@@ -24,7 +24,7 @@ from temporalio.bridge.proto.streams import (
     NexusLimits,
     NexusResumeRequest,
 )
-from temporalio.contrib.streams._body import decode_body, encode_bodies
+from temporalio.contrib.streams._body import decode_bodies, decode_body, encode_bodies
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams.nexus._generated import (
@@ -104,7 +104,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     endpoint gets the Worker's store rights, for every stream in the
     namespace and as any producer. Pass ``authorize`` to check each call: it
     gets a :class:`StreamAccess` and answers whether to serve it, and a
-    refused call fails as unauthorized.
+    refused call fails as unauthorized. A ``nexusrpc.HandlerError`` it raises
+    crosses as it is, so it can give the caller a reason. Any other exception
+    crosses as a retryable ``INTERNAL`` error.
 
     Parked reads hold Nexus task slots for up to their ``wait_ms``. With many
     readers, serve appends and reads on separate task queues or endpoints, so
@@ -199,6 +201,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
             return
         try:
             allowed = await self._authorize(access)
+        except nexusrpc.HandlerError:
+            # The authorizer chose what the caller sees.
+            raise
         except Exception as error:
             # The authorizer is user code, so its failure crosses spelled out,
             # with its stack frames left on this side.
@@ -229,6 +234,13 @@ async def _run_codec(converter: DataConverter, work: CodecWork) -> list[CodecRes
             failed = CodecResult(error=f"{type(error).__name__}: {error}")
             return [failed] * len(payloads)
         return [CodecResult(payload=payload) for payload in encoded]
+    try:
+        # One call for the page, since a remote codec pays a round trip each.
+        decoded_page = await decode_bodies(converter, payloads)
+    except Exception:
+        pass
+    else:
+        return [CodecResult(payload=payload) for payload in decoded_page]
     results: list[CodecResult] = []
     for payload in payloads:
         # Each record decodes on its own, so a body the codec refuses crosses
@@ -266,7 +278,12 @@ def _internal(error: Exception) -> NexusFailure:
 
 
 def _handler_error(failure: NexusFailure) -> nexusrpc.HandlerError:
-    kind = nexusrpc.HandlerErrorType[failure.handler_error_type]
+    try:
+        kind = nexusrpc.HandlerErrorType[failure.handler_error_type]
+    except KeyError:
+        # A type this release doesn't know, which only a Core from another
+        # release sends.
+        kind = nexusrpc.HandlerErrorType.INTERNAL
     return nexusrpc.HandlerError(
         failure.message,
         type=kind,
