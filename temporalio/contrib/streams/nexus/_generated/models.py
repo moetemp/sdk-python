@@ -940,8 +940,8 @@ class ReadOutput:
 
     state: bytes | None = None
     """Pass as state on the next call of this read. It matches next_token, also when the
-    answer was cut short by its byte budget. It stays below 64 KiB, so it can ride in a
-    Workflow's History.
+    answer was cut short by its byte budget. It holds at most 64 KiB, which is about 87
+    KiB as base64, so it can ride in a Workflow's History. A longer state is refused.
     """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(
@@ -1492,11 +1492,21 @@ class StreamOperationToken:
         Raises:
             ValueError: ``token`` is not one, or it names another version.
         """
+        # The decoder drops characters outside the alphabet and takes the
+        # standard one, so the alphabet is checked first, as Core does.
+        letters = token.rstrip("=").replace("-", "").replace("_", "")
+        if not (letters.isascii() and letters.isalnum()):
+            raise ValueError("not a StreamOperationToken: not base64url text")
         try:
             text = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
             transfer: typing.Any = json.loads(text)
         except ValueError as error:
             raise ValueError(f"not a StreamOperationToken: {error}") from None
+        # The converter takes 2.0 as 2, and Core doesn't.
+        if not isinstance(transfer, dict) or type(transfer.get("v")) is not int:
+            raise ValueError(
+                "not a StreamOperationToken: the version is not an integer"
+            )
         try:
             return _StreamOperationTokenTransferTypeConverter().from_transfer_type(
                 transfer, cls
