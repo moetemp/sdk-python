@@ -104,7 +104,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     endpoint gets the Worker's store rights, for every stream in the
     namespace and as any producer. Pass ``authorize`` to check each call: it
     gets a :class:`StreamAccess` and answers whether to serve it, and a
-    refused call fails as unauthorized.
+    refused call fails as unauthorized. A ``nexusrpc.HandlerError`` it raises
+    crosses as it is, so it can give the caller a reason. Any other exception
+    crosses as a retryable ``INTERNAL`` error.
 
     Parked reads hold Nexus task slots for up to their ``wait_ms``. With many
     readers, serve appends and reads on separate task queues or endpoints, so
@@ -199,6 +201,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
             return
         try:
             allowed = await self._authorize(access)
+        except nexusrpc.HandlerError:
+            # The authorizer chose what the caller sees.
+            raise
         except Exception as error:
             # The authorizer is user code, so its failure crosses spelled out,
             # with its stack frames left on this side.

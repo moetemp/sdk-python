@@ -482,6 +482,25 @@ async def test_an_authorizer_that_raises_crosses_as_an_internal_error(
     assert "File " not in refused.value.detail
 
 
+async def test_an_authorizers_own_handler_error_crosses_as_it_is(
+    server: Server, backing: Backing
+):
+    # The authorizer's reason reaches the caller, which doesn't retry it.
+    async def authorize(_access: StreamAccess) -> bool:
+        raise nexusrpc.HandlerError(
+            "the caller's token expired",
+            type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+        )
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+    assert refused.value.status == 403
+    assert not refused.value.retryable
+    assert "the caller's token expired" in refused.value.detail
+
+
 async def test_finish_is_a_call_of_its_own(service: Service):
     ref = await stream_of(service)
     await append(service, ref, "one")
