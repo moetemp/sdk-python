@@ -37,7 +37,7 @@ workflowservice_request_response_proto = (
 # Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
 # released yet. Once they land upstream, this moves back to a released nexgen version.
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "03cfd0ddbbc8a8e7bf70af3964e4700c4a79a8b0"
+NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
 nex_gen_root = base_dir / ".nexgen-system" / NEX_GEN_REVISION
 
 

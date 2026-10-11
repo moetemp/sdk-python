@@ -77,7 +77,7 @@ class NexusLimits(google.protobuf.message.Message):
     MAX_ANSWER_BYTES_FIELD_NUMBER: builtins.int
     MAX_RECORD_BYTES_FIELD_NUMBER: builtins.int
     max_answer_bytes: builtins.int
-    """The most record bytes one read answer carries past its first record, as they cross in base64.
+    """The most bytes one read answer takes as JSON past its first record, with its tokens and state.
     Zero takes the default of 1 MiB, which keeps an answer below the server's blob size limit.
     """
     max_record_bytes: builtins.int
@@ -390,16 +390,28 @@ class AttachCallerResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     OPERATION_TOKEN_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
     operation_token: builtins.str
     """The token the start answers with. It names the stream, the attach and the chain."""
+    @property
+    def failure(self) -> global___NexusFailure:
+        """Set when the attach failed, as the Nexus calls answer a failure, so lang hands it to its
+        Nexus handler as it is. The token is then empty.
+        """
     def __init__(
         self,
         *,
         operation_token: builtins.str = ...,
+        failure: global___NexusFailure | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["failure", b"failure"]
+    ) -> builtins.bool: ...
     def ClearField(
         self,
-        field_name: typing_extensions.Literal["operation_token", b"operation_token"],
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "operation_token", b"operation_token"
+        ],
     ) -> None: ...
 
 global___AttachCallerResponse = AttachCallerResponse
@@ -430,8 +442,20 @@ global___DetachCallerRequest = DetachCallerRequest
 class DetachCallerResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    FAILURE_FIELD_NUMBER: builtins.int
+    @property
+    def failure(self) -> global___NexusFailure:
+        """Set when the detach failed, as the Nexus calls answer a failure."""
     def __init__(
         self,
+        *,
+        failure: global___NexusFailure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["failure", b"failure"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["failure", b"failure"]
     ) -> None: ...
 
 global___DetachCallerResponse = DetachCallerResponse

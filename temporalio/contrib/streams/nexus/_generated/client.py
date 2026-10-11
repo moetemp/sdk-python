@@ -236,7 +236,8 @@ class TemporalStreamsHttpClient:
                 continue
             if answer.records or answer.done:
                 return answer
-            request = dataclasses.replace(request, state=answer.state)
+            if answer.state is not None:
+                request = dataclasses.replace(request, state=answer.state)
             if time.monotonic() >= end:
                 return answer
             if time.monotonic() - started < wait / 2:

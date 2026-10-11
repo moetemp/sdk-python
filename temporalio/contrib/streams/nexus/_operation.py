@@ -23,15 +23,12 @@ from temporalio.bridge.proto.streams import (
     StreamAddress,
     StreamOwnerKind,
 )
-from temporalio.contrib.streams._errors import (
-    StreamError,
-    StreamNotFoundError,
-    StreamStorageError,
-    StreamUnsupportedError,
-)
+from temporalio.bridge.streams_generated import StreamNexusService
+from temporalio.client import Client
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams.nexus._generated.models import StreamOperationToken
+from temporalio.contrib.streams.nexus._handler import _handler_error
 
 __all__ = ["StreamOperationHandler", "stream_ref_from_token"]
 
@@ -51,20 +48,17 @@ def stream_ref_from_token(token: str) -> StreamRef:
     return StreamOperationToken.from_token(token).ref
 
 
-def _handler_error(error: StreamError | ValueError) -> nexusrpc.HandlerError:
-    # The same table the stream service's operations answer with, so a caller
-    # sees one meaning for each kind.
-    if isinstance(error, ValueError):
-        kind, retryable = nexusrpc.HandlerErrorType.BAD_REQUEST, False
-    elif isinstance(error, StreamNotFoundError):
-        kind, retryable = nexusrpc.HandlerErrorType.NOT_FOUND, False
-    elif isinstance(error, StreamUnsupportedError):
-        kind, retryable = nexusrpc.HandlerErrorType.NOT_IMPLEMENTED, False
-    elif isinstance(error, StreamStorageError):
-        kind, retryable = nexusrpc.HandlerErrorType.UNAVAILABLE, True
-    else:
-        kind, retryable = nexusrpc.HandlerErrorType.INTERNAL, False
-    return nexusrpc.HandlerError(str(error), type=kind, retryable_override=retryable)
+async def _caller_calls(client: Client) -> StreamNexusService:
+    """Core's caller calls, on the store of the operation Worker's client."""
+    try:
+        return await store_for_client(client)._nexus_service_for(client)
+    except ValueError as error:
+        # The handler's configuration is at fault, so the caller's request
+        # isn't refused, and a retry may land once the Worker is fixed.
+        raise nexusrpc.HandlerError(
+            f"the stream operation's Worker can't reach a stream store: {error}",
+            type=nexusrpc.HandlerErrorType.INTERNAL,
+        ) from None
 
 
 class StreamOperationHandler(
@@ -84,6 +78,10 @@ class StreamOperationHandler(
     The operation's output type is the close result's type. The records
     themselves are read through the stream service, not carried by the
     operation.
+
+    The client of the Worker that runs the operation must carry a stream
+    store plugin, as the stream service's handler's does, since Core attaches
+    the caller through it.
 
     .. warning::
         This API is experimental.
@@ -111,35 +109,38 @@ class StreamOperationHandler(
         if not ctx.callback_url:
             # Refused before open_stream runs, so a start that can't work
             # creates nothing.
-            raise _handler_error(
-                ValueError(
-                    "a stream-returning operation needs a caller callback; start "
-                    "it asynchronously"
-                )
+            raise nexusrpc.HandlerError(
+                "a stream-returning operation needs a caller callback; start it "
+                "asynchronously",
+                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+                retryable_override=False,
             )
-        ref = await self._open_stream(ctx, input)
         client = temporalio.nexus.client()
-        try:
-            ref._require_supported()
-            service = await store_for_client(client)._nexus_service_for(client)
-            response = await call(
-                service.attach_caller(
-                    AttachCallerRequest(
-                        stream=StreamAddress(
-                            namespace=client.namespace,
-                            owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
-                            workflow_id=ref.workflow_id,
-                            run_id=ref.run_id or "",
-                            topic=ref.topic,
+        service = await _caller_calls(client)
+        ref = await self._open_stream(ctx, input)
+        response = await call(
+            service.attach_caller(
+                AttachCallerRequest(
+                    stream=StreamAddress(
+                        namespace=client.namespace,
+                        # Core refuses an owner kind this release doesn't open.
+                        owner_kind=(
+                            StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW
+                            if ref.kind == "workflow"
+                            else StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
                         ),
-                        request_id=ctx.request_id,
-                        callback_url=ctx.callback_url,
-                        callback_headers=dict(ctx.callback_headers),
-                    )
+                        workflow_id=ref.workflow_id,
+                        run_id=ref.run_id or "",
+                        topic=ref.topic,
+                    ),
+                    request_id=ctx.request_id,
+                    callback_url=ctx.callback_url,
+                    callback_headers=dict(ctx.callback_headers),
                 )
             )
-        except (StreamError, ValueError) as error:
-            raise _handler_error(error) from None
+        )
+        if response.HasField("failure"):
+            raise _handler_error(response.failure)
         return nexusrpc.handler.StartOperationResultAsync(
             token=response.operation_token
         )
@@ -154,14 +155,11 @@ class StreamOperationHandler(
                 (``BAD_REQUEST``), or the server didn't take the detach.
         """
         client = temporalio.nexus.client()
-        try:
-            service = await store_for_client(client)._nexus_service_for(client)
-            await call(
-                service.detach_caller(
-                    DetachCallerRequest(
-                        namespace=client.namespace, operation_token=token
-                    )
-                )
+        service = await _caller_calls(client)
+        response = await call(
+            service.detach_caller(
+                DetachCallerRequest(namespace=client.namespace, operation_token=token)
             )
-        except (StreamError, ValueError) as error:
-            raise _handler_error(error) from None
+        )
+        if response.HasField("failure"):
+            raise _handler_error(response.failure)

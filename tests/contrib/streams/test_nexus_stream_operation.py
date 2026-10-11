@@ -12,9 +12,9 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import nexusrpc
@@ -32,12 +32,8 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     RecordKind,
     StreamClosedError,
-    StreamNotFoundError,
     StreamRef,
-    StreamRefusedError,
-    StreamStorageError,
     StreamStorePlugin,
-    StreamUnsupportedError,
     get_stream_handle,
     workflow_writer,
 )
@@ -47,12 +43,12 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
-from temporalio.contrib.streams.nexus._operation import _handler_error
 from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
+from tests.contrib.streams._support import vendored_core_nexus
 from tests.helpers import new_worker
 from tests.helpers.nexus import make_nexus_endpoint_name
 
@@ -103,26 +99,30 @@ async def test_a_start_without_a_callback_is_refused_before_it_opens_the_stream(
     assert not opened
 
 
-@pytest.mark.parametrize(
-    "error, kind, retryable",
-    [
-        (ValueError("bad token"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
-        (StreamNotFoundError("no owner"), nexusrpc.HandlerErrorType.NOT_FOUND, False),
-        (
-            StreamUnsupportedError("no notifier"),
-            nexusrpc.HandlerErrorType.NOT_IMPLEMENTED,
-            False,
-        ),
-        (StreamStorageError("down"), nexusrpc.HandlerErrorType.UNAVAILABLE, True),
-        (StreamRefusedError("no"), nexusrpc.HandlerErrorType.INTERNAL, False),
-    ],
-)
-def test_a_failure_reaches_the_caller_as_the_stream_service_maps_it(
-    error: Exception, kind: nexusrpc.HandlerErrorType, retryable: bool
+def _raised(error: nexusrpc.HandlerError) -> tuple[str, bool | None, str | None]:
+    """The type, retryability and stream condition class a caller sees."""
+    failure = error.original_failure
+    details: Mapping[str, Any] = (failure.details if failure else None) or {}
+    cause = details.get("cause", {}).get("applicationFailureInfo", {})
+    return error.type.name, error.retryable_override, cause.get("type")
+
+
+async def test_a_start_on_a_worker_without_a_store_fails_before_it_opens_the_stream(
+    client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    handler_error = _handler_error(error)  # type: ignore[arg-type]
-    assert handler_error.type == kind
-    assert handler_error.retryable == retryable
+    monkeypatch.setattr("temporalio.nexus.client", lambda: client)
+    opened: list[str] = []
+
+    async def open_stream(_ctx: Any, prompt: str) -> StreamRef:
+        opened.append(prompt)
+        return REF
+
+    with pytest.raises(nexusrpc.HandlerError) as raised:
+        await StreamOperationHandler(open_stream).start(start_context(), "hi")
+
+    # The handler's configuration is at fault, not the caller's request.
+    assert raised.value.type == nexusrpc.HandlerErrorType.INTERNAL
+    assert not opened
 
 
 async def test_a_start_for_an_owner_that_does_not_exist_is_not_found(
@@ -137,7 +137,8 @@ async def test_a_start_for_an_owner_that_does_not_exist_is_not_found(
     with pytest.raises(nexusrpc.HandlerError) as raised:
         await StreamOperationHandler(open_missing).start(start_context(), "hi")
 
-    assert raised.value.type == nexusrpc.HandlerErrorType.NOT_FOUND
+    # Core's table, as the stream service's operations answer with it.
+    assert _raised(raised.value) == ("NOT_FOUND", False, "StreamNotFoundError")
 
 
 async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
@@ -154,17 +155,13 @@ async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
             cancel_context(), "not-a-token"
         )
 
-    assert raised.value.type == nexusrpc.HandlerErrorType.BAD_REQUEST
+    assert _raised(raised.value) == ("BAD_REQUEST", False, "ValueError")
 
 
 def test_a_token_reads_as_the_shared_vectors_say() -> None:
-    # The vectors Core's encoder writes, in the Core this SDK vendors.
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "temporalio/bridge/sdk-core/crates/streams/nexus"
-        / "operation_token_vectors.json"
+    vectors = json.loads(
+        (vendored_core_nexus() / "operation_token_vectors.json").read_text()
     )
-    vectors = json.loads(path.read_text())
     for vector in vectors["vectors"] + vectors["decode_only"]:
         ref = vector["ref"]
         assert stream_ref_from_token(vector["token"]) == StreamRef(

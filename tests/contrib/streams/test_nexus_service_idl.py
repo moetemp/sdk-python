@@ -7,7 +7,6 @@ the contract; these pin what the rest of the SDK relies on from them.
 from __future__ import annotations
 
 import base64
-import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -28,8 +27,10 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHttpClient,
 )
 from temporalio.contrib.streams.nexus._generated import StreamOperationToken
+from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
+from tests.contrib.streams._support import vendored_core_nexus
 
 T = TypeVar("T")
 
@@ -64,15 +65,7 @@ def test_the_contract_comes_from_the_vendored_core():
     # none of its own.
     package = Path(temporalio.contrib.streams.__file__).parent
     assert not (package / "nexus" / "temporal_streams.nexusrpc.yaml").exists()
-    contract = (
-        package.parent.parent
-        / "bridge"
-        / "sdk-core"
-        / "crates"
-        / "streams"
-        / "nexus"
-        / "temporal_streams.nexusrpc.yaml"
-    )
+    contract = vendored_core_nexus() / "temporal_streams.nexusrpc.yaml"
     assert "x-nexus-stream-ref: { py: temporalio.contrib.streams.StreamRef }" in (
         contract.read_text()
     )
@@ -223,18 +216,39 @@ def test_a_stale_record_decodes_with_its_mark():
     assert stored.stale is True
 
 
-def test_the_generated_long_poll_sends_back_each_answers_state():
-    source = inspect.getsource(TemporalStreamsHttpClient.read_until_records)
-    assert "request = dataclasses.replace(request, state=answer.state)" in source
+async def test_the_generated_long_poll_sends_back_each_answers_state(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Two empty answers, then records. Each answer's state rides the next call.
+    answers = [
+        {"records": [], "next_token": "c", "done": False, "state": "AQ=="},
+        {"records": [], "next_token": "c", "done": False, "state": "Ag=="},
+        {
+            "records": [{"token": "d", "record": ""}],
+            "next_token": "d",
+            "done": False,
+            "state": "Aw==",
+        },
+    ]
+    sent: list[Any] = []
+
+    def post(_url: str, body: bytes, _headers: Any, _timeout: float) -> bytes:
+        sent.append(json.loads(body).get("state"))
+        return json.dumps(answers.pop(0)).encode()
+
+    monkeypatch.setattr(generated_client, "_post", post)
+    caller = TemporalStreamsHttpClient("http://stub")
+    answer = await caller.read_until_records(
+        ReadInput(stream=StreamRef.for_workflow("chat-1"), state=b"\x00"),
+        deadline=10.0,
+    )
+    assert answer.state == b"\x03"
+    assert sent == ["AA==", "AQ==", "Ag=="]
 
 
 # The vectors Core's encoder and decoder read, in the Core this SDK vendors.
 _TOKEN_VECTORS = json.loads(
-    (
-        Path(__file__).resolve().parents[3]
-        / "temporalio/bridge/sdk-core/crates/streams/nexus"
-        / "operation_token_vectors.json"
-    ).read_text()
+    (vendored_core_nexus() / "operation_token_vectors.json").read_text()
 )
 
 
