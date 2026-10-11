@@ -59,9 +59,17 @@ def test_the_service_definition_carries_the_contract_operations():
     }
 
 
-def test_the_contract_ships_beside_the_bindings():
+def test_the_contract_comes_from_the_vendored_core():
+    # Core serves the contract, so the SDK generates from Core's copy and keeps
+    # none of its own.
+    package = Path(temporalio.contrib.streams.__file__).parent
+    assert not (package / "nexus" / "temporal_streams.nexusrpc.yaml").exists()
     contract = (
-        Path(temporalio.contrib.streams.__file__).parent
+        package.parent.parent
+        / "bridge"
+        / "sdk-core"
+        / "crates"
+        / "streams"
         / "nexus"
         / "temporal_streams.nexusrpc.yaml"
     )

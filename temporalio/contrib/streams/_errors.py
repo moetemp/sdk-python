@@ -149,6 +149,8 @@ _BY_KIND: dict[int, type[StreamError]] = {
     StreamFailureKind.STREAM_FAILURE_KIND_NOT_FOUND: StreamNotFoundError,
     StreamFailureKind.STREAM_FAILURE_KIND_STORAGE: StreamStorageError,
     StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED: StreamUnsupportedError,
+    # The call's input breaks its contract, so the same call fails the same way.
+    StreamFailureKind.STREAM_FAILURE_KIND_INVALID_ARGUMENT: StreamRefusedError,
 }
 
 

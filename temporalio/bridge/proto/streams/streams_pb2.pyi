@@ -79,6 +79,11 @@ class _StreamFailureKindEnumTypeWrapper(
     """The store failed or could not be reached."""
     STREAM_FAILURE_KIND_UNSUPPORTED: _StreamFailureKind.ValueType  # 11
     """This release or this store does not offer the capability."""
+    STREAM_FAILURE_KIND_INVALID_ARGUMENT: _StreamFailureKind.ValueType  # 12
+    """The call's input breaks the contract, such as a missing member or a value out of range, so
+    the same call fails the same way. The Nexus calls answer it, as BAD_REQUEST. A lang built
+    before this kind maps it, as any kind it doesn't know, to a storage failure.
+    """
 
 class StreamFailureKind(
     _StreamFailureKind, metaclass=_StreamFailureKindEnumTypeWrapper
@@ -110,6 +115,11 @@ STREAM_FAILURE_KIND_STORAGE: StreamFailureKind.ValueType  # 10
 """The store failed or could not be reached."""
 STREAM_FAILURE_KIND_UNSUPPORTED: StreamFailureKind.ValueType  # 11
 """This release or this store does not offer the capability."""
+STREAM_FAILURE_KIND_INVALID_ARGUMENT: StreamFailureKind.ValueType  # 12
+"""The call's input breaks the contract, such as a missing member or a value out of range, so
+the same call fails the same way. The Nexus calls answer it, as BAD_REQUEST. A lang built
+before this kind maps it, as any kind it doesn't know, to a storage failure.
+"""
 global___StreamFailureKind = StreamFailureKind
 
 class _PromoteOutcome:

@@ -2930,9 +2930,12 @@ name = "temporalio-streams"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "crc16",
  "prost",
  "redis",
+ "serde",
+ "serde_json",
  "sha2",
  "temporalio-common",
  "thiserror",
