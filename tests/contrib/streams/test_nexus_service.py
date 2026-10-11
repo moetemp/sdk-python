@@ -962,6 +962,16 @@ def test_a_core_failure_crosses_as_its_handler_error(
     assert details["nexusHandlerFailureInfo"]["type"] == kind.name
 
 
+@pytest.mark.parametrize("name", ["", "NOT_A_TYPE"])
+def test_an_unknown_handler_error_type_crosses_as_internal(name: str):
+    # Only a Core from another release could send one.
+    crossed = _handler_error(
+        NexusFailure(handler_error_type=name, retryable=True, message="why")
+    )
+    assert crossed.type == nexusrpc.HandlerErrorType.INTERNAL
+    assert str(crossed) == "why"
+
+
 async def test_a_refusal_carries_no_handler_stack_frames(service: Service):
     ref = await stream_of(service)
     await append(service, ref, "one")

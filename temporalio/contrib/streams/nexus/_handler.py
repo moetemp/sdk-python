@@ -278,7 +278,12 @@ def _internal(error: Exception) -> NexusFailure:
 
 
 def _handler_error(failure: NexusFailure) -> nexusrpc.HandlerError:
-    kind = nexusrpc.HandlerErrorType[failure.handler_error_type]
+    try:
+        kind = nexusrpc.HandlerErrorType[failure.handler_error_type]
+    except KeyError:
+        # A type this release doesn't know, which only a Core from another
+        # release sends.
+        kind = nexusrpc.HandlerErrorType.INTERNAL
     return nexusrpc.HandlerError(
         failure.message,
         type=kind,
