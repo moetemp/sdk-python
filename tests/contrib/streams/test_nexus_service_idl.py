@@ -30,6 +30,7 @@ from temporalio.contrib.streams.nexus._generated import StreamOperationToken
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
+from tests.contrib.streams._support import vendored_core_nexus
 
 T = TypeVar("T")
 
@@ -64,15 +65,7 @@ def test_the_contract_comes_from_the_vendored_core():
     # none of its own.
     package = Path(temporalio.contrib.streams.__file__).parent
     assert not (package / "nexus" / "temporal_streams.nexusrpc.yaml").exists()
-    contract = (
-        package.parent.parent
-        / "bridge"
-        / "sdk-core"
-        / "crates"
-        / "streams"
-        / "nexus"
-        / "temporal_streams.nexusrpc.yaml"
-    )
+    contract = vendored_core_nexus() / "temporal_streams.nexusrpc.yaml"
     assert "x-nexus-stream-ref: { py: temporalio.contrib.streams.StreamRef }" in (
         contract.read_text()
     )
@@ -255,11 +248,7 @@ async def test_the_generated_long_poll_sends_back_each_answers_state(
 
 # The vectors Core's encoder and decoder read, in the Core this SDK vendors.
 _TOKEN_VECTORS = json.loads(
-    (
-        Path(__file__).resolve().parents[3]
-        / "temporalio/bridge/sdk-core/crates/streams/nexus"
-        / "operation_token_vectors.json"
-    ).read_text()
+    (vendored_core_nexus() / "operation_token_vectors.json").read_text()
 )
 
 
