@@ -76,7 +76,7 @@ class NexusLimits(google.protobuf.message.Message):
     MAX_ANSWER_BYTES_FIELD_NUMBER: builtins.int
     MAX_RECORD_BYTES_FIELD_NUMBER: builtins.int
     max_answer_bytes: builtins.int
-    """The most record bytes one read answer carries past its first record, as they cross in base64.
+    """The most bytes one read answer takes as JSON past its first record, with its tokens and state.
     Zero takes the default of 1 MiB, which keeps an answer below the server's blob size limit.
     """
     max_record_bytes: builtins.int
