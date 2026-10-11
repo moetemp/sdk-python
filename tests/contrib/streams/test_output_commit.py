@@ -28,15 +28,18 @@ from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
 from temporalio.contrib.streams import (
     RecordKind,
     StreamClosedError,
+    StreamStorePlugin,
+    activity_handle,
     get_stream_handle,
     topic,
     workflow_writer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
-from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.converter import DataConverter, ExternalStorage, PayloadCodec
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
 from tests.helpers import new_worker
+from tests.test_extstore import InMemoryTestDriver
 
 EVENTS = topic("events", dict)
 OTHER = topic("other", dict)
@@ -328,14 +331,18 @@ class ClosesItsTopic:
         self.done = True
 
 
-@pytest.mark.skipif(
-    not os.environ.get("STREAMS_REDIS_URL"),
-    reason="set STREAMS_REDIS_URL to run the Redis close case",
-)
-async def test_a_committed_close_leaves_the_topic_closed_on_redis(client: Client):
-    store = RedisStreams(
-        os.environ["STREAMS_REDIS_URL"], key_prefix=f"close-{uuid.uuid4().hex}"
-    )
+def store_for(backing: str) -> StreamStorePlugin:
+    if backing == "memory":
+        return MemoryStreams()
+    url = os.environ.get("STREAMS_REDIS_URL")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to run the Redis cases")
+    return RedisStreams(url, key_prefix=f"close-{uuid.uuid4().hex}")
+
+
+@pytest.mark.parametrize("backing", ["memory", "redis"])
+async def test_a_committed_close_leaves_the_topic_closed(client: Client, backing: str):
+    store = store_for(backing)
     streams_client = await connect_with(client, store)
     workflow_id = new_workflow_id()
     async with new_worker(streams_client, ClosesItsTopic) as worker:
@@ -362,3 +369,39 @@ async def test_a_committed_close_leaves_the_topic_closed_on_redis(client: Client
         await other.append({"other": 1})
         await handle.signal(ClosesItsTopic.finish)
         await handle.result()
+
+
+@activity.defn
+async def appends_a_large_body() -> None:
+    await activity_handle().producer(topic=EVENTS).append({"from": "x" * 4096})
+
+
+@workflow.defn
+class PublishesLargeBodies:
+    @workflow.run
+    async def run(self) -> None:
+        workflow_writer(EVENTS).publish({"from": "w" * 4096})
+        await workflow.execute_activity(
+            appends_a_large_body, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+async def test_large_bodies_go_to_external_storage_and_read_back(client: Client):
+    driver = InMemoryTestDriver()
+    converter = DataConverter(
+        external_storage=ExternalStorage(drivers=[driver], payload_size_threshold=1024)
+    )
+    stored = await connect_with(client, MemoryStreams(), converter)
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        stored, PublishesLargeBodies, activities=[appends_a_large_body]
+    ) as worker:
+        await stored.execute_workflow(
+            PublishesLargeBodies.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(get_stream_handle(stored, workflow_id).read(topic=EVENTS))
+    assert [r.value for r in records] == [{"from": "w" * 4096}, {"from": "x" * 4096}]
+    # Both bodies went to the driver, from the Workflow's completion and from
+    # the Activity's append, so the store held claims.
+    kept = b"".join(driver._storage.values())
+    assert b"w" * 4096 in kept and b"x" * 4096 in kept
