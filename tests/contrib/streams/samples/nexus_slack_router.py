@@ -124,23 +124,27 @@ async def main(client: Client, endpoint: str, task_queue: str) -> Routed:
     server needs CHASM, ``nexusoperation.enableProgress`` and
     ``streamnotifier.enabled``.
     """
-    # The handler's Worker carries the store, tells the server's notifier when
-    # the stream moves, and serves the reads on the same endpoint.
-    provider = MemoryStreams().notify_on_append()
-    streams = TemporalStreamsHandler(provider)
+    # The store rides the client, and the Worker built from it gets the store.
+    # With notifications on, Core tells the server's notifier when the stream
+    # moves, and the Worker serves the reads on the same endpoint.
+    store = MemoryStreams().notify_on_append()
+    store_client = await Client.connect(
+        client.service_client.config.target_host,
+        namespace=client.namespace,
+        plugins=[store],
+    )
+    streams = TemporalStreamsHandler()
     async with Worker(
-        client,
+        store_client,
         task_queue=task_queue,
         workflows=[Conversation, SlackRouter],
         nexus_service_handlers=[ConversationHandler(), streams],
-        plugins=[provider],
     ):
-        routed = await client.execute_workflow(
+        routed = await store_client.execute_workflow(
             SlackRouter.run,
             args=[endpoint, "release 42"],
             id=f"router-{task_queue}",
             task_queue=task_queue,
         )
         await streams.close()
-    await provider.close()
     return routed
