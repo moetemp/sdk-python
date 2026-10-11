@@ -1,12 +1,14 @@
 """Generate the stream service's Python bindings from its Nexus contract.
 
-The contract is ``temporalio/contrib/streams/nexus/temporal_streams.nexusrpc.yaml``
-and the bindings land in ``temporalio/contrib/streams/nexus/_generated``. With
+Core serves the contract, so its one copy is Core's
+``crates/streams/nexus/temporal_streams.nexusrpc.yaml``, read from the vendored
+Core, and the bindings land in ``temporalio/contrib/streams/nexus/_generated``. With
 ``--check`` the script generates into a scratch directory and fails when the
 result differs from what is checked in, which is how CI keeps the two in step.
 
 The contract uses the ``x-nexus-long-poll``, ``x-nexus-cursor``,
-``x-nexus-stream-ref`` and ``x-nexus-handle`` annotations, which no nexgen
+``x-nexus-stream-ref``, ``x-nexus-handle`` and ``x-nexus-operation-token``
+annotations, and the bindings include the forwarding handler, which no nexgen
 release carries yet, so the generator is a pinned revision of the nexgen fork
 until they merge upstream. It is installed under its own root, so the
 ``nexgen`` release that ``gen_nexus_system_api.py`` uses is left alone.
@@ -24,11 +26,20 @@ from pathlib import Path
 
 base_dir = Path(__file__).parent.parent
 package_dir = base_dir / "temporalio" / "contrib" / "streams" / "nexus"
-contract_path = package_dir / "temporal_streams.nexusrpc.yaml"
+contract_path = (
+    base_dir
+    / "temporalio"
+    / "bridge"
+    / "sdk-core"
+    / "crates"
+    / "streams"
+    / "nexus"
+    / "temporal_streams.nexusrpc.yaml"
+)
 output_dir = package_dir / "_generated"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "03cfd0ddbbc8a8e7bf70af3964e4700c4a79a8b0"
+NEX_GEN_REVISION = "0b974dd0693ac68adcbf6c78819f2124c4b55018"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 
@@ -66,6 +77,7 @@ def generate(target: Path) -> None:
             *nex_gen_command(),
             "python",
             "--client",
+            "--forwarder",
             "--output",
             str(target),
             str(contract_path),
