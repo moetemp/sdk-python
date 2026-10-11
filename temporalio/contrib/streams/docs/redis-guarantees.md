@@ -146,13 +146,22 @@ Every key of a namespace's streams starts with
 one namespace's applications:
 
 ```
-ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo
+ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo
 ```
 
 The conformance suite and a Workflow publish test run as a user with
 exactly these rules, so a store change that needs another command fails
 the tests. The delete helper also needs `+scan`. `+config|get` is only used
 to read `maxmemory-policy`, and the store goes on when a server refuses it.
+The store keeps the set of each run chain's topics, so it can close every
+open topic when the chain ends, which needs `+sadd` and `+smembers`.
+
+Upgrading from a release whose line has no `+sadd` or `+smembers`, appends
+and Workflow output keep working with the old user. The store skips the
+topic set and logs a warning once. But a chain end then can't list the
+chain's topics, so callers of a stream-returning Nexus operation wait for
+the notifier's owner check instead of completing. Widen the ACL before or
+with the upgrade.
 
 What crosses the wire:
 
