@@ -10,7 +10,9 @@ read with the answer the stream service gave.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
+import types
 import os
 import uuid
 from collections.abc import Sequence
@@ -73,6 +75,7 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
+import temporalio.contrib.streams.nexus._reader as reader_module
 from temporalio.contrib.streams.nexus._generated import (
     RecordWireSuperseded,
     StreamOperationToken,
@@ -780,6 +783,64 @@ async def test_a_stale_record_that_cannot_cross_is_reported_without_a_value() ->
         (Cursor("cursor-2"), None),
         (Cursor("cursor-3"), None),
     ]
+
+
+class _CompletedHandle:
+    """An operation handle whose operation already completed."""
+
+    operation_token = StreamOperationToken(
+        ref=STREAM, attach="attach-request", chain="run-id"
+    ).to_token()
+    latest_progress = None
+
+    async def progress(self, *, after_counter: int = 0) -> None:
+        return None
+
+    def __await__(self) -> Any:
+        async def result() -> str:
+            return "summary"
+
+        return result().__await__()
+
+
+async def test_each_read_sends_the_state_the_last_answer_gave(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay doesn't compare a Nexus command's input, so a fake client
+    records what each read sends."""
+    answers = [
+        ReadOutput(
+            records=[record(1, text="a")],
+            next_token="cursor-1",
+            done=False,
+            state=b"s1",
+        ),
+        ReadOutput(records=[], next_token="cursor-1", done=False, state=b"s2"),
+        ReadOutput(records=[], next_token="cursor-1", done=True, state=b"s3"),
+    ]
+    sent: list[bytes | None] = []
+
+    class FakeClient:
+        async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
+            sent.append(input.state)
+            return answers.pop(0)
+
+    fake_workflow = types.SimpleNamespace(
+        create_nexus_client=lambda **_kwargs: FakeClient(),
+        payload_converter=lambda: converter,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(reader_module, "workflow", fake_workflow)
+    reader = StreamReader(
+        _CompletedHandle(),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        after=ReadPosition(cursor=Cursor(""), state=base64.b64encode(b"s0").decode()),
+    )
+    assert await reader.next() == [Token("a")]
+    assert await reader.next() is None
+    assert sent == [b"s0", b"s1", b"s2"]
+    assert reader.position.state == base64.b64encode(b"s3").decode()
 
 
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
