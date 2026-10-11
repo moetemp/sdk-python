@@ -34,7 +34,10 @@ class RedisStreams(StreamStorePlugin):
 
         Args:
             url: A ``redis://`` or ``rediss://`` URL, or the seed nodes of a
-                cluster. Credentials and TLS settings come from the URL.
+                cluster. Credentials and TLS settings come from the URL. In
+                this release TLS verifies the server against the system's
+                root certificates only, with no custom CA and no client
+                certificate.
             cluster: Whether ``url`` names a Redis Cluster. Every key of one
                 Workflow's streams shares a hash tag, so a cluster serves
                 them from one slot.

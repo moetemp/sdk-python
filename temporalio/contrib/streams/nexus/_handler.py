@@ -358,7 +358,7 @@ class TemporalStreamsHandler:
             # they are not transported.
             if record.HasField("superseded"):
                 continue
-            wire = await self._record_wire(client.data_converter, record)
+            wire = await self._record_wire(handle._converter, record)
             wire_size = _crossing_size(len(wire.record))
             if records and size + wire_size > self._max_answer_bytes:
                 cut = True
