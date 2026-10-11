@@ -249,7 +249,7 @@ gate tests/contrib/streams/test_nexus_reader.py \
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_output_commit.py \
-  test_a_committed_close_leaves_the_topic_closed_on_redis
+  test_a_committed_close_leaves_the_topic_closed
 gate tests/contrib/streams/test_samples.py \
   test_path_a_a_client_reads_what_a_workflow_published \
   test_path_b_a_reader_drops_what_a_failed_attempt_wrote
