@@ -126,7 +126,9 @@ shutdown, and any Worker on the endpoint's task queue can serve a reader's
 next read. The reader carries Core's read state in each read instead. So
 the reader and the stream service come from the same release. A stream
 service from an earlier release refuses the reader's `state` as an unknown
-member.
+member. A reader from an earlier release on a newer service still works, but
+it sends no state, so the service primes from the cursor on every read and
+knows only the cursor record's producer.
 
 `notify_on_append()` turns on progress only. Without it, the caller sees no
 progress, but the close still completes every operation with its result.
@@ -134,8 +136,9 @@ Core closes a stream's notifier after every store close whenever the store
 has a client, whether or not progress is on. Turn it on before the client
 connects. One store instance serves one client connection, so a second
 `Client.connect` with the same instance raises `ValueError`. A client
-copied from the connected one with `Client(**config)` shares it. A server without the stream notifier costs one call, and then
-Core stops notifier calls in that process.
+copied from the connected one with `Client(**config)` shares it. A server
+without the stream notifier costs one call, and then Core stops notifier
+calls in that process.
 
 Core notifies each stream's notifier after every append and every Workflow
 batch that becomes visible. It keeps one notifier per stream, and drops it
@@ -229,8 +232,10 @@ What `next()` does:
   Each entry is a `ReadSupersession` with `index` (how many items had been
   handed over when it came), `cursor` and `supersession`. The stream service
   marks it. Each read carries the state the last answer gave, so the marks
-  hold across reads, across the service's Workers, and for a reader built
-  with `after=`:
+  hold across reads and across the service's Workers. A reader built with
+  `after=` an earlier reader's `position` keeps them exact too. One built
+  with only a cursor tells the service only the cursor record's producer, so
+  another producer's stale record can pass as current data:
 
   ```python
   if reader.supersessions:
@@ -296,12 +301,18 @@ Reading a stream adds to the caller's History in two ways.
 The server terminates a Workflow whose History passes 51,200 events or
 50 MiB by default. To read a long stream, Continue-as-New before that, for
 example when `workflow.info().is_continue_as_new_suggested()` is true. Pass
-`reader.cursor` to the new run, start the operation again there, and resume
-after the cursor:
+`reader.position` to the new run, start the operation again there, and
+resume from it:
 
 ```python
-reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT, after=cursor)
+reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT, after=position)
 ```
+
+A `ReadPosition` holds the cursor and the stream service's read state, at
+most about 87 KiB, so it passes as a Workflow argument. With it, the new
+run's superseded and stale marks stay exact for every producer. A bare
+cursor works too, but it tells the service only the cursor record's
+producer.
 
 Two cases stop a reader that would otherwise read for ever.
 
