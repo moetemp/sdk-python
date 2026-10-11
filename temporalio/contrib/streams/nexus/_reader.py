@@ -14,6 +14,7 @@ read answered, and a replay hands over the same batches at the same points.
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -33,6 +34,7 @@ from temporalio.contrib.streams.nexus._generated import (
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
 
 __all__ = [
+    "ReadPosition",
     "ReadStaleRecord",
     "ReadSupersession",
     "StreamIncompleteError",
@@ -110,13 +112,40 @@ class ReadStaleRecord:
     """The stream position of the record."""
 
     producer_id: str
-    """The producer that wrote it."""
+    """The producer that wrote it. Empty when the service couldn't hand the
+    record over."""
 
     attempt: int
-    """The attempt that wrote it, lower than one the reader already saw."""
+    """The attempt that wrote it, lower than one the reader already saw. Zero
+    when the service couldn't hand the record over."""
 
     value: Any
-    """The record's item, decoded into the reader's item type."""
+    """The record's item, decoded into the reader's item type. ``None`` when
+    the record couldn't be handed over or decoded, since a stale record
+    raises nothing."""
+
+
+@dataclass(frozen=True)
+class ReadPosition:
+    """Where a reader is, with what the stream service knows of the read.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    Pass it to a new reader as ``after=`` to go on where an earlier one
+    stopped, such as across Continue-as-New. It holds the cursor and the
+    service's read state, so the new reader's superseded and stale marks
+    stay exact for every producer. A cursor alone tells the service only the
+    cursor record's producer. Both fields are text, so the position passes as
+    a Workflow argument.
+    """
+
+    cursor: Cursor
+    """Past every record the reader handed over."""
+
+    state: str = ""
+    """The stream service's read state, opaque and in base64. Empty before
+    the first read."""
 
 
 class StreamReader(Generic[T]):
@@ -144,8 +173,10 @@ class StreamReader(Generic[T]):
     earlier attempt writes after a later one started is not handed over, and
     :attr:`stale_records` reports it. The stream service marks both. Each read
     carries the state the service answered with last, so the marks hold
-    across reads, across the service's Workers, and for a reader built with
-    ``after=``, which starts from the cursor. A
+    across reads and across the service's Workers. A reader built with
+    ``after=`` an earlier reader's :attr:`position` keeps them exact too. One
+    built with only a cursor tells the service only the cursor record's
+    producer, so another producer's stale record can pass as current data. A
     record whose body the Workflow's payload converter cannot decode into
     ``item_type`` raises :class:`temporalio.contrib.streams.StreamRecordError`
     from :meth:`next` once the records before it are handed over; the call
@@ -161,8 +192,9 @@ class StreamReader(Generic[T]):
     Every read is a Nexus operation result in the caller's History, about
     three events and up to one read answer (1 MiB of records) each. To read a
     long stream, Continue-as-New before History grows too large: pass
-    :attr:`cursor` to the new run, start the operation again there, and build
-    the reader with ``after=cursor``. After a successful completion, the
+    :attr:`position` to the new run, start the operation again there, and
+    build the reader with ``after=position``. The position is at most about
+    87 KiB. After a successful completion, the
     reader reads until the stream service says the stream is done, and raises
     :class:`StreamIncompleteError` once its reads have found nothing for
     ``drain_limit``. A stream that ended waits at most ``drain_limit`` for its
@@ -184,7 +216,7 @@ class StreamReader(Generic[T]):
         *,
         item_type: type[T],
         endpoint: str,
-        after: Cursor | None = None,
+        after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
     ) -> None:
         """Read the stream ``handle``'s operation returns.
@@ -195,8 +227,11 @@ class StreamReader(Generic[T]):
             item_type: What each record's body decodes into.
             endpoint: The Nexus endpoint that serves the stream service for
                 this stream, usually the operation's own.
-            after: Resume after this cursor, such as a previous run's
-                :attr:`cursor`. ``None`` starts at the oldest record kept.
+            after: Resume where an earlier reader stopped. Pass its
+                :attr:`position` to keep every producer's marks exact. A
+                bare cursor tells the stream service only the cursor record's
+                producer, so another producer's stale record can pass as
+                current data. ``None`` starts at the oldest record kept.
             drain_limit: How long reads after a successful completion may
                 find nothing, or a stream that ended may wait for its
                 operation to complete, before the reader raises
@@ -216,8 +251,12 @@ class StreamReader(Generic[T]):
         self._stream: StreamRef | None = None
         # Core's read state from the last answer, which the next read carries.
         self._state: bytes | None = None
+        if isinstance(after, ReadPosition) and after.state:
+            self._state = base64.b64decode(after.state)
         self._answer: ReadOutput | None = None
         self._pending: list[RecordWire] = []
+        if isinstance(after, ReadPosition):
+            after = after.cursor
         self._cursor = after.token if after is not None else ""
         self._counter = 0
         # Whether the last read answered with no record. An answer short of
@@ -238,6 +277,12 @@ class StreamReader(Generic[T]):
     def cursor(self) -> Cursor:
         """Where the reader is: past every record it has handed over."""
         return Cursor(self._cursor)
+
+    @property
+    def position(self) -> ReadPosition:
+        """Where the reader is, with the service's read state, for a new reader."""
+        state = base64.b64encode(self._state).decode() if self._state else ""
+        return ReadPosition(cursor=self.cursor, state=state)
 
     @property
     def supersessions(self) -> Sequence[ReadSupersession]:
@@ -368,6 +413,11 @@ class StreamReader(Generic[T]):
                     )
                 )
                 continue
+            if stored.stale:
+                # Not the current answer, so one that can't be read is still
+                # reported, and raises nothing.
+                self._stale_records.append(self._stale(stored, cursor, len(batch)))
+                continue
             try:
                 record = self._record(stored)
             except Exception as error:
@@ -383,19 +433,7 @@ class StreamReader(Generic[T]):
                 return batch
             if record is None:
                 continue
-            producer_id, attempt, value = record
-            if stored.stale:
-                self._stale_records.append(
-                    ReadStaleRecord(
-                        index=self._handed_over + len(batch),
-                        cursor=cursor,
-                        producer_id=producer_id,
-                        attempt=attempt,
-                        value=value,
-                    )
-                )
-            else:
-                batch.append(cast(T, value))
+            batch.append(cast(T, record[2]))
         answer = self._answer
         assert answer is not None
         if answer.next_token:
@@ -430,6 +468,26 @@ class StreamReader(Generic[T]):
             ),
         )
         self._pending = list(self._answer.records)
+
+    def _stale(
+        self, stored: RecordWire, cursor: Cursor, batched: int
+    ) -> ReadStaleRecord:
+        producer_id, attempt, value = "", 0, None
+        if not stored.error:
+            try:
+                wire = WireRecord.FromString(stored.record)
+                producer_id, attempt = wire.producer_id, wire.attempt
+                record = self._record(stored)
+                value = record[2] if record is not None else None
+            except Exception:
+                pass
+        return ReadStaleRecord(
+            index=self._handed_over + batched,
+            cursor=cursor,
+            producer_id=producer_id,
+            attempt=attempt,
+            value=value,
+        )
 
     def _record(self, stored: RecordWire) -> tuple[str, int, Any] | None:
         """The producer, attempt and item of a data record, or ``None``."""
