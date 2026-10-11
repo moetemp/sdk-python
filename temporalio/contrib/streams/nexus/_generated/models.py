@@ -27,7 +27,19 @@ _APPEND_OUTPUT_DECLARED: frozenset[str] = frozenset({"cursor"})
 _READ_OUTPUT_DECLARED: frozenset[str] = frozenset({"records", "next_token", "done"})
 
 
-_RECORD_WIRE_DECLARED: frozenset[str] = frozenset({"token", "record", "error"})
+_RECORD_WIRE_DECLARED: frozenset[str] = frozenset(
+    {"token", "record", "error", "superseded"}
+)
+
+
+_RECORD_WIRE_SUPERSEDED_DECLARED: frozenset[str] = frozenset(
+    {"producer_id", "previous_attempt", "attempt"}
+)
+
+
+_SUPERSESSION_DECLARED: frozenset[str] = frozenset(
+    {"producer_id", "previous_attempt", "attempt"}
+)
 
 
 class _AppendInputTransferTypeConverter(
@@ -857,9 +869,9 @@ class ReadOutput:
     """
 
     done: bool
-    """The stream ended for this reader: its owner's run chain is closed and every retained
-    record after the cursor has been delivered. Nothing more will arrive, so the caller
-    stops.
+    """The stream ended for this reader: the stream is closed, or its owner's run chain
+    ended, and every retained record after the cursor has been delivered. Nothing more
+    will arrive, so the caller stops.
     """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(
@@ -918,6 +930,23 @@ class _RecordWireTransferTypeConverter(
                 else:
                     error_value = error_value_raw
 
+        superseded_value: RecordWireSuperseded | None = None
+        if "superseded" in raw:
+            superseded_value_raw = raw["superseded"]
+            if superseded_value_raw is None:
+                violations.append(
+                    Violation(path="superseded", reason="explicit null not allowed")
+                )
+            else:
+                try:
+                    superseded_value = (
+                        _RecordWireSupersededTransferTypeConverter().from_transfer_type(
+                            superseded_value_raw, RecordWireSuperseded
+                        )
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "superseded", error)
+
         additional_properties: dict[str, typing.Any] = {}
         for key in raw:
             if key not in _RECORD_WIRE_DECLARED:
@@ -928,6 +957,7 @@ class _RecordWireTransferTypeConverter(
             token=token_value,
             record=record_value,
             error=error_value,
+            superseded=superseded_value,
             additional_properties=additional_properties,
         )
 
@@ -961,6 +991,18 @@ class _RecordWireTransferTypeConverter(
             if not (isinstance(error_value, str)):
                 violations.append(Violation(path="error", reason="expected string"))
             out["error"] = error_value
+        superseded_value: typing.Any = runtime_value.superseded
+        if superseded_value is not None:
+            superseded_violation_count = len(violations)
+            if len(violations) == superseded_violation_count:
+                try:
+                    out["superseded"] = (
+                        _RecordWireSupersededTransferTypeConverter().to_transfer_type(
+                            superseded_value
+                        )
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "superseded", error)
         additional_properties_value: typing.Any = runtime_value.additional_properties
         if not isinstance(additional_properties_value, dict):
             raise temporalio.converter.create_payload_validation_error(
@@ -995,9 +1037,10 @@ class RecordWire:
 
     record: bytes
     """The serialized temporal.sdk.streams.v1.StreamRecord: topic, kind, producer, attempt,
-    sequence and body. The serving Worker's codec decodes the body, and it crosses
-    encoded once, inside the read result, which the caller's codec decodes. Empty when
-    error is set.
+    sequence and body. The body is the producer's payload decoded by the serving
+    Worker's data converter, payload codec and external storage included. The answer as
+    a whole is encoded on its way back like any operation result, so the caller's codec
+    decodes it and the body crosses encoded once. Empty when error or superseded is set.
     """
 
     error: str | None = None
@@ -1005,6 +1048,179 @@ class RecordWire:
     the store directly that is larger than a read result can carry. The record is left
     out, and a reader goes on past the cursor.
     """
+
+    superseded: RecordWireSuperseded | None = None
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict
+    )
+
+
+class _RecordWireSupersededTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["RecordWireSuperseded", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["RecordWireSuperseded"]
+    ) -> "RecordWireSuperseded":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        producer_id_value: str = typing.cast("typing.Any", None)
+        if "producer_id" not in raw or raw["producer_id"] is None:
+            violations.append(Violation(path="producer_id", reason="required"))
+        else:
+            producer_id_value_raw = raw["producer_id"]
+            if not isinstance(producer_id_value_raw, str):
+                violations.append(
+                    Violation(path="producer_id", reason="expected string")
+                )
+            else:
+                producer_id_value = producer_id_value_raw
+
+        previous_attempt_value: int = typing.cast("typing.Any", None)
+        if "previous_attempt" not in raw or raw["previous_attempt"] is None:
+            violations.append(Violation(path="previous_attempt", reason="required"))
+        else:
+            previous_attempt_value_raw = raw["previous_attempt"]
+            previous_attempt_value_parsed = _parse_spec_integer(
+                previous_attempt_value_raw, "previous_attempt", violations
+            )
+            if previous_attempt_value_parsed is not None:
+                previous_attempt_value = previous_attempt_value_parsed
+
+        attempt_value: int = typing.cast("typing.Any", None)
+        if "attempt" not in raw or raw["attempt"] is None:
+            violations.append(Violation(path="attempt", reason="required"))
+        else:
+            attempt_value_raw = raw["attempt"]
+            attempt_value_parsed = _parse_spec_integer(
+                attempt_value_raw, "attempt", violations
+            )
+            if attempt_value_parsed is not None:
+                attempt_value = attempt_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _RECORD_WIRE_SUPERSEDED_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return RecordWireSuperseded(
+            producer_id=producer_id_value,
+            previous_attempt=previous_attempt_value,
+            attempt=attempt_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "RecordWireSuperseded") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, RecordWireSuperseded):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        producer_id_value: typing.Any = runtime_value.producer_id
+        if producer_id_value is None:
+            violations.append(Violation(path="producer_id", reason="required"))
+        else:
+            if not (isinstance(producer_id_value, str)):
+                violations.append(
+                    Violation(path="producer_id", reason="expected string")
+                )
+            out["producer_id"] = producer_id_value
+        previous_attempt_value: typing.Any = runtime_value.previous_attempt
+        if previous_attempt_value is None:
+            violations.append(Violation(path="previous_attempt", reason="required"))
+        else:
+            if not (
+                not isinstance(previous_attempt_value, bool)
+                and (
+                    isinstance(previous_attempt_value, int)
+                    or (
+                        isinstance(previous_attempt_value, float)
+                        and previous_attempt_value.is_integer()
+                    )
+                )
+            ):
+                violations.append(
+                    Violation(path="previous_attempt", reason="expected integer")
+                )
+            else:
+                if abs(previous_attempt_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="previous_attempt",
+                            reason="exceeds ±(2^53-1) integer cap",
+                        )
+                    )
+            out["previous_attempt"] = previous_attempt_value
+        attempt_value: typing.Any = runtime_value.attempt
+        if attempt_value is None:
+            violations.append(Violation(path="attempt", reason="required"))
+        else:
+            if not (
+                not isinstance(attempt_value, bool)
+                and (
+                    isinstance(attempt_value, int)
+                    or (isinstance(attempt_value, float) and attempt_value.is_integer())
+                )
+            ):
+                violations.append(Violation(path="attempt", reason="expected integer"))
+            else:
+                if abs(attempt_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="attempt", reason="exceeds ±(2^53-1) integer cap"
+                        )
+                    )
+            out["attempt"] = attempt_value
+        additional_properties_value: typing.Any = runtime_value.additional_properties
+        if not isinstance(additional_properties_value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        checked_additional_properties = typing.cast(
+            "dict[str, typing.Any]", additional_properties_value
+        )
+        for key, entry in checked_additional_properties.items():
+            path = _member_path(key)
+            if key in _RECORD_WIRE_SUPERSEDED_DECLARED:
+                violations.append(
+                    Violation(
+                        path=path,
+                        reason="additional property collides with declared property",
+                    )
+                )
+            else:
+                out[key] = entry
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_RecordWireSupersededTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class RecordWireSuperseded:
+    """Set instead of a record when a later attempt of a producer started writing. The
+    store's reader reports it, at the cursor before the new attempt's first record, also
+    on a read that resumes after a cursor and saw no earlier attempt itself.
+    """
+
+    producer_id: str
+    """The producer whose attempt changed."""
+
+    previous_attempt: int
+    """The attempt readers saw before."""
+
+    attempt: int
+    """The attempt that started writing."""
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict
@@ -1135,3 +1351,171 @@ StreamRef: typing.TypeAlias = temporalio.contrib.streams.StreamRef
 """One stream, named by its owner and a topic. It names no cursor and no store, so the same
 reference is good behind any endpoint that serves the owner.
 """
+
+
+class _SupersessionTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["Supersession", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["Supersession"]
+    ) -> "Supersession":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        producer_id_value: str = typing.cast("typing.Any", None)
+        if "producer_id" not in raw or raw["producer_id"] is None:
+            violations.append(Violation(path="producer_id", reason="required"))
+        else:
+            producer_id_value_raw = raw["producer_id"]
+            if not isinstance(producer_id_value_raw, str):
+                violations.append(
+                    Violation(path="producer_id", reason="expected string")
+                )
+            else:
+                producer_id_value = producer_id_value_raw
+
+        previous_attempt_value: int = typing.cast("typing.Any", None)
+        if "previous_attempt" not in raw or raw["previous_attempt"] is None:
+            violations.append(Violation(path="previous_attempt", reason="required"))
+        else:
+            previous_attempt_value_raw = raw["previous_attempt"]
+            previous_attempt_value_parsed = _parse_spec_integer(
+                previous_attempt_value_raw, "previous_attempt", violations
+            )
+            if previous_attempt_value_parsed is not None:
+                previous_attempt_value = previous_attempt_value_parsed
+
+        attempt_value: int = typing.cast("typing.Any", None)
+        if "attempt" not in raw or raw["attempt"] is None:
+            violations.append(Violation(path="attempt", reason="required"))
+        else:
+            attempt_value_raw = raw["attempt"]
+            attempt_value_parsed = _parse_spec_integer(
+                attempt_value_raw, "attempt", violations
+            )
+            if attempt_value_parsed is not None:
+                attempt_value = attempt_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _SUPERSESSION_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return Supersession(
+            producer_id=producer_id_value,
+            previous_attempt=previous_attempt_value,
+            attempt=attempt_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "Supersession") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, Supersession):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        producer_id_value: typing.Any = runtime_value.producer_id
+        if producer_id_value is None:
+            violations.append(Violation(path="producer_id", reason="required"))
+        else:
+            if not (isinstance(producer_id_value, str)):
+                violations.append(
+                    Violation(path="producer_id", reason="expected string")
+                )
+            out["producer_id"] = producer_id_value
+        previous_attempt_value: typing.Any = runtime_value.previous_attempt
+        if previous_attempt_value is None:
+            violations.append(Violation(path="previous_attempt", reason="required"))
+        else:
+            if not (
+                not isinstance(previous_attempt_value, bool)
+                and (
+                    isinstance(previous_attempt_value, int)
+                    or (
+                        isinstance(previous_attempt_value, float)
+                        and previous_attempt_value.is_integer()
+                    )
+                )
+            ):
+                violations.append(
+                    Violation(path="previous_attempt", reason="expected integer")
+                )
+            else:
+                if abs(previous_attempt_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="previous_attempt",
+                            reason="exceeds ±(2^53-1) integer cap",
+                        )
+                    )
+            out["previous_attempt"] = previous_attempt_value
+        attempt_value: typing.Any = runtime_value.attempt
+        if attempt_value is None:
+            violations.append(Violation(path="attempt", reason="required"))
+        else:
+            if not (
+                not isinstance(attempt_value, bool)
+                and (
+                    isinstance(attempt_value, int)
+                    or (isinstance(attempt_value, float) and attempt_value.is_integer())
+                )
+            ):
+                violations.append(Violation(path="attempt", reason="expected integer"))
+            else:
+                if abs(attempt_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="attempt", reason="exceeds ±(2^53-1) integer cap"
+                        )
+                    )
+            out["attempt"] = attempt_value
+        additional_properties_value: typing.Any = runtime_value.additional_properties
+        if not isinstance(additional_properties_value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        checked_additional_properties = typing.cast(
+            "dict[str, typing.Any]", additional_properties_value
+        )
+        for key, entry in checked_additional_properties.items():
+            path = _member_path(key)
+            if key in _SUPERSESSION_DECLARED:
+                violations.append(
+                    Violation(
+                        path=path,
+                        reason="additional property collides with declared property",
+                    )
+                )
+            else:
+                out[key] = entry
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_SupersessionTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class Supersession:
+    """A later attempt of a producer started writing."""
+
+    producer_id: str
+    """The producer whose attempt changed."""
+
+    previous_attempt: int
+    """The attempt readers saw before."""
+
+    attempt: int
+    """The attempt that started writing."""
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict
+    )

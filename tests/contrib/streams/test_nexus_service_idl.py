@@ -147,3 +147,30 @@ def test_a_reference_this_release_cannot_open_is_refused_at_decode():
     stream["kind"] = "activity"
     with pytest.raises(ValueError, match="unknown StreamRef kind 'activity'"):
         _from_json(document, ReadInput)
+
+
+def test_a_supersession_decodes_at_its_cursor():
+    document = {
+        "records": [
+            {
+                "token": "memory:abcd1234:2",
+                "record": "",
+                "superseded": {
+                    "producer_id": "tokens@run-1",
+                    "previous_attempt": 1,
+                    "attempt": 2,
+                },
+            },
+        ],
+        "next_token": "memory:abcd1234:2",
+        "done": False,
+    }
+    answer = _from_json(document, ReadOutput)
+    assert isinstance(answer, ReadOutput)
+    [record] = answer.records
+    assert record.superseded is not None
+    assert (
+        record.superseded.producer_id,
+        record.superseded.previous_attempt,
+        record.superseded.attempt,
+    ) == ("tokens@run-1", 1, 2)
