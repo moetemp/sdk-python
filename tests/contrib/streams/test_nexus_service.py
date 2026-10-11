@@ -2,10 +2,10 @@
 
 Every case runs against the stock dev server, started here with an HTTP port,
 through a Nexus endpoint the case creates and deletes, so the request goes
-through the same ingress a remote caller's does. The cases follow the
-conformance suite where the service passes a provider's behavior through, and
-pin what only the service decides: subscriptions per reader, idle expiry,
-error mapping and the wire form of records.
+through the same ingress a remote caller's does. Core serves the contract and
+its own tests pin each rule. These cases check the whole path end to end, and
+pin what only the SDK decides: the authorizer, the payload codec and its
+serialization context, and the failure that crosses.
 
 The cases are parametrized over ``BACKINGS``, the stores the service runs
 over. Each yields a :class:`Backing`.
@@ -20,7 +20,6 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 import nexusrpc
@@ -31,25 +30,21 @@ import temporalio.api.nexus.v1
 import temporalio.api.operatorservice.v1
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
-from temporalio.bridge.proto.streams import StreamFailure, StreamFailureKind
+from temporalio.api.failure.v1 import (
+    ApplicationFailureInfo,
+    Failure,
+    NexusHandlerFailureInfo,
+)
+from temporalio.bridge.proto.streams import (
+    NexusFailure,
+)
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
-from temporalio.bridge.streams import StreamCallFailure, StreamStore
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     RecordKind,
-    StreamClosedError,
-    StreamCursorError,
-    StreamError,
-    StreamExpiredError,
-    StreamNotFoundError,
-    StreamOutcomeUnknownError,
-    StreamProducerError,
     StreamRef,
-    StreamRefusedError,
-    StreamStorageError,
     StreamStorePlugin,
-    StreamUnsupportedError,
     get_stream_handle,
 )
 from temporalio.contrib.streams._cursor import BEGINNING
@@ -238,7 +233,6 @@ async def serve(
                     id=endpoint.id, version=endpoint.version
                 )
             )
-            await handler.close()
 
 
 @pytest_asyncio.fixture(params=sorted(BACKINGS))  # type: ignore[reportUntypedFunctionDecorator]
@@ -488,19 +482,6 @@ async def test_an_authorizer_that_raises_crosses_as_an_internal_error(
     assert "File " not in refused.value.detail
 
 
-async def test_a_producer_refuses_a_next_sequence_that_isnt_an_int(
-    backing: Backing,
-):
-    stream = get_stream_handle(backing.client, "wf")
-    for next_sequence in (True, 1.5):
-        with pytest.raises(ValueError, match="next_sequence"):
-            stream.producer(
-                producer_id="p",
-                attempt=1,
-                next_sequence=next_sequence,  # type: ignore[arg-type]
-            )
-
-
 async def test_finish_is_a_call_of_its_own(service: Service):
     ref = await stream_of(service)
     await append(service, ref, "one")
@@ -544,33 +525,6 @@ async def test_a_foreign_cursor_is_refused(service: Service):
     with pytest.raises(HTTPStatusError) as refused:
         await read(service, ref.with_topic("other"), theirs.cursor)
     assert refused_as(refused.value) == "StreamCursorError"
-
-
-async def test_an_expired_cursor_is_told_apart(
-    service: Service, monkeypatch: pytest.MonkeyPatch
-):
-    # Core decides expiry, and its own tests cover when. What crosses here is
-    # Core's answer, so the store's call answers EXPIRED for one cursor.
-    ref = await stream_of(service)
-    await append(service, ref, "one")
-    real = StreamStore.call
-
-    async def call(self: StreamStore, rpc: str, req: Any, resp_type: Any) -> Any:
-        if rpc == "Read" and req.after == "trimmed-cursor":
-            raise StreamCallFailure(
-                StreamFailure(
-                    kind=StreamFailureKind.STREAM_FAILURE_KIND_EXPIRED,
-                    message="the records after this cursor were trimmed",
-                )
-            )
-        return await real(self, rpc, req, resp_type)
-
-    monkeypatch.setattr(StreamStore, "call", call)
-    with pytest.raises(HTTPStatusError) as refused:
-        await read(service, ref, "trimmed-cursor")
-    assert refused.value.status == 400
-    assert not refused.value.retryable
-    assert refused_as(refused.value) == "StreamExpiredError"
 
 
 async def test_argument_mistakes_are_bad_requests(service: Service):
@@ -648,31 +602,6 @@ async def test_two_readers_on_one_stream_keep_their_own_places(
     assert [texts(answer) for answer in answers] == [["e"], ["e"]]
 
 
-async def test_an_idle_read_state_expires(server: Server, backing: Backing):
-    async with serve(server, backing, idle_timeout=timedelta(seconds=0.5)) as service:
-        ref = await stream_of(service)
-        await append(service, ref, "a", "b")
-        first = await read(service, ref, max_records=1)
-        key = (ref.kind, ref.workflow_id, "", ref.topic, first.next_token)
-        assert service.handler._states[key][0]
-        await asyncio.sleep(1.0)
-        # Past its timeout the state is not handed to Core again.
-        assert service.handler._take(key) == b""
-        # The reader's next call reads on from its cursor without it.
-        assert texts(await read(service, ref, first.next_token)) == ["b"]
-
-
-async def test_the_longest_idle_read_state_goes_first(server: Server, backing: Backing):
-    async with serve(server, backing, max_idle_reads=2) as service:
-        refs = [await stream_of(service) for _ in range(3)]
-        for ref in refs:
-            await append(service, ref, "a", "b")
-            await read(service, ref, max_records=1)
-        assert [key[1] for key in service.handler._states] == [
-            ref.workflow_id for ref in refs[1:]
-        ]
-
-
 @workflow.defn
 class StreamsThroughNexus:
     """Appends and reads through the service from Workflow code."""
@@ -714,6 +643,37 @@ async def test_a_workflow_calls_the_service_through_its_nexus_client(
             task_queue=worker.task_queue,
         )
     assert result == ["hi"]
+
+
+class RefusingCodec(PayloadCodec):
+    """A codec whose key for one body is gone."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if any(payload.data == b"poison" for payload in payloads):
+            raise ValueError("the key for this body is gone")
+        return list(payloads)
+
+
+async def test_a_body_the_codec_cannot_decode_crosses_as_an_error(
+    server: Server, backing: Backing
+):
+    worker_client = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=RefusingCodec()),
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "poison", "fine")
+        answer = await read(service, ref)
+    # Each body decodes on its own, so the reader goes on past the bad one.
+    bad, good = answer.records
+    assert bad.error and "the key for this body is gone" in bad.error
+    assert bad.record == b""
+    assert good.error is None
+    assert WireRecord.FromString(good.record).body.data == b"fine"
 
 
 class XorCodec(PayloadCodec):
@@ -914,45 +874,38 @@ async def test_a_stored_record_above_the_limit_crosses_as_an_error(
     assert WireRecord.FromString(small.record).body.data == b"small"
 
 
-async def test_close_drops_every_held_read_state(service: Service):
-    ref = await stream_of(service)
-    await append(service, ref, "a", "b")
-    first = await read(service, ref, max_records=1)
-    assert service.handler._states
-    await service.handler.close()
-    assert not service.handler._states
-    # A reader reads on from its own cursor.
-    assert texts(await read(service, ref, first.next_token)) == ["b"]
-
-
 @pytest.mark.parametrize(
-    "error, kind, retryable",
+    "name, kind, retryable",
     [
-        (StreamNotFoundError("x"), nexusrpc.HandlerErrorType.NOT_FOUND, False),
-        (StreamCursorError("x"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
-        (StreamExpiredError("x"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
-        (StreamProducerError("x"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
-        (StreamClosedError("x"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
-        (StreamUnsupportedError("x"), nexusrpc.HandlerErrorType.NOT_IMPLEMENTED, False),
-        (StreamRefusedError("x"), nexusrpc.HandlerErrorType.INTERNAL, False),
-        (StreamOutcomeUnknownError("x"), nexusrpc.HandlerErrorType.UNAVAILABLE, True),
-        (StreamStorageError("x"), nexusrpc.HandlerErrorType.UNAVAILABLE, True),
-        (StreamError("x"), nexusrpc.HandlerErrorType.INTERNAL, True),
-        (ValueError("x"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
+        ("StreamProducerError", nexusrpc.HandlerErrorType.BAD_REQUEST, False),
+        ("StreamStorageError", nexusrpc.HandlerErrorType.UNAVAILABLE, True),
     ],
 )
-def test_each_stream_condition_crosses_as_its_own_class(
-    error: Exception, kind: nexusrpc.HandlerErrorType, retryable: bool
+def test_a_core_failure_crosses_as_its_handler_error(
+    name: str, kind: nexusrpc.HandlerErrorType, retryable: bool
 ):
-    crossed = _handler_error(error)  # type: ignore[arg-type]
-    name = type(error).__name__
+    # Core maps each stream condition. The handler only hands its failure on.
+    crossed = _handler_error(
+        NexusFailure(
+            handler_error_type=kind.name,
+            retryable=retryable,
+            message=f"{name}: x",
+            failure=Failure(
+                cause=Failure(
+                    message="x",
+                    application_failure_info=ApplicationFailureInfo(
+                        type=name, non_retryable=not retryable
+                    ),
+                ),
+                nexus_handler_failure_info=NexusHandlerFailureInfo(type=kind.name),
+            ),
+        )
+    )
     assert crossed.type == kind
     assert crossed.retryable == retryable
-    assert str(crossed).startswith(f"{name}: ")
-    # What crosses is the failure the handler spells out, with no stack.
+    assert str(crossed) == f"{name}: x"
     original = crossed.original_failure
     assert original is not None
-    assert original.message == str(crossed)
     assert not original.stack_trace
     details = dict(original.details or {})
     cause = details["cause"]["applicationFailureInfo"]
@@ -993,14 +946,6 @@ async def test_the_generated_read_loop_ends_when_the_stream_does(service: Servic
     # rather than asking again until its deadline.
     assert answer.done and answer.records == []
     assert asyncio.get_running_loop().time() - started < 5.0
-
-
-async def test_a_producer_takes_the_callers_next_sequence(backing: Backing):
-    stream = get_stream_handle(backing.client, "wf")
-    producer = stream.producer(producer_id="p", attempt=1, next_sequence=3)
-    assert producer._sequence == 3
-    with pytest.raises(ValueError, match="next_sequence"):
-        stream.producer(producer_id="p", attempt=1, next_sequence=0)
 
 
 async def test_the_handler_decodes_with_the_workflows_serialization_context(
