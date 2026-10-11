@@ -149,17 +149,19 @@ _BY_KIND: dict[int, type[StreamError]] = {
     StreamFailureKind.STREAM_FAILURE_KIND_NOT_FOUND: StreamNotFoundError,
     StreamFailureKind.STREAM_FAILURE_KIND_STORAGE: StreamStorageError,
     StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED: StreamUnsupportedError,
-    # The call's input breaks its contract, so the same call fails the same way.
-    StreamFailureKind.STREAM_FAILURE_KIND_INVALID_ARGUMENT: StreamRefusedError,
 }
 
 
-def error_from_failure(failure: StreamFailure) -> StreamError:
+def error_from_failure(failure: StreamFailure) -> StreamError | ValueError:
     """The error a caller catches for Core's ``failure``.
 
-    A kind this release does not know is a storage error, since the call
-    failed for a reason the caller can't act on beyond retrying later.
+    An input that breaks the call's contract is a ``ValueError``, as in the
+    rest of the SDK, so a caller can tell it from a store refusal. A kind this
+    release does not know is a storage error, since the call failed for a
+    reason the caller can't act on beyond retrying later.
     """
+    if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_INVALID_ARGUMENT:
+        return ValueError(failure.message)
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_RECORD:
         return StreamRecordError(failure.message, Cursor(failure.cursor))
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT:
