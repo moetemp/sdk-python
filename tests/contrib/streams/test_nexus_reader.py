@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import dataclasses
-import types
 import os
+import types
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -26,6 +26,7 @@ import pytest
 from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 
+import temporalio.contrib.streams.nexus._reader as reader_module
 import temporalio.nexus
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload, Payloads, WorkflowType
@@ -75,7 +76,6 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
-import temporalio.contrib.streams.nexus._reader as reader_module
 from temporalio.contrib.streams.nexus._generated import (
     RecordWireSuperseded,
     StreamOperationToken,

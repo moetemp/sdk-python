@@ -66,8 +66,8 @@ from temporalio.contrib.streams.nexus._operation import (
     stream_ref_from_token,
 )
 from temporalio.contrib.streams.nexus._reader import (
-    ReadStaleRecord,
     ReadPosition,
+    ReadStaleRecord,
     ReadSupersession,
     StreamIncompleteError,
     StreamReader,
