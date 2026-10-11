@@ -119,8 +119,12 @@ worker = Worker(
 )
 ```
 
-Turn `notify_on_append()` on before the client connects. Without it, the
-operation still works, but the caller sees no progress until the close.
+`notify_on_append()` turns on progress only. Without it, the caller sees no
+progress, but the close still completes every operation with its result.
+Core closes a stream's notifier after every store close whenever the store
+has a client, whether or not progress is on. Turn it on before the client
+connects. A server without the stream notifier costs one call, and then
+Core stops notifier calls in that process.
 
 Core notifies each stream's notifier after every append and every Workflow
 batch that becomes visible. It keeps one notifier per stream, and drops it
@@ -323,21 +327,29 @@ Two cases stop a reader that would otherwise read for ever.
   the new chain's records. Give each stream owner its own Workflow id, or
   reuse an id only after its readers finish.
 - `close_workflow_stream` closes the stream after Core promotes the Workflow
-  Task's records: first in the store, then its notifier. Each step that
-  fails is tried again with backoff, from 1 second up to 1 minute, until it
-  lands or the Worker stops. A close the server refuses for good, such as
-  one for a stream it doesn't know, isn't retried. If the close never lands,
-  or a reader's repair promoted the batch instead (a repair sends no close),
-  readers still end once the owner's run chain closes, since the store
-  marks the chain closed.
-- When the owner's run chain ends, Core closes the notifier of every topic
-  of the chain that's still open, so their callers' operations complete
-  with an empty result. A topic closed with `close_workflow_stream` keeps
-  its own result, since the server keeps the first close it gets. If the
-  Worker that ran the final task stopped first, the callers fail at the
-  notifier's next owner check (`streamnotifier.ownerCheckInterval`)
-  instead. Topics written only by an SDK release from before the store
-  moved into Core aren't listed, and fail the same way.
+  Task's records. The store closes first, then the notifier. A failed
+  promotion and each failed close step are tried again with backoff, from
+  1 second up to 1 minute, until they land or the Worker stops. A close the
+  server refuses for good, such as one for a stream it doesn't know, isn't
+  retried.
+- What's left is a Worker that stops before it promotes the Workflow Task
+  that closes the stream. A reader's repair then promotes the batch, but a
+  repair sends no close. Readers still end once the owner's run chain
+  closes, since the store marks the chain closed. The callers don't get the
+  result, and fail at the notifier's next owner check
+  (`streamnotifier.ownerCheckInterval`).
+- When the owner's run chain ends, the Worker that ran the final task
+  closes the notifier of every topic of the chain that's still open, so
+  their callers' operations complete with an empty result. It does so after
+  the final task's own closes, so a topic closed with
+  `close_workflow_stream` keeps its own result. The server keeps the first
+  close it gets, so a reader that finds the owner ended closes only the
+  store. If the Worker that ran the final task stopped first, the callers
+  fail at the notifier's next owner check instead. Topics written only by an
+  SDK release from before the store moved into Core aren't listed, and fail
+  the same way. So do all topics when the Redis user lacks `+sadd` and
+  `+smembers`, which the ACL from before the move doesn't have. Widen it
+  with the upgrade (see the Redis guarantees page).
 
 ## Guarantees
 
@@ -407,5 +419,6 @@ The stock dev server has no stream notifier, so the sample test and the
 reader, progress and stream operation lifecycle tests skip there.
 `scripts/streams_live_lane.sh` builds a server that has the notifier, starts
 it with the settings above and a scratch Redis, and runs those tests against
-it, along with Core's live notifier test. It fails when one of them skips. A release of streams over Nexus needs a
-green run of it, until CI has a lane with such a server.
+it, along with Core's live notifier test. It fails unless each test on its
+gated list passes. A release of streams over Nexus needs a green run of it,
+until CI has a lane with such a server.
