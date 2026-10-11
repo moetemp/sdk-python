@@ -695,6 +695,35 @@ async def test_a_body_the_codec_cannot_decode_crosses_as_an_error(
     assert WireRecord.FromString(good.record).body.data == b"fine"
 
 
+class CountingCodec(PayloadCodec):
+    """Counts the decode calls that carry stream bodies, as a remote codec's
+    round trips."""
+
+    def __init__(self) -> None:
+        self.body_calls: list[int] = []
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        bodies = [p for p in payloads if p.metadata.get("encoding") == b"binary/test"]
+        if bodies:
+            self.body_calls.append(len(bodies))
+        return list(payloads)
+
+
+async def test_a_read_page_decodes_in_one_codec_call(server: Server, backing: Backing):
+    codec = CountingCodec()
+    worker_client = with_converter(
+        backing.client, dataclasses.replace(DataConverter.default, payload_codec=codec)
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "one", "two", "three")
+        assert texts(await read(service, ref)) == ["one", "two", "three"]
+    assert codec.body_calls == [3]
+
+
 class XorCodec(PayloadCodec):
     """Encrypts a payload by XOR, the way a namespace's codec would."""
 

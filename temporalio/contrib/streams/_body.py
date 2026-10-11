@@ -63,6 +63,19 @@ async def encode_bodies(
     return await converter._external_store_payload_sequence(encoded)
 
 
+async def decode_bodies(
+    converter: DataConverter, payloads: Sequence[Payload]
+) -> list[Payload]:
+    """Undo :func:`encode_bodies` on bodies read back from the store, together.
+
+    Raises:
+        RuntimeError: A body is a claim and ``converter`` has no external
+            storage to redeem it with.
+    """
+    retrieved = await converter._external_retrieve_payload_sequence(payloads)
+    return await converter._decode_payload_sequence(retrieved)
+
+
 async def decode_body(converter: DataConverter, payload: Payload) -> Payload:
     """Undo :func:`encode_bodies` on a body read back from the store.
 

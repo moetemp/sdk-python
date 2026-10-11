@@ -24,7 +24,7 @@ from temporalio.bridge.proto.streams import (
     NexusLimits,
     NexusResumeRequest,
 )
-from temporalio.contrib.streams._body import decode_body, encode_bodies
+from temporalio.contrib.streams._body import decode_bodies, decode_body, encode_bodies
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams.nexus._generated import (
@@ -234,6 +234,13 @@ async def _run_codec(converter: DataConverter, work: CodecWork) -> list[CodecRes
             failed = CodecResult(error=f"{type(error).__name__}: {error}")
             return [failed] * len(payloads)
         return [CodecResult(payload=payload) for payload in encoded]
+    try:
+        # One call for the page, since a remote codec pays a round trip each.
+        decoded_page = await decode_bodies(converter, payloads)
+    except Exception:
+        pass
+    else:
+        return [CodecResult(payload=payload) for payload in decoded_page]
     results: list[CodecResult] = []
     for payload in payloads:
         # Each record decodes on its own, so a body the codec refuses crosses
