@@ -19,6 +19,7 @@ writes with a producer id and attempt of its own.
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import AsyncGenerator
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, cast, overload
@@ -47,6 +48,7 @@ from temporalio.contrib.streams._record import Cursor, RecordKind, StreamRecord
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wire import WireRecord, from_read, to_wire
+from temporalio.converter import DataConverter, WorkflowSerializationContext
 
 __all__ = [
     "ActivityStreamHandle",
@@ -145,7 +147,7 @@ class StreamProducer(Generic[T]):
             return await self._write(RecordKind.FINISH, [None])
 
     async def _write(self, kind: RecordKind, values: Any) -> Cursor:
-        converter = self._handle._client.data_converter
+        converter = self._handle._converter
         wires = [
             to_wire(
                 converter.payload_converter,
@@ -210,6 +212,13 @@ class StreamHandle:
         self._plugin = plugin
         self._client = client
         self._ref = ref
+        # The stream is the Workflow's, and the Workflow encodes its records with
+        # its own context, so every reader and producer on it uses that context.
+        self._converter: DataConverter = client.data_converter.with_context(
+            WorkflowSerializationContext(
+                namespace=client.namespace, workflow_id=ref.workflow_id
+            )
+        )
 
     @property
     def ref(self) -> StreamRef:
@@ -279,6 +288,13 @@ class StreamHandle:
                 retains, or the read fell behind retention while it ran.
             StreamRecordError: A record did not decode. Read on from its
                 cursor to skip it.
+            StreamNotFoundError: The owner doesn't exist.
+            StreamStorageError: The store failed or couldn't be reached, as
+                a Redis blip during a long read does.
+
+        Any of these ends the generator. Start a new read after the last
+        cursor you handled. It reads on from there, though it no longer knows
+        which earlier attempts of other producers it delivered.
         """
         name, result_type = self._resolve(topic, result_type)
         return self._read(name, after, result_type)
@@ -292,7 +308,7 @@ class StreamHandle:
         while True:
             response = await call(service.read(request))
             for record in response.records:
-                yield await from_read(self._client.data_converter, record, result_type)
+                yield await from_read(self._converter, record, result_type)
             if response.done:
                 return
             request.after = response.cursor
@@ -343,8 +359,11 @@ class StreamHandle:
         A process that restarts its work raises ``attempt``, which starts a
         new sequence and tells readers that what the earlier attempt wrote is
         superseded. Keep one producer object per ``(topic, producer_id,
-        attempt)``. Each object numbers its own records from one, so a second
-        object for the same session is refused as stale.
+        attempt)``. Each object numbers its own records from one. A second
+        object for the same session is refused as stale once the first moved
+        past its first batch. Before that, a second object's first batch with
+        the same content as the first object's is taken as a retry, and the
+        store writes nothing, with no error.
 
         ``next_sequence`` is the sequence of the producer's next record. A
         caller that keeps its own count across processes, such as the stream
@@ -389,10 +408,16 @@ class ActivityStreamHandle:
     producer.
     """
 
-    def __init__(self, inner: StreamHandle, identity: ActivityProducer) -> None:
+    def __init__(
+        self,
+        inner: StreamHandle,
+        identity: ActivityProducer,
+        producers: dict[str, StreamProducer[Any]],
+    ) -> None:
         """Prefer :func:`temporalio.contrib.streams.activity_handle`."""
         self._inner = inner
         self._identity = identity
+        self._producers = producers
 
     @property
     def ref(self) -> StreamRef:
@@ -453,16 +478,23 @@ class ActivityStreamHandle:
         attempt is the Activity's Temporal attempt, so the first record of a
         retry makes readers see ``SUPERSEDED``. A retry starts a new sequence,
         and the store deduplicates a repeated append within one attempt.
+
+        Every call in one attempt returns the same producer for a topic, so
+        two parts of the Activity that each ask for it number their records
+        in one sequence.
         """
         name, _ = self._inner._resolve(topic, None)
-        identity = self._identity
-        return StreamProducer(
-            self._inner,
-            name,
-            f"{identity.activity_id}@{identity.run_id}",
-            identity.attempt,
-            activity=identity,
-        )
+        producer = self._producers.get(name)
+        if producer is None:
+            identity = self._identity
+            producer = self._producers[name] = StreamProducer(
+                self._inner,
+                name,
+                f"{identity.activity_id}@{identity.run_id}",
+                identity.attempt,
+                activity=identity,
+            )
+        return producer
 
 
 def activity_handle() -> ActivityStreamHandle:
@@ -473,13 +505,24 @@ def activity_handle() -> ActivityStreamHandle:
     :func:`get_stream_handle` with ``temporalio.activity.client()`` and a
     producer id of your own.
 
+    A Local Activity has no stream producer in this release. Its attempt is
+    not durable, so after a Worker crash it runs again as the same attempt,
+    and the store refuses its first append as stale. Publish from the
+    Workflow instead, which commits with the Workflow Task.
+
     Raises:
-        StreamUnsupportedError: The Activity was not scheduled by a Workflow;
-            streams owned by an Activity are not supported in this release.
+        StreamUnsupportedError: The Activity is a Local Activity, or it was
+            not scheduled by a Workflow, since streams owned by an Activity
+            are not supported in this release.
         ValueError: No stream store is registered on the Worker's client.
         RuntimeError: Not called from inside an Activity.
     """
     info = temporalio.activity.info()
+    if info.is_local:
+        raise StreamUnsupportedError(
+            "a Local Activity has no stream producer in this release, since its "
+            "attempt isn't durable; publish from the Workflow instead"
+        )
     if info.workflow_id is None or info.workflow_run_id is None:
         raise StreamUnsupportedError(
             "this Activity was not scheduled by a Workflow, and streams owned by "
@@ -494,7 +537,23 @@ def activity_handle() -> ActivityStreamHandle:
         attempt=info.attempt,
     )
     inner = StreamHandle(store_for_client(client), client, ref)
-    return ActivityStreamHandle(inner, identity)
+    return ActivityStreamHandle(inner, identity, _attempt_producers())
+
+
+# The producers of each running Activity attempt, by topic, under the id of the
+# attempt's context. The context isn't hashable, so a finalizer drops the entry
+# with it.
+_activity_producers: dict[int, dict[str, StreamProducer[Any]]] = {}
+
+
+def _attempt_producers() -> dict[str, StreamProducer[Any]]:
+    context = temporalio.activity._Context.current()
+    key = id(context)
+    producers = _activity_producers.get(key)
+    if producers is None:
+        producers = _activity_producers[key] = {}
+        weakref.finalize(context, _activity_producers.pop, key, None)
+    return producers
 
 
 def get_stream_handle(

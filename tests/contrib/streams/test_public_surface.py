@@ -7,6 +7,7 @@ import temporalio.contrib.streams as streams
 # The helpers behind the handles stay importable from their private modules,
 # but they are not part of the public surface.
 _PRIVATE = {
+    "RUN_ID_KEY",
     "batch_digest",
     "content_hash",
     "decode_body",
