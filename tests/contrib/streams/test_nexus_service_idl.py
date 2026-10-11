@@ -7,6 +7,7 @@ the contract; these pin what the rest of the SDK relies on from them.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -24,7 +25,9 @@ from temporalio.contrib.streams.nexus import (
     ReadOutput,
     RecordWire,
     TemporalStreams,
+    TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._generated import StreamOperationToken
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 
@@ -178,3 +181,119 @@ def test_a_supersession_decodes_at_its_cursor():
         record.superseded.previous_attempt,
         record.superseded.attempt,
     ) == ("tokens@run-1", 1, 2)
+
+
+def test_a_read_carries_its_state_both_ways():
+    # The reader carries Core's read state, so the handler holds none.
+    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), state=b"\x01\x02")
+    assert _to_json(read)["state"] == base64.b64encode(b"\x01\x02").decode()
+    answer = _from_json(
+        {
+            "records": [],
+            "next_token": "memory:abcd1234:2",
+            "done": False,
+            "state": "AQI=",
+        },
+        ReadOutput,
+    )
+    assert answer.state == b"\x01\x02"
+
+
+def test_a_stale_record_decodes_with_its_mark():
+    record = base64.b64encode(b"\x1a\x06tokens").decode()
+    answer = _from_json(
+        {
+            "records": [
+                {"token": "memory:abcd1234:3", "record": record, "stale": True}
+            ],
+            "next_token": "memory:abcd1234:3",
+            "done": False,
+        },
+        ReadOutput,
+    )
+    [stored] = answer.records
+    assert stored.stale is True
+
+
+def test_the_generated_long_poll_sends_back_each_answers_state():
+    source = inspect.getsource(TemporalStreamsHttpClient.read_until_records)
+    assert "request = dataclasses.replace(request, state=answer.state)" in source
+
+
+# Core's crates/streams/nexus/operation_token_vectors.json, which Core's
+# encoder checks too.
+_TOKEN_VECTORS = [
+    (
+        StreamRef(kind="workflow", workflow_id="owner-1", run_id=None, topic="tokens"),
+        "attach-1",
+        "chain-1",
+        "eyJhdHRhY2giOiJhdHRhY2gtMSIsImNoYWluIjoiY2hhaW4tMSIsInJlZiI6eyJraW5kIjoid29ya2Zsb3ciLC"
+        "JydW5faWQiOm51bGwsInRvcGljIjoidG9rZW5zIiwid29ya2Zsb3dfaWQiOiJvd25lci0xIn0sInYiOjJ9",
+    ),
+    (
+        StreamRef(
+            kind="workflow", workflow_id="owner-1", run_id="run-2", topic="tokens"
+        ),
+        "attach-1",
+        "run-1",
+        "eyJhdHRhY2giOiJhdHRhY2gtMSIsImNoYWluIjoicnVuLTEiLCJyZWYiOnsia2luZCI6IndvcmtmbG93IiwicnV"
+        "uX2lkIjoicnVuLTIiLCJ0b3BpYyI6InRva2VucyIsIndvcmtmbG93X2lkIjoib3duZXItMSJ9LCJ2IjoyfQ",
+    ),
+    (
+        StreamRef(
+            kind="workflow",
+            workflow_id='order/42 "quoted"',
+            run_id=None,
+            topic="t\\back\nline",
+        ),
+        "req-\u00e9",
+        "chain-\u00fc",
+        "eyJhdHRhY2giOiJyZXEtXHUwMGU5IiwiY2hhaW4iOiJjaGFpbi1cdTAwZmMiLCJyZWYiOnsia2luZCI6IndvcmtmbG"
+        "93IiwicnVuX2lkIjpudWxsLCJ0b3BpYyI6InRcXGJhY2tcbmxpbmUiLCJ3b3JrZmxvd19pZCI6Im9yZGVyLzQyIFwic"
+        "XVvdGVkXCIifSwidiI6Mn0",
+    ),
+    (
+        StreamRef(
+            kind="workflow",
+            workflow_id="\u65e5\u672c\u8a9e-wf",
+            run_id=None,
+            topic="emoji-\U0001f600",
+        ),
+        "r",
+        "c",
+        "eyJhdHRhY2giOiJyIiwiY2hhaW4iOiJjIiwicmVmIjp7ImtpbmQiOiJ3b3JrZmxvdyIsInJ1bl9pZCI6bnVsbCwidG9"
+        "waWMiOiJlbW9qaS1cdWQ4M2RcdWRlMDAiLCJ3b3JrZmxvd19pZCI6Ilx1NjVlNVx1NjcyY1x1OGE5ZS13ZiJ9LCJ2Ij"
+        "oyfQ",
+    ),
+]
+
+
+@pytest.mark.parametrize("ref, attach, chain, token", _TOKEN_VECTORS)
+def test_the_operation_token_reads_cores_vectors(
+    ref: StreamRef, attach: str, chain: str, token: str
+):
+    decoded = StreamOperationToken.from_token(token)
+    assert (decoded.v, decoded.ref, decoded.attach, decoded.chain) == (
+        2,
+        ref,
+        attach,
+        chain,
+    )
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "",
+        "not-a-token",
+        # A token with only its version.
+        "eyJ2IjogMn0",
+        # A version 1 token.
+        "eyJ2IjogMSwgImF0dGFjaCI6ICJhdHRhY2gtMSIsICJjaGFpbiI6ICJjaGFpbi0xIiwgInJlZiI6IHsia2luZCI6"
+        "ICJ3b3JrZmxvdyIsICJ3b3JrZmxvd19pZCI6ICJvd25lci0xIiwgInJ1bl9pZCI6IG51bGwsICJ0b3BpYyI6ICJ0b2t"
+        "lbnMifX0=",
+    ],
+)
+def test_the_operation_token_refuses_cores_refused_vectors(token: str):
+    with pytest.raises(ValueError):
+        StreamOperationToken.from_token(token)

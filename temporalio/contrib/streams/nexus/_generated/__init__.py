@@ -13,6 +13,7 @@ from .models import (
     ReadOutput,
     RecordWire,
     RecordWireSuperseded,
+    StreamOperationToken,
     Supersession,
 )
 from .services import TemporalStreams
@@ -26,6 +27,7 @@ __all__ = [
     "ReadOutput",
     "RecordWire",
     "RecordWireSuperseded",
+    "StreamOperationToken",
     "Supersession",
     "TemporalStreams",
 ]
