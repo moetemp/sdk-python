@@ -152,13 +152,16 @@ Every key of a namespace's streams starts with
 one namespace's applications:
 
 ```
-ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo
+ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
 ```
 
 The conformance suite and a Workflow publish test run as a user with
-exactly these rules, so a store change that needs another command fails
-the tests. The delete helper also needs `+scan`. `+config|get` is only used
-to read `maxmemory-policy`, and the store goes on when a server refuses it.
+exactly these rules, on a single server and on a cluster, so a store change
+that needs another command fails the tests. A cluster client reads the
+topology with `CLUSTER SLOTS` first. An ACL user lives on one node, so on a
+cluster you create the user on every node. The delete helper also needs
+`+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
+store goes on when a server refuses it.
 
 What crosses the wire:
 
@@ -188,9 +191,9 @@ All keys of one run chain's streams share a hash tag, so every script and
 transaction touches one slot. Different Workflows, and different run
 chains of one Workflow id, spread across the cluster. The version check
 and the `maxmemory-policy` check ask every primary, and
-`delete_workflow_streams` scans every primary.
+`delete_workflow_streams` scans every primary. A scan makes no promise about
+keys that move to another node while it runs, so a delete during a reshard
+can miss some. Run it again once the reshard is done.
 
-Core's conformance suite runs against a Redis 7 cluster too. The cluster
-client also sends `CLUSTER SLOTS` and `COMMAND` to discover the cluster, so
-an ACL user for it needs `+cluster|slots +command` as well. The ACL above
-was tested on a single server only.
+Core's conformance suite runs against a Redis 7 cluster too, also as a
+user with exactly the ACL above.
