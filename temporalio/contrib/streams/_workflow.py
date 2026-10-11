@@ -45,6 +45,13 @@ estimates.
 # the topic name itself.
 _MANIFEST_FIXED_BYTES = 512
 _MANIFEST_TOPIC_BYTES = 72
+# The largest body one record may carry, the same limit the stream service
+# keeps for a record that crosses Nexus.
+_MAX_RECORD_BYTES = 3 << 19
+# The most body bytes one activation may publish. Core stages them in one store
+# call before the completion goes out, and a call too large fails the Workflow
+# Task on every retry.
+_MAX_ACTIVATION_BYTES = 16 << 20
 
 
 class _RunStreams:
@@ -57,22 +64,37 @@ class _RunStreams:
         self.commit: WorkflowOutputStreamCommit | None = None
         self.topics: set[str] = set()
         self.manifest_bound = _MANIFEST_FIXED_BYTES
+        self.activation_bytes = 0
 
     def add(self, record: OutputRecord) -> None:
         """Add ``record`` to this activation's commit.
 
         Raises:
-            StreamError: The record would take this completion's manifest
-                past :data:`MANIFEST_BUDGET_BYTES`. Nothing is added.
+            StreamError: The record's body is over the per-record limit, it
+                would take this activation's bodies past their budget, or it
+                would take this completion's manifest past
+                :data:`MANIFEST_BUDGET_BYTES`. Nothing is added.
         """
+        if record.logical_size > _MAX_RECORD_BYTES:
+            raise StreamError(
+                f"a record of {record.logical_size} bytes on {record.topic!r} is "
+                f"over the per-record limit of {_MAX_RECORD_BYTES} bytes"
+            )
         commit = workflow._Runtime.current().workflow_stream_commit()
         if commit is not self.commit:
             self.commit, self.topics = commit, set()
             self.manifest_bound = _MANIFEST_FIXED_BYTES
-        if record.topic not in self.topics:
-            bound = (
-                self.manifest_bound + _MANIFEST_TOPIC_BYTES + len(record.topic.encode())
+            self.activation_bytes = 0
+        total = self.activation_bytes + record.logical_size
+        if total > _MAX_ACTIVATION_BYTES:
+            raise StreamError(
+                f"publishing {record.logical_size} more bytes on {record.topic!r} "
+                f"would take this activation past {_MAX_ACTIVATION_BYTES} bytes "
+                "of records; publish the rest after the Workflow next waits"
             )
+        bound = self.manifest_bound
+        if record.topic not in self.topics:
+            bound += _MANIFEST_TOPIC_BYTES + len(record.topic.encode())
             if bound > MANIFEST_BUDGET_BYTES:
                 raise StreamError(
                     f"publishing to {record.topic!r} would take this Workflow Task's "
@@ -81,7 +103,8 @@ class _RunStreams:
                     "activation; spread the topics across Workflow Tasks"
                 )
             self.topics.add(record.topic)
-            self.manifest_bound = bound
+        self.manifest_bound = bound
+        self.activation_bytes = total
         commit.records.append(record)
 
 
@@ -91,7 +114,11 @@ _runs: weakref.WeakKeyDictionary[Any, _RunStreams] = weakref.WeakKeyDictionary()
 
 
 def _run_streams() -> _RunStreams:
-    return _runs.setdefault(workflow._Runtime.current(), _RunStreams())
+    runtime = workflow._Runtime.current()
+    streams = _runs.get(runtime)
+    if streams is None:
+        streams = _runs[runtime] = _RunStreams()
+    return streams
 
 
 def _publish(record: OutputRecord, action: str) -> None:
@@ -142,12 +169,14 @@ class WorkflowStreamWriter(Generic[T]):
                 Worker has no stream store.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator, which commit nothing.
-            temporalio.contrib.streams.StreamError: This activation already
-                published to so many topics that one more would take the
-                Workflow Task's manifest past its budget. Nothing is
-                published; publish the rest after the Workflow next waits.
-                Catch it: uncaught, it fails the Workflow Task, and every
-                retry runs the same code and fails the same way.
+            temporalio.contrib.streams.StreamError: The value's payload is
+                over 1.5 MiB, it would take this activation's records past
+                16 MiB, or this activation already published to so many
+                topics that one more would take the Workflow Task's manifest
+                past its budget. Nothing is published. Publish the rest after
+                the Workflow next waits. Catch it: uncaught, it fails the
+                Workflow Task, and every retry runs the same code and fails
+                the same way.
         """
         if self._topic in _run_streams().finished:
             raise ValueError(f"topic {self._topic!r} was already finished")

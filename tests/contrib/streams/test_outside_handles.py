@@ -7,6 +7,7 @@ reaches a Workflow's stream by Workflow id through its store.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Sequence
 from datetime import timedelta
@@ -26,14 +27,22 @@ from temporalio.contrib.streams import (
     StreamNotFoundError,
     StreamProducerError,
     StreamRef,
+    StreamUnsupportedError,
     Supersession,
     activity_handle,
     get_stream_handle,
     topic,
+    workflow_writer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
-from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.converter import (
+    DataConverter,
+    PayloadCodec,
+    SerializationContext,
+    WithSerializationContext,
+)
 from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
 from tests.contrib.streams.test_workflow_writer import EVENTS, Publisher
 from tests.helpers import new_worker
@@ -337,3 +346,115 @@ async def test_an_activity_producer_writes_in_every_run_of_a_chain(client: Clien
     assert producers[0] == producers[1] != producers[2] == producers[3]
     assert producers[3] == last_producer
     assert last_producer.endswith("@" + (await handle.describe()).run_id)
+
+
+class WorkflowKeyedCodec(PayloadCodec, WithSerializationContext):
+    """Encrypts each payload under the key of the Workflow its context names, as
+    a multi-tenant codec does. A payload decodes only under the same key."""
+
+    def __init__(self, key: str = "") -> None:
+        self.key = key
+
+    def with_context(self, context: SerializationContext) -> WorkflowKeyedCodec:
+        workflow_id = getattr(context, "workflow_id", None)
+        return WorkflowKeyedCodec(workflow_id or "")
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={"encoding": b"binary/keyed", "key": self.key.encode()},
+                data=p.SerializeToString(),
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        out = []
+        for p in payloads:
+            if p.metadata.get("encoding") != b"binary/keyed":
+                out.append(p)
+                continue
+            if p.metadata["key"].decode() != self.key:
+                raise ValueError(
+                    f"encrypted under {p.metadata['key']!r}, not {self.key!r}"
+                )
+            out.append(Payload.FromString(p.data))
+        return out
+
+
+@activity.defn
+async def append_one_token() -> None:
+    await activity_handle().producer(topic=TOKENS).append("from the activity")
+
+
+@workflow.defn
+class PublishesThenRunsAnActivity:
+    @workflow.run
+    async def run(self) -> None:
+        workflow_writer(TOKENS).publish("from the workflow")
+        await workflow.execute_activity(
+            append_one_token, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+async def test_both_sides_use_the_workflows_serialization_context(client: Client):
+    # The Workflow's records are encoded with its context, so readers and the
+    # other producers on its stream must use the same one.
+    keyed = await connect_with(
+        client, MemoryStreams(), DataConverter(payload_codec=WorkflowKeyedCodec())
+    )
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        keyed, PublishesThenRunsAnActivity, activities=[append_one_token]
+    ) as worker:
+        await keyed.execute_workflow(
+            PublishesThenRunsAnActivity.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+    records = await read_all(get_stream_handle(keyed, workflow_id).read(topic=TOKENS))
+    assert [r.value for r in records] == ["from the workflow", "from the activity"]
+
+
+@activity.defn
+async def logs_twice() -> None:
+    # A helper that asks for the producer on every call.
+    for line in ["started", "started"]:
+        await activity_handle().producer(topic=TOKENS).append(line)
+
+
+@workflow.defn
+class RunsLogsTwice:
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.execute_activity(
+            logs_twice, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+async def test_an_activity_gets_one_producer_per_topic(client: Client):
+    # Two producer objects would both start at sequence 1, so the second equal
+    # record would dedupe into the first and vanish.
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams_client, RunsLogsTwice, activities=[logs_twice]
+    ) as worker:
+        await streams_client.execute_workflow(
+            RunsLogsTwice.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(
+        get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
+    )
+    assert [r.value for r in records] == ["started", "started"]
+
+
+async def test_a_local_activity_has_no_stream_producer():
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(ActivityEnvironment.default_info(), is_local=True)
+
+    async def local() -> None:
+        activity_handle()
+
+    with pytest.raises(StreamUnsupportedError, match="Local Activity"):
+        await env.run(local)

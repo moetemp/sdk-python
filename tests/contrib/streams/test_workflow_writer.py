@@ -21,6 +21,7 @@ from temporalio.contrib.streams import (
     BEGINNING,
     DEFAULT_TOPIC,
     RecordKind,
+    StreamError,
     get_stream_handle,
     topic,
     workflow_writer,
@@ -163,3 +164,44 @@ async def test_a_workflow_without_a_store_is_told(client: Client):
             task_queue=worker.task_queue,
         )
     assert "no stream store is registered" in said
+
+
+@workflow.defn
+class PublishesTooMuch:
+    @workflow.run
+    async def run(self) -> list[str]:
+        said: list[str] = []
+        writer = workflow_writer(EVENTS)
+        try:
+            writer.publish({"big": "x" * (2 << 20)})
+        except StreamError as error:
+            said.append(str(error))
+        published = 0
+        try:
+            for _ in range(40):
+                writer.publish({"chunk": "x" * (1 << 20)})
+                published += 1
+        except StreamError as error:
+            said.append(str(error))
+        said.append(str(published))
+        # The next Workflow Task has a fresh budget.
+        await workflow.sleep(0.01)
+        writer.publish({"after": "budget"})
+        return said
+
+
+async def test_a_record_or_an_activation_too_large_is_refused_at_the_call(
+    client: Client,
+):
+    # Core stages an activation's bodies in one store call, so a body or an
+    # activation without a bound fails the task on every retry.
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, PublishesTooMuch) as worker:
+        said = await streams_client.execute_workflow(
+            PublishesTooMuch.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    record_refusal, budget_refusal, published = said
+    assert "per-record limit" in record_refusal
+    assert "activation" in budget_refusal
+    assert 0 < int(published) < 40
