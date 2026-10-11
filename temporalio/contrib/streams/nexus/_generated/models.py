@@ -940,8 +940,8 @@ class ReadOutput:
 
     state: bytes | None = None
     """Pass as state on the next call of this read. It matches next_token, also when the
-    answer was cut short by its byte budget. It stays below 64 KiB, so it can ride in a
-    Workflow's History.
+    answer was cut short by its byte budget. It holds at most 64 KiB, which is about 87
+    KiB as base64, so it can ride in a Workflow's History. A longer state is refused.
     """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(

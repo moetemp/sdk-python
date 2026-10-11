@@ -243,17 +243,17 @@ async def test_the_generated_long_poll_sends_back_each_answers_state(
 
 
 # A copy of Core's crates/streams/nexus/operation_token_vectors.json, from
-# moetemp/sdk-rust moe/bridge/cn5-stream-callers at d34278ab. Core's encoder and
+# moetemp/sdk-rust moe/bridge/cn5-stream-callers at b0ac595e. Core's encoder and
 # decoder read the same file.
 _TOKEN_VECTORS = json.loads(
     (Path(__file__).parent / "operation_token_vectors.json").read_text()
 )
 
 # Core's canonical crates/streams/nexus/temporal_streams.nexusrpc.yaml at CN4
-# bba0fbb0. This branch's Core pin has no copy to compare with, so the digest
+# 8835dc5a. This branch's Core pin has no copy to compare with, so the digest
 # pins it, and N0b generates from Core's own copy.
 _CORE_CONTRACT_SHA256 = (
-    "5ffffcbc8bb6314fb19fd05b95b9ca781e627e50ae46182317ca21149b7a70a5"
+    "547e2da0d3e47b098950ebdb5ec8d248ca798d8aed230b1189935af4b0fea768"
 )
 
 
