@@ -13,6 +13,7 @@ read answered, and a replay hands over the same batches at the same points.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -45,15 +46,19 @@ _DRAIN_WAIT_MS = 2000
 
 
 class StreamIncompleteError(StreamError):
-    """The operation completed, but the stream never said it ended.
+    """The stream and its operation didn't both end within the drain limit.
 
     .. warning::
         This API is experimental and may change in future versions.
 
-    The reader gave up after its drain limit of empty reads, because every
-    read is a Nexus operation in the caller's History. It happens when the
-    owner's close didn't reach the store, or when the Workflow id moved on to
-    a new run chain whose topic is still open.
+    Either the operation completed but the stream never said it ended, or the
+    stream ended but the operation never completed. The reader gives up
+    after its drain limit, because every read is a Nexus operation in the
+    caller's History, and a wait with no end holds the caller open. The
+    first happens when the owner's close didn't reach the store, or when the
+    Workflow id moved on to a new run chain whose topic is still open. The
+    second happens when the close never reached the caller, for example when
+    the server refused it for good.
     """
 
     def __init__(self, message: str, *, cursor: Cursor) -> None:
@@ -156,9 +161,11 @@ class StreamReader(Generic[T]):
     the reader with ``after=cursor``. After a successful completion, the
     reader reads until the stream service says the stream is done, and raises
     :class:`StreamIncompleteError` once its reads have found nothing for
-    ``drain_limit``. A read that fails because retention dropped the records
-    after the cursor raises with ``StreamExpiredError`` as its cause. A new
-    reader with no ``after`` starts again at the oldest record still kept.
+    ``drain_limit``. A stream that ended waits at most ``drain_limit`` for its
+    operation to complete, then raises the same error. A read that fails
+    because retention dropped the records after the cursor raises with
+    ``StreamExpiredError`` as its cause. A new reader with no ``after`` starts
+    again at the oldest record still kept.
 
     Bodies reach Workflow code decoded: the stream service decodes each body
     with its Worker's data converter, payload codec included, and the read's
@@ -187,7 +194,8 @@ class StreamReader(Generic[T]):
             after: Resume after this cursor, such as a previous run's
                 :attr:`cursor`. ``None`` starts at the oldest record kept.
             drain_limit: How long reads after a successful completion may
-                find nothing before the reader raises
+                find nothing, or a stream that ended may wait for its
+                operation to complete, before the reader raises
                 :class:`StreamIncompleteError`.
 
         Raises:
@@ -200,6 +208,7 @@ class StreamReader(Generic[T]):
         self._endpoint = endpoint
         self._drain_limit = drain_limit
         self._drain_since: datetime | None = None
+        self._done_since: datetime | None = None
         self._stream: StreamRef | None = None
         self._decoder: RecordDecoder | None = None
         self._cursor = after.token if after is not None else ""
@@ -255,7 +264,9 @@ class StreamReader(Generic[T]):
                 ``item_type``, or was too large to cross. The next call goes
                 on past it.
             StreamIncompleteError: The operation completed, but reads found
-                nothing for ``drain_limit`` and the stream never ended.
+                nothing for ``drain_limit`` and the stream never ended. Or the
+                stream ended, but the operation didn't complete within
+                ``drain_limit``.
             ValueError: The operation's token does not name a stream.
         """
         if self._undecodable is not None:
@@ -294,7 +305,7 @@ class StreamReader(Generic[T]):
                 # Raises the operation's failure, if it failed.
                 await self._handle
                 return None
-            progress = await self._handle.progress(after_counter=self._counter)
+            progress = await self._next_progress()
             if progress is None:
                 # Records may have landed after the last progress.
                 self._operation_resolved = True
@@ -307,6 +318,28 @@ class StreamReader(Generic[T]):
                 self._counter = progress.counter
             self._caught_up = False
         return None
+
+    async def _next_progress(self) -> workflow.NexusOperationProgress | None:
+        if not self._stream_done:
+            return await self._handle.progress(after_counter=self._counter)
+        # No record follows the stream's end, so only the completion is left,
+        # and a completion that never comes would hold the caller open.
+        if self._done_since is None:
+            self._done_since = workflow.now()
+        left = self._drain_limit - (workflow.now() - self._done_since)
+        try:
+            if left <= timedelta(0):
+                raise asyncio.TimeoutError
+            return await asyncio.wait_for(
+                self._handle.progress(after_counter=self._counter),
+                left.total_seconds(),
+            )
+        except asyncio.TimeoutError:
+            raise StreamIncompleteError(
+                f"the stream ended, but the operation didn't complete within "
+                f"{self._drain_limit}",
+                cursor=self.cursor,
+            ) from None
 
     async def _read(self) -> list[T]:
         if self._stream is None:

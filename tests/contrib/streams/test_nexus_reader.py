@@ -35,6 +35,9 @@ from temporalio.api.history.v1 import (
     NexusOperationFailedEventAttributes,
     NexusOperationScheduledEventAttributes,
     NexusOperationStartedEventAttributes,
+    TimerCanceledEventAttributes,
+    TimerFiredEventAttributes,
+    TimerStartedEventAttributes,
     WorkflowExecutionCompletedEventAttributes,
     WorkflowExecutionStartedEventAttributes,
     WorkflowTaskCompletedEventAttributes,
@@ -240,6 +243,36 @@ class History:
                     message=f"{operation} failed",
                     application_failure_info=ApplicationFailureInfo(type="Broken"),
                 ),
+            ),
+        )
+
+    def timer_started(self, seconds: int) -> int:
+        """The timer the reader starts in the task just completed."""
+        return self.add(
+            EventType.EVENT_TYPE_TIMER_STARTED,
+            timer_started_event_attributes=TimerStartedEventAttributes(
+                timer_id="1",
+                start_to_fire_timeout=Duration(seconds=seconds),
+                workflow_task_completed_event_id=self._completed,
+            ),
+        )
+
+    def timer_fired(self, started_event_id: int, seconds: int) -> None:
+        self._time += timedelta(seconds=seconds)
+        self.add(
+            EventType.EVENT_TYPE_TIMER_FIRED,
+            timer_fired_event_attributes=TimerFiredEventAttributes(
+                timer_id="1", started_event_id=started_event_id
+            ),
+        )
+
+    def timer_canceled(self, started_event_id: int) -> None:
+        self.add(
+            EventType.EVENT_TYPE_TIMER_CANCELED,
+            timer_canceled_event_attributes=TimerCanceledEventAttributes(
+                timer_id="1",
+                started_event_id=started_event_id,
+                workflow_task_completed_event_id=self._completed,
             ),
         )
 
@@ -454,6 +487,48 @@ async def test_after_a_completion_a_stream_that_never_ends_raises() -> None:
     h.workflow_completed()
     await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
     assert seen[0].error == "StreamIncompleteError"
+
+
+async def test_a_stream_done_without_a_completion_raises_after_the_drain_limit() -> (
+    None
+):
+    """The store says the stream is done, but the operation never completes,
+    for example when the owner closed its stream and runs on for days. The
+    reader doesn't wait on progress for ever."""
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 2))
+    h.read(answer(record(1, text="a"), record(2, RecordKind.FINISH), done=True))
+    h.task()
+    h.timer_fired(h.timer_started(60), 60)
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a")]]
+    assert seen[0].error == "StreamIncompleteError"
+
+
+async def test_a_completion_after_the_stream_is_done_ends_the_reader() -> None:
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 2))
+    h.read(answer(record(1, text="a"), record(2, RecordKind.FINISH), done=True))
+    h.task()
+    timer = h.timer_started(60)
+    h.completed(chat, "summary")
+    h.task()
+    h.timer_canceled(timer)
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a")]]
+    assert seen[0].after_end is None
+    assert seen[0].error is None
 
 
 async def test_a_record_too_large_to_cross_raises_and_the_reader_goes_on() -> None:
