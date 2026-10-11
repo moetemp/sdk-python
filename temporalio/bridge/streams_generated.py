@@ -76,6 +76,22 @@ class StreamNexusService:
         """Initialize service with the provided store."""
         self._store = store
 
+    async def attach_caller(
+        self, req: temporalio.bridge.proto.streams.AttachCallerRequest
+    ) -> temporalio.bridge.proto.streams.AttachCallerResponse:
+        """Invokes the StreamNexusService.attach_caller call."""
+        return await self._store.call(
+            "AttachCaller", req, temporalio.bridge.proto.streams.AttachCallerResponse
+        )
+
+    async def detach_caller(
+        self, req: temporalio.bridge.proto.streams.DetachCallerRequest
+    ) -> temporalio.bridge.proto.streams.DetachCallerResponse:
+        """Invokes the StreamNexusService.detach_caller call."""
+        return await self._store.call(
+            "DetachCaller", req, temporalio.bridge.proto.streams.DetachCallerResponse
+        )
+
     async def nexus_append(
         self, req: temporalio.bridge.proto.streams.NexusCall
     ) -> temporalio.bridge.proto.streams.NexusStep:

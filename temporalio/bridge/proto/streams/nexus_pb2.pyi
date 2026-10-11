@@ -14,6 +14,7 @@ import google.protobuf.timestamp_pb2
 
 import temporalio.api.common.v1.message_pb2
 import temporalio.api.failure.v1.message_pb2
+import temporalio.bridge.proto.streams.streams_pb2
 
 if sys.version_info >= (3, 8):
     import typing as typing_extensions
@@ -316,3 +317,121 @@ class NexusFailure(google.protobuf.message.Message):
     ) -> None: ...
 
 global___NexusFailure = NexusFailure
+
+class AttachCallerRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class CallbackHeadersEntry(google.protobuf.message.Message):
+        DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+        KEY_FIELD_NUMBER: builtins.int
+        VALUE_FIELD_NUMBER: builtins.int
+        key: builtins.str
+        value: builtins.str
+        def __init__(
+            self,
+            *,
+            key: builtins.str = ...,
+            value: builtins.str = ...,
+        ) -> None: ...
+        def ClearField(
+            self,
+            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
+        ) -> None: ...
+
+    STREAM_FIELD_NUMBER: builtins.int
+    REQUEST_ID_FIELD_NUMBER: builtins.int
+    CALLBACK_URL_FIELD_NUMBER: builtins.int
+    CALLBACK_HEADERS_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> temporalio.bridge.proto.streams.streams_pb2.StreamAddress:
+        """The stream the operation's start names. An empty run id attaches to the chain that holds the
+        Workflow id now.
+        """
+    request_id: builtins.str
+    """The start's request id. A retried start attaches once."""
+    callback_url: builtins.str
+    """The start's callback URL and headers. An empty URL is refused, since the caller could never
+    hear about the stream.
+    """
+    @property
+    def callback_headers(
+        self,
+    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]: ...
+    def __init__(
+        self,
+        *,
+        stream: temporalio.bridge.proto.streams.streams_pb2.StreamAddress | None = ...,
+        request_id: builtins.str = ...,
+        callback_url: builtins.str = ...,
+        callback_headers: collections.abc.Mapping[builtins.str, builtins.str]
+        | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "callback_headers",
+            b"callback_headers",
+            "callback_url",
+            b"callback_url",
+            "request_id",
+            b"request_id",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___AttachCallerRequest = AttachCallerRequest
+
+class AttachCallerResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    OPERATION_TOKEN_FIELD_NUMBER: builtins.int
+    operation_token: builtins.str
+    """The token the start answers with. It names the stream, the attach and the chain."""
+    def __init__(
+        self,
+        *,
+        operation_token: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal["operation_token", b"operation_token"],
+    ) -> None: ...
+
+global___AttachCallerResponse = AttachCallerResponse
+
+class DetachCallerRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NAMESPACE_FIELD_NUMBER: builtins.int
+    OPERATION_TOKEN_FIELD_NUMBER: builtins.int
+    namespace: builtins.str
+    operation_token: builtins.str
+    """The token the start answered with."""
+    def __init__(
+        self,
+        *,
+        namespace: builtins.str = ...,
+        operation_token: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "namespace", b"namespace", "operation_token", b"operation_token"
+        ],
+    ) -> None: ...
+
+global___DetachCallerRequest = DetachCallerRequest
+
+class DetachCallerResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___DetachCallerResponse = DetachCallerResponse

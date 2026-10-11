@@ -22,9 +22,12 @@ from temporalio.api.common.v1 import (
 from temporalio.api.failure.v1 import (
     message_pb2 as temporal_dot_api_dot_failure_dot_v1_dot_message__pb2,
 )
+from temporalio.bridge.proto.streams import (
+    streams_pb2 as temporal_dot_sdk_dot_core_dot_streams_dot_streams__pb2,
+)
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n%temporal/sdk/core/streams/nexus.proto\x12\x0f\x63oresdk.streams\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto"\x89\x01\n\tNexusCall\x12\r\n\x05input\x18\x01 \x01(\x0c\x12,\n\x08\x64\x65\x61\x64line\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12,\n\x06limits\x18\x03 \x01(\x0b\x32\x1c.coresdk.streams.NexusLimits\x12\x11\n\tnamespace\x18\x04 \x01(\t"A\n\x0bNexusLimits\x12\x18\n\x10max_answer_bytes\x18\x01 \x01(\x04\x12\x18\n\x10max_record_bytes\x18\x02 \x01(\x04"\x84\x01\n\tNexusStep\x12\x10\n\x06output\x18\x01 \x01(\x0cH\x00\x12+\n\x05\x63odec\x18\x02 \x01(\x0b\x32\x1a.coresdk.streams.CodecWorkH\x00\x12\x30\n\x07\x66\x61ilure\x18\x03 \x01(\x0b\x32\x1d.coresdk.streams.NexusFailureH\x00\x42\x06\n\x04step"\x8c\x01\n\tCodecWork\x12\x0e\n\x06\x65ncode\x18\x01 \x01(\x08\x12\x11\n\tnamespace\x18\x02 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t\x12\x31\n\x08payloads\x18\x04 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x14\n\x0c\x63ontinuation\x18\x05 \x01(\x04"Y\n\x12NexusResumeRequest\x12\x14\n\x0c\x63ontinuation\x18\x01 \x01(\x04\x12-\n\x07results\x18\x02 \x03(\x0b\x32\x1c.coresdk.streams.CodecResult"\\\n\x0b\x43odecResult\x12\x32\n\x07payload\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x0f\n\x05\x65rror\x18\x02 \x01(\tH\x00\x42\x08\n\x06result"\x81\x01\n\x0cNexusFailure\x12\x1a\n\x12handler_error_type\x18\x01 \x01(\t\x12\x11\n\tretryable\x18\x02 \x01(\x08\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x31\n\x07\x66\x61ilure\x18\x04 \x01(\x0b\x32 .temporal.api.failure.v1.Failure2\xf0\x01\n\x12StreamNexusService\x12\x45\n\x0bNexusAppend\x12\x1a.coresdk.streams.NexusCall\x1a\x1a.coresdk.streams.NexusStep\x12\x43\n\tNexusRead\x12\x1a.coresdk.streams.NexusCall\x1a\x1a.coresdk.streams.NexusStep\x12N\n\x0bNexusResume\x12#.coresdk.streams.NexusResumeRequest\x1a\x1a.coresdk.streams.NexusStepB-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
+    b'\n%temporal/sdk/core/streams/nexus.proto\x12\x0f\x63oresdk.streams\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto\x1a\'temporal/sdk/core/streams/streams.proto"\x89\x01\n\tNexusCall\x12\r\n\x05input\x18\x01 \x01(\x0c\x12,\n\x08\x64\x65\x61\x64line\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12,\n\x06limits\x18\x03 \x01(\x0b\x32\x1c.coresdk.streams.NexusLimits\x12\x11\n\tnamespace\x18\x04 \x01(\t"A\n\x0bNexusLimits\x12\x18\n\x10max_answer_bytes\x18\x01 \x01(\x04\x12\x18\n\x10max_record_bytes\x18\x02 \x01(\x04"\x84\x01\n\tNexusStep\x12\x10\n\x06output\x18\x01 \x01(\x0cH\x00\x12+\n\x05\x63odec\x18\x02 \x01(\x0b\x32\x1a.coresdk.streams.CodecWorkH\x00\x12\x30\n\x07\x66\x61ilure\x18\x03 \x01(\x0b\x32\x1d.coresdk.streams.NexusFailureH\x00\x42\x06\n\x04step"\x8c\x01\n\tCodecWork\x12\x0e\n\x06\x65ncode\x18\x01 \x01(\x08\x12\x11\n\tnamespace\x18\x02 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t\x12\x31\n\x08payloads\x18\x04 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x14\n\x0c\x63ontinuation\x18\x05 \x01(\x04"Y\n\x12NexusResumeRequest\x12\x14\n\x0c\x63ontinuation\x18\x01 \x01(\x04\x12-\n\x07results\x18\x02 \x03(\x0b\x32\x1c.coresdk.streams.CodecResult"\\\n\x0b\x43odecResult\x12\x32\n\x07payload\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x0f\n\x05\x65rror\x18\x02 \x01(\tH\x00\x42\x08\n\x06result"\x81\x01\n\x0cNexusFailure\x12\x1a\n\x12handler_error_type\x18\x01 \x01(\t\x12\x11\n\tretryable\x18\x02 \x01(\x08\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x31\n\x07\x66\x61ilure\x18\x04 \x01(\x0b\x32 .temporal.api.failure.v1.Failure"\xfc\x01\n\x13\x41ttachCallerRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x14\n\x0c\x63\x61llback_url\x18\x03 \x01(\t\x12S\n\x10\x63\x61llback_headers\x18\x04 \x03(\x0b\x32\x39.coresdk.streams.AttachCallerRequest.CallbackHeadersEntry\x1a\x36\n\x14\x43\x61llbackHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"/\n\x14\x41ttachCallerResponse\x12\x17\n\x0foperation_token\x18\x01 \x01(\t"A\n\x13\x44\x65tachCallerRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x17\n\x0foperation_token\x18\x02 \x01(\t"\x16\n\x14\x44\x65tachCallerResponse2\xaa\x03\n\x12StreamNexusService\x12\x45\n\x0bNexusAppend\x12\x1a.coresdk.streams.NexusCall\x1a\x1a.coresdk.streams.NexusStep\x12\x43\n\tNexusRead\x12\x1a.coresdk.streams.NexusCall\x1a\x1a.coresdk.streams.NexusStep\x12N\n\x0bNexusResume\x12#.coresdk.streams.NexusResumeRequest\x1a\x1a.coresdk.streams.NexusStep\x12[\n\x0c\x41ttachCaller\x12$.coresdk.streams.AttachCallerRequest\x1a%.coresdk.streams.AttachCallerResponse\x12[\n\x0c\x44\x65tachCaller\x12$.coresdk.streams.DetachCallerRequest\x1a%.coresdk.streams.DetachCallerResponseB-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
 )
 
 
@@ -35,6 +38,13 @@ _CODECWORK = DESCRIPTOR.message_types_by_name["CodecWork"]
 _NEXUSRESUMEREQUEST = DESCRIPTOR.message_types_by_name["NexusResumeRequest"]
 _CODECRESULT = DESCRIPTOR.message_types_by_name["CodecResult"]
 _NEXUSFAILURE = DESCRIPTOR.message_types_by_name["NexusFailure"]
+_ATTACHCALLERREQUEST = DESCRIPTOR.message_types_by_name["AttachCallerRequest"]
+_ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY = _ATTACHCALLERREQUEST.nested_types_by_name[
+    "CallbackHeadersEntry"
+]
+_ATTACHCALLERRESPONSE = DESCRIPTOR.message_types_by_name["AttachCallerResponse"]
+_DETACHCALLERREQUEST = DESCRIPTOR.message_types_by_name["DetachCallerRequest"]
+_DETACHCALLERRESPONSE = DESCRIPTOR.message_types_by_name["DetachCallerResponse"]
 NexusCall = _reflection.GeneratedProtocolMessageType(
     "NexusCall",
     (_message.Message,),
@@ -112,26 +122,92 @@ NexusFailure = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(NexusFailure)
 
+AttachCallerRequest = _reflection.GeneratedProtocolMessageType(
+    "AttachCallerRequest",
+    (_message.Message,),
+    {
+        "CallbackHeadersEntry": _reflection.GeneratedProtocolMessageType(
+            "CallbackHeadersEntry",
+            (_message.Message,),
+            {
+                "DESCRIPTOR": _ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY,
+                "__module__": "temporal.sdk.core.streams.nexus_pb2",
+                # @@protoc_insertion_point(class_scope:coresdk.streams.AttachCallerRequest.CallbackHeadersEntry)
+            },
+        ),
+        "DESCRIPTOR": _ATTACHCALLERREQUEST,
+        "__module__": "temporal.sdk.core.streams.nexus_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.AttachCallerRequest)
+    },
+)
+_sym_db.RegisterMessage(AttachCallerRequest)
+_sym_db.RegisterMessage(AttachCallerRequest.CallbackHeadersEntry)
+
+AttachCallerResponse = _reflection.GeneratedProtocolMessageType(
+    "AttachCallerResponse",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _ATTACHCALLERRESPONSE,
+        "__module__": "temporal.sdk.core.streams.nexus_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.AttachCallerResponse)
+    },
+)
+_sym_db.RegisterMessage(AttachCallerResponse)
+
+DetachCallerRequest = _reflection.GeneratedProtocolMessageType(
+    "DetachCallerRequest",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _DETACHCALLERREQUEST,
+        "__module__": "temporal.sdk.core.streams.nexus_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.DetachCallerRequest)
+    },
+)
+_sym_db.RegisterMessage(DetachCallerRequest)
+
+DetachCallerResponse = _reflection.GeneratedProtocolMessageType(
+    "DetachCallerResponse",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _DETACHCALLERRESPONSE,
+        "__module__": "temporal.sdk.core.streams.nexus_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.DetachCallerResponse)
+    },
+)
+_sym_db.RegisterMessage(DetachCallerResponse)
+
 _STREAMNEXUSSERVICE = DESCRIPTOR.services_by_name["StreamNexusService"]
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = (
         b"\352\002*Temporalio::Internal::Bridge::Api::Streams"
     )
-    _NEXUSCALL._serialized_start = 169
-    _NEXUSCALL._serialized_end = 306
-    _NEXUSLIMITS._serialized_start = 308
-    _NEXUSLIMITS._serialized_end = 373
-    _NEXUSSTEP._serialized_start = 376
-    _NEXUSSTEP._serialized_end = 508
-    _CODECWORK._serialized_start = 511
-    _CODECWORK._serialized_end = 651
-    _NEXUSRESUMEREQUEST._serialized_start = 653
-    _NEXUSRESUMEREQUEST._serialized_end = 742
-    _CODECRESULT._serialized_start = 744
-    _CODECRESULT._serialized_end = 836
-    _NEXUSFAILURE._serialized_start = 839
-    _NEXUSFAILURE._serialized_end = 968
-    _STREAMNEXUSSERVICE._serialized_start = 971
-    _STREAMNEXUSSERVICE._serialized_end = 1211
+    _ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY._options = None
+    _ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY._serialized_options = b"8\001"
+    _NEXUSCALL._serialized_start = 210
+    _NEXUSCALL._serialized_end = 347
+    _NEXUSLIMITS._serialized_start = 349
+    _NEXUSLIMITS._serialized_end = 414
+    _NEXUSSTEP._serialized_start = 417
+    _NEXUSSTEP._serialized_end = 549
+    _CODECWORK._serialized_start = 552
+    _CODECWORK._serialized_end = 692
+    _NEXUSRESUMEREQUEST._serialized_start = 694
+    _NEXUSRESUMEREQUEST._serialized_end = 783
+    _CODECRESULT._serialized_start = 785
+    _CODECRESULT._serialized_end = 877
+    _NEXUSFAILURE._serialized_start = 880
+    _NEXUSFAILURE._serialized_end = 1009
+    _ATTACHCALLERREQUEST._serialized_start = 1012
+    _ATTACHCALLERREQUEST._serialized_end = 1264
+    _ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY._serialized_start = 1210
+    _ATTACHCALLERREQUEST_CALLBACKHEADERSENTRY._serialized_end = 1264
+    _ATTACHCALLERRESPONSE._serialized_start = 1266
+    _ATTACHCALLERRESPONSE._serialized_end = 1313
+    _DETACHCALLERREQUEST._serialized_start = 1315
+    _DETACHCALLERREQUEST._serialized_end = 1380
+    _DETACHCALLERRESPONSE._serialized_start = 1382
+    _DETACHCALLERRESPONSE._serialized_end = 1404
+    _STREAMNEXUSSERVICE._serialized_start = 1407
+    _STREAMNEXUSSERVICE._serialized_end = 1833
 # @@protoc_insertion_point(module_scope)
