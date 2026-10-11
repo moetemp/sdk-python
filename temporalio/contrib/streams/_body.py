@@ -3,11 +3,15 @@
 The payload converter turns a value into the body and stops there. Every
 other payload the SDK sends then passes through the payload codec and
 external storage, and a stream body owes the same, or a codec-protected
-deployment would leak plaintext through its streams. Core never sees a
-plaintext body, so both hashes that need one are taken here, before the
-codec. A codec that encrypts with a fresh nonce makes every retry's bytes
-differ, so a store that compared encoded bytes would refuse a retry as a
-divergent write.
+deployment would leak plaintext through its streams. On the direct paths, a
+Workflow's writer and the outside handles, Core never sees a plaintext body,
+so both hashes that need one are taken here, before the codec. A codec that
+encrypts with a fresh nonce makes every retry's bytes differ, so a store that
+compared encoded bytes would refuse a retry as a divergent write.
+
+The stream service's Nexus path is different (DD-98). Core gets the caller's
+plain bodies, takes both hashes over the bytes the caller sent, and asks the
+handler to run the codec. Only the codec step uses this module there.
 """
 
 from __future__ import annotations
