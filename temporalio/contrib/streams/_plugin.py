@@ -170,10 +170,11 @@ class StreamStorePlugin(SimplePlugin):
         """Close the stream ``ref`` names, and complete its operations with ``result``.
 
         The store refuses appends from then on, and every read ends after the
-        last record. With :meth:`notify_on_append` on, Core then closes the
-        stream's notifier on the server, so every stream-returning Nexus
-        operation that handed out the stream completes with ``result``,
-        encoded with ``client``'s data converter.
+        last record. Core then closes the stream's notifier on the server, so
+        every stream-returning Nexus operation that handed out the stream
+        completes with ``result``, encoded with ``client``'s data converter.
+        It does so whether or not :meth:`notify_on_append` is on, which turns
+        on progress only.
 
         Raises:
             temporalio.contrib.streams.StreamError: The store or the notifier

@@ -482,6 +482,25 @@ async def test_an_authorizer_that_raises_crosses_as_an_internal_error(
     assert "File " not in refused.value.detail
 
 
+async def test_an_authorizers_own_handler_error_crosses_as_it_is(
+    server: Server, backing: Backing
+):
+    # The authorizer's reason reaches the caller, which doesn't retry it.
+    async def authorize(_access: StreamAccess) -> bool:
+        raise nexusrpc.HandlerError(
+            "the caller's token expired",
+            type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+        )
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+    assert refused.value.status == 403
+    assert not refused.value.retryable
+    assert "the caller's token expired" in refused.value.detail
+
+
 async def test_finish_is_a_call_of_its_own(service: Service):
     ref = await stream_of(service)
     await append(service, ref, "one")
@@ -674,6 +693,66 @@ async def test_a_body_the_codec_cannot_decode_crosses_as_an_error(
     assert bad.record == b""
     assert good.error is None
     assert WireRecord.FromString(good.record).body.data == b"fine"
+
+
+class CountingCodec(PayloadCodec):
+    """Counts the decode calls that carry stream bodies, as a remote codec's
+    round trips."""
+
+    def __init__(self) -> None:
+        self.body_calls: list[int] = []
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        bodies = [p for p in payloads if p.metadata.get("encoding") == b"binary/test"]
+        if bodies:
+            self.body_calls.append(len(bodies))
+        return list(payloads)
+
+
+async def test_a_read_page_decodes_in_one_codec_call(server: Server, backing: Backing):
+    codec = CountingCodec()
+    worker_client = with_converter(
+        backing.client, dataclasses.replace(DataConverter.default, payload_codec=codec)
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "one", "two", "three")
+        assert texts(await read(service, ref)) == ["one", "two", "three"]
+    assert codec.body_calls == [3]
+
+
+class FailingEncodeCodec(PayloadCodec):
+    """A codec whose key service is down, so nothing encodes."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if any(p.metadata.get("encoding") == b"binary/test" for p in payloads):
+            raise RuntimeError("the key service is down")
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+
+async def test_an_append_the_codec_cannot_encode_writes_nothing(
+    server: Server, backing: Backing
+):
+    worker_client = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=FailingEncodeCodec()),
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "one", "two")
+        answer = await read(service, ref, wait_ms=0)
+    # Nothing was written, so a retry is safe, and the caller is told to retry.
+    assert refused.value.status == 500
+    assert refused.value.retryable
+    assert "File " not in refused.value.detail
+    assert answer.records == []
 
 
 class XorCodec(PayloadCodec):
@@ -912,6 +991,16 @@ def test_a_core_failure_crosses_as_its_handler_error(
     assert cause["type"] == name
     assert cause.get("nonRetryable", False) == (not retryable)
     assert details["nexusHandlerFailureInfo"]["type"] == kind.name
+
+
+@pytest.mark.parametrize("name", ["", "NOT_A_TYPE"])
+def test_an_unknown_handler_error_type_crosses_as_internal(name: str):
+    # Only a Core from another release could send one.
+    crossed = _handler_error(
+        NexusFailure(handler_error_type=name, retryable=True, message="why")
+    )
+    assert crossed.type == nexusrpc.HandlerErrorType.INTERNAL
+    assert str(crossed) == "why"
 
 
 async def test_a_refusal_carries_no_handler_stack_frames(service: Service):
