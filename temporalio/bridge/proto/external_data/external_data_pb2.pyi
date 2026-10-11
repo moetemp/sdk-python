@@ -265,8 +265,8 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
         """One entry per activation segment, including segments which published no output."""
     provider_id: builtins.str
     """The stream store that holds the batch. Reconciliation refuses to interpret the batch through
-    a different store or store format. Replay compares the format but not the store, since a
-    store can be renamed or swapped for a Replayer without changing the output.
+    a different store or store format. Replay compares neither, since a store can be renamed,
+    swapped for a Replayer or change its stage layout without changing the output.
     """
     provider_format_version: builtins.int
     def __init__(
