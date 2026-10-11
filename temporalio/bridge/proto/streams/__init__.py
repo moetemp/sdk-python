@@ -1,3 +1,12 @@
+from .nexus_pb2 import (
+    CodecResult,
+    CodecWork,
+    NexusCall,
+    NexusFailure,
+    NexusLimits,
+    NexusResumeRequest,
+    NexusStep,
+)
 from .streams_pb2 import (
     ActivityProducer,
     AppendRecord,
@@ -47,6 +56,8 @@ __all__ = [
     "ChainId",
     "CloseRequest",
     "CloseResponse",
+    "CodecResult",
+    "CodecWork",
     "DeleteOwnerRequest",
     "DeleteOwnerResponse",
     "FlushNotificationsRequest",
@@ -55,6 +66,11 @@ __all__ = [
     "LatestResponse",
     "MemoryStoreConfig",
     "NamedProducer",
+    "NexusCall",
+    "NexusFailure",
+    "NexusLimits",
+    "NexusResumeRequest",
+    "NexusStep",
     "PendingStage",
     "PromoteOutcome",
     "PromoteResult",

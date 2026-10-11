@@ -209,6 +209,9 @@ class TemporalStreamsHttpClient:
         deadline passes first, the last answer is returned, which still carries
         the caller's resume position.
 
+        After an answer with nothing, the next attempt sends the ``state`` that
+        answer carried, so the endpoint keeps nothing between calls.
+
         ``deadline`` is the whole budget in seconds. The single-shot method stays
         available for a caller that wants one attempt.
         """
@@ -233,6 +236,7 @@ class TemporalStreamsHttpClient:
                 continue
             if answer.records or answer.done:
                 return answer
+            request = dataclasses.replace(request, state=answer.state)
             if time.monotonic() >= end:
                 return answer
             if time.monotonic() - started < wait / 2:
@@ -323,6 +327,7 @@ class StreamHandle:
         max_records: int | None = None,
         wait_ms: int | None = None,
         latest_only: bool | None = None,
+        state: bytes | None = None,
     ) -> ReadOutput:
         """Answer with the records after the caller's cursor. The call waits until it
         has max_records records or wait_ms passes, whichever comes first, and
@@ -339,6 +344,7 @@ class StreamHandle:
                 max_records=max_records,
                 wait_ms=wait_ms,
                 latest_only=latest_only,
+                state=state,
             ),
         )
 
@@ -348,6 +354,7 @@ class StreamHandle:
         after_token: str | None = None,
         max_records: int | None = None,
         latest_only: bool | None = None,
+        state: bytes | None = None,
         deadline: float,
     ) -> ReadOutput:
         """Calls ``read`` until it answers with something, or until ``deadline``.
@@ -357,6 +364,9 @@ class StreamHandle:
         ``records`` is non-empty, or whose ``done`` is true, is returned. When the
         deadline passes first, the last answer is returned, which still carries
         the caller's resume position.
+
+        After an answer with nothing, the next attempt sends the ``state`` that
+        answer carried, so the endpoint keeps nothing between calls.
 
         ``deadline`` is the whole budget in seconds. The single-shot method stays
         available for a caller that wants one attempt.
@@ -370,6 +380,7 @@ class StreamHandle:
                 after_token=after_token,
                 max_records=max_records,
                 latest_only=latest_only,
+                state=state,
             ),
             deadline=deadline,
         )
