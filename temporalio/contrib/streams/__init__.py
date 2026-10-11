@@ -6,7 +6,8 @@
 A Workflow owns a stream. Producers outside Workflow code, such as the
 Workflow's Activities and clients, append to it, and outside readers consume
 it from a cursor. Records live in a store the application runs, which
-Core reaches for every SDK, and never pass through Temporal or its History.
+Core reaches for every SDK. Record bodies never reach the server. A Workflow
+Task that publishes adds one marker event with a small manifest.
 
 The contract:
 

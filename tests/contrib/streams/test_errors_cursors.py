@@ -101,3 +101,16 @@ def test_the_start_cursors_are_the_tokens_core_reads():
     assert BEGINNING.token == ""
     assert END.token == "$end"
     assert str(Cursor("memory:abc:7")) == "memory:abc:7"
+
+
+def test_a_producer_refusal_says_whether_the_batch_diverged():
+    # A divergent retry means the caller changed the batch, and a stale one
+    # usually means a second producer object for the same session.
+    divergent = error_from_failure(
+        StreamFailure(kind=StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT)
+    )
+    stale = error_from_failure(
+        StreamFailure(kind=StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_STALE)
+    )
+    assert isinstance(divergent, StreamProducerError) and divergent.divergent
+    assert isinstance(stale, StreamProducerError) and not stale.divergent
