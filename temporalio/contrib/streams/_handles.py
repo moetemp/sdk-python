@@ -377,8 +377,14 @@ class StreamHandle:
             raise ValueError("producer_id must not be empty")
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ValueError(f"attempt must be an int of at least 1, got {attempt!r}")
-        if next_sequence < 1:
-            raise ValueError(f"next_sequence must be at least 1, got {next_sequence}")
+        if (
+            isinstance(next_sequence, bool)
+            or not isinstance(next_sequence, int)
+            or next_sequence < 1
+        ):
+            raise ValueError(
+                f"next_sequence must be an int of at least 1, got {next_sequence!r}"
+            )
         name, _ = self._resolve(topic, None)
         return StreamProducer(
             self, name, producer_id, attempt, next_sequence=next_sequence

@@ -191,9 +191,12 @@ $defs:
         contentEncoding: base64
         description: >-
           The serialized temporal.sdk.streams.v1.StreamRecord: topic, kind,
-          producer, attempt, sequence and body. The serving Worker's codec
-          decodes the body, and it crosses encoded once, inside the read
-          result, which the caller's codec decodes. Empty when error is set.
+          producer, attempt, sequence and body. The body is the producer's
+          payload decoded by the serving Worker's data converter, payload
+          codec and external storage included. The answer as a whole is
+          encoded on its way back like any operation result, so the caller's
+          codec decodes it and the body crosses encoded once. Empty when
+          error or superseded is set.
       error:
         type: string
         description: >-
@@ -201,7 +204,30 @@ $defs:
           one written to the store directly that is larger than a read result
           can carry. The record is left out, and a reader goes on past the
           cursor.
+      superseded:
+        $ref: "#/$defs/Supersession"
+        description: >-
+          Set instead of a record when a later attempt of a producer started
+          writing. The store's reader reports it, at the cursor before the
+          new attempt's first record, also on a read that resumes after a
+          cursor and saw no earlier attempt itself.
     required: [token, record]
+    additionalProperties: true
+
+  Supersession:
+    type: object
+    description: "A later attempt of a producer started writing."
+    properties:
+      producer_id:
+        type: string
+        description: "The producer whose attempt changed."
+      previous_attempt:
+        type: integer
+        description: "The attempt readers saw before."
+      attempt:
+        type: integer
+        description: "The attempt that started writing."
+    required: [producer_id, previous_attempt, attempt]
     additionalProperties: true
 
   ReadOutput:
@@ -221,8 +247,9 @@ $defs:
       done:
         type: boolean
         description: >-
-          The stream ended for this reader: its owner's run chain is closed
-          and every retained record after the cursor has been delivered.
+          The stream ended for this reader: the stream is closed, or its
+          owner's run chain ended, and every retained record after the cursor
+          has been delivered.
           Nothing more will arrive, so the caller stops.
     required: [records, next_token, done]
     additionalProperties: true

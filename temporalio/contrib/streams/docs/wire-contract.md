@@ -35,7 +35,7 @@ Workflow's run chain:
 | Suffix | Type | Holds |
 |---|---|---|
 | `:t:<topic>` | stream | The log of one topic |
-| `:t:<topic>:meta` | hash | Dedupe state and the tombstone of that log |
+| `:t:<topic>:meta` | hash | Dedupe state, the tombstone of that log, and `closed` = `1` once the topic is closed |
 | `:chain` | hash | `closed` = `1` once the run chain has ended |
 | `:stage:<token>` | list | A staged Workflow publish: topic, record, topic, record, ... |
 | `:stages` | hash | Every stage not yet promoted or aborted |
@@ -85,7 +85,7 @@ order:
    return the held first and last entry ids and write nothing; with another
    digest, refuse (divergent). If the batch's first sequence is below the
    held one plus its record count, refuse (stale).
-3. If `chain` has `closed`, refuse (closed).
+3. If `chain` or `meta` has `closed`, refuse (closed).
 4. If the log key is missing but `meta` has `last`, set `meta.trimmed` to
    `last`, because the log expired whole.
 5. `XADD` each record with id `*` and field `r`.
@@ -181,3 +181,14 @@ expired when `meta.trimmed` is newer than it, or, if the log is gone, when
 Any party that sees the Workflow's run chain end (complete, fail, cancel,
 terminate or time out, but not Continue-as-New) sets `HSET chain closed 1`
 and `PEXPIRE chain <retention + 30 days>`.
+
+A close of one topic before its chain ends, such as the owner closing a
+stream, sets `HSET meta closed 1` and `PEXPIRE meta <retention + 30 days>`
+on that topic's `meta`. The append script checks both flags, so no append
+lands after a close returned.
+
+A producer of the earlier interim release runs its own append script in
+Python, and that script checks only `chain`. It knows nothing of a topic
+close. In a fleet that mixes it with Core-based writers, it goes on writing
+to a topic that Core closed, until the chain ends. Upgrade every writer of a
+stream before you rely on a topic close.
