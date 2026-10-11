@@ -14,7 +14,6 @@ import os
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import nexusrpc
@@ -48,6 +47,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
+from tests.contrib.streams._support import vendored_core_nexus
 from tests.helpers import new_worker
 from tests.helpers.nexus import make_nexus_endpoint_name
 
@@ -157,13 +157,9 @@ async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
 
 
 def test_a_token_reads_as_the_shared_vectors_say() -> None:
-    # The vectors Core's encoder writes, in the Core this SDK vendors.
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "temporalio/bridge/sdk-core/crates/streams/nexus"
-        / "operation_token_vectors.json"
+    vectors = json.loads(
+        (vendored_core_nexus() / "operation_token_vectors.json").read_text()
     )
-    vectors = json.loads(path.read_text())
     for vector in vectors["vectors"] + vectors["decode_only"]:
         ref = vector["ref"]
         assert stream_ref_from_token(vector["token"]) == StreamRef(
