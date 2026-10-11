@@ -37,8 +37,10 @@ def batch_digest(records: Sequence[WireRecord]) -> bytes:
 
     Each record is its length in 8 bytes big-endian, then its deterministic
     serialization, so a batch split differently can't collide with this one.
-    Every SDK takes it the same way, and the store compares it when a
-    producer repeats its newest batch.
+    The store compares it when a producer repeats its newest batch. Only the
+    writer that made it compares it, since deterministic serialization is
+    stable within one protobuf implementation and not across languages, so a
+    retry must come from the same SDK as the batch it repeats.
     """
     digest = hashlib.sha256()
     for record in records:
