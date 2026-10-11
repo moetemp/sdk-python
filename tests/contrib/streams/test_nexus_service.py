@@ -724,6 +724,37 @@ async def test_a_read_page_decodes_in_one_codec_call(server: Server, backing: Ba
     assert codec.body_calls == [3]
 
 
+class FailingEncodeCodec(PayloadCodec):
+    """A codec whose key service is down, so nothing encodes."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if any(p.metadata.get("encoding") == b"binary/test" for p in payloads):
+            raise RuntimeError("the key service is down")
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+
+async def test_an_append_the_codec_cannot_encode_writes_nothing(
+    server: Server, backing: Backing
+):
+    worker_client = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=FailingEncodeCodec()),
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "one", "two")
+        answer = await read(service, ref, wait_ms=0)
+    # Nothing was written, so a retry is safe, and the caller is told to retry.
+    assert refused.value.status == 500
+    assert refused.value.retryable
+    assert "File " not in refused.value.detail
+    assert answer.records == []
+
+
 class XorCodec(PayloadCodec):
     """Encrypts a payload by XOR, the way a namespace's codec would."""
 
