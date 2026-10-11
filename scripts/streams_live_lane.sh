@@ -237,13 +237,15 @@ gate tests/contrib/streams/test_nexus_stream_operation.py \
   test_a_workflow_closes_its_own_stream \
   test_a_workflows_own_publishes_reach_the_caller_as_progress \
   test_an_append_after_an_outside_close_is_refused \
-  test_a_worker_flushes_on_stop_and_a_replay_after_it_runs
+  test_a_worker_flushes_on_stop_and_a_replay_after_it_runs \
+  test_a_worker_without_notifications_still_delivers_the_close_result
 gate tests/contrib/streams/test_nexus_reader.py \
   test_bodies_reach_the_workflow_decoded_by_the_callers_codec \
   test_live_a_close_with_the_last_publishes_loses_none_of_them \
   test_live_a_new_reader_resumes_after_a_cursor \
   test_live_a_start_on_a_closed_stream_still_names_it \
-  test_live_a_workflow_reads_every_record_then_none
+  test_live_a_workflow_reads_every_record_then_none \
+  test_live_a_reader_after_continue_as_new_sees_a_later_attempt
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_output_commit.py \
