@@ -161,8 +161,9 @@ that needs another command fails the tests. A cluster client reads the
 topology with `CLUSTER SLOTS` first. An ACL user lives on one node, so on a
 cluster you create the user on every node. The delete helper also needs
 `+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
-store goes on when a server refuses it. The store keeps the set of each run chain's topics, so it can close every
-open topic when the chain ends, which needs `+sadd` and `+smembers`.
+store goes on when a server refuses it. The store keeps the set of each run
+chain's topics, so it can close every open topic when the chain ends, which
+needs `+sadd` and `+smembers`.
 
 Upgrading from a release whose line has no `+sadd` or `+smembers`, appends
 and Workflow output keep working with the old user. The store skips the
