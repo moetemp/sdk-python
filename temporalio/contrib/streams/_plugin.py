@@ -49,8 +49,11 @@ class StreamStorePlugin(SimplePlugin):
 
     Use :class:`temporalio.contrib.streams.redis.RedisStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
-    is one store. Registering a second, different store on the same client
-    raises ``ValueError``, because a handle could otherwise pick either.
+    is one store, on one client connection, since Core asks about each
+    stream's owner over the connection that connected the store. A second
+    connection, such as another namespace's endpoint, needs its own instance.
+    Registering a second, different store on the same client raises
+    ``ValueError``, because a handle could otherwise pick either.
     """
 
     def __init__(self, name: str, config: StreamStoreConfig) -> None:
@@ -60,6 +63,9 @@ class StreamStorePlugin(SimplePlugin):
         self._service: StreamService | None = None
         self._store: StreamStore | None = None
         self._connecting: asyncio.Lock | None = None
+        self._service_client: ServiceClient | None = None
+        # Whether Client.connect connected the store, which a Worker needs.
+        self._connected_by_connect = False
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
@@ -88,6 +94,7 @@ class StreamStorePlugin(SimplePlugin):
         """
         service_client = await next(config)
         await self._connected(service_client)
+        self._connected_by_connect = True
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
@@ -95,11 +102,17 @@ class StreamStorePlugin(SimplePlugin):
 
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
-                or that client was not made with ``Client.connect``.
+                or that client was not made with ``Client.connect``. A
+                client made otherwise is refused even after one of its handles
+                connected the store.
         """
         config = super().configure_worker(config)
         client = config["client"]  # type:ignore[reportTypedDictNotRequiredAccess]
-        if self not in client.config()["plugins"] or self._store is None:
+        if (
+            self not in client.config()["plugins"]
+            or not self._connected_by_connect
+            or client.service_client is not self._service_client
+        ):
             raise ValueError(
                 f"stream store {self.name()!r} must be registered on the Worker's "
                 "client, as Client.connect(..., plugins=[store])"
@@ -147,23 +160,35 @@ class StreamStorePlugin(SimplePlugin):
         return (await call(self._service.delete_owner(request))).deleted
 
     async def _service_for(self, client: Client) -> StreamService:
-        """The stream service, connecting the store if no client did yet."""
-        if self._service is None:
-            await self._connected(client.service_client)
+        """The stream service, connecting the store if no client did yet.
+
+        Raises:
+            ValueError: Another client connection already connected the store.
+        """
+        await self._connected(client.service_client)
         assert self._service is not None
         return self._service
 
     async def _connected(self, service_client: ServiceClient) -> None:
+        if self._service_client is service_client:
+            return
         if self._connecting is None:
             self._connecting = asyncio.Lock()
         async with self._connecting:
-            if self._store is not None:
+            if self._service_client is service_client:
                 return
+            if self._service_client is not None:
+                raise ValueError(
+                    f"stream store {self.name()!r} serves one client connection, "
+                    "and another one already connected it; give each connection "
+                    "a store instance of its own"
+                )
             bridge: temporalio.bridge.client.Client = await cast(
                 Any, service_client
             )._connected_client()
             self._store = await call(StreamStore.connect(bridge, self._config))
             self._service = StreamService(self._store)
+            self._service_client = service_client
 
 
 async def call(pending: Awaitable[T]) -> T:

@@ -118,19 +118,19 @@ the shortest retention wins.
 
 ## A Workflow's own publish
 
-1. Stage: one script runs `RPUSH stage <topic> <record> ...` (in chunks of
+1. Lang sends each record's topic, kind, body, content hash and
+   plaintext size in the completion's output commit, and Core builds the
+   stored records and the manifest from them. The manifest and its
+   fingerprint live only in the History marker, a Core-local proto, so they
+   are not part of the stored format. The fingerprint never covers the run
+   id, since a reset run replays the markers of its base run.
+2. Stage: one script runs `RPUSH stage <topic> <record> ...` (in chunks of
    1000 values, since Lua's `unpack` is bounded), sets
    `PEXPIRE stage <retention + 30 days>`, and sets
    `HSET stages <token> <run id>\x1f<history floor>\x1f<topic>\x1f...`.
    Topic names hold no control characters, so `\x1f` can't appear in one.
    It sets `PEXPIRE stages <retention + 30 days>` only when `PTTL stages`
    is lower, so the hash outlives every stage it lists.
-2. Lang sends each record's topic, kind, body, content hash and
-   plaintext size in the completion's output commit, and Core builds the
-   stored record and the manifest from them. The manifest's fingerprint
-   (version 2) covers each record's topic, kind, content hash and size, as
-   length-prefixed fields, and never the run id, since a reset run replays
-   the markers of its base run.
 3. The Workflow Task's commit is recorded by Core in a
    `core_external_stream` marker whose output manifest carries the stage
    token.
