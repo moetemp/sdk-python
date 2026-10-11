@@ -794,6 +794,7 @@ class _CompletedHandle:
     latest_progress = None
 
     async def progress(self, *, after_counter: int = 0) -> None:
+        del after_counter
         return None
 
     def __await__(self) -> Any:
