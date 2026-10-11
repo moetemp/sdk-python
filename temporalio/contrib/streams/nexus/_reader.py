@@ -19,15 +19,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast
 
-from google.protobuf.message import DecodeError
-
 from temporalio import workflow
 from temporalio.contrib.streams._errors import StreamError, StreamRecordError
 from temporalio.contrib.streams._record import Cursor, RecordKind, Supersession
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._wire import WireRecord
-from temporalio.contrib.streams.nexus._decoder import RecordDecoder
-from temporalio.contrib.streams.nexus._generated import ReadInput, TemporalStreams
+from temporalio.contrib.streams.nexus._generated import (
+    ReadInput,
+    ReadOutput,
+    RecordWire,
+    TemporalStreams,
+)
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
 
 __all__ = [
@@ -138,10 +140,12 @@ class StreamReader(Generic[T]):
     over; a producer's ``FINISH`` record is not. When a later attempt of a
     producer takes over (a retried Activity, for example), the earlier
     attempt's records already handed over stay handed over, and
-    :attr:`supersessions` says where the later attempt began. That holds for a
-    reader built with ``after=`` too, when the earlier attempt's records came
-    before its cursor. A record an earlier attempt writes after a later one
-    started is not handed over, and :attr:`stale_records` reports it. A
+    :attr:`supersessions` says where the later attempt began. A record an
+    earlier attempt writes after a later one started is not handed over, and
+    :attr:`stale_records` reports it. The stream service marks both. Each read
+    carries the state the service answered with last, so the marks hold
+    across reads, across the service's Workers, and for a reader built with
+    ``after=``, which starts from the cursor. A
     record whose body the Workflow's payload converter cannot decode into
     ``item_type`` raises :class:`temporalio.contrib.streams.StreamRecordError`
     from :meth:`next` once the records before it are handed over; the call
@@ -210,7 +214,10 @@ class StreamReader(Generic[T]):
         self._drain_since: datetime | None = None
         self._done_since: datetime | None = None
         self._stream: StreamRef | None = None
-        self._decoder: RecordDecoder | None = None
+        # Core's read state from the last answer, which the next read carries.
+        self._state: bytes | None = None
+        self._answer: ReadOutput | None = None
+        self._pending: list[RecordWire] = []
         self._cursor = after.token if after is not None else ""
         self._counter = 0
         # Whether the last read answered with no record. An answer short of
@@ -226,7 +233,6 @@ class StreamReader(Generic[T]):
         self._supersessions: list[ReadSupersession] = []
         self._stale_records: list[ReadStaleRecord] = []
         self._undecodable: StreamRecordError | None = None
-        self._decode_failure: str | None = None
 
     @property
     def cursor(self) -> Cursor:
@@ -342,18 +348,70 @@ class StreamReader(Generic[T]):
             ) from None
 
     async def _read(self) -> list[T]:
+        if not self._pending:
+            await self._fetch()
+        batch: list[T] = []
+        while self._pending:
+            stored = self._pending.pop(0)
+            cursor = Cursor(stored.token)
+            self._cursor = stored.token
+            if stored.superseded is not None:
+                self._supersessions.append(
+                    ReadSupersession(
+                        index=self._handed_over + len(batch),
+                        cursor=cursor,
+                        supersession=Supersession(
+                            producer_id=stored.superseded.producer_id,
+                            previous_attempt=stored.superseded.previous_attempt,
+                            attempt=stored.superseded.attempt,
+                        ),
+                    )
+                )
+                continue
+            try:
+                record = self._record(stored)
+            except Exception as error:
+                # The rest of the answer stays pending, so the next call hands
+                # it over without reading again.
+                self._undecodable = StreamRecordError(
+                    f"stream record at {cursor} could not be read as "
+                    f"{getattr(self._item_type, '__name__', self._item_type)!s}: "
+                    f"{error}",
+                    cursor,
+                )
+                self._caught_up = False
+                return batch
+            if record is None:
+                continue
+            producer_id, attempt, value = record
+            if stored.stale:
+                self._stale_records.append(
+                    ReadStaleRecord(
+                        index=self._handed_over + len(batch),
+                        cursor=cursor,
+                        producer_id=producer_id,
+                        attempt=attempt,
+                        value=value,
+                    )
+                )
+            else:
+                batch.append(cast(T, value))
+        answer = self._answer
+        assert answer is not None
+        if answer.next_token:
+            self._cursor = answer.next_token
+        # Core's state matches the answer's end, so it goes with the cursor.
+        self._state = answer.state
+        self._caught_up = not answer.records
+        self._stream_done = answer.done
+        return batch
+
+    async def _fetch(self) -> None:
         if self._stream is None:
             token = self._handle.operation_token
             if not token:
                 raise ValueError("the operation has no token, so it names no stream")
             self._stream = stream_ref_from_token(token)
-            self._decoder = RecordDecoder(
-                workflow.payload_converter(),
-                self._item_type,
-                after=Cursor(self._cursor),
-                warn=self._warn,
-            )
-        assert self._decoder is not None
         # A read covers every record the progress seen so far announced.
         latest = self._handle.latest_progress
         if latest is not None:
@@ -361,85 +419,32 @@ class StreamReader(Generic[T]):
         client = workflow.create_nexus_client(
             service=TemporalStreams, endpoint=self._endpoint
         )
-        answer = await client.execute_operation(
+        self._answer = await client.execute_operation(
             TemporalStreams.read,
             ReadInput(
                 stream=self._stream,
                 after_token=self._cursor or None,
                 max_records=_BATCH,
                 wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else 0,
+                state=self._state,
             ),
         )
-        batch: list[T] = []
-        for stored in answer.records:
-            cursor = Cursor(stored.token)
-            wire: WireRecord | None = None
-            if stored.superseded is not None:
-                taken = Supersession(
-                    producer_id=stored.superseded.producer_id,
-                    previous_attempt=stored.superseded.previous_attempt,
-                    attempt=stored.superseded.attempt,
-                )
-                if self._decoder.take(taken):
-                    self._supersessions.append(
-                        ReadSupersession(
-                            index=self._handed_over + len(batch),
-                            cursor=cursor,
-                            supersession=taken,
-                        )
-                    )
-            elif stored.error:
-                # The service left out a record no read result can carry.
-                self._decode_failure = stored.error
-            else:
-                try:
-                    wire = WireRecord.FromString(stored.record)
-                except DecodeError as error:
-                    self._decode_failure = str(error)
-            if wire is not None:
-                try:
-                    records = self._decoder.decode(cursor, wire)
-                except StreamRecordError as error:
-                    self._decode_failure = str(error)
-                    records = []
-                for record in records:
-                    if record.kind is RecordKind.DATA and record.stale:
-                        self._stale_records.append(
-                            ReadStaleRecord(
-                                index=self._handed_over + len(batch),
-                                cursor=record.cursor,
-                                producer_id=record.producer_id,
-                                attempt=record.attempt,
-                                value=record.value,
-                            )
-                        )
-                    elif record.kind is RecordKind.DATA:
-                        batch.append(cast(T, record.value))
-                    elif record.supersession is not None:
-                        self._supersessions.append(
-                            ReadSupersession(
-                                index=self._handed_over + len(batch),
-                                cursor=record.cursor,
-                                supersession=record.supersession,
-                            )
-                        )
-            self._cursor = stored.token
-            if self._decode_failure is not None:
-                # Stop at the bad record; what follows it is read again next.
-                self._undecodable = StreamRecordError(
-                    f"stream record at {cursor} could not be read as "
-                    f"{getattr(self._item_type, '__name__', self._item_type)!s}: "
-                    f"{self._decode_failure}",
-                    cursor,
-                )
-                self._decode_failure = None
-                self._caught_up = False
-                return batch
-        if answer.next_token:
-            self._cursor = answer.next_token
-        self._caught_up = not answer.records
-        self._stream_done = answer.done
-        return batch
+        self._pending = list(self._answer.records)
 
-    def _warn(self, message: str) -> None:
-        workflow.logger.warning(message)
+    def _record(self, stored: RecordWire) -> tuple[str, int, Any] | None:
+        """The producer, attempt and item of a data record, or ``None``."""
+        if stored.error:
+            # The service left out a record it couldn't hand over.
+            raise ValueError(stored.error)
+        wire = WireRecord.FromString(stored.record)
+        kind = RecordKind(wire.kind) if wire.kind else RecordKind.DATA
+        if kind is RecordKind.SUPERSEDED:
+            raise ValueError("a SUPERSEDED record is marked by readers, never stored")
+        if kind is not RecordKind.DATA:
+            return None
+        value: Any = None
+        if wire.HasField("body"):
+            value = workflow.payload_converter().from_payloads(
+                [wire.body], [self._item_type]
+            )[0]
+        return wire.producer_id, wire.attempt, value

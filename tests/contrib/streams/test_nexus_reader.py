@@ -61,6 +61,7 @@ from temporalio.contrib.streams._record import Cursor, RecordKind
 from temporalio.contrib.streams._wire import WireRecord, to_wire
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
+    ReadInput,
     ReadOutput,
     ReadStaleRecord,
     ReadSupersession,
@@ -71,8 +72,10 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
-from temporalio.contrib.streams.nexus._generated import RecordWireSuperseded
-from temporalio.contrib.streams.nexus._operation import _encode_token
+from temporalio.contrib.streams.nexus._generated import (
+    RecordWireSuperseded,
+    StreamOperationToken,
+)
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import NexusOperationError
 from temporalio.service import RPCError, RPCStatusCode
@@ -220,7 +223,9 @@ class History:
             EventType.EVENT_TYPE_NEXUS_OPERATION_STARTED,
             nexus_operation_started_event_attributes=NexusOperationStartedEventAttributes(
                 scheduled_event_id=scheduled_event_id,
-                operation_token=_encode_token(STREAM, "attach-request", "run-id"),
+                operation_token=StreamOperationToken(
+                    ref=STREAM, attach="attach-request", chain="run-id"
+                ).to_token(),
                 request_id="request-chat",
             ),
         )
@@ -297,6 +302,7 @@ def record(
     *,
     attempt: int = 1,
     sequence: int | None = None,
+    stale: bool = False,
 ) -> RecordWire:
     wire = to_wire(
         converter,
@@ -307,7 +313,11 @@ def record(
         attempt=attempt,
         sequence=position if sequence is None else sequence,
     )
-    return RecordWire(token=f"cursor-{position}", record=wire.SerializeToString())
+    return RecordWire(
+        token=f"cursor-{position}",
+        record=wire.SerializeToString(),
+        stale=True if stale else None,
+    )
 
 
 def answer(*records: RecordWire, done: bool = False, cursor: str = "") -> ReadOutput:
@@ -545,9 +555,8 @@ async def test_a_record_too_large_to_cross_raises_and_the_reader_goes_on() -> No
             record(3, text="c"),
         )
     )
-    # a is handed over, the large record raises, then the reader reads after it.
-    h.task()
-    h.read(answer(record(3, text="c")))
+    # a is handed over, the large record raises, then the rest of the answer
+    # is handed over with no read again.
     h.task()
     h.read(answer(cursor="cursor-3"))
     h.task()
@@ -602,8 +611,8 @@ async def test_a_failed_operation_raises_after_its_records_are_read() -> None:
 
 async def test_the_reader_records_where_a_producer_attempt_was_superseded() -> None:
     """The second attempt of the producer rewrites from its first record. The
-    batch carries both attempts' data, and the reader says where the second
-    attempt took over."""
+    batch carries both attempts' data, and the reader says where the stream
+    service marked the second attempt taking over."""
     h = History()
     h.started()
     h.task()
@@ -614,6 +623,7 @@ async def test_the_reader_records_where_a_producer_attempt_was_superseded() -> N
         answer(
             record(1, text="a"),
             record(2, text="b"),
+            superseded(2, 1, 2),
             record(3, text="a2", attempt=2, sequence=1),
         )
     )
@@ -688,34 +698,6 @@ async def test_a_resumed_reader_takes_the_supersession_at_its_cursor() -> None:
     ]
 
 
-async def test_a_supersession_the_service_and_the_reader_both_saw_is_one() -> None:
-    h = History()
-    h.started()
-    h.task()
-    chat = h.scheduled("ChatService", "chat")
-    h.chat_started(chat)
-    h.task(progress(chat, 3))
-    h.read(
-        answer(
-            record(1, text="a"),
-            record(2, text="b"),
-            superseded(2, 1, 2),
-            record(3, text="a2", attempt=2, sequence=1),
-        )
-    )
-    h.task()
-    h.read(answer(cursor="cursor-3"))
-    h.task()
-    h.completed(chat, "summary")
-    h.task()
-    h.read(answer(cursor="cursor-3", done=True))
-    h.task()
-    h.workflow_completed()
-    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
-    assert seen[0].batches == [[Token("a"), Token("b"), Token("a2")]]
-    assert [s.supersession.attempt for s in seen[0].supersessions] == [2]
-
-
 async def test_a_stale_record_is_reported_and_kept_out_of_the_batch() -> None:
     """Attempt 1 timed out but kept running, and wrote once more after attempt
     2 started. That token is not the current answer."""
@@ -729,7 +711,7 @@ async def test_a_stale_record_is_reported_and_kept_out_of_the_batch() -> None:
         answer(
             record(1, text="a"),
             record(2, text="a2", attempt=2, sequence=1),
-            record(3, text="late", attempt=1, sequence=2),
+            record(3, text="late", attempt=1, sequence=2, stale=True),
             record(4, text="b2", attempt=2, sequence=2),
         )
     )
@@ -909,7 +891,6 @@ async def test_live_a_workflow_reads_every_record_then_none(
         await owner.signal(LiveTokenOwner.done)
         await store.close_stream(client, ref, "7 tokens")
         seen_live = await asyncio.wait_for(caller.result(), 30)
-        await streams.close()
 
     assert [token for batch in seen_live.batches for token in batch] == [
         Token(text) for text in texts
@@ -1031,6 +1012,30 @@ async def _read_what_is_appended(
 ) -> list[str]:
     """Appends ``texts`` from outside the owner once the caller is attached,
     closes the stream, and answers with the labels the caller read."""
+    labels, _ = await _append_and_read(client, env, backing, texts, per_append)
+    return labels
+
+
+async def _read_appended_history(
+    client: Client, env: WorkflowEnvironment, texts: list[str], per_append: int
+) -> WorkflowHistory:
+    """The caller's History after it read ``texts``, appended a batch at a time
+    with a pause, so it takes several reads."""
+    _, history = await _append_and_read(
+        client, env, "memory", texts, per_append, pause=0.5
+    )
+    return history
+
+
+async def _append_and_read(
+    client: Client,
+    env: WorkflowEnvironment,
+    backing: str,
+    texts: list[str],
+    per_append: int,
+    *,
+    pause: float = 0,
+) -> tuple[list[str], WorkflowHistory]:
     store = _notifying_store(backing)
     if backing == "memory-async-codec":
         config = client.config()
@@ -1088,11 +1093,46 @@ async def _read_what_is_appended(
             await producer.append(
                 *(Token(text) for text in texts[start : start + per_append])
             )
+            await asyncio.sleep(pause)
         await store.close_stream(client, ref, "done")
         labels = await asyncio.wait_for(caller.result(), 60)
         await client.get_workflow_handle(owner_id).signal(LiveIdleOwner.done)
-        await streams.close()
-    return labels
+        history = await caller.fetch_history()
+    return labels, history
+
+
+async def test_live_each_read_carries_the_state_its_last_answer_gave(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    """The stream service holds nothing between reads, so the reader sends
+    back Core's state, and any of the service's Workers can serve the next."""
+    texts = [f"t{n}" for n in range(6)]
+    history = await _read_appended_history(client, env, texts, per_append=2)
+    scheduled = {
+        event.event_id: converter.from_payload(
+            event.nexus_operation_scheduled_event_attributes.input, ReadInput
+        )
+        for event in history.events
+        if event.nexus_operation_scheduled_event_attributes.operation == "read"
+    }
+    answers = [
+        (
+            scheduled[
+                event.nexus_operation_completed_event_attributes.scheduled_event_id
+            ],
+            converter.from_payload(
+                event.nexus_operation_completed_event_attributes.result, ReadOutput
+            ),
+        )
+        for event in history.events
+        if event.nexus_operation_completed_event_attributes.scheduled_event_id
+        in scheduled
+    ]
+    assert len(answers) >= 3, answers
+    assert answers[0][0].state is None
+    for (_, earlier), (later, _) in zip(answers, answers[1:]):
+        assert earlier.state
+        assert later.state == earlier.state
 
 
 @pytest.mark.parametrize("backing", BACKINGS)
@@ -1193,7 +1233,6 @@ async def test_live_a_close_with_the_last_publishes_loses_none_of_them(
         await client.get_workflow_handle(owner_id).signal(
             LiveOwnerThatClosesInOneTask.done
         )
-        await streams.close()
     assert labels == [str(n) for n in range(300)]
 
 
@@ -1262,7 +1301,6 @@ async def test_live_a_start_on_a_closed_stream_still_names_it(
             30,
         )
         await owner.signal(LiveIdleOwner.done)
-        await streams.close()
 
     assert stream_ref_from_token(token) == ref
     assert labels == [f"t{n}" for n in range(5)]
@@ -1365,7 +1403,6 @@ async def test_live_a_new_reader_resumes_after_a_cursor(
         await caller.signal(LiveResumingReader.resume)
         first, later = await asyncio.wait_for(caller.result(), 30)
         await client.get_workflow_handle(owner_id).signal(LiveIdleOwner.done)
-        await streams.close()
 
     assert first == ["t0", "t1", "t2"]
     assert later == ["t3", "t4"]
@@ -1463,7 +1500,6 @@ async def test_live_a_reader_after_continue_as_new_sees_a_later_attempt(
         await store.close_stream(client, ref, "done")
         texts, supersessions = await asyncio.wait_for(caller.result(), 30)
         await owner.signal(LiveIdleOwner.done)
-        await streams.close()
 
     assert texts == ["u0", "u1", "u2"]
     assert supersessions == [(0, "writer", 1, 2)]
@@ -1495,9 +1531,8 @@ async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> 
             record(3, text="c"),
         )
     )
-    # a is handed over, the bad record raises, then the reader reads after it.
-    h.task()
-    h.read(answer(record(3, text="c")))
+    # a is handed over, the bad record raises, then the rest of the answer is
+    # handed over with no read again.
     h.task()
     h.read(answer(cursor="cursor-3"))
     h.task()
