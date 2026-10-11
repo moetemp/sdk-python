@@ -100,34 +100,37 @@ it looks up from the owner Workflow, so the owner must exist when the start
 returns and whenever the producer notifies. Starting it in `open_stream`, as
 above, covers both.
 
-The handler's Worker carries the stream provider with its notify hook on, and
-serves the stream service next to the handler, so the caller reads on the
-same endpoint:
+The store rides the handler Worker's client, with notifications on. The
+Worker serves the stream service next to the handler, so the caller reads on
+the same endpoint:
 
 ```python
-from temporalio.contrib.streams.memory import MemoryStreams   # or RedisStreams(...)
+from temporalio.client import Client
+from temporalio.contrib.streams.redis import RedisStreams   # or MemoryStreams()
 from temporalio.contrib.streams.nexus import TemporalStreamsHandler
 
-provider = MemoryStreams().notify_on_append()
+store = RedisStreams("redis://localhost:6379").notify_on_append()
+client = await Client.connect("localhost:7233", plugins=[store])
 worker = Worker(
     client,
     task_queue="conversations",
     workflows=[Conversation],
-    nexus_service_handlers=[ConversationHandler(), TemporalStreamsHandler(provider)],
-    plugins=[provider],
+    nexus_service_handlers=[ConversationHandler(), TemporalStreamsHandler()],
 )
 ```
 
-Without `notify_on_append()`, the operation still works, but the caller sees
-no progress until the close.
+Turn `notify_on_append()` on before the client connects. Without it, the
+operation still works, but the caller sees no progress until the close.
 
-The provider keeps one notifier per stream it wrote to, and drops it when
-the stream closes through `close_stream`, when the owner's run chain ends on
-that Worker, or when it is the least recently used of more than
-`notify_on_append(max_notifiers=...)` (1000 by default). A Worker run with
-`Worker.run` waits briefly for the notifications still out when it stops.
-`async with` on the Worker does not, so call
-`await provider.flush_notifications()` after the block.
+Core notifies each stream's notifier after every append and every Workflow
+batch that becomes visible. It keeps one notifier per stream, and drops it
+when the stream closes, when the owner's run chain ends, or when it is the
+least recently used of more than `notify_on_append(max_notifiers=...)`
+(1000 by default). A notification goes out in the background, and a Worker
+built from the client waits up to 10 seconds for the ones still out when it
+stops. A process that holds only a client, such as an outside producer that
+appends and then exits, calls `await store.flush_notifications()` before it
+exits, so a caller doesn't wait for progress that was never sent.
 
 Closing the stream completes every operation that handed it out:
 
@@ -137,12 +140,13 @@ Closing the stream completes every operation that handed it out:
   then completes the operations, so a reader never misses a record
   published in the same task.
 - From outside a Workflow, for example an Activity or the process that sees
-  the work end, `await provider.close_stream(client, ref, result)`. It
-  closes the stream in the store first, so a later append from a client or
-  an Activity raises `StreamClosedError`. The owner Workflow's own later
-  publishes still land, since Workflow code cannot be refused
-  deterministically, and readers that already ended miss them; the Worker
-  logs a warning. So close a Workflow-owned stream from the Workflow.
+  the work end, `await store.close_stream(client, ref, result)`. It closes
+  the stream in the store first, so a later append from a client or an
+  Activity raises `StreamClosedError`, and then closes its notifier. It
+  raises when either refuses the close. The owner Workflow's own later
+  publishes still land, since Workflow code can't be refused
+  deterministically, and readers that already ended miss them. So close a
+  Workflow-owned stream from the Workflow.
 
 A reader ends when the stream service says the stream is done: the stream
 is closed in the store and the reader has every record.
@@ -163,8 +167,9 @@ What happens underneath:
 1. The handler's start attaches the caller's callback to the stream's
    notifier on the server, and returns the stream reference in the
    operation token.
-2. Each append notifies the notifier. Notifications are folded: at most one
-   call is in flight, and the newest one wins.
+2. Core notifies the notifier after each append and each visible Workflow
+   batch. Notifications are folded: at most one call is in flight, and the
+   newest one wins.
 3. The notifier delivers the latest notification to the caller as progress.
 4. The close completes the caller's operation with the close result.
 
@@ -317,16 +322,22 @@ Two cases stop a reader that would otherwise read for ever.
   starts a new one while a reader still drains, the reader can hand over
   the new chain's records. Give each stream owner its own Workflow id, or
   reuse an id only after its readers finish.
-- `close_workflow_stream` closes the stream after the Worker promotes the
-  Workflow Task's records. If the close call fails, the Worker tries again
-  with backoff, from 1 second up to 1 minute, until it lands or the Worker
-  stops. It doesn't retry a close the server refuses for good, such as one
-  for a stream it doesn't know. If the close never lands, or a reader's
-  repair promoted the batch instead (a repair sends no close), readers
-  still end once the owner's run chain closes, since the store marks the
-  chain closed. The callers' operations then fail, and don't complete with
-  the close result, at the notifier's next owner check
-  (`streamnotifier.ownerCheckInterval`).
+- `close_workflow_stream` closes the stream after Core promotes the Workflow
+  Task's records: first in the store, then its notifier. Each step that
+  fails is tried again with backoff, from 1 second up to 1 minute, until it
+  lands or the Worker stops. A close the server refuses for good, such as
+  one for a stream it doesn't know, isn't retried. If the close never lands,
+  or a reader's repair promoted the batch instead (a repair sends no close),
+  readers still end once the owner's run chain closes, since the store
+  marks the chain closed.
+- When the owner's run chain ends, Core closes the notifier of every topic
+  of the chain that's still open, so their callers' operations complete
+  with an empty result. A topic closed with `close_workflow_stream` keeps
+  its own result, since the server keeps the first close it gets. If the
+  Worker that ran the final task stopped first, the callers fail at the
+  notifier's next owner check (`streamnotifier.ownerCheckInterval`)
+  instead. Topics written only by an SDK release from before the store
+  moved into Core aren't listed, and fail the same way.
 
 ## Guarantees
 
@@ -393,8 +404,8 @@ settings above and skips on a server without the stream notifier.
 ## Live tests
 
 The stock dev server has no stream notifier, so the sample test and the
-reader and stream operation lifecycle tests skip there.
+reader, progress and stream operation lifecycle tests skip there.
 `scripts/streams_live_lane.sh` builds a server that has the notifier, starts
 it with the settings above and a scratch Redis, and runs those tests against
-it. It fails when one of them skips. A release of streams over Nexus needs a
+it, along with Core's live notifier test. It fails when one of them skips. A release of streams over Nexus needs a
 green run of it, until CI has a lane with such a server.
