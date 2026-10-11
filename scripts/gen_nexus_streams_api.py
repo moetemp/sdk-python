@@ -28,7 +28,7 @@ contract_path = package_dir / "temporal_streams.nexusrpc.yaml"
 output_dir = package_dir / "_generated"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "03cfd0ddbbc8a8e7bf70af3964e4700c4a79a8b0"
+NEX_GEN_REVISION = "0b974dd0693ac68adcbf6c78819f2124c4b55018"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 
