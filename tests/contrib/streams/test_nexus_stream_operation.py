@@ -757,3 +757,49 @@ def test_a_worker_leaves_the_stop_flush_to_core() -> None:
     # the wait against a server that's down.
     assert StreamStorePlugin.run_worker is SimplePlugin.run_worker
 
+
+async def test_a_worker_without_notifications_still_delivers_the_close_result(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    # Notifications only gate progress. A close reaches the notifier whatever
+    # the store config says, so the caller completes with its result.
+    owner_id = f"owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=TOKENS_TOPIC)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-closer-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    streams_client = await connect(client, MemoryStreams())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            OwnerThatClosesInOneTask.run, 3, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    async with Worker(
+        streams_client,
+        task_queue=task_queue,
+        workflows=[StreamOperationCaller, OwnerThatClosesInOneTask],
+        nexus_service_handlers=[ChatServiceHandler()],
+    ):
+        observed = await asyncio.wait_for(
+            streams_client.execute_workflow(
+                StreamOperationCaller.run,
+                endpoint,
+                id=f"stream-closer-caller-{uuid.uuid4()}",
+                task_queue=task_queue,
+            ),
+            30,
+        )
+        owner = streams_client.get_workflow_handle(owner_id)
+        await owner.signal(OwnerThatClosesInOneTask.done)
+        await owner.result()
+
+    assert observed.result == "3 tokens"
