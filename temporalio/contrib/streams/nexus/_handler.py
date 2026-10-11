@@ -42,6 +42,7 @@ from temporalio.contrib.streams.nexus._generated import (
     ReadInput,
     ReadOutput,
     RecordWire,
+    RecordWireSuperseded,
     TemporalStreams,
 )
 
@@ -54,9 +55,9 @@ _DEFAULT_MAX_ANSWER_BYTES = 1 << 20
 # One record must fit a read result on its own, so a record above this can never
 # be read through the service.
 _DEFAULT_MAX_RECORD_BYTES = 3 << 19
-# What a body gains inside its stored record: topic, producer, attempt,
-# sequence and the content hash.
-_RECORD_OVERHEAD = 256
+# What a stored record holds beside its body, topic and producer id: the kind,
+# attempt and sequence, the field tags, and the content hash metadata.
+_RECORD_FIXED_BYTES = 192
 # Room left inside the request deadline for the answer to travel back.
 _DEADLINE_MARGIN = timedelta(milliseconds=500)
 
@@ -83,8 +84,16 @@ _ERROR_TYPES: tuple[tuple[type[StreamError], nexusrpc.HandlerErrorType, bool], .
 _TEMPORAL_FAILURE_TYPE = "temporal.api.failure.v1.Failure"
 
 
-def _handler_error(error: ValueError | StreamError) -> nexusrpc.HandlerError:
-    if isinstance(error, ValueError):
+def _handler_error(
+    error: Exception, *, internal: bool = False
+) -> nexusrpc.HandlerError:
+    if internal:
+        kind, retryable, name = (
+            nexusrpc.HandlerErrorType.INTERNAL,
+            True,
+            type(error).__name__,
+        )
+    elif isinstance(error, ValueError):
         kind, retryable, name = (
             nexusrpc.HandlerErrorType.BAD_REQUEST,
             False,
@@ -275,7 +284,15 @@ class TemporalStreamsHandler:
         self._states.clear()
 
     async def _check(self, access: StreamAccess) -> None:
-        if self._authorize is None or await self._authorize(access):
+        if self._authorize is None:
+            return
+        try:
+            allowed = await self._authorize(access)
+        except Exception as error:
+            # Spelled out like a stream error, so the authorizer's stack frames
+            # stay on this side.
+            raise _handler_error(error, internal=True) from None
+        if allowed:
             return
         raise nexusrpc.HandlerError(
             f"the caller may not {access.operation} stream {access.stream.topic!r} "
@@ -297,8 +314,13 @@ class TemporalStreamsHandler:
         if not input.finish and not payloads:
             raise ValueError("an append carries payloads or finishes")
         values: list[RawValue] = []
+        overhead = (
+            len(input.stream.topic.encode())
+            + len(input.producer_id.encode())
+            + _RECORD_FIXED_BYTES
+        )
         for index, body in enumerate(payloads):
-            size = _crossing_size(len(body) + _RECORD_OVERHEAD)
+            size = _crossing_size(len(body) + overhead)
             if size > self._max_record_bytes:
                 raise ValueError(
                     f"payload {index} would take {size} bytes in a read result, "
@@ -354,11 +376,21 @@ class TemporalStreamsHandler:
         size = 0
         cut = False
         for record in response.records:
-            # A reader synthesizes supersessions from the attempts it sees, so
-            # they are not transported.
             if record.HasField("superseded"):
-                continue
-            wire = await self._record_wire(handle._converter, record)
+                # A read that resumes after a cursor learns of the earlier
+                # attempt only from the store's reader, so this crosses too.
+                superseded = record.superseded
+                wire = RecordWire(
+                    token=record.cursor,
+                    record=b"",
+                    superseded=RecordWireSuperseded(
+                        producer_id=superseded.producer_id,
+                        previous_attempt=superseded.previous_attempt,
+                        attempt=superseded.attempt,
+                    ),
+                )
+            else:
+                wire = await self._record_wire(handle._converter, record)
             wire_size = _crossing_size(len(wire.record))
             if records and size + wire_size > self._max_answer_bytes:
                 cut = True
