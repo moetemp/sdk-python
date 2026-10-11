@@ -14,14 +14,26 @@ from typing import Any, Generic, TypeVar, overload
 
 from temporalio import workflow
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
-from temporalio.bridge.proto.workflow_commands import OutputRecord
+from temporalio.bridge.proto.workflow_commands import (
+    OutputRecord,
+    WorkflowOutputStreamCommit,
+)
 from temporalio.contrib.streams._body import content_hash
+from temporalio.contrib.streams._errors import StreamError
 from temporalio.contrib.streams._plugin import worker_has_store
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 
 __all__ = ["WorkflowStreamWriter", "workflow_writer"]
 
 T = TypeVar("T")
+
+# The largest body one record may carry, the same limit the stream service
+# keeps for a record that crosses Nexus.
+_MAX_RECORD_BYTES = 3 << 19
+# The most body bytes one activation may publish. Core stages them in one store
+# call before the completion goes out, and a call too large fails the Workflow
+# Task on every retry.
+_MAX_ACTIVATION_BYTES = 16 << 20
 
 
 class _RunStreams:
@@ -31,10 +43,34 @@ class _RunStreams:
         # FINISH is a statement about the topic, not about a writer object,
         # and every workflow_writer() call returns a new writer.
         self.finished: set[str] = set()
+        self.commit: WorkflowOutputStreamCommit | None = None
+        self.activation_bytes = 0
 
     def add(self, record: OutputRecord) -> None:
-        """Add ``record`` to this activation's commit."""
-        workflow._Runtime.current().workflow_stream_commit().records.append(record)
+        """Add ``record`` to this activation's commit.
+
+        Raises:
+            StreamError: The record's body is over the per-record limit, or
+                it would take this activation's bodies past their budget.
+                Nothing is added.
+        """
+        if record.logical_size > _MAX_RECORD_BYTES:
+            raise StreamError(
+                f"a record of {record.logical_size} bytes on {record.topic!r} is "
+                f"over the per-record limit of {_MAX_RECORD_BYTES} bytes"
+            )
+        commit = workflow._Runtime.current().workflow_stream_commit()
+        if commit is not self.commit:
+            self.commit, self.activation_bytes = commit, 0
+        total = self.activation_bytes + record.logical_size
+        if total > _MAX_ACTIVATION_BYTES:
+            raise StreamError(
+                f"publishing {record.logical_size} more bytes on {record.topic!r} "
+                f"would take this activation past {_MAX_ACTIVATION_BYTES} bytes "
+                "of records; publish the rest after the Workflow next waits"
+            )
+        self.activation_bytes = total
+        commit.records.append(record)
 
 
 # Keyed by the run's runtime, so the state goes with the run at eviction and
@@ -43,7 +79,11 @@ _runs: weakref.WeakKeyDictionary[Any, _RunStreams] = weakref.WeakKeyDictionary()
 
 
 def _run_streams() -> _RunStreams:
-    return _runs.setdefault(workflow._Runtime.current(), _RunStreams())
+    runtime = workflow._Runtime.current()
+    streams = _runs.get(runtime)
+    if streams is None:
+        streams = _runs[runtime] = _RunStreams()
+    return streams
 
 
 def _publish(record: OutputRecord, action: str) -> None:
@@ -93,6 +133,10 @@ class WorkflowStreamWriter(Generic[T]):
                 Worker has no stream store.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator, which commit nothing.
+            temporalio.contrib.streams.StreamError: The value's payload is
+                over 1.5 MiB, or it would take this activation's records past
+                16 MiB. Nothing is published. Catch it: uncaught, it fails the
+                Workflow Task, and every retry fails the same way.
         """
         if self._topic in _run_streams().finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
