@@ -254,7 +254,7 @@ async def test_the_generated_long_poll_sends_back_each_answers_state(
 
 
 # A copy of Core's crates/streams/nexus/operation_token_vectors.json, from
-# moetemp/sdk-rust moe/bridge/cn5-stream-callers at d34278ab. Core's encoder and
+# moetemp/sdk-rust moe/bridge/cn5-stream-callers at b0ac595e. Core's encoder and
 # decoder read the same file.
 _TOKEN_VECTORS = json.loads(
     (Path(__file__).parent / "operation_token_vectors.json").read_text()
