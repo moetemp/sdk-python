@@ -197,7 +197,9 @@ All keys of one run chain's streams share a hash tag, so every script and
 transaction touches one slot. Different Workflows, and different run
 chains of one Workflow id, spread across the cluster. The version check
 and the `maxmemory-policy` check ask every primary, and
-`delete_workflow_streams` scans every primary.
+`delete_workflow_streams` scans every primary. A scan makes no promise about
+keys that move to another node while it runs, so a delete during a reshard
+can miss some. Run it again once the reshard is done.
 
 Core's conformance suite runs against a Redis 7 cluster too. The cluster
 client also sends `CLUSTER SLOTS` and `COMMAND` to discover the cluster, so
