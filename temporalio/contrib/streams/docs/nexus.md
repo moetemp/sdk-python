@@ -123,7 +123,9 @@ worker = Worker(
 progress, but the close still completes every operation with its result.
 Core closes a stream's notifier after every store close whenever the store
 has a client, whether or not progress is on. Turn it on before the client
-connects. A server without the stream notifier costs one call, and then
+connects. One store instance serves one client connection, so a second
+`Client.connect` with the same instance raises `ValueError`. A client
+copied from the connected one with `Client(**config)` shares it. A server without the stream notifier costs one call, and then
 Core stops notifier calls in that process.
 
 Core notifies each stream's notifier after every append and every Workflow
