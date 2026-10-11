@@ -9,13 +9,12 @@ the stream completes the operation with the close result.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
-import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import nexusrpc
@@ -27,18 +26,18 @@ from temporalio import workflow
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.workflowservice.v1 import (
-    AttachStreamCallbackRequest,
     DescribeStreamNotifierRequest,
-    DescribeWorkflowExecutionRequest,
-    DescribeWorkflowExecutionResponse,
-    DetachStreamCallbackRequest,
 )
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     RecordKind,
     StreamClosedError,
+    StreamNotFoundError,
     StreamRef,
+    StreamRefusedError,
+    StreamStorageError,
     StreamStorePlugin,
+    StreamUnsupportedError,
     get_stream_handle,
     workflow_writer,
 )
@@ -48,7 +47,7 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
-from temporalio.converter import DataConverter
+from temporalio.contrib.streams.nexus._operation import _handler_error
 from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
@@ -58,42 +57,6 @@ from tests.helpers import new_worker
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
-
-
-@dataclass
-class FakeWorkflowService:
-    """Records the notifier calls the operation makes."""
-
-    attached: list[AttachStreamCallbackRequest] = field(default_factory=list)
-    detached: list[DetachStreamCallbackRequest] = field(default_factory=list)
-    # The first run of each Workflow id's current chain, as describe answers.
-    chains: dict[str, str] = field(default_factory=dict)
-    described: list[DescribeWorkflowExecutionRequest] = field(default_factory=list)
-
-    async def describe_workflow_execution(
-        self, request: DescribeWorkflowExecutionRequest
-    ) -> DescribeWorkflowExecutionResponse:
-        self.described.append(request)
-        response = DescribeWorkflowExecutionResponse()
-        response.workflow_execution_info.first_run_id = self.chains.get(
-            request.execution.workflow_id, "chain-1"
-        )
-        return response
-
-    async def attach_stream_callback(self, request: AttachStreamCallbackRequest) -> Any:
-        self.attached.append(request)
-
-    async def detach_stream_callback(self, request: DetachStreamCallbackRequest) -> Any:
-        self.detached.append(request)
-
-
-class FakeClient:
-    """Enough of a client for the operation handler."""
-
-    def __init__(self, service: FakeWorkflowService) -> None:
-        self.workflow_service = service
-        self.namespace = "default"
-        self.data_converter = DataConverter.default
 
 
 def start_context(callback_url: str | None = "temporal://system") -> Any:
@@ -117,135 +80,100 @@ def cancel_context() -> Any:
     )
 
 
-async def open_stream(_ctx: Any, _prompt: str) -> StreamRef:
-    return REF
+# Core attaches and detaches the caller and mints the token. Its tests in
+# crates/streams/src/nexus/operation.rs cover the attach, the token, a pinned
+# ref and the chain a cancel detaches from. These cover what stays in lang.
 
 
-def handler_with(
-    monkeypatch: pytest.MonkeyPatch, service: FakeWorkflowService
-) -> StreamOperationHandler[str, str]:
-    monkeypatch.setattr("temporalio.nexus.client", lambda: FakeClient(service))
-    return StreamOperationHandler(open_stream)
+async def test_a_start_without_a_callback_is_refused_before_it_opens_the_stream() -> (
+    None
+):
+    opened: list[str] = []
 
-
-async def test_start_attaches_the_callers_callback_and_hands_back_the_ref(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = FakeWorkflowService()
-    handler = handler_with(monkeypatch, service)
-
-    result = await handler.start(start_context(), "hi")
-
-    assert isinstance(result, nexusrpc.handler.StartOperationResultAsync)
-    assert stream_ref_from_token(result.token) == REF
-    [attach] = service.attached
-    assert attach.namespace == "default"
-    assert attach.request_id == "attach-1"
-    assert attach.callback.url == "temporal://system"
-    assert dict(attach.callback.header) == {"nexus-callback-token": "abc"}
-    assert attach.stream_ref == StreamReference(
-        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
-        workflow_id="owner-1",
-        run_id="chain-1",
-        topic="tokens",
-    )
-
-
-async def test_the_attach_carries_the_start_token_and_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = FakeWorkflowService()
-    handler = handler_with(monkeypatch, service)
-    before = time.time()
-
-    result = await handler.start(start_context(), "hi")
-
-    [attach] = service.attached
-    # The notifier hands both back with progress and the completion, so a
-    # completion that beats the start response still names the operation.
-    assert attach.operation_token == result.token
-    assert attach.HasField("start_time")
-    assert before - 1 <= attach.start_time.ToSeconds() <= time.time() + 1
-
-
-async def test_a_pinned_ref_attaches_by_its_chains_first_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = FakeWorkflowService(chains={"owner-1": "run-1"})
-    monkeypatch.setattr("temporalio.nexus.client", lambda: FakeClient(service))
-    pinned = StreamRef.for_workflow("owner-1", run_id="run-2", topic="tokens")
-
-    async def open_pinned(_ctx: Any, _prompt: str) -> StreamRef:
-        return pinned
-
-    result = await StreamOperationHandler(open_pinned).start(start_context(), "hi")
-
-    assert stream_ref_from_token(result.token) == pinned
-    # One notifier per run chain: a Continue-as-New keeps it, a new chain on
-    # the same Workflow id gets its own.
-    assert service.described[0].execution.run_id == "run-2"
-    assert service.attached[0].stream_ref.run_id == "run-1"
-
-
-async def test_a_start_without_a_callback_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = FakeWorkflowService()
-    handler = handler_with(monkeypatch, service)
+    async def open_stream(_ctx: Any, prompt: str) -> StreamRef:
+        opened.append(prompt)
+        return REF
 
     with pytest.raises(nexusrpc.HandlerError) as raised:
-        await handler.start(start_context(callback_url=None), "hi")
+        await StreamOperationHandler(open_stream).start(
+            start_context(callback_url=None), "hi"
+        )
 
     assert raised.value.type == nexusrpc.HandlerErrorType.BAD_REQUEST
-    assert not service.attached
+    assert not opened
 
 
-async def test_cancel_detaches_the_callback_it_attached(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "error, kind, retryable",
+    [
+        (ValueError("bad token"), nexusrpc.HandlerErrorType.BAD_REQUEST, False),
+        (StreamNotFoundError("no owner"), nexusrpc.HandlerErrorType.NOT_FOUND, False),
+        (
+            StreamUnsupportedError("no notifier"),
+            nexusrpc.HandlerErrorType.NOT_IMPLEMENTED,
+            False,
+        ),
+        (StreamStorageError("down"), nexusrpc.HandlerErrorType.UNAVAILABLE, True),
+        (StreamRefusedError("no"), nexusrpc.HandlerErrorType.INTERNAL, False),
+    ],
+)
+def test_a_failure_reaches_the_caller_as_the_stream_service_maps_it(
+    error: Exception, kind: nexusrpc.HandlerErrorType, retryable: bool
 ) -> None:
-    service = FakeWorkflowService()
-    handler = handler_with(monkeypatch, service)
-    started = await handler.start(start_context(), "hi")
-
-    await handler.cancel(cancel_context(), started.token)
-
-    [detach] = service.detached
-    assert detach.request_id == "attach-1"
-    assert detach.stream_ref == service.attached[0].stream_ref
+    handler_error = _handler_error(error)  # type: ignore[arg-type]
+    assert handler_error.type == kind
+    assert handler_error.retryable == retryable
 
 
-async def test_cancel_detaches_from_the_chain_it_attached_to(
-    monkeypatch: pytest.MonkeyPatch,
+async def test_a_start_for_an_owner_that_does_not_exist_is_not_found(
+    client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = FakeWorkflowService()
-    handler = handler_with(monkeypatch, service)
-    started = await handler.start(start_context(), "hi")
-    # The Workflow id moved on to a new chain since the start.
-    service.chains["owner-1"] = "chain-2"
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
 
-    await handler.cancel(cancel_context(), started.token)
+    async def open_missing(_ctx: Any, _prompt: str) -> StreamRef:
+        return StreamRef.for_workflow(f"missing-{uuid.uuid4()}", topic="tokens")
 
-    assert service.detached[0].stream_ref.run_id == "chain-1"
+    with pytest.raises(nexusrpc.HandlerError) as raised:
+        await StreamOperationHandler(open_missing).start(start_context(), "hi")
+
+    assert raised.value.type == nexusrpc.HandlerErrorType.NOT_FOUND
 
 
-def test_a_token_that_names_no_stream_is_refused() -> None:
-    # A version 1 token, from before the token named the chain.
-    old = base64.urlsafe_b64encode(
-        json.dumps(
-            {
-                "v": 1,
-                "attach": "attach-1",
-                "chain": "chain-1",
-                "ref": {
-                    "kind": "workflow",
-                    "workflow_id": "owner-1",
-                    "run_id": None,
-                    "topic": "tokens",
-                },
-            }
-        ).encode()
-    ).decode()
-    for token in ["", "not-a-token", "eyJ2IjogMn0", old]:
+async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+
+    async def open_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return REF
+
+    with pytest.raises(nexusrpc.HandlerError) as raised:
+        await StreamOperationHandler(open_stream).cancel(
+            cancel_context(), "not-a-token"
+        )
+
+    assert raised.value.type == nexusrpc.HandlerErrorType.BAD_REQUEST
+
+
+def test_a_token_reads_as_the_shared_vectors_say() -> None:
+    # The vectors Core's encoder writes, in the Core this SDK vendors.
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "temporalio/bridge/sdk-core/crates/streams/nexus"
+        / "operation_token_vectors.json"
+    )
+    vectors = json.loads(path.read_text())
+    for vector in vectors["vectors"] + vectors["decode_only"]:
+        ref = vector["ref"]
+        assert stream_ref_from_token(vector["token"]) == StreamRef(
+            kind=ref["kind"],
+            workflow_id=ref["workflow_id"],
+            run_id=ref.get("run_id"),
+            topic=ref["topic"],
+        )
+    for token in vectors["refused"]:
         with pytest.raises(ValueError):
             stream_ref_from_token(token)
 

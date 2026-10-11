@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import json
 import typing
 
 import typing_extensions
@@ -24,11 +26,13 @@ from ._definitions import (
 _APPEND_OUTPUT_DECLARED: frozenset[str] = frozenset({"cursor"})
 
 
-_READ_OUTPUT_DECLARED: frozenset[str] = frozenset({"records", "next_token", "done"})
+_READ_OUTPUT_DECLARED: frozenset[str] = frozenset(
+    {"records", "next_token", "done", "state"}
+)
 
 
 _RECORD_WIRE_DECLARED: frozenset[str] = frozenset(
-    {"token", "record", "error", "superseded"}
+    {"token", "record", "error", "stale", "superseded"}
 )
 
 
@@ -552,6 +556,23 @@ class _ReadInputTransferTypeConverter(
                 else:
                     latest_only_value = latest_only_value_raw
 
+        state_value: bytes | None = None
+        if "state" in raw:
+            state_value_raw = raw["state"]
+            if state_value_raw is None:
+                violations.append(
+                    Violation(path="state", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(state_value_raw, str):
+                    violations.append(Violation(path="state", reason="expected string"))
+                else:
+                    state_value_parsed = _parse_base64(
+                        state_value_raw, "state", violations
+                    )
+                    if state_value_parsed is not None:
+                        state_value = state_value_parsed
+
         for key in raw:
             if (
                 key != "stream"
@@ -559,6 +580,7 @@ class _ReadInputTransferTypeConverter(
                 and key != "max_records"
                 and key != "wait_ms"
                 and key != "latest_only"
+                and key != "state"
             ):
                 violations.append(
                     Violation(path=_member_path(key), reason="unknown field")
@@ -571,6 +593,7 @@ class _ReadInputTransferTypeConverter(
             max_records=max_records_value,
             wait_ms=wait_ms_value,
             latest_only=latest_only_value,
+            state=state_value,
         )
 
     @typing_extensions.override
@@ -676,6 +699,13 @@ class _ReadInputTransferTypeConverter(
                     Violation(path="latest_only", reason="expected boolean")
                 )
             out["latest_only"] = latest_only_value
+        state_value: typing.Any = runtime_value.state
+        if state_value is not None:
+            state_violation_count = len(violations)
+            if not (isinstance(state_value, bytes)):
+                violations.append(Violation(path="state", reason="expected bytes"))
+            if len(violations) == state_violation_count:
+                out["state"] = _format_base64(state_value)
         if violations:
             raise temporalio.converter.create_payload_validation_error(violations)
         return out
@@ -696,7 +726,9 @@ class ReadInput:
     """
 
     max_records: int | None = None
-    """Answer with at most this many records. 100 when absent."""
+    """Answer with at most this many stored records. 100 when absent. A supersession comes
+    on top.
+    """
 
     wait_ms: int | None = None
     """Wait at most this long for a record before answering. The handler shortens it to fit
@@ -707,6 +739,13 @@ class ReadInput:
     latest_only: bool | None = None
     """Answer with the cursor of the newest record and no records, for a reader that
     follows from now. Refused beside after_token.
+    """
+
+    state: bytes | None = None
+    """The state of this read's previous answer, opaque to the caller. Absent on a read's
+    first call. With it the endpoint knows which producer attempts the reader already
+    saw, so its superseded and stale marks are exact across calls and across handler
+    Workers. A state that doesn't parse is refused as a cursor mistake.
     """
 
 
@@ -773,6 +812,23 @@ class _ReadOutputTransferTypeConverter(
             else:
                 done_value = done_value_raw
 
+        state_value: bytes | None = None
+        if "state" in raw:
+            state_value_raw = raw["state"]
+            if state_value_raw is None:
+                violations.append(
+                    Violation(path="state", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(state_value_raw, str):
+                    violations.append(Violation(path="state", reason="expected string"))
+                else:
+                    state_value_parsed = _parse_base64(
+                        state_value_raw, "state", violations
+                    )
+                    if state_value_parsed is not None:
+                        state_value = state_value_parsed
+
         additional_properties: dict[str, typing.Any] = {}
         for key in raw:
             if key not in _READ_OUTPUT_DECLARED:
@@ -783,6 +839,7 @@ class _ReadOutputTransferTypeConverter(
             records=records_value,
             next_token=next_token_value,
             done=done_value,
+            state=state_value,
             additional_properties=additional_properties,
         )
 
@@ -831,6 +888,13 @@ class _ReadOutputTransferTypeConverter(
             if not (isinstance(done_value, bool)):
                 violations.append(Violation(path="done", reason="expected boolean"))
             out["done"] = done_value
+        state_value: typing.Any = runtime_value.state
+        if state_value is not None:
+            state_violation_count = len(violations)
+            if not (isinstance(state_value, bytes)):
+                violations.append(Violation(path="state", reason="expected bytes"))
+            if len(violations) == state_violation_count:
+                out["state"] = _format_base64(state_value)
         additional_properties_value: typing.Any = runtime_value.additional_properties
         if not isinstance(additional_properties_value, dict):
             raise temporalio.converter.create_payload_validation_error(
@@ -872,6 +936,12 @@ class ReadOutput:
     """The stream ended for this reader: the stream is closed, or its owner's run chain
     ended, and every retained record after the cursor has been delivered. Nothing more
     will arrive, so the caller stops.
+    """
+
+    state: bytes | None = None
+    """Pass as state on the next call of this read. It matches next_token, also when the
+    answer was cut short by its byte budget. It stays below 64 KiB, so it can ride in a
+    Workflow's History.
     """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(
@@ -930,6 +1000,21 @@ class _RecordWireTransferTypeConverter(
                 else:
                     error_value = error_value_raw
 
+        stale_value: bool | None = None
+        if "stale" in raw:
+            stale_value_raw = raw["stale"]
+            if stale_value_raw is None:
+                violations.append(
+                    Violation(path="stale", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(stale_value_raw, bool):
+                    violations.append(
+                        Violation(path="stale", reason="expected boolean")
+                    )
+                else:
+                    stale_value = stale_value_raw
+
         superseded_value: RecordWireSuperseded | None = None
         if "superseded" in raw:
             superseded_value_raw = raw["superseded"]
@@ -957,6 +1042,7 @@ class _RecordWireTransferTypeConverter(
             token=token_value,
             record=record_value,
             error=error_value,
+            stale=stale_value,
             superseded=superseded_value,
             additional_properties=additional_properties,
         )
@@ -991,6 +1077,11 @@ class _RecordWireTransferTypeConverter(
             if not (isinstance(error_value, str)):
                 violations.append(Violation(path="error", reason="expected string"))
             out["error"] = error_value
+        stale_value: typing.Any = runtime_value.stale
+        if stale_value is not None:
+            if not (isinstance(stale_value, bool)):
+                violations.append(Violation(path="stale", reason="expected boolean"))
+            out["stale"] = stale_value
         superseded_value: typing.Any = runtime_value.superseded
         if superseded_value is not None:
             superseded_violation_count = len(violations)
@@ -1047,6 +1138,12 @@ class RecordWire:
     """Why the endpoint can't hand over the record at this cursor, such as one written to
     the store directly that is larger than a read result can carry. The record is left
     out, and a reader goes on past the cursor.
+    """
+
+    stale: bool | None = None
+    """The record is from an attempt of its producer below the newest one this read
+    delivered: an older attempt wrote after a newer one started. It is still delivered,
+    so a reader can keep it out of the current answer.
     """
 
     superseded: RecordWireSuperseded | None = None
@@ -1225,6 +1322,187 @@ class RecordWireSuperseded:
     additional_properties: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict
     )
+
+
+class _StreamOperationTokenTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["StreamOperationToken", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["StreamOperationToken"]
+    ) -> "StreamOperationToken":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        v_value: typing.Literal[2] = typing.cast("typing.Any", None)
+        if "v" not in raw or raw["v"] is None:
+            violations.append(Violation(path="v", reason="required"))
+        else:
+            v_value_raw = raw["v"]
+            v_value_parsed = _parse_spec_integer(v_value_raw, "v", violations)
+            if v_value_parsed is not None:
+                if v_value_parsed not in (2,):
+                    violations.append(Violation(path="v", reason="must equal 2"))
+                else:
+                    v_value = typing.cast("typing.Any", v_value_parsed)
+
+        ref_value: StreamRef = typing.cast("typing.Any", None)
+        if "ref" not in raw or raw["ref"] is None:
+            violations.append(Violation(path="ref", reason="required"))
+        else:
+            ref_value_raw = raw["ref"]
+            try:
+                ref_value = _StreamRefTransferTypeConverter().from_transfer_type(
+                    ref_value_raw, StreamRef
+                )
+            except temporalio.exceptions.ApplicationError as error:
+                _collect(violations, "ref", error)
+
+        attach_value: str = typing.cast("typing.Any", None)
+        if "attach" not in raw or raw["attach"] is None:
+            violations.append(Violation(path="attach", reason="required"))
+        else:
+            attach_value_raw = raw["attach"]
+            if not isinstance(attach_value_raw, str):
+                violations.append(Violation(path="attach", reason="expected string"))
+            else:
+                attach_value = attach_value_raw
+
+        chain_value: str = typing.cast("typing.Any", None)
+        if "chain" not in raw or raw["chain"] is None:
+            violations.append(Violation(path="chain", reason="required"))
+        else:
+            chain_value_raw = raw["chain"]
+            if not isinstance(chain_value_raw, str):
+                violations.append(Violation(path="chain", reason="expected string"))
+            else:
+                chain_value = chain_value_raw
+
+        for key in raw:
+            if key != "v" and key != "ref" and key != "attach" and key != "chain":
+                violations.append(
+                    Violation(path=_member_path(key), reason="unknown field")
+                )
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return StreamOperationToken(
+            v=v_value,
+            ref=ref_value,
+            attach=attach_value,
+            chain=chain_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "StreamOperationToken") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, StreamOperationToken):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        v_value: typing.Any = runtime_value.v
+        if v_value is None:
+            violations.append(Violation(path="v", reason="required"))
+        else:
+            if not (
+                not isinstance(v_value, bool)
+                and (
+                    isinstance(v_value, int)
+                    or (isinstance(v_value, float) and v_value.is_integer())
+                )
+            ):
+                violations.append(Violation(path="v", reason="expected integer"))
+            else:
+                if typing.cast("object", v_value) not in (2,):
+                    violations.append(Violation(path="v", reason="must equal 2"))
+            out["v"] = v_value
+        ref_value: typing.Any = runtime_value.ref
+        if ref_value is None:
+            violations.append(Violation(path="ref", reason="required"))
+        else:
+            ref_violation_count = len(violations)
+            if len(violations) == ref_violation_count:
+                try:
+                    out["ref"] = _StreamRefTransferTypeConverter().to_transfer_type(
+                        ref_value
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "ref", error)
+        attach_value: typing.Any = runtime_value.attach
+        if attach_value is None:
+            violations.append(Violation(path="attach", reason="required"))
+        else:
+            if not (isinstance(attach_value, str)):
+                violations.append(Violation(path="attach", reason="expected string"))
+            out["attach"] = attach_value
+        chain_value: typing.Any = runtime_value.chain
+        if chain_value is None:
+            violations.append(Violation(path="chain", reason="required"))
+        else:
+            if not (isinstance(chain_value, str)):
+                violations.append(Violation(path="chain", reason="expected string"))
+            out["chain"] = chain_value
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_StreamOperationTokenTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class StreamOperationToken:
+    """What a stream-returning operation's token carries. Core mints it when the operation
+    starts, and a caller reads the stream back from it. The token is this model's
+    transfer form as JSON with sorted keys and no spaces, in base64url with no padding.
+    """
+
+    v: typing.Literal[2] = 2
+    """The token version. A token of another version is refused."""
+
+    ref: StreamRef
+
+    attach: str
+    """The request id of the start that attached the caller."""
+
+    chain: str
+    """The first run of the run chain the start attached to, so a cancel detaches from it
+    even after the Workflow id moved on to a new chain.
+    """
+
+    def to_token(self) -> str:
+        """This value as an operation token.
+
+        The token is the JSON transfer form with sorted keys and no spaces, in
+        base64url with no padding, so any implementation writes the same text.
+        """
+        transfer: typing.Any = (
+            _StreamOperationTokenTransferTypeConverter().to_transfer_type(self)
+        )
+        text = json.dumps(transfer, separators=(",", ":"), sort_keys=True)
+        return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+    @classmethod
+    def from_token(cls, token: str) -> "StreamOperationToken":
+        """Reads an operation token that ``to_token`` wrote.
+
+        Raises:
+            ValueError: ``token`` is not one, or it names another version.
+        """
+        try:
+            text = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
+            transfer: typing.Any = json.loads(text)
+        except ValueError as error:
+            raise ValueError(f"not a StreamOperationToken: {error}") from None
+        try:
+            return _StreamOperationTokenTransferTypeConverter().from_transfer_type(
+                transfer, cls
+            )
+        except temporalio.exceptions.ApplicationError as error:
+            raise ValueError(f"not a StreamOperationToken: {error}") from None
 
 
 class _StreamRefTransferTypeConverter(

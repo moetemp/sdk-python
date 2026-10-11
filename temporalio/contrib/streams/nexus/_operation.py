@@ -4,86 +4,39 @@ The operation stays open while the stream runs. Its start attaches the
 caller's callback to the stream's notifier on the server, so the notifier
 tells the caller when the stream moves (Nexus operation progress) and
 completes the operation when the stream closes. The caller learns which
-stream it is from the operation token.
+stream it is from the operation token. Core resolves the stream's run chain,
+mints the token and attaches the callback.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 import nexusrpc
 import nexusrpc.handler
-from google.protobuf.timestamp_pb2 import Timestamp
 
 import temporalio.nexus
-from temporalio.api.common.v1 import Callback, WorkflowExecution
-from temporalio.api.enums.v1 import StreamOwnerKind
-from temporalio.api.stream.v1 import StreamReference
-from temporalio.api.workflowservice.v1 import (
-    AttachStreamCallbackRequest,
-    DescribeWorkflowExecutionRequest,
-    DetachStreamCallbackRequest,
+from temporalio.bridge.proto.streams import (
+    AttachCallerRequest,
+    DetachCallerRequest,
+    StreamAddress,
+    StreamOwnerKind,
 )
-from temporalio.client import Client
+from temporalio.contrib.streams._errors import (
+    StreamError,
+    StreamNotFoundError,
+    StreamStorageError,
+    StreamUnsupportedError,
+)
+from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams.nexus._generated.models import StreamOperationToken
 
 __all__ = ["StreamOperationHandler", "stream_ref_from_token"]
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
-
-# The token's own format version, so a later release that carries more (or a
-# typed start result instead) can tell an old token apart.
-_TOKEN_VERSION = 2
-
-
-def _encode_token(ref: StreamRef, attach_request_id: str, first_run_id: str) -> str:
-    body = {
-        "v": _TOKEN_VERSION,
-        "ref": {
-            "kind": ref.kind,
-            "workflow_id": ref.workflow_id,
-            "run_id": ref.run_id,
-            "topic": ref.topic,
-        },
-        "attach": attach_request_id,
-        # The chain the start attached to, so a cancel detaches from it even
-        # after the Workflow id moved on to a new chain.
-        "chain": first_run_id,
-    }
-    encoded = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
-    return base64.urlsafe_b64encode(encoded).decode().rstrip("=")
-
-
-def _decode_token(token: str) -> tuple[StreamRef, str, str]:
-    try:
-        padded = token + "=" * (-len(token) % 4)
-        body: Any = json.loads(base64.urlsafe_b64decode(padded))
-        if not isinstance(body, dict) or body.get("v") != _TOKEN_VERSION:
-            raise ValueError("unknown token version")
-        ref: Any = body["ref"]
-        attach: Any = body["attach"]
-        if not isinstance(attach, str):
-            raise ValueError("the attach request id is not a string")
-        chain: Any = body["chain"]
-        if not isinstance(chain, str):
-            raise ValueError("the chain's first run id is not a string")
-        return (
-            StreamRef(
-                kind=ref["kind"],
-                workflow_id=ref["workflow_id"],
-                run_id=ref["run_id"],
-                topic=ref["topic"],
-            ),
-            attach,
-            chain,
-        )
-    except (ValueError, TypeError, KeyError, binascii.Error) as error:
-        raise ValueError(f"not a stream operation token: {error}") from None
 
 
 def stream_ref_from_token(token: str) -> StreamRef:
@@ -95,32 +48,23 @@ def stream_ref_from_token(token: str) -> StreamRef:
     Raises:
         ValueError: ``token`` did not come from :class:`StreamOperationHandler`.
     """
-    return _decode_token(token)[0]
+    return StreamOperationToken.from_token(token).ref
 
 
-def _stream_reference(ref: StreamRef, first_run_id: str) -> StreamReference:
-    # The notifier is keyed by the run chain, through its first run, so a
-    # pinned ref and a following one reach the same notifier, while a new
-    # chain on the same Workflow id gets its own.
-    return StreamReference(
-        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
-        workflow_id=ref.workflow_id,
-        run_id=first_run_id,
-        topic=ref.topic,
-    )
-
-
-async def _chain_first_run_id(client: Client, ref: StreamRef) -> str:
-    # An unpinned ref names the Workflow id's current chain.
-    response = await client.workflow_service.describe_workflow_execution(
-        DescribeWorkflowExecutionRequest(
-            namespace=client.namespace,
-            execution=WorkflowExecution(
-                workflow_id=ref.workflow_id, run_id=ref.run_id or ""
-            ),
-        )
-    )
-    return response.workflow_execution_info.first_run_id
+def _handler_error(error: StreamError | ValueError) -> nexusrpc.HandlerError:
+    # The same table the stream service's operations answer with, so a caller
+    # sees one meaning for each kind.
+    if isinstance(error, ValueError):
+        kind, retryable = nexusrpc.HandlerErrorType.BAD_REQUEST, False
+    elif isinstance(error, StreamNotFoundError):
+        kind, retryable = nexusrpc.HandlerErrorType.NOT_FOUND, False
+    elif isinstance(error, StreamUnsupportedError):
+        kind, retryable = nexusrpc.HandlerErrorType.NOT_IMPLEMENTED, False
+    elif isinstance(error, StreamStorageError):
+        kind, retryable = nexusrpc.HandlerErrorType.UNAVAILABLE, True
+    else:
+        kind, retryable = nexusrpc.HandlerErrorType.INTERNAL, False
+    return nexusrpc.HandlerError(str(error), type=kind, retryable_override=retryable)
 
 
 class StreamOperationHandler(
@@ -134,8 +78,8 @@ class StreamOperationHandler(
     reference in the operation token. From then on the server tells the
     caller each time the stream moves, when the store has
     :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
-    and completes the operation with the
-    close result when the stream closes. A cancel detaches the caller.
+    and completes the operation with the close result when the stream closes.
+    A cancel detaches the caller.
 
     The operation's output type is the close result's type. The records
     themselves are read through the stream service, not carried by the
@@ -161,37 +105,44 @@ class StreamOperationHandler(
 
         Raises:
             nexusrpc.HandlerError: The caller sent no callback, so it could
-                never hear about the stream.
+                never hear about the stream (``BAD_REQUEST``), or the server
+                didn't take the attach.
         """
         if not ctx.callback_url:
-            raise nexusrpc.HandlerError(
-                "a stream-returning operation needs a caller callback; start it "
-                "asynchronously",
-                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+            # Refused before open_stream runs, so a start that can't work
+            # creates nothing.
+            raise _handler_error(
+                ValueError(
+                    "a stream-returning operation needs a caller callback; start "
+                    "it asynchronously"
+                )
             )
         ref = await self._open_stream(ctx, input)
         client = temporalio.nexus.client()
-        first_run_id = await _chain_first_run_id(client, ref)
-        token = _encode_token(ref, ctx.request_id, first_run_id)
-        start_time = Timestamp()
-        start_time.GetCurrentTime()
-        # Idempotent by request id, so a retried start attaches once. The
-        # notifier hands the token and start time back with progress and the
-        # completion, so a completion that beats this start's response, on a
-        # stream already closed for example, still names the operation.
-        await client.workflow_service.attach_stream_callback(
-            AttachStreamCallbackRequest(
-                namespace=client.namespace,
-                stream_ref=_stream_reference(ref, first_run_id),
-                request_id=ctx.request_id,
-                callback=Callback.Nexus(
-                    url=ctx.callback_url, header=dict(ctx.callback_headers)
-                ),
-                operation_token=token,
-                start_time=start_time,
+        try:
+            ref._require_supported()
+            service = await store_for_client(client)._nexus_service_for(client)
+            response = await call(
+                service.attach_caller(
+                    AttachCallerRequest(
+                        stream=StreamAddress(
+                            namespace=client.namespace,
+                            owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
+                            workflow_id=ref.workflow_id,
+                            run_id=ref.run_id or "",
+                            topic=ref.topic,
+                        ),
+                        request_id=ctx.request_id,
+                        callback_url=ctx.callback_url,
+                        callback_headers=dict(ctx.callback_headers),
+                    )
+                )
             )
+        except (StreamError, ValueError) as error:
+            raise _handler_error(error) from None
+        return nexusrpc.handler.StartOperationResultAsync(
+            token=response.operation_token
         )
-        return nexusrpc.handler.StartOperationResultAsync(token=token)
 
     async def cancel(
         self, ctx: nexusrpc.handler.CancelOperationContext, token: str
@@ -199,19 +150,18 @@ class StreamOperationHandler(
         """Detach the caller: the stream goes on, the operation ends.
 
         Raises:
-            nexusrpc.HandlerError: ``token`` is not one this operation issued.
+            nexusrpc.HandlerError: ``token`` is not one this operation issued
+                (``BAD_REQUEST``), or the server didn't take the detach.
         """
-        try:
-            ref, attach_request_id, first_run_id = _decode_token(token)
-        except ValueError as error:
-            raise nexusrpc.HandlerError(
-                str(error), type=nexusrpc.HandlerErrorType.BAD_REQUEST
-            ) from None
         client = temporalio.nexus.client()
-        await client.workflow_service.detach_stream_callback(
-            DetachStreamCallbackRequest(
-                namespace=client.namespace,
-                stream_ref=_stream_reference(ref, first_run_id),
-                request_id=attach_request_id,
+        try:
+            service = await store_for_client(client)._nexus_service_for(client)
+            await call(
+                service.detach_caller(
+                    DetachCallerRequest(
+                        namespace=client.namespace, operation_token=token
+                    )
+                )
             )
-        )
+        except (StreamError, ValueError) as error:
+            raise _handler_error(error) from None
