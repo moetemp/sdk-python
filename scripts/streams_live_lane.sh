@@ -11,6 +11,7 @@
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7881)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server.
+#   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 set -euo pipefail
 
@@ -62,6 +63,9 @@ callback.allowedAddresses:
       - Pattern: "localhost:$HTTP_PORT"
         AllowInsecure: true
       - Pattern: "127.0.0.1:$HTTP_PORT"
+        AllowInsecure: true
+      # Core's live notifier test takes the notifier's callbacks on this address.
+      - Pattern: "127.0.0.1:7899"
         AllowInsecure: true
 system.forceSearchAttributesCacheRefreshOnRead:
   - value: true
@@ -209,6 +213,20 @@ uv run --no-sync pytest \
 gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: lifecycle tests skipped, see above" >&2
+  status=1
+fi
+
+# Core sends the notifications and the closes, so its own live test runs against the server too.
+# It returns early without a server, so the lane checks that it ran.
+core_test=streams::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
+STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" \
+  CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK_DIR/cargo-target}" \
+  cargo test --manifest-path temporalio/bridge/sdk-core/Cargo.toml -p temporalio-sdk-core \
+  --features streams --lib -- "$core_test" --exact --nocapture 2>&1 |
+  tee "$WORK_DIR/core-live.log" || status=$?
+if grep -q "set STREAMS_NOTIFIER_SERVER" "$WORK_DIR/core-live.log" ||
+  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/core-live.log"; then
+  echo "live lane: Core's live notifier test did not run and pass" >&2
   status=1
 fi
 exit "$status"
