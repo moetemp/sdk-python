@@ -7,6 +7,7 @@ the contract; these pin what the rest of the SDK relies on from them.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -24,7 +25,9 @@ from temporalio.contrib.streams.nexus import (
     ReadOutput,
     RecordWire,
     TemporalStreams,
+    TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._generated import StreamOperationToken
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 
@@ -56,9 +59,17 @@ def test_the_service_definition_carries_the_contract_operations():
     }
 
 
-def test_the_contract_ships_beside_the_bindings():
+def test_the_contract_comes_from_the_vendored_core():
+    # Core serves the contract, so the SDK generates from Core's copy and keeps
+    # none of its own.
+    package = Path(temporalio.contrib.streams.__file__).parent
+    assert not (package / "nexus" / "temporal_streams.nexusrpc.yaml").exists()
     contract = (
-        Path(temporalio.contrib.streams.__file__).parent
+        package.parent.parent
+        / "bridge"
+        / "sdk-core"
+        / "crates"
+        / "streams"
         / "nexus"
         / "temporal_streams.nexusrpc.yaml"
     )
@@ -178,3 +189,80 @@ def test_a_supersession_decodes_at_its_cursor():
         record.superseded.previous_attempt,
         record.superseded.attempt,
     ) == ("tokens@run-1", 1, 2)
+
+
+def test_a_read_carries_its_state_both_ways():
+    # The reader carries Core's read state, so the handler holds none.
+    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), state=b"\x01\x02")
+    assert _to_json(read)["state"] == base64.b64encode(b"\x01\x02").decode()
+    answer = _from_json(
+        {
+            "records": [],
+            "next_token": "memory:abcd1234:2",
+            "done": False,
+            "state": "AQI=",
+        },
+        ReadOutput,
+    )
+    assert answer.state == b"\x01\x02"
+
+
+def test_a_stale_record_decodes_with_its_mark():
+    record = base64.b64encode(b"\x1a\x06tokens").decode()
+    answer = _from_json(
+        {
+            "records": [
+                {"token": "memory:abcd1234:3", "record": record, "stale": True}
+            ],
+            "next_token": "memory:abcd1234:3",
+            "done": False,
+        },
+        ReadOutput,
+    )
+    [stored] = answer.records
+    assert stored.stale is True
+
+
+def test_the_generated_long_poll_sends_back_each_answers_state():
+    source = inspect.getsource(TemporalStreamsHttpClient.read_until_records)
+    assert "request = dataclasses.replace(request, state=answer.state)" in source
+
+
+# A copy of Core's crates/streams/nexus/operation_token_vectors.json, from
+# moetemp/sdk-rust moe/bridge/cn5-stream-callers at d34278ab. Core's encoder and
+# decoder read the same file.
+_TOKEN_VECTORS = json.loads(
+    (Path(__file__).parent / "operation_token_vectors.json").read_text()
+)
+
+
+def _token_of(vector: dict[str, Any]) -> StreamOperationToken:
+    ref = vector["ref"]
+    return StreamOperationToken(
+        ref=StreamRef(
+            kind=ref["kind"],
+            workflow_id=ref["workflow_id"],
+            run_id=ref.get("run_id"),
+            topic=ref["topic"],
+        ),
+        attach=vector["attach"],
+        chain=vector["chain"],
+    )
+
+
+@pytest.mark.parametrize("vector", _TOKEN_VECTORS["vectors"])
+def test_the_operation_token_writes_and_reads_cores_vectors(vector: dict[str, Any]):
+    token = _token_of(vector)
+    assert token.to_token() == vector["token"]
+    assert StreamOperationToken.from_token(vector["token"]) == token
+
+
+@pytest.mark.parametrize("vector", _TOKEN_VECTORS["decode_only"])
+def test_the_operation_token_reads_cores_decode_only_vectors(vector: dict[str, Any]):
+    assert StreamOperationToken.from_token(vector["token"]) == _token_of(vector)
+
+
+@pytest.mark.parametrize("token", _TOKEN_VECTORS["refused"])
+def test_the_operation_token_refuses_cores_refused_vectors(token: str):
+    with pytest.raises(ValueError):
+        StreamOperationToken.from_token(token)

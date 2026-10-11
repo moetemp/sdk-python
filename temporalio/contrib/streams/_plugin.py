@@ -30,7 +30,7 @@ from temporalio.bridge.proto.streams import (
     StreamStoreConfig,
 )
 from temporalio.bridge.streams import StreamCallFailure, StreamStore
-from temporalio.bridge.streams_generated import StreamService
+from temporalio.bridge.streams_generated import StreamNexusService, StreamService
 from temporalio.contrib.streams._body import encode_bodies
 from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.plugin import SimplePlugin
@@ -253,6 +253,16 @@ class StreamStorePlugin(SimplePlugin):
         await self._connected(client.service_client)
         assert self._service is not None
         return self._service
+
+    async def _nexus_service_for(self, client: Client) -> StreamNexusService:
+        """The stream service's Nexus calls, on the store of ``client``.
+
+        Raises:
+            ValueError: Another client connection already connected the store.
+        """
+        await self._connected(client.service_client)
+        assert self._store is not None
+        return StreamNexusService(self._store)
 
     async def _connected(self, service_client: ServiceClient) -> None:
         if self._service_client is service_client:
