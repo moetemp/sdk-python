@@ -72,7 +72,7 @@ Differences to plan for:
    if workflow.patched("publish-to-streams"):
        workflow_writer(TOKENS).publish(token)
    else:
-       await stream.topic("tokens").publish(token)
+       stream.topic("tokens").publish(token)
    ```
 4. Remove `WorkflowStream` from a Workflow only after no reader needs its
    records.
@@ -85,9 +85,11 @@ these changes reach application code:
 - **Register the store with `Client.connect`.** Pass `RedisStreams` or
   `MemoryStreams` in `Client.connect(..., plugins=[...])`. Connecting the
   client connects the store, and Workers built from that client take it. A
-  store passed only to `Worker(plugins=[...])`, or to a client made without
-  `Client.connect`, is refused with `ValueError`, since Core needs the
-  client's connection to check a stream's owner.
+  Worker refuses a store passed only to `Worker(plugins=[...])`, or one on a
+  client made without `Client.connect`, with `ValueError`, since Core needs
+  the client's connection to check a stream's owner. Handles work on either
+  client, and connect the store on first use. One store instance serves one
+  client connection, so a second connection needs its own instance.
 - **`RedisStreams` takes URLs.** Pass a `redis://` or `rediss://` URL, or
   the seed nodes of a cluster with `cluster=True`. It no longer takes an
   application-owned `redis.asyncio` client, and `poll_interval` is gone.
