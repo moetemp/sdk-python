@@ -246,7 +246,9 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_start_on_a_closed_stream_still_names_it \
   test_live_a_workflow_reads_every_record_then_none \
   test_live_a_reader_after_continue_as_new_sees_a_later_attempt \
-  test_live_each_read_carries_the_state_its_last_answer_gave
+  test_live_each_read_carries_the_state_its_last_answer_gave \
+  test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
+  test_live_a_reader_gets_every_record_of_a_burst
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_output_commit.py \
