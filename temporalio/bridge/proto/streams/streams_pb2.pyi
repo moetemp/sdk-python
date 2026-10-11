@@ -276,7 +276,7 @@ global___RedisStoreConfig = RedisStoreConfig
 
 class MemoryStoreConfig(google.protobuf.message.Message):
     """Streams in this process's memory, for tests and local development. Nothing survives the
-    process.
+    process, and each connect makes a store of its own that shares no streams with another.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -494,8 +494,9 @@ class AppendRequest(google.protobuf.message.Message):
     digest: builtins.bytes
     """The batch's identity, which the store compares when the producer repeats its newest batch.
     Lang takes it before the codec, as the SHA-256 over each converted record as its length in 8
-    bytes big-endian, then its deterministic serialization. Every SDK takes it this way, so a
-    retry through another SDK or release still dedupes. Required.
+    bytes big-endian, then its deterministic serialization. Deterministic serialization is stable
+    within one protobuf library only, so only the SDK that made a digest can repeat the batch and
+    dedupe. Another SDK's retry of the same batch fails as PRODUCER_DIVERGENT. Required.
     """
     def __init__(
         self,
@@ -586,9 +587,13 @@ class ReadRequest(google.protobuf.message.Message):
     """
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration:
-        """How long to wait for a record when none is there. Zero answers at once."""
+        """How long to wait for a record when none is there. Zero answers at once. Core waits at most
+        60 seconds, the stream service contract's long-poll maximum.
+        """
     max_records: builtins.int
-    """Zero lets Core choose."""
+    """How many stored records one answer holds at most. A synthesized supersession comes on top.
+    Zero lets Core choose. Core answers with at most 1,000 records.
+    """
     state: builtins.bytes
     """The `state` of the previous answer of the same read. Empty on its first call."""
     def __init__(
@@ -893,7 +898,9 @@ class DeleteOwnerResponse(google.protobuf.message.Message):
 
     DELETED_FIELD_NUMBER: builtins.int
     deleted: builtins.int
-    """How many store keys the delete removed."""
+    """How much the delete removed, counted the store's own way, such as Redis keys. Only zero
+    means the same on every store: nothing was left to delete.
+    """
     def __init__(
         self,
         *,

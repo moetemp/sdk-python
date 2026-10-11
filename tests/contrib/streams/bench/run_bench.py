@@ -1,4 +1,4 @@
-"""Local stream benchmarks: PERF-04 and PERF-05 on the dev server and Redis.
+"""Local stream benchmarks: PERF-04 and PERF-05a on the dev server and Redis.
 
 Not part of the test run. Run one measurement at a time, for example::
 
@@ -360,7 +360,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "scenario",
-        choices=["perf04-activity", "perf04-workflow", "perf05a", "perf05b", "perf05c"],
+        choices=["perf04-activity", "perf04-workflow", "perf05a"],
     )
     parser.add_argument("--redis", required=True)
     parser.add_argument("--count", type=int, default=300)

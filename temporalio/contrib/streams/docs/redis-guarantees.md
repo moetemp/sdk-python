@@ -122,10 +122,13 @@ gone logs a warning that names its token. A stage whose run History no
 longer holds is never promoted, and it waits for that expiry.
 
 A publishing Workflow can only move forward. Once it has published, only a
-Worker with this release can replay it, so don't roll a fleet back to a
-release without streams while such Workflows run. Replaying needs no store,
-but a Worker that runs such a Workflow on needs the store on its client. Their next Workflow Task would fail
-as nondeterministic until the rollback is undone.
+Worker with this release can replay it. A Worker rolled back to a release
+without streams fails the Workflow's next task as nondeterministic, until the
+rollback is undone, so don't roll a fleet back while such Workflows run.
+
+Replaying a publishing Workflow needs no store, since nothing is stored
+again. A Worker that runs such a Workflow on, and publishes live, needs the
+store on its client.
 
 ## Access control
 
@@ -137,7 +140,10 @@ promotes or aborts the stages a stopped Worker left. So a reader needs the
 same Redis rules as a writer, and the Temporal permissions to describe the
 Workflow and read its History. A read holds one Redis connection while it
 waits, from a pool Core keeps per node, so set `blocking_reads_per_node` on
-`RedisStreams` to the streams a process follows at once.
+`RedisStreams` to the streams a process follows at once. A read that finds
+the pool full waits for a connection until its own poll ends, then answers
+empty, so a process that follows more streams than the pool holds sees
+records late rather than failing.
 
 Every key of a namespace's streams starts with
 `<prefix>:{<namespace>:`, where `<prefix>` is the store's `key_prefix`
@@ -146,13 +152,15 @@ Every key of a namespace's streams starts with
 one namespace's applications:
 
 ```
-ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo
+ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
 ```
 
 The conformance suite and a Workflow publish test run as a user with
 exactly these rules, so a store change that needs another command fails
 the tests. The delete helper also needs `+scan`. `+config|get` is only used
 to read `maxmemory-policy`, and the store goes on when a server refuses it.
+A cluster client reads the topology with `CLUSTER SLOTS` first, and on a
+cluster the user must exist on every node.
 The store keeps the set of each run chain's topics, so it can close every
 open topic when the chain ends, which needs `+sadd` and `+smembers`.
 
@@ -177,7 +185,10 @@ What crosses the wire:
   keys can tell when two records carry the same value, and can confirm a
   guess of a value. If that matters for your data, add something unique,
   such as a random field, to each value.
-- **Transport.** Use TLS (`rediss://`) to encrypt traffic to Redis.
+- **Transport.** Use TLS (`rediss://`) to encrypt traffic to Redis. In this
+  release the store checks the server against the system's root
+  certificates only. A private CA and client certificates are not supported
+  yet.
 
 ## Redis Cluster
 
