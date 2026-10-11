@@ -737,6 +737,51 @@ async def test_a_stale_record_is_reported_and_kept_out_of_the_batch() -> None:
     ]
 
 
+async def test_a_stale_record_that_cannot_cross_is_reported_without_a_value() -> None:
+    """A stale record isn't the current answer, so one the service couldn't
+    hand over, or one that doesn't decode, is reported and raises nothing."""
+    undecodable = to_wire(
+        converter,
+        topic=STREAM.topic,
+        kind=RecordKind.DATA,
+        value="not a token",
+        producer_id="chat",
+        attempt=1,
+        sequence=3,
+    )
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 4))
+    h.read(
+        answer(
+            record(1, text="a2", attempt=2, sequence=1),
+            RecordWire(token="cursor-2", record=b"", error="too large", stale=True),
+            RecordWire(
+                token="cursor-3", record=undecodable.SerializeToString(), stale=True
+            ),
+            record(4, text="b2", attempt=2, sequence=2),
+        )
+    )
+    h.task()
+    h.read(answer(cursor="cursor-4"))
+    h.task()
+    h.completed(chat, "summary")
+    h.task()
+    h.read(answer(cursor="cursor-4", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a2"), Token("b2")]]
+    assert seen[0].undecodable == []
+    assert [(r.cursor, r.value) for r in seen[0].stale_records] == [
+        (Cursor("cursor-2"), None),
+        (Cursor("cursor-3"), None),
+    ]
+
+
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
     """A read's answer is one Nexus operation result, encoded by the handler
     Worker's codec with the bodies inside it in the clear. The caller Worker's

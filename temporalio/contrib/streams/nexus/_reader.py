@@ -112,13 +112,17 @@ class ReadStaleRecord:
     """The stream position of the record."""
 
     producer_id: str
-    """The producer that wrote it."""
+    """The producer that wrote it. Empty when the service couldn't hand the
+    record over."""
 
     attempt: int
-    """The attempt that wrote it, lower than one the reader already saw."""
+    """The attempt that wrote it, lower than one the reader already saw. Zero
+    when the service couldn't hand the record over."""
 
     value: Any
-    """The record's item, decoded into the reader's item type."""
+    """The record's item, decoded into the reader's item type. ``None`` when
+    the record couldn't be handed over or decoded, since a stale record
+    raises nothing."""
 
 
 @dataclass(frozen=True)
@@ -409,6 +413,11 @@ class StreamReader(Generic[T]):
                     )
                 )
                 continue
+            if stored.stale:
+                # Not the current answer, so one that can't be read is still
+                # reported, and raises nothing.
+                self._stale_records.append(self._stale(stored, cursor, len(batch)))
+                continue
             try:
                 record = self._record(stored)
             except Exception as error:
@@ -424,19 +433,7 @@ class StreamReader(Generic[T]):
                 return batch
             if record is None:
                 continue
-            producer_id, attempt, value = record
-            if stored.stale:
-                self._stale_records.append(
-                    ReadStaleRecord(
-                        index=self._handed_over + len(batch),
-                        cursor=cursor,
-                        producer_id=producer_id,
-                        attempt=attempt,
-                        value=value,
-                    )
-                )
-            else:
-                batch.append(cast(T, value))
+            batch.append(cast(T, record[2]))
         answer = self._answer
         assert answer is not None
         if answer.next_token:
@@ -471,6 +468,26 @@ class StreamReader(Generic[T]):
             ),
         )
         self._pending = list(self._answer.records)
+
+    def _stale(
+        self, stored: RecordWire, cursor: Cursor, batched: int
+    ) -> ReadStaleRecord:
+        producer_id, attempt, value = "", 0, None
+        if not stored.error:
+            try:
+                wire = WireRecord.FromString(stored.record)
+                producer_id, attempt = wire.producer_id, wire.attempt
+                record = self._record(stored)
+                value = record[2] if record is not None else None
+            except Exception:
+                pass
+        return ReadStaleRecord(
+            index=self._handed_over + batched,
+            cursor=cursor,
+            producer_id=producer_id,
+            attempt=attempt,
+            value=value,
+        )
 
     def _record(self, stored: RecordWire) -> tuple[str, int, Any] | None:
         """The producer, attempt and item of a data record, or ``None``."""
