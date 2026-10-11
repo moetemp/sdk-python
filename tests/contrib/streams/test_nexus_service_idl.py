@@ -228,11 +228,13 @@ def test_the_generated_long_poll_sends_back_each_answers_state():
     assert "request = dataclasses.replace(request, state=answer.state)" in source
 
 
-# A copy of Core's crates/streams/nexus/operation_token_vectors.json, from
-# moetemp/sdk-rust moe/bridge/cn5-stream-callers at d34278ab. Core's encoder and
-# decoder read the same file.
+# The vectors Core's encoder and decoder read, in the Core this SDK vendors.
 _TOKEN_VECTORS = json.loads(
-    (Path(__file__).parent / "operation_token_vectors.json").read_text()
+    (
+        Path(__file__).resolve().parents[3]
+        / "temporalio/bridge/sdk-core/crates/streams/nexus"
+        / "operation_token_vectors.json"
+    ).read_text()
 )
 
 
