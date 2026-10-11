@@ -72,6 +72,7 @@ from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import PollerBehaviorSimpleMaximum, Worker
 from tests import DEV_SERVER_DOWNLOAD_VERSION
+from tests.contrib.streams.test_outside_handles import WorkflowKeyedCodec
 from tests.helpers import find_free_port, new_worker
 
 _SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
@@ -145,6 +146,13 @@ async def connect(
         data_converter=converter or DataConverter.default,
         plugins=[store],
     )
+
+
+def with_converter(client: Client, converter: DataConverter) -> Client:
+    """``client`` on its own connection, with another data converter."""
+    config = client.config()
+    config["data_converter"] = converter
+    return Client(**config)
 
 
 @asynccontextmanager
@@ -680,9 +688,9 @@ async def test_a_workflow_reader_gets_plain_bodies_that_stay_encrypted_elsewhere
     # The handler and the caller share the namespace's codec. The store keeps
     # each body encrypted, the read result crosses encrypted as a whole, and
     # Workflow code sees the plain body.
-    coded = await connect(
-        server.client,
-        backing.store,
+    # The same connection as the backing's client, since one store serves one.
+    coded = with_converter(
+        backing.client,
         dataclasses.replace(DataConverter.default, payload_codec=XorCodec()),
     )
     async with serve(server, backing, client=coded) as service:
@@ -733,9 +741,9 @@ async def test_a_read_that_does_not_wait_answers_with_what_the_store_holds(
 ):
     # wait_ms=0 means "do not wait for new records", not "skip a fetch that
     # needs I/O": every record already in the store comes back.
-    slow = await connect(
-        server.client,
-        backing.store,
+    # The same connection as the backing's client, since one store serves one.
+    slow = with_converter(
+        backing.client,
         dataclasses.replace(DataConverter.default, payload_codec=SlowCodec()),
     )
     async with serve(server, backing, client=slow) as service:
@@ -938,3 +946,24 @@ async def test_a_producer_takes_the_callers_next_sequence(backing: Backing):
     assert producer._sequence == 3
     with pytest.raises(ValueError, match="next_sequence"):
         stream.producer(producer_id="p", attempt=1, next_sequence=0)
+
+
+async def test_the_handler_decodes_with_the_workflows_serialization_context(
+    server: Server, backing: Backing
+):
+    # The handler's append encodes with the stream Workflow's context, as the
+    # Workflow and every producer do, so its read must decode with it too.
+    keyed = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=WorkflowKeyedCodec()),
+    )
+    async with serve(server, backing, client=keyed) as service:
+        ref = await stream_of(service)
+        async with new_worker(keyed, StreamsThroughNexus) as worker:
+            result = await keyed.execute_workflow(
+                StreamsThroughNexus.run,
+                args=[service.endpoint, ref],
+                id=f"streams-keyed-{uuid.uuid4().hex}",
+                task_queue=worker.task_queue,
+            )
+    assert result == ["hi"]
