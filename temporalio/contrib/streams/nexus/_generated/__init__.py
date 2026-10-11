@@ -12,6 +12,8 @@ from .models import (
     ReadInput,
     ReadOutput,
     RecordWire,
+    RecordWireSuperseded,
+    Supersession,
 )
 from .services import TemporalStreams
 
@@ -23,5 +25,7 @@ __all__ = [
     "ReadInput",
     "ReadOutput",
     "RecordWire",
+    "RecordWireSuperseded",
+    "Supersession",
     "TemporalStreams",
 ]

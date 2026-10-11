@@ -3,7 +3,9 @@
 Workflow code reads through the stream service, so it can't reach Core's
 reader. The records arrive plain, as stored, and this synthesizes
 ``SUPERSEDED`` from the attempts it observes, the same way Core's reader
-does for a read outside Workflow code.
+does for a read outside Workflow code. The service also passes on the
+supersessions Core's reader saw, which covers the one this tracker can't
+see, at a cursor a new reader resumes after.
 """
 
 from __future__ import annotations
@@ -68,6 +70,13 @@ class AttemptTracker:
         self._attempts: dict[str, int] = {}
         self._warn = warn
 
+    def take(self, producer_id: str, attempt: int) -> bool:
+        """Note an attempt another reader saw start. Whether it is new to this read."""
+        if not producer_id or attempt <= self._attempts.get(producer_id, 0):
+            return False
+        self._attempts[producer_id] = attempt
+        return True
+
     def behind(self, producer_id: str, attempt: int) -> bool:
         """Whether this read already delivered a newer attempt of ``producer_id``."""
         return bool(producer_id) and 0 < attempt < self._attempts.get(producer_id, 0)
@@ -87,7 +96,7 @@ class AttemptTracker:
         is no generation to compare.
 
         An attempt that goes backwards supersedes nothing either. It is
-        reported through ``warn``, and the reader marks its records
+        reported through ``warn``, and the decoder marks its records
         ``stale`` rather than passing them off as ordinary data.
         A lower attempt after a higher one means an older attempt was still
         writing after a newer one started, such as an Activity attempt that
@@ -157,6 +166,15 @@ class RecordDecoder:
         self._attempts.note(
             wire.producer_id, wire.attempt, topic=wire.topic, previous=self._previous
         )
+
+    def take(self, supersession: Supersession) -> bool:
+        """Note a supersession the stream service's reader saw.
+
+        Whether this decoder hadn't seen it, so the reader reports it once.
+        The service's reader is primed from the record at the read's cursor,
+        so it sees an attempt change there that a resumed decoder can't.
+        """
+        return self._attempts.take(supersession.producer_id, supersession.attempt)
 
     def decode(self, cursor: Cursor, wire: WireRecord) -> list[StreamRecord[Any]]:
         """The records to yield for one stored record, in order."""

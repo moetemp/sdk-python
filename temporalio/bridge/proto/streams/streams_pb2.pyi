@@ -165,7 +165,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
     """Tells each stream's notifier on the server when the stream moves, after every append and
     every Workflow batch that becomes visible. That's what makes a caller of a stream-returning
     Nexus operation see progress. Off by default, since most streams have no such caller and each
-    notification costs a call. Needs a server with the stream notifier.
+    notification costs a call. It turns on progress only. Closes reach the notifier either way. A
+    server without the stream notifier costs one call, and then the process stops notifying.
     """
     max_notifiers: builtins.int
     """How many streams to keep a notifier for, dropping the least recently used. Zero uses 1000."""
@@ -808,10 +809,10 @@ class CloseRequest(google.protobuf.message.Message):
     @property
     def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """What every stream-returning Nexus operation that handed out the stream completes with, after
-        lang's payload codec. With the store config's `notify_on_append`, the stream's notifier on
-        the server closes once the store has. When set, a notifier that doesn't take the close fails
-        the call. Unset, the operations complete with an empty result, and the notifier close is
-        retried in the background.
+        lang's payload codec. The stream's notifier on the server closes once the store has. When
+        set, a notifier that doesn't take the close fails the call, and Core keeps trying in the
+        background too. Unset, the operations complete with an empty result, and the notifier close
+        is retried in the background.
         """
     def __init__(
         self,

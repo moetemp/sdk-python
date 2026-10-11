@@ -270,7 +270,11 @@ def body(text: str) -> bytes:
 
 
 def records_of(answer: ReadOutput) -> list[WireRecord]:
-    return [WireRecord.FromString(record.record) for record in answer.records]
+    return [
+        WireRecord.FromString(record.record)
+        for record in answer.records
+        if record.superseded is None
+    ]
 
 
 def texts(answer: ReadOutput) -> list[str]:
@@ -434,16 +438,67 @@ async def test_a_divergent_or_stale_retry_is_refused(service: Service):
     assert texts(await read(service, ref)) == ["one", "two"]
 
 
-async def test_a_new_attempt_crosses_without_a_supersession_record(service: Service):
+async def test_a_new_attempt_crosses_as_a_supersession_at_its_cursor(
+    service: Service,
+):
     ref = await stream_of(service)
-    await append(service, ref, "old", producer_id="model")
+    old = await append(service, ref, "old", producer_id="model")
     await append(service, ref, "new", producer_id="model", attempt=2)
-    stored = records_of(await read(service, ref))
-    # A reader synthesizes the supersession from the attempts it sees.
-    assert [(r.kind, r.attempt) for r in stored] == [
+    answer = await read(service, ref)
+    superseded = [r.superseded for r in answer.records if r.superseded]
+    assert [(s.producer_id, s.previous_attempt, s.attempt) for s in superseded] == [
+        ("model", 1, 2)
+    ]
+    assert [(r.kind, r.attempt) for r in records_of(answer)] == [
         (RecordKind.DATA, 1),
         (RecordKind.DATA, 2),
     ]
+    # A read that resumes after the old attempt's record has seen no attempt of
+    # its own, so only the store's reader knows the new one supersedes it.
+    resumed = await read(service, ref, old.cursor)
+    assert resumed.records[0].superseded is not None
+    assert resumed.records[0].token == old.cursor
+    assert texts(resumed) == ["new"]
+
+
+async def test_an_append_counts_the_producer_id_toward_the_record_limit(
+    server: Server, backing: Backing
+):
+    # The stored record holds the topic and the producer id beside the body,
+    # and a record no read can carry would be lost to every reader.
+    async with serve(server, backing, max_record_bytes=4096) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "x" * 2600, producer_id="p" * 600)
+    assert refused_as(refused.value) == "ValueError"
+    assert "limit" in refused.value.detail
+
+
+async def test_an_authorizer_that_raises_crosses_as_an_internal_error(
+    server: Server, backing: Backing
+):
+    async def authorize(_access: StreamAccess) -> bool:
+        raise RuntimeError("the policy lookup timed out")
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+    assert refused.value.status == 500
+    assert "File " not in refused.value.detail
+
+
+async def test_a_producer_refuses_a_next_sequence_that_isnt_an_int(
+    backing: Backing,
+):
+    stream = get_stream_handle(backing.client, "wf")
+    for next_sequence in (True, 1.5):
+        with pytest.raises(ValueError, match="next_sequence"):
+            stream.producer(
+                producer_id="p",
+                attempt=1,
+                next_sequence=next_sequence,  # type: ignore[arg-type]
+            )
 
 
 async def test_finish_is_a_call_of_its_own(service: Service):

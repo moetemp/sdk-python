@@ -48,6 +48,9 @@ class NexusOperationProgress:
     metadata: Mapping[str, str]
     """Small details from the handler."""
 
+    # The metadata mapping isn't hashable, so a hash would always raise.
+    __hash__ = None  # type: ignore[assignment]
+
 
 class NexusOperationHandle(Generic[OutputT]):
     """Handle for interacting with a Nexus operation."""
