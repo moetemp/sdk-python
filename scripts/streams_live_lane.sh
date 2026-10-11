@@ -3,11 +3,11 @@
 #
 # The stock dev server has no stream notifier and no Nexus progress, so the lifecycle tests skip
 # there. This lane builds a server that has both, starts it with the settings the guide lists,
-# and fails if any of those tests skips. Run it from a built sdk-python checkout.
+# and fails unless every gated test below passes. Run it from a built sdk-python checkout.
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         branch or tag to build (default: the notifier frontend branch)
+#   SERVER_REF         commit to build (default: the notifier frontend commit the release names)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7881)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server.
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-moe/bridge/n9-notifier-frontend}
+SERVER_REF=${SERVER_REF:-1b7e801667da81b91cabe4146ad2cedcaeefd35d}
 PORT_BASE=${PORT_BASE:-7881}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,7 +38,10 @@ echo "work dir: $WORK_DIR"
 
 if [[ -z "${SERVER_BIN:-}" ]]; then
   echo "building the server from $SERVER_REPO at $SERVER_REF"
-  git clone --quiet --depth 1 --branch "$SERVER_REF" "$SERVER_REPO" "$WORK_DIR/temporal"
+  # By commit, so two green runs test the same server.
+  git init --quiet "$WORK_DIR/temporal"
+  git -C "$WORK_DIR/temporal" fetch --quiet --depth 1 "$SERVER_REPO" "$SERVER_REF"
+  git -C "$WORK_DIR/temporal" checkout --quiet FETCH_HEAD
   (cd "$WORK_DIR/temporal" && go build -o "$WORK_DIR/temporal-server" ./cmd/server)
   SERVER_BIN="$WORK_DIR/temporal-server"
 fi
@@ -215,6 +218,64 @@ if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xm
   echo "live lane: lifecycle tests skipped, see above" >&2
   status=1
 fi
+
+# The release gate. Each id must have run and passed, in every parameter it has, so a renamed,
+# moved or reworded test fails the lane instead of passing unseen.
+gated_tests=()
+gate() {
+  local file=$1
+  shift
+  for name in "$@"; do
+    gated_tests+=("$file::$name")
+  done
+}
+gate tests/contrib/streams/test_nexus_samples.py \
+  test_the_slack_router_files_each_message_under_its_channel
+gate tests/contrib/streams/test_nexus_stream_operation.py \
+  test_a_caller_sees_appends_as_progress_and_the_close_as_the_result \
+  test_a_close_in_the_task_of_the_last_publishes_comes_after_them \
+  test_a_workflow_closes_its_own_stream \
+  test_a_workflows_own_publishes_reach_the_caller_as_progress \
+  test_an_append_after_an_outside_close_is_refused \
+  test_a_worker_flushes_on_stop_and_a_replay_after_it_runs
+gate tests/contrib/streams/test_nexus_reader.py \
+  test_bodies_reach_the_workflow_decoded_by_the_callers_codec \
+  test_live_a_close_with_the_last_publishes_loses_none_of_them \
+  test_live_a_new_reader_resumes_after_a_cursor \
+  test_live_a_start_on_a_closed_stream_still_names_it \
+  test_live_a_workflow_reads_every_record_then_none
+gate tests/nexus/test_workflow_operation_progress.py \
+  test_live_progress_is_ordered_folded_ended_and_replayed
+gate tests/contrib/streams/test_output_commit.py \
+  test_a_committed_close_leaves_the_topic_closed_on_redis
+gate tests/contrib/streams/test_samples.py \
+  test_path_a_a_client_reads_what_a_workflow_published \
+  test_path_b_a_reader_drops_what_a_failed_attempt_wrote
+uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
+import sys
+import xml.etree.ElementTree as ElementTree
+
+junit, gated = sys.argv[1], sys.argv[2:]
+outcomes: dict[str, list[str]] = {}
+for case in ElementTree.parse(junit).iter("testcase"):
+    path = case.get("classname", "").replace(".", "/") + ".py"
+    test_id = f"{path}::{case.get('name', '').split('[')[0]}"
+    outcome = next(
+        (child.tag for child in case if child.tag in ("skipped", "failure", "error")),
+        "passed",
+    )
+    outcomes.setdefault(test_id, []).append(outcome)
+failed = False
+for test_id in gated:
+    seen = outcomes.get(test_id)
+    if not seen:
+        print(f"live lane: gated test did not run: {test_id}", file=sys.stderr)
+        failed = True
+    elif set(seen) != {"passed"}:
+        print(f"live lane: gated test {seen}: {test_id}", file=sys.stderr)
+        failed = True
+sys.exit(1 if failed else 0)
+PY
 
 # Core sends the notifications and the closes, so its own live test runs against the server too.
 # It returns early without a server, so the lane checks that it ran.
