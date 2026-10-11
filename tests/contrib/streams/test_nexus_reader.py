@@ -59,6 +59,7 @@ from temporalio.contrib.streams._wire import WireRecord, to_wire
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     ReadOutput,
+    ReadStaleRecord,
     ReadSupersession,
     RecordWire,
     StreamOperationHandler,
@@ -100,6 +101,7 @@ class Seen:
     after_end: list[Token] | None = None
     error: str | None = None
     supersessions: list[ReadSupersession] = field(default_factory=list)
+    stale_records: list[ReadStaleRecord] = field(default_factory=list)
     undecodable: list[str] = field(default_factory=list)
 
 
@@ -136,6 +138,7 @@ class ChatReader:
             cause = error.cause if isinstance(error, NexusOperationError) else error
             observed.error = type(cause).__name__
         observed.supersessions = list(reader.supersessions)
+        observed.stale_records = list(reader.stale_records)
         seen.append(observed)
 
 
@@ -636,6 +639,44 @@ async def test_a_supersession_the_service_and_the_reader_both_saw_is_one() -> No
     await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
     assert seen[0].batches == [[Token("a"), Token("b"), Token("a2")]]
     assert [s.supersession.attempt for s in seen[0].supersessions] == [2]
+
+
+async def test_a_stale_record_is_reported_and_kept_out_of_the_batch() -> None:
+    """Attempt 1 timed out but kept running, and wrote once more after attempt
+    2 started. That token is not the current answer."""
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 4))
+    h.read(
+        answer(
+            record(1, text="a"),
+            record(2, text="a2", attempt=2, sequence=1),
+            record(3, text="late", attempt=1, sequence=2),
+            record(4, text="b2", attempt=2, sequence=2),
+        )
+    )
+    h.task()
+    h.read(answer(cursor="cursor-4"))
+    h.task()
+    h.completed(chat, "summary")
+    h.task()
+    h.read(answer(cursor="cursor-4", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a"), Token("a2"), Token("b2")]]
+    assert seen[0].stale_records == [
+        ReadStaleRecord(
+            index=2,
+            cursor=Cursor("cursor-3"),
+            producer_id="chat",
+            attempt=1,
+            value=Token("late"),
+        )
+    ]
 
 
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:

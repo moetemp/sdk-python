@@ -96,7 +96,7 @@ class AttemptTracker:
         is no generation to compare.
 
         An attempt that goes backwards supersedes nothing either. It is
-        reported through ``warn``, and the reader marks its records
+        reported through ``warn``, and the decoder marks its records
         ``stale`` rather than passing them off as ordinary data.
         A lower attempt after a higher one means an older attempt was still
         writing after a newer one started, such as an Activity attempt that

@@ -30,6 +30,7 @@ from temporalio.contrib.streams.nexus._generated import ReadInput, TemporalStrea
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
 
 __all__ = [
+    "ReadStaleRecord",
     "ReadSupersession",
     "StreamIncompleteError",
     "StreamReader",
@@ -83,6 +84,34 @@ class ReadSupersession:
     """The producer and the attempts it names."""
 
 
+@dataclass(frozen=True)
+class ReadStaleRecord:
+    """A record from a producer attempt behind one the reader already saw.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    An attempt that timed out but kept running can write after a later
+    attempt started. Its records are not the current answer, so the reader
+    keeps them out of the batches it hands over and reports them here.
+    """
+
+    index: int
+    """How many items the reader had handed over before it."""
+
+    cursor: Cursor
+    """The stream position of the record."""
+
+    producer_id: str
+    """The producer that wrote it."""
+
+    attempt: int
+    """The attempt that wrote it, lower than one the reader already saw."""
+
+    value: Any
+    """The record's item, decoded into the reader's item type."""
+
+
 class StreamReader(Generic[T]):
     """Reads the stream a Nexus operation returns, in a Workflow.
 
@@ -106,11 +135,12 @@ class StreamReader(Generic[T]):
     attempt's records already handed over stay handed over, and
     :attr:`supersessions` says where the later attempt began. That holds for a
     reader built with ``after=`` too, when the earlier attempt's records came
-    before its cursor. A record whose
-    body the Workflow's payload converter cannot decode into ``item_type``
-    raises :class:`temporalio.contrib.streams.StreamRecordError` from
-    :meth:`next` once the records
-    before it are handed over; the call after that goes on past it.
+    before its cursor. A record an earlier attempt writes after a later one
+    started is not handed over, and :attr:`stale_records` reports it. A
+    record whose body the Workflow's payload converter cannot decode into
+    ``item_type`` raises :class:`temporalio.contrib.streams.StreamRecordError`
+    from :meth:`next` once the records before it are handed over; the call
+    after that goes on past it.
 
     Each read goes to the run chain the Workflow id has when the read runs,
     not to the chain the operation token names: a stream reference pins a
@@ -185,6 +215,7 @@ class StreamReader(Generic[T]):
         self._ended = False
         self._handed_over = 0
         self._supersessions: list[ReadSupersession] = []
+        self._stale_records: list[ReadStaleRecord] = []
         self._undecodable: StreamRecordError | None = None
         self._decode_failure: str | None = None
 
@@ -197,6 +228,11 @@ class StreamReader(Generic[T]):
     def supersessions(self) -> Sequence[ReadSupersession]:
         """Every producer attempt change this reader has seen, in order."""
         return tuple(self._supersessions)
+
+    @property
+    def stale_records(self) -> Sequence[ReadStaleRecord]:
+        """Every record from an attempt behind one already seen, in order."""
+        return tuple(self._stale_records)
 
     async def next(self) -> list[T] | None:
         """The next batch of records, or ``None`` once the stream has ended.
@@ -334,7 +370,17 @@ class StreamReader(Generic[T]):
                     self._decode_failure = str(error)
                     records = []
                 for record in records:
-                    if record.kind is RecordKind.DATA:
+                    if record.kind is RecordKind.DATA and record.stale:
+                        self._stale_records.append(
+                            ReadStaleRecord(
+                                index=self._handed_over + len(batch),
+                                cursor=record.cursor,
+                                producer_id=record.producer_id,
+                                attempt=record.attempt,
+                                value=record.value,
+                            )
+                        )
+                    elif record.kind is RecordKind.DATA:
                         batch.append(cast(T, record.value))
                     elif record.supersession is not None:
                         self._supersessions.append(
