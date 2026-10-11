@@ -67,6 +67,7 @@ from temporalio.contrib.streams.nexus import (
     close_workflow_stream,
     stream_ref_from_token,
 )
+from temporalio.contrib.streams.nexus._generated import RecordWireSuperseded
 from temporalio.contrib.streams.nexus._operation import _encode_token
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import NexusOperationError
@@ -108,10 +109,15 @@ seen: list[Seen] = []
 @workflow.defn(name="ChatReader")
 class ChatReader:
     @workflow.run
-    async def run(self) -> None:
+    async def run(self, after: str = "") -> None:
         client = workflow.create_nexus_client(service=ChatService, endpoint=ENDPOINT)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=ENDPOINT)
+        reader = StreamReader(
+            handle,
+            item_type=Token,
+            endpoint=ENDPOINT,
+            after=Cursor(after) if after else None,
+        )
         observed = Seen()
         try:
             while True:
@@ -154,12 +160,13 @@ class History:
         self.events.append(event)
         return event.event_id
 
-    def started(self) -> None:
+    def started(self, *args: object) -> None:
         self.add(
             EventType.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED,
             workflow_execution_started_event_attributes=WorkflowExecutionStartedEventAttributes(
                 workflow_type=WorkflowType(name="ChatReader"),
                 task_queue=TaskQueue(name=TASK_QUEUE),
+                input=Payloads(payloads=converter.to_payloads(args)) if args else None,
                 original_execution_run_id="run-id",
                 first_execution_run_id="run-id",
                 attempt=1,
@@ -551,6 +558,84 @@ async def test_the_reader_records_where_a_producer_attempt_was_superseded() -> N
             ),
         )
     ]
+
+
+def superseded(position: int, previous_attempt: int, attempt: int) -> RecordWire:
+    """What the stream service sends when its reader saw a later attempt start."""
+    return RecordWire(
+        token=f"cursor-{position}",
+        record=b"",
+        superseded=RecordWireSuperseded(
+            producer_id="chat", previous_attempt=previous_attempt, attempt=attempt
+        ),
+    )
+
+
+async def test_a_resumed_reader_takes_the_supersession_at_its_cursor() -> None:
+    """A run after Continue-as-New reads after the earlier run's cursor, so
+    its own tracker never saw the earlier attempt. The stream service did,
+    from the record at the cursor, and its supersession is what tells the
+    later attempt's records apart."""
+    h = History()
+    h.started("cursor-3")
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 5))
+    h.read(
+        answer(
+            superseded(3, 1, 2),
+            record(4, text="a2", attempt=2, sequence=1),
+            record(5, text="b2", attempt=2, sequence=2),
+        )
+    )
+    h.task()
+    h.read(answer(cursor="cursor-5"))
+    h.task()
+    h.completed(chat, "summary")
+    h.task()
+    h.read(answer(cursor="cursor-5", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a2"), Token("b2")]]
+    assert seen[0].supersessions == [
+        ReadSupersession(
+            index=0,
+            cursor=Cursor("cursor-3"),
+            supersession=Supersession(
+                producer_id="chat", previous_attempt=1, attempt=2
+            ),
+        )
+    ]
+
+
+async def test_a_supersession_the_service_and_the_reader_both_saw_is_one() -> None:
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 3))
+    h.read(
+        answer(
+            record(1, text="a"),
+            record(2, text="b"),
+            superseded(2, 1, 2),
+            record(3, text="a2", attempt=2, sequence=1),
+        )
+    )
+    h.task()
+    h.read(answer(cursor="cursor-3"))
+    h.task()
+    h.completed(chat, "summary")
+    h.task()
+    h.read(answer(cursor="cursor-3", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a"), Token("b"), Token("a2")]]
+    assert [s.supersession.attempt for s in seen[0].supersessions] == [2]
 
 
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
@@ -1168,6 +1253,104 @@ async def test_live_a_new_reader_resumes_after_a_cursor(
 
     assert first == ["t0", "t1", "t2"]
     assert later == ["t3", "t4"]
+
+
+@workflow.defn(name="LiveContinuingReader")
+class LiveContinuingReader:
+    """Reads a first batch, then continues as new and reads the rest after the
+    first run's cursor, as a long reader keeps its History small."""
+
+    @workflow.run
+    async def run(
+        self, endpoint: str, after: str = ""
+    ) -> tuple[list[str], list[tuple[int, str, int, int]]]:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=Cursor(after) if after else None,
+        )
+        if not after:
+            batch = await reader.next()
+            assert batch is not None
+            workflow.continue_as_new(args=[endpoint, reader.cursor.token])
+        texts: list[str] = []
+        while (more := await reader.next()) is not None:
+            texts += [token.text for token in more]
+        await handle
+        return texts, [
+            (
+                s.index,
+                s.supersession.producer_id,
+                s.supersession.previous_attempt,
+                s.supersession.attempt,
+            )
+            for s in reader.supersessions
+        ]
+
+
+@pytest.mark.parametrize("backing", ["memory", "redis"])
+async def test_live_a_reader_after_continue_as_new_sees_a_later_attempt(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """Attempt 1 writes, the reader continues as new after it, then attempt 2
+    writes. The new run's reader learns of attempt 1 only through the stream
+    service, so without its supersession the two attempts would mix."""
+    store = _notifying_store(backing)
+    client = await connect(client, store)
+    owner_id = f"continuing-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def open_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(open_stream)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveContinuingReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        owner = await client.start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        handle = get_stream_handle(client, ref)
+        first = handle.producer(producer_id="writer", attempt=1)
+        await first.append(Token("t0"), Token("t1"), Token("t2"))
+        caller = await client.start_workflow(
+            LiveContinuingReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for _ in range(300):
+            latest = client.get_workflow_handle(caller.id)
+            if (await latest.describe()).run_id != caller.result_run_id:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("the reader never continued as new")
+        second = handle.producer(producer_id="writer", attempt=2)
+        await second.append(Token("u0"), Token("u1"), Token("u2"))
+        await store.close_stream(client, ref, "done")
+        texts, supersessions = await asyncio.wait_for(caller.result(), 30)
+        await owner.signal(LiveIdleOwner.done)
+        await streams.close()
+
+    assert texts == ["u0", "u1", "u2"]
+    assert supersessions == [(0, "writer", 1, 2)]
 
 
 async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> None:

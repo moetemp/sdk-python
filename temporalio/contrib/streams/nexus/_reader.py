@@ -104,7 +104,9 @@ class StreamReader(Generic[T]):
     over; a producer's ``FINISH`` record is not. When a later attempt of a
     producer takes over (a retried Activity, for example), the earlier
     attempt's records already handed over stay handed over, and
-    :attr:`supersessions` says where the later attempt began. A record whose
+    :attr:`supersessions` says where the later attempt began. That holds for a
+    reader built with ``after=`` too, when the earlier attempt's records came
+    before its cursor. A record whose
     body the Workflow's payload converter cannot decode into ``item_type``
     raises :class:`temporalio.contrib.streams.StreamRecordError` from
     :meth:`next` once the records
@@ -303,7 +305,21 @@ class StreamReader(Generic[T]):
         for stored in answer.records:
             cursor = Cursor(stored.token)
             wire: WireRecord | None = None
-            if stored.error:
+            if stored.superseded is not None:
+                taken = Supersession(
+                    producer_id=stored.superseded.producer_id,
+                    previous_attempt=stored.superseded.previous_attempt,
+                    attempt=stored.superseded.attempt,
+                )
+                if self._decoder.take(taken):
+                    self._supersessions.append(
+                        ReadSupersession(
+                            index=self._handed_over + len(batch),
+                            cursor=cursor,
+                            supersession=taken,
+                        )
+                    )
+            elif stored.error:
                 # The service left out a record no read result can carry.
                 self._decode_failure = stored.error
             else:
