@@ -162,6 +162,13 @@ to read `maxmemory-policy`, and the store goes on when a server refuses it.
 The store keeps the set of each run chain's topics, so it can close every
 open topic when the chain ends, which needs `+sadd` and `+smembers`.
 
+Upgrading from a release whose line has no `+sadd` or `+smembers`, appends
+and Workflow output keep working with the old user. The store skips the
+topic set and logs a warning once. But a chain end then can't list the
+chain's topics, so callers of a stream-returning Nexus operation wait for
+the notifier's owner check instead of completing. Widen the ACL before or
+with the upgrade.
+
 What crosses the wire:
 
 - **Record bodies** go through your data converter's payload codec before

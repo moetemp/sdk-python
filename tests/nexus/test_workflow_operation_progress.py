@@ -13,6 +13,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 
 import nexusrpc
 import pytest
@@ -656,3 +657,13 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
         workflows=[LiveProgressCaller], workflow_runner=UnsandboxedWorkflowRunner()
     ).replay_workflow(await handle.fetch_history())
     assert live_replayed == [observed]
+
+
+def test_progress_says_it_cannot_be_hashed() -> None:
+    progress = workflow.NexusOperationProgress(
+        position="cursor-1", counter=1, metadata=MappingProxyType({"k": "v"})
+    )
+    # The metadata mapping isn't hashable, so the type doesn't offer a hash.
+    assert type(progress).__hash__ is None
+    with pytest.raises(TypeError):
+        hash(progress)

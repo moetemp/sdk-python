@@ -151,3 +151,30 @@ def test_a_reference_of_another_kind_decodes_for_the_handler_to_refuse():
     # Opening a handle on it is what refuses it.
     with pytest.raises(StreamUnsupportedError, match="'activity'"):
         decoded.stream._require_supported()  # type: ignore[reportPrivateUsage]
+
+
+def test_a_supersession_decodes_at_its_cursor():
+    document = {
+        "records": [
+            {
+                "token": "memory:abcd1234:2",
+                "record": "",
+                "superseded": {
+                    "producer_id": "tokens@run-1",
+                    "previous_attempt": 1,
+                    "attempt": 2,
+                },
+            },
+        ],
+        "next_token": "memory:abcd1234:2",
+        "done": False,
+    }
+    answer = _from_json(document, ReadOutput)
+    assert isinstance(answer, ReadOutput)
+    [record] = answer.records
+    assert record.superseded is not None
+    assert (
+        record.superseded.producer_id,
+        record.superseded.previous_attempt,
+        record.superseded.attempt,
+    ) == ("tokens@run-1", 1, 2)

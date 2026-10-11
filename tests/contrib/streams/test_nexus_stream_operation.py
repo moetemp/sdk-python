@@ -49,6 +49,7 @@ from temporalio.contrib.streams.nexus import (
     stream_ref_from_token,
 )
 from temporalio.converter import DataConverter
+from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
@@ -731,9 +732,8 @@ async def test_a_close_with_the_last_publishes_closes_the_store_after_them(
 async def test_a_worker_flushes_on_stop_and_a_replay_after_it_runs(
     client: Client,
 ) -> None:
-    # The Worker flushes its notifications when it stops. That flush ran past
-    # the Worker's shutdown, and leaving `async with` used to cancel it, and
-    # with it whatever the caller awaited next, here a replay.
+    # Core flushes a Worker's notifications when it stops, and the caller goes
+    # on to a replay with no cancel left over from the Worker's exit.
     store = MemoryStreams().notify_on_append()
     streams_client = await connect(client, store)
     async with new_worker(streams_client, OwnerThatClosesInOneTask) as worker:
@@ -750,3 +750,56 @@ async def test_a_worker_flushes_on_stop_and_a_replay_after_it_runs(
         await owner.result()
     history = await owner.fetch_history()
     await Replayer(workflows=[OwnerThatClosesInOneTask]).replay_workflow(history)
+
+
+def test_a_worker_leaves_the_stop_flush_to_core() -> None:
+    # Core's Worker stop already flushes, and a second flush here would double
+    # the wait against a server that's down.
+    assert StreamStorePlugin.run_worker is SimplePlugin.run_worker
+
+
+async def test_a_worker_without_notifications_still_delivers_the_close_result(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    # Notifications only gate progress. A close reaches the notifier whatever
+    # the store config says, so the caller completes with its result.
+    owner_id = f"owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=TOKENS_TOPIC)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-closer-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    streams_client = await connect(client, MemoryStreams())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            OwnerThatClosesInOneTask.run, 3, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    async with Worker(
+        streams_client,
+        task_queue=task_queue,
+        workflows=[StreamOperationCaller, OwnerThatClosesInOneTask],
+        nexus_service_handlers=[ChatServiceHandler()],
+    ):
+        observed = await asyncio.wait_for(
+            streams_client.execute_workflow(
+                StreamOperationCaller.run,
+                endpoint,
+                id=f"stream-closer-caller-{uuid.uuid4()}",
+                task_queue=task_queue,
+            ),
+            30,
+        )
+        owner = streams_client.get_workflow_handle(owner_id)
+        await owner.signal(OwnerThatClosesInOneTask.done)
+        await owner.result()
+
+    assert observed.result == "3 tokens"
