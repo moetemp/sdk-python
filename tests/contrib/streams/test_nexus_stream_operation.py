@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -100,7 +101,8 @@ async def test_a_start_without_a_callback_is_refused_before_it_opens_the_stream(
 
 def _raised(error: nexusrpc.HandlerError) -> tuple[str, bool | None, str | None]:
     """The type, retryability and stream condition class a caller sees."""
-    details = error.original_failure.details if error.original_failure else {}
+    failure = error.original_failure
+    details: Mapping[str, Any] = (failure.details if failure else None) or {}
     cause = details.get("cause", {}).get("applicationFailureInfo", {})
     return error.type.name, error.retryable_override, cause.get("type")
 
