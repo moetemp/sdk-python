@@ -49,6 +49,7 @@ from temporalio.contrib.streams.nexus import (
     stream_ref_from_token,
 )
 from temporalio.converter import DataConverter
+from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
@@ -731,9 +732,8 @@ async def test_a_close_with_the_last_publishes_closes_the_store_after_them(
 async def test_a_worker_flushes_on_stop_and_a_replay_after_it_runs(
     client: Client,
 ) -> None:
-    # The Worker flushes its notifications when it stops. That flush ran past
-    # the Worker's shutdown, and leaving `async with` used to cancel it, and
-    # with it whatever the caller awaited next, here a replay.
+    # Core flushes a Worker's notifications when it stops, and the caller goes
+    # on to a replay with no cancel left over from the Worker's exit.
     store = MemoryStreams().notify_on_append()
     streams_client = await connect(client, store)
     async with new_worker(streams_client, OwnerThatClosesInOneTask) as worker:
@@ -750,3 +750,10 @@ async def test_a_worker_flushes_on_stop_and_a_replay_after_it_runs(
         await owner.result()
     history = await owner.fetch_history()
     await Replayer(workflows=[OwnerThatClosesInOneTask]).replay_workflow(history)
+
+
+def test_a_worker_leaves_the_stop_flush_to_core() -> None:
+    # Core's Worker stop already flushes, and a second flush here would double
+    # the wait against a server that's down.
+    assert StreamStorePlugin.run_worker is SimplePlugin.run_worker
+
