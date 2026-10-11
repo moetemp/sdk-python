@@ -97,7 +97,17 @@ class StreamProducerError(StreamRefusedError):
     The sequence was already used with different content, or it is below the
     newest sequence the store holds for this producer and attempt. Nothing
     was written, and repeating the call gets the same answer.
+
+    ``divergent`` is true when the sequence was already written with
+    different content, so the caller changed the batch on a retry. Otherwise
+    the sequence is stale, most often from a second producer object for the
+    same session.
     """
+
+    def __init__(self, message: str, *, divergent: bool = False) -> None:
+        """Say whether the batch diverged or the sequence is stale."""
+        super().__init__(message)
+        self.divergent = divergent
 
 
 class StreamOutcomeUnknownError(StreamStorageError):
@@ -150,4 +160,6 @@ def error_from_failure(failure: StreamFailure) -> StreamError:
     """
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_RECORD:
         return StreamRecordError(failure.message, Cursor(failure.cursor))
+    if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT:
+        return StreamProducerError(failure.message, divergent=True)
     return _BY_KIND.get(failure.kind, StreamStorageError)(failure.message)
