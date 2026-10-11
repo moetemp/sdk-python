@@ -97,8 +97,9 @@ class StreamRecord(google.protobuf.message.Message):
     SEQUENCE_FIELD_NUMBER: builtins.int
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """The value the producer published. A provider runs it through the
-        payload codec and external storage before it stores the record.
+        """The value the producer published. Lang runs it through the payload
+        codec and external storage before it reaches any store, so a store and
+        Core see only the encoded payload.
         """
     @property
     def metadata(
