@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import timedelta
 
 import pytest
 
 from temporalio import activity
+from temporalio.api.common.v1 import Payload
 from temporalio.bridge.proto.streams import (
+    AppendRecord,
+    AppendRequest,
     LatestRequest,
+    NamedProducer,
     StreamAddress,
     StreamOwnerKind,
 )
+from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamError, StreamNotFoundError
 from temporalio.contrib.streams._plugin import _StreamsInterceptor, call
@@ -88,7 +94,7 @@ async def test_a_store_core_cannot_reach_fails_the_connect(client: Client):
         )
 
 
-def test_redis_settings_reach_core():
+def test_redis_settings_go_into_the_store_config():
     store = RedisStreams(
         ["redis://a:6379", "redis://b:6379"],
         cluster=True,
@@ -119,14 +125,79 @@ def test_redis_setting_mistakes_are_value_errors():
         RedisStreams("redis://a", retention=timedelta(microseconds=10))
 
 
-async def test_deleting_needs_a_connected_store(client: Client):
+async def test_deleting_removes_what_a_workflow_stream_holds(client: Client):
     store = MemoryStreams()
     with pytest.raises(ValueError, match="no client has connected"):
         await store.delete_workflow_streams(client.namespace, "wf")
-    await connect_with(client, store)
-    assert await store.delete_workflow_streams(client.namespace, "wf") == 0
+    streams_client = await connect_with(client, store)
+    service = await store._service_for(streams_client)
+    workflow_id = f"stream-owner-{uuid.uuid4()}"
+    await streams_client.start_workflow(
+        "StreamOwner", id=workflow_id, task_queue=f"unpolled-{uuid.uuid4()}"
+    )
+    stream = address(client, workflow_id)
+    await call(
+        service.append(
+            AppendRequest(
+                stream=stream,
+                named=NamedProducer(producer_id="p", attempt=1),
+                sequence=1,
+                records=[
+                    AppendRecord(
+                        kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
+                        body=Payload(data=b"a"),
+                        content_hash=hashlib.sha256(b"a").digest(),
+                    )
+                ],
+                digest=hashlib.sha256(b"batch").digest(),
+            )
+        )
+    )
+    assert (await call(service.latest(LatestRequest(stream=stream)))).cursor
+
+    assert await store.delete_workflow_streams(client.namespace, workflow_id) > 0
+    assert (await call(service.latest(LatestRequest(stream=stream)))).cursor == ""
+
+
+async def test_one_store_serves_one_client_connection(client: Client):
+    store = MemoryStreams()
+    first = await connect_with(client, store)
+    # Core asks about owners over the connection that connected the store, so a
+    # second connection would get the first one's answers.
+    with pytest.raises(ValueError, match="one client connection"):
+        await connect_with(client, store)
+    config = client.config()
+    config["plugins"] = [store]
+    with pytest.raises(ValueError, match="one client connection"):
+        await store._service_for(Client(**config))
+    # A client copied from the connected one shares its connection.
+    copied = first.config()
+    assert await store._service_for(Client(**copied))
+
+
+async def test_a_worker_needs_a_client_made_with_connect_after_a_lazy_connect(
+    client: Client,
+):
+    store = MemoryStreams()
+    config = client.config()
+    config["plugins"] = [store]
+    lazy = Client(**config)
+    # A handle call connects the store, but the client still wasn't connected
+    # through the plugin, so Workers built from it are refused all the same.
+    await store._service_for(lazy)
+    with pytest.raises(ValueError, match="registered on the Worker's client"):
+        Worker(lazy, task_queue=str(uuid.uuid4()), activities=[_noop])
 
 
 @activity.defn
 async def _noop() -> None:
     pass
+
+
+def address(client: Client, workflow_id: str) -> StreamAddress:
+    return StreamAddress(
+        namespace=client.namespace,
+        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
+        workflow_id=workflow_id,
+        topic="out",
+    )
