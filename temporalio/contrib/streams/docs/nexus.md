@@ -119,6 +119,15 @@ worker = Worker(
 )
 ```
 
+Core serves the stream service. `TemporalStreamsHandler` hands each call to
+Core and keeps only what Core can't do: your `authorize` callable and the
+namespace's payload codec. It holds nothing between calls, so it needs no
+shutdown, and any Worker on the endpoint's task queue can serve a reader's
+next read. The reader carries Core's read state in each read instead. So
+the reader and the stream service come from the same release. A stream
+service from an earlier release refuses the reader's `state` as an unknown
+member.
+
 `notify_on_append()` turns on progress only. Without it, the caller sees no
 progress, but the close still completes every operation with its result.
 Core closes a stream's notifier after every store close whenever the store
@@ -218,13 +227,22 @@ What `next()` does:
   replaced by a newer one, the reader records that in
   `reader.supersessions`, in order, instead of returning it from `next()`.
   Each entry is a `ReadSupersession` with `index` (how many items had been
-  handed over when it came), `cursor` and `supersession`:
+  handed over when it came), `cursor` and `supersession`. The stream service
+  marks it. Each read carries the state the last answer gave, so the marks
+  hold across reads, across the service's Workers, and for a reader built
+  with `after=`:
 
   ```python
   if reader.supersessions:
       workflow.logger.warning("a producer restarted: %s", reader.supersessions[-1])
   ```
 
+- A record that an earlier attempt of a producer wrote after a newer attempt
+  started is not the current answer, so `next()` does not return it. The
+  reader records it in `reader.stale_records`, in order. Each entry is a
+  `ReadStaleRecord` with `index`, `cursor`, `producer_id`, `attempt` and the
+  decoded `value`. This happens when an Activity attempt times out but keeps
+  running.
 - A record whose body does not decode into `item_type` raises
   `temporalio.contrib.streams.StreamRecordError` (a `StreamError` with
   `.cursor`), after the records before it are handed over. The next call
@@ -237,6 +255,12 @@ Bodies reach the Workflow decoded. The stream service decodes them with its
 Worker's data converter, the read result crosses once encoded with that
 Worker's payload codec, and the caller's codec decodes it. So the handler's
 Worker and the caller's Worker must use the same payload codec.
+
+The codec runs in the handler Worker's process, as a step Core asks for in
+the middle of a call. So Core holds plain bodies in memory during a call:
+an append's bodies before the codec encodes them, and a read's bodies after
+the codec decodes them. Core never stores or logs them, and sends them only
+in the read's answer. The store keeps only encoded bodies.
 
 Each read is a synchronous Nexus operation of the Workflow, so History
 records it and a replay reads the same records. When a read finds no new

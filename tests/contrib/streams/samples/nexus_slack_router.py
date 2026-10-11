@@ -133,12 +133,11 @@ async def main(client: Client, endpoint: str, task_queue: str) -> Routed:
         namespace=client.namespace,
         plugins=[store],
     )
-    streams = TemporalStreamsHandler()
     async with Worker(
         store_client,
         task_queue=task_queue,
         workflows=[Conversation, SlackRouter],
-        nexus_service_handlers=[ConversationHandler(), streams],
+        nexus_service_handlers=[ConversationHandler(), TemporalStreamsHandler()],
     ):
         routed = await store_client.execute_workflow(
             SlackRouter.run,
@@ -146,5 +145,4 @@ async def main(client: Client, endpoint: str, task_queue: str) -> Routed:
             id=f"router-{task_queue}",
             task_queue=task_queue,
         )
-        await streams.close()
     return routed
