@@ -35,6 +35,7 @@ class OnCompleteRequest(google.protobuf.message.Message):
     SUCCESS_FIELD_NUMBER: builtins.int
     FAILURE_FIELD_NUMBER: builtins.int
     SOURCE_CONTEXT_FIELD_NUMBER: builtins.int
+    RECEIVER_STATE_FIELD_NUMBER: builtins.int
     @property
     def success(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The operation was successful, and resulted in the given payload."""
@@ -44,12 +45,17 @@ class OnCompleteRequest(google.protobuf.message.Message):
     @property
     def source_context(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """User-supplied data which was added to the source invocation. (As applicable.)"""
+    receiver_state: builtins.bytes
+    """The `receiver_state` of the last OnProgressResponse that the server accepted for this
+    callback. Empty when no progress was accepted.
+    """
     def __init__(
         self,
         *,
         success: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
         source_context: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        receiver_state: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -69,6 +75,8 @@ class OnCompleteRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "failure",
             b"failure",
+            "receiver_state",
+            b"receiver_state",
             "result",
             b"result",
             "source_context",
@@ -106,18 +114,30 @@ class OnProgressRequest(google.protobuf.message.Message):
 
     PROGRESS_FIELD_NUMBER: builtins.int
     SOURCE_CONTEXT_FIELD_NUMBER: builtins.int
+    OPERATION_TOKEN_FIELD_NUMBER: builtins.int
+    RECEIVER_STATE_FIELD_NUMBER: builtins.int
     @property
     def progress(self) -> temporalio.api.nexus.v1.message_pb2.NexusOperationProgress:
         """The progress of the source operation. `progress.operation` is not set."""
     @property
     def source_context(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """User-supplied data which was added to the source invocation. (As applicable.)"""
+    operation_token: builtins.str
+    """The handler token of the source operation, when the source is a standalone Nexus operation
+    that has started. Empty otherwise.
+    """
+    receiver_state: builtins.bytes
+    """The `receiver_state` of the last OnProgressResponse that the server accepted for this
+    callback. Empty when no progress was accepted.
+    """
     def __init__(
         self,
         *,
         progress: temporalio.api.nexus.v1.message_pb2.NexusOperationProgress
         | None = ...,
         source_context: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        operation_token: builtins.str = ...,
+        receiver_state: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -128,7 +148,14 @@ class OnProgressRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "progress", b"progress", "source_context", b"source_context"
+            "operation_token",
+            b"operation_token",
+            "progress",
+            b"progress",
+            "receiver_state",
+            b"receiver_state",
+            "source_context",
+            b"source_context",
         ],
     ) -> None: ...
 
@@ -139,8 +166,28 @@ class OnProgressResponse(google.protobuf.message.Message):
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    RECEIVER_STATE_FIELD_NUMBER: builtins.int
+    BEHIND_FIELD_NUMBER: builtins.int
+    receiver_state: builtins.bytes
+    """Opaque state for the handler, such as a read cursor. The server stores it on the callback
+    and sends it in the next OnProgressRequest and in the OnCompleteRequest. The server refuses
+    further progress for the callback when the state is larger than its configured limit.
+    """
+    behind: builtins.bool
+    """Set when the handler did not reach `progress.position`. The server then sends the same
+    progress again at once, unless newer progress replaced it.
+    """
     def __init__(
         self,
+        *,
+        receiver_state: builtins.bytes = ...,
+        behind: builtins.bool = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "behind", b"behind", "receiver_state", b"receiver_state"
+        ],
     ) -> None: ...
 
 global___OnProgressResponse = OnProgressResponse

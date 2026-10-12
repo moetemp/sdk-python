@@ -25,7 +25,7 @@ from temporalio.api.nexus.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n:temporal/api/notificationservice/v1/request_response.proto\x12#temporal.api.notificationservice.v1\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto\x1a#temporal/api/nexus/v1/message.proto"\xbf\x01\n\x11OnCompleteRequest\x12\x32\n\x07success\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x33\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x12\x37\n\x0esource_context\x18\x03 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadB\x08\n\x06result"\x14\n\x12OnCompleteResponse"\x8d\x01\n\x11OnProgressRequest\x12?\n\x08progress\x18\x01 \x01(\x0b\x32-.temporal.api.nexus.v1.NexusOperationProgress\x12\x37\n\x0esource_context\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload"\x14\n\x12OnProgressResponseB\xd2\x01\n&io.temporal.api.notificationservice.v1B\x14RequestResponseProtoP\x01Z=go.temporal.io/api/notificationservice/v1;notificationservice\xaa\x02%Temporalio.Api.NotificationService.V1\xea\x02(Temporalio::Api::NotificationService::V1b\x06proto3'
+    b'\n:temporal/api/notificationservice/v1/request_response.proto\x12#temporal.api.notificationservice.v1\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto\x1a#temporal/api/nexus/v1/message.proto"\xd7\x01\n\x11OnCompleteRequest\x12\x32\n\x07success\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x33\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x12\x37\n\x0esource_context\x18\x03 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x16\n\x0ereceiver_state\x18\x04 \x01(\x0c\x42\x08\n\x06result"\x14\n\x12OnCompleteResponse"\xbe\x01\n\x11OnProgressRequest\x12?\n\x08progress\x18\x01 \x01(\x0b\x32-.temporal.api.nexus.v1.NexusOperationProgress\x12\x37\n\x0esource_context\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x17\n\x0foperation_token\x18\x03 \x01(\t\x12\x16\n\x0ereceiver_state\x18\x04 \x01(\x0c"<\n\x12OnProgressResponse\x12\x16\n\x0ereceiver_state\x18\x01 \x01(\x0c\x12\x0e\n\x06\x62\x65hind\x18\x02 \x01(\x08\x42\xd2\x01\n&io.temporal.api.notificationservice.v1B\x14RequestResponseProtoP\x01Z=go.temporal.io/api/notificationservice/v1;notificationservice\xaa\x02%Temporalio.Api.NotificationService.V1\xea\x02(Temporalio::Api::NotificationService::V1b\x06proto3'
 )
 
 
@@ -81,11 +81,11 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = b"\n&io.temporal.api.notificationservice.v1B\024RequestResponseProtoP\001Z=go.temporal.io/api/notificationservice/v1;notificationservice\252\002%Temporalio.Api.NotificationService.V1\352\002(Temporalio::Api::NotificationService::V1"
     _ONCOMPLETEREQUEST._serialized_start = 214
-    _ONCOMPLETEREQUEST._serialized_end = 405
-    _ONCOMPLETERESPONSE._serialized_start = 407
-    _ONCOMPLETERESPONSE._serialized_end = 427
-    _ONPROGRESSREQUEST._serialized_start = 430
-    _ONPROGRESSREQUEST._serialized_end = 571
-    _ONPROGRESSRESPONSE._serialized_start = 573
-    _ONPROGRESSRESPONSE._serialized_end = 593
+    _ONCOMPLETEREQUEST._serialized_end = 429
+    _ONCOMPLETERESPONSE._serialized_start = 431
+    _ONCOMPLETERESPONSE._serialized_end = 451
+    _ONPROGRESSREQUEST._serialized_start = 454
+    _ONPROGRESSREQUEST._serialized_end = 644
+    _ONPROGRESSRESPONSE._serialized_start = 646
+    _ONPROGRESSRESPONSE._serialized_end = 706
 # @@protoc_insertion_point(module_scope)
