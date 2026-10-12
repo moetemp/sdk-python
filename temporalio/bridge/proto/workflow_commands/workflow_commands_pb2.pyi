@@ -420,24 +420,36 @@ class OutputClose(google.protobuf.message.Message):
 
     TOPIC_FIELD_NUMBER: builtins.int
     RESULT_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
     topic: builtins.str
     @property
     def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """After lang's payload codec. Sent again while replaying, since a close that History proves
         may still need sending.
         """
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Closes the stream with a failure instead of `result`, after lang's failure converter and
+        codec. A close carries a result or a failure, never both.
+        """
     def __init__(
         self,
         *,
         topic: builtins.str = ...,
         result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["result", b"result"]
+        self,
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
-        field_name: typing_extensions.Literal["result", b"result", "topic", b"topic"],
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result", "topic", b"topic"
+        ],
     ) -> None: ...
 
 global___OutputClose = OutputClose

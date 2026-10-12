@@ -15,6 +15,7 @@ import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
 
 import temporalio.api.common.v1.message_pb2
+import temporalio.api.failure.v1.message_pb2
 import temporalio.bridge.proto.streams.v1.message_pb2
 
 if sys.version_info >= (3, 10):
@@ -819,6 +820,7 @@ class CloseRequest(google.protobuf.message.Message):
 
     STREAM_FIELD_NUMBER: builtins.int
     RESULT_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     @property
@@ -829,19 +831,30 @@ class CloseRequest(google.protobuf.message.Message):
         background too. Unset, the operations complete with an empty result, and the notifier close
         is retried in the background.
         """
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Closes the stream with a failure instead of `result`, after lang's failure converter and
+        codec. The operations complete as failed, or as canceled for a failure with canceled info.
+        A close carries a result or a failure, never both.
+        """
     def __init__(
         self,
         *,
         stream: global___StreamAddress | None = ...,
         result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
     def HasField(
         self,
-        field_name: typing_extensions.Literal["result", b"result", "stream", b"stream"],
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result", "stream", b"stream"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
-        field_name: typing_extensions.Literal["result", b"result", "stream", b"stream"],
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result", "stream", b"stream"
+        ],
     ) -> None: ...
 
 global___CloseRequest = CloseRequest
