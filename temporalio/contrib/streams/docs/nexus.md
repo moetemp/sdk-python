@@ -413,6 +413,9 @@ uses it, and so does the notifier's owner check.
 
 No Worker runs a final task for a terminated or timed-out owner, so only the
 owner check closes those, after up to `streamnotifier.ownerCheckInterval`.
+The check leaves a completed, failed or canceled owner alone until
+`streamnotifier.ownerCloseGrace` (1 minute by default) after it closed, so
+the Worker's own close, with the real result or failure, comes first.
 The owner check reads no History, so a failed owner that it closes gives an
 `ApplicationError` of type `StreamOwnerFailed` rather than the Workflow's
 own failure. A stream server from before this release ignores a close's

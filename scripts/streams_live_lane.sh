@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-f44bf7c2994c4190e2aa0f15e43eef0d85c774f3}
+SERVER_REF=${SERVER_REF:-5220e042123eda7bea5b79e50a4773eb4dc36ccd}
 PORT_BASE=${PORT_BASE:-7881}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -78,6 +78,10 @@ streamnotifier.enabled:
 # terminated and timed-out cases finish in seconds, not minutes.
 streamnotifier.ownerCheckInterval:
   - value: 2s
+# A completed, failed or canceled owner is left alone this long after it
+# closed, so the Worker's close with the real result wins.
+streamnotifier.ownerCloseGrace:
+  - value: 10s
 history.enableSignalWithStartFromWorkflow:
   - value: true
 EOF
