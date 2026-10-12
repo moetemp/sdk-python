@@ -373,6 +373,9 @@ class _Runtime(ABC):
     ) -> temporalio.bridge.proto.workflow_commands.WorkflowOutputStreamCommit: ...
 
     @abstractmethod
+    def workflow_failure_converter(self) -> temporalio.converter.FailureConverter: ...
+
+    @abstractmethod
     def workflow_memo(self) -> Mapping[str, Any]: ...
 
     @abstractmethod

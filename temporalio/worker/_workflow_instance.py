@@ -1404,6 +1404,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._stream_commit = command.workflow_output_stream_commit
         return self._stream_commit
 
+    def workflow_failure_converter(self) -> temporalio.converter.FailureConverter:
+        return self._workflow_context_failure_converter
+
     def workflow_memo(self) -> Mapping[str, Any]:
         if self._untyped_converted_memo is None:
             self._untyped_converted_memo = {

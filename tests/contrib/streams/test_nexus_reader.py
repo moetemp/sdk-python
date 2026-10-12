@@ -81,7 +81,7 @@ from temporalio.contrib.streams.nexus._generated import (
     StreamOperationToken,
 )
 from temporalio.converter import DataConverter, PayloadCodec
-from temporalio.exceptions import NexusOperationError
+from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -1038,6 +1038,143 @@ async def test_live_a_workflow_reads_every_record_then_none(
     await Replayer(
         workflows=[LiveChatReader], data_converter=data_converter
     ).replay_workflow(history)
+
+
+@workflow.defn(name="LiveEndingOwner")
+class LiveEndingOwner:
+    """Publishes its tokens on its own stream, then fails when told to, or
+    waits until it is canceled. It never closes its stream itself."""
+
+    def __init__(self) -> None:
+        self._fail = False
+
+    @workflow.run
+    async def run(self, texts: list[str]) -> None:
+        writer = workflow_writer(STREAM.topic)
+        for text in texts:
+            writer.publish(Token(text))
+            await workflow.sleep(timedelta(milliseconds=100))
+        writer.finish()
+        await workflow.wait_condition(lambda: self._fail)
+        raise ApplicationError(
+            "the model gave up", type="OwnerGaveUp", non_retryable=True
+        )
+
+    @workflow.signal
+    def fail(self) -> None:
+        self._fail = True
+
+
+@dataclass
+class LiveEnding:
+    texts: list[str]
+    cause: str
+    cause_type: str
+
+
+@workflow.defn(name="LiveEndingReader")
+class LiveEndingReader:
+    """Reads every token, then reports how the operation ended."""
+
+    @workflow.run
+    async def run(self, endpoint: str) -> LiveEnding:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        texts: list[str] = []
+        try:
+            while (batch := await reader.next()) is not None:
+                texts += [token.text for token in batch]
+        except NexusOperationError as error:
+            cause = error.cause
+            return LiveEnding(
+                texts,
+                type(cause).__name__,
+                cause.type
+                if isinstance(cause, ApplicationError) and cause.type
+                else "",
+            )
+        return LiveEnding(texts, "", "")
+
+
+async def _read_an_ending_owner(
+    client: Client, env: WorkflowEnvironment, end: str
+) -> LiveEnding:
+    """Runs a caller against an owner that publishes, then fails or is canceled
+    without closing its stream, and answers with what the caller saw."""
+    client = await connect(client, MemoryStreams().notify_on_append())
+    owner_id = f"ending-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    texts = [f"token-{n}" for n in range(5)]
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveEndingOwner.run, texts, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveEndingReader, LiveEndingOwner],
+        nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
+    ):
+        caller = await client.start_workflow(
+            LiveEndingReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        owner = client.get_workflow_handle(owner_id)
+        for _ in range(200):
+            try:
+                history = await owner.fetch_history()
+            except RPCError:
+                history = None
+            if history is not None and (
+                sum(
+                    event.HasField("timer_fired_event_attributes")
+                    for event in history.events
+                )
+                >= len(texts)
+            ):
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("the owner never finished publishing")
+        if end == "fail":
+            await owner.signal(LiveEndingOwner.fail)
+        else:
+            await owner.cancel()
+        ending = await asyncio.wait_for(caller.result(), 30)
+    assert ending.texts == texts, "a record was lost before the failure"
+    return ending
+
+
+async def test_live_a_failed_owner_raises_after_every_record_is_read(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    """The owner failed without closing its stream. Its failure closes the
+    stream, so the reader hands over every record, then raises the failure."""
+    ending = await _read_an_ending_owner(client, env, "fail")
+    assert (ending.cause, ending.cause_type) == ("ApplicationError", "OwnerGaveUp")
+
+
+async def test_live_a_canceled_owner_raises_a_canceled_operation(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    ending = await _read_an_ending_owner(client, env, "cancel")
+    assert ending.cause == "CancelledError"
 
 
 @workflow.defn(name="LiveLabelReader")

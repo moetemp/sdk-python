@@ -730,6 +730,7 @@ class NotifyStreamRequest:
     metadata: dict[str, str] | None = dataclasses.field(default_factory=dict)
     close: bool | None = None
     close_result: typing.Any | None = None
+    close_failure: BaseException | None = None
 
 
 class _NotifyStreamRequestTransferTypeConverter(
@@ -766,6 +767,9 @@ class _NotifyStreamRequestTransferTypeConverter(
             close_result=_support.payload_from_proto(value.close_result)
             if value.HasField("close_result")
             else None,
+            close_failure=_support.failure_from_proto(value.close_failure)
+            if value.HasField("close_failure")
+            else None,
         )
 
     @typing_extensions.override
@@ -792,6 +796,10 @@ class _NotifyStreamRequestTransferTypeConverter(
             message.close = value.close
         if value.close_result is not None:
             message.close_result.CopyFrom(_support.payload_to_proto(value.close_result))
+        if value.close_failure is not None:
+            message.close_failure.CopyFrom(
+                _support.failure_to_proto(value.close_failure)
+            )
         return message
 
 
