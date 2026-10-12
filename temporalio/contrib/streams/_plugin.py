@@ -165,7 +165,12 @@ class StreamStorePlugin(SimplePlugin):
         return self
 
     async def close_stream(
-        self, client: Client, ref: StreamRef, result: Any = None
+        self,
+        client: Client,
+        ref: StreamRef,
+        result: Any = None,
+        *,
+        error: BaseException | None = None,
     ) -> None:
         """Close the stream ``ref`` names, and complete its operations with ``result``.
 
@@ -173,21 +178,23 @@ class StreamStorePlugin(SimplePlugin):
         last record. Core then closes the stream's notifier on the server, so
         every stream-returning Nexus operation that handed out the stream
         completes with ``result``, encoded with ``client``'s data converter.
-        It does so whether or not :meth:`notify_on_append` is on, which turns
-        on progress only.
+        With ``error`` set instead, the operations fail with it as the cause,
+        or are canceled for a :class:`temporalio.exceptions.CancelledError`.
+        Core closes the notifier whether or not :meth:`notify_on_append` is
+        on, which turns on progress only.
 
         Raises:
+            ValueError: Both ``result`` and ``error`` are set.
             temporalio.contrib.streams.StreamError: The store or the notifier
                 refused the close.
 
         .. warning::
             This API is experimental.
         """
+        if result is not None and error is not None:
+            raise ValueError("a stream closes with a result or an error, not both")
         ref._require_supported()
         converter = client.data_converter
-        [payload] = await encode_bodies(
-            converter, converter.payload_converter.to_payloads([result])
-        )
         request = CloseRequest(
             stream=StreamAddress(
                 namespace=client.namespace,
@@ -196,8 +203,14 @@ class StreamStorePlugin(SimplePlugin):
                 run_id=ref.run_id or "",
                 topic=ref.topic,
             ),
-            result=payload,
         )
+        if error is not None:
+            await converter.encode_failure(error, request.failure)
+        else:
+            [payload] = await encode_bodies(
+                converter, converter.payload_converter.to_payloads([result])
+            )
+            request.result.CopyFrom(payload)
         await call((await self._service_for(client)).close(request))
 
     async def flush_notifications(self) -> None:
