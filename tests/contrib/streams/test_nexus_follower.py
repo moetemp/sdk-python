@@ -618,6 +618,10 @@ async def test_live_a_follower_resumes_on_another_worker(
         await lane.follow()
         await producer.append("a", "b")
         await _until(lambda: "b" in first.ordered())
+        # The call answers after its last read waited a second and armed the
+        # stream. A Worker that stops before that loses the answer, and the
+        # server sends the progress again from the earlier position.
+        await asyncio.sleep(3)
     # The read position lives on the server's callback, so another Worker,
     # with nothing of the first one's, goes on from it.
     async with lane.worker(second):

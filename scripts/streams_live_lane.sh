@@ -286,6 +286,15 @@ gate tests/contrib/streams/test_nexus_follower.py \
   test_live_a_follower_resumes_on_another_worker \
   test_live_a_late_follower_reads_the_backlog_in_pages \
   test_live_a_failed_owner_reaches_on_close_as_a_failure
+gate tests/contrib/streams/test_nexus_adaptive.py \
+  test_live_a_busy_stream_sends_no_notification \
+  test_live_an_idle_reader_wakes_once_per_burst \
+  test_live_a_short_gap_costs_no_notification \
+  test_live_two_readers_wake_from_one_notification \
+  test_live_a_follower_arms_and_wakes \
+  test_live_a_follower_on_an_empty_stream_wakes_on_the_first_append \
+  test_live_a_close_reaches_an_unarmed_caller \
+  test_live_every_append_mode_notifies_each_append
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_output_commit.py \
