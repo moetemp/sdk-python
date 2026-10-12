@@ -38,6 +38,7 @@ async def notify_stream(
     metadata: dict[str, str] | None = None,
     close: bool | None = None,
     close_result: typing.Any | None = None,
+    close_failure: BaseException | None = None,
 ) -> NexusOperationHandle[NotifyStreamResponse,]:
     request = NotifyStreamRequest(
         stream_ref=stream_ref,
@@ -46,5 +47,6 @@ async def notify_stream(
         metadata=metadata or {},
         close=close,
         close_result=close_result,
+        close_failure=close_failure,
     )
     return await _notify_stream(request)

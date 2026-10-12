@@ -17,6 +17,7 @@ from temporalio.api.common.v1.message_pb2 import (
     Priority,
     SearchAttributes,
 )
+from temporalio.api.failure.v1.message_pb2 import Failure
 from temporalio.api.sdk.v1.user_metadata_pb2 import UserMetadata
 from temporalio.bridge._visitor import PayloadVisitor
 from temporalio.bridge._visitor_functions import VisitorFunctions
@@ -27,6 +28,7 @@ from temporalio.bridge.proto.workflow_activation.workflow_activation_pb2 import 
 )
 from temporalio.bridge.proto.workflow_commands.workflow_commands_pb2 import (
     ContinueAsNewWorkflowExecution,
+    OutputClose,
     ScheduleActivity,
     ScheduleLocalActivity,
     ScheduleNexusOperation,
@@ -34,6 +36,7 @@ from temporalio.bridge.proto.workflow_commands.workflow_commands_pb2 import (
     StartChildWorkflowExecution,
     UpdateResponse,
     WorkflowCommand,
+    WorkflowOutputStreamCommit,
 )
 from temporalio.bridge.proto.workflow_completion.workflow_completion_pb2 import (
     Success,
@@ -211,6 +214,35 @@ async def test_visit_payloads_on_other_commands():
 
     ur = cmds[4].update_response
     assert ur.completed.metadata["visited"]
+
+
+async def test_a_stream_close_failure_is_visited():
+    # A close's failure goes through the codec as its result does.
+    comp = WorkflowActivationCompletion(
+        run_id="2",
+        successful=Success(
+            commands=[
+                WorkflowCommand(
+                    workflow_output_stream_commit=WorkflowOutputStreamCommit(
+                        closes=[
+                            OutputClose(
+                                topic="t",
+                                failure=Failure(
+                                    message="Encoded failure",
+                                    encoded_attributes=Payload(data=b"f1"),
+                                ),
+                            )
+                        ]
+                    )
+                )
+            ]
+        ),
+    )
+
+    await PayloadVisitor().visit(Visitor(), comp)
+
+    close = comp.successful.commands[0].workflow_output_stream_commit.closes[0]
+    assert close.failure.encoded_attributes.metadata["visited"]
 
 
 async def test_system_nexus_envelope_is_detected_in_generic_payload_field():
