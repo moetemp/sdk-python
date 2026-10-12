@@ -503,6 +503,8 @@ class PayloadVisitor:
     ):
         if o.HasField("result"):
             await self._visit_temporal_api_common_v1_Payload(fs, o.result)
+        if o.HasField("failure"):
+            await self._visit_temporal_api_failure_v1_Failure(fs, o.failure)
 
     async def _visit_coresdk_workflow_commands_WorkflowOutputStreamCommit(
         self, fs: VisitorFunctions, o: Any
