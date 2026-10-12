@@ -89,6 +89,7 @@ nexusoperation.enableStandalone:
   - value: true
 nexusoperation.enabledCallbackKinds:
   - value:
+      - nexus
       - nexusHandler
 EOF
 

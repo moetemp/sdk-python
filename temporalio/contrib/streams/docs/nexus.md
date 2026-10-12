@@ -417,7 +417,7 @@ NexusHandler callbacks on a standalone operation:
 | Setting | Why |
 |---|---|
 | `nexusoperation.enableStandalone` | Standalone Nexus operations. |
-| `nexusoperation.enabledCallbackKinds: [nexusHandler]` | A standalone start may carry a callback to a Worker's task queue. |
+| `nexusoperation.enabledCallbackKinds: [nexus, nexusHandler]` | A standalone start may carry a callback to a Worker's task queue (`nexusHandler`), and other callers' Nexus callbacks (`nexus`). |
 
 The store must have `notify_on_append()` on, so the stream's moves reach the
 follower as progress. A callback attached later with
