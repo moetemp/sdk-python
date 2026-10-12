@@ -168,19 +168,27 @@ class StreamStoreConfig(google.protobuf.message.Message):
     MEMORY_FIELD_NUMBER: builtins.int
     NOTIFY_ON_APPEND_FIELD_NUMBER: builtins.int
     MAX_NOTIFIERS_FIELD_NUMBER: builtins.int
+    NOTIFY_EVERY_APPEND_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
     def memory(self) -> global___MemoryStoreConfig: ...
     notify_on_append: builtins.bool
-    """Tells each stream's notifier on the server when the stream moves, after every append and
-    every Workflow batch that becomes visible. That's what makes a caller of a stream-returning
-    Nexus operation see progress. Off by default, since most streams have no such caller and each
-    notification costs a call. It turns on progress only. Closes reach the notifier either way. A
-    server without the stream notifier costs one call, and then the process stops notifying.
+    """Tells each stream's notifier on the server when the stream moves while a reader sleeps on
+    it: after an append or a Workflow batch that becomes visible, when a reader armed the stream
+    with an empty read. That's what makes a caller of a stream-returning Nexus operation see
+    progress. A busy stream, whose readers find records on each read, costs no notification. Off
+    by default, since most streams have no such caller. It turns on progress only. Closes reach
+    the notifier either way. A server without the stream notifier costs one call, and then the
+    process stops notifying.
     """
     max_notifiers: builtins.int
     """How many streams to keep a notifier for, dropping the least recently used. Zero uses 1000."""
+    notify_every_append: builtins.bool
+    """With `notify_on_append`, notifies after every append and every Workflow batch that becomes
+    visible, whether or not a reader armed the stream. For a deployment whose readers can't arm,
+    such as a hand-written reader over HTTP. Off by default.
+    """
     def __init__(
         self,
         *,
@@ -188,6 +196,7 @@ class StreamStoreConfig(google.protobuf.message.Message):
         memory: global___MemoryStoreConfig | None = ...,
         notify_on_append: builtins.bool = ...,
         max_notifiers: builtins.int = ...,
+        notify_every_append: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -202,6 +211,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
             b"max_notifiers",
             "memory",
             b"memory",
+            "notify_every_append",
+            b"notify_every_append",
             "notify_on_append",
             b"notify_on_append",
             "redis",
@@ -590,6 +601,7 @@ class ReadRequest(google.protobuf.message.Message):
     WAIT_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     after: builtins.str
@@ -607,6 +619,11 @@ class ReadRequest(google.protobuf.message.Message):
     """
     state: builtins.bytes
     """The `state` of the previous answer of the same read. Empty on its first call."""
+    arm: builtins.bool
+    """For a reader that sleeps until its caller hears of progress. When the read waits its whole
+    `wait` and finds nothing, the store arms the stream in the same step, so the next append
+    notifies the stream's callers. A reader without a callback leaves it unset.
+    """
     def __init__(
         self,
         *,
@@ -615,6 +632,7 @@ class ReadRequest(google.protobuf.message.Message):
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         max_records: builtins.int = ...,
         state: builtins.bytes = ...,
+        arm: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -625,6 +643,8 @@ class ReadRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "after",
             b"after",
+            "arm",
+            b"arm",
             "max_records",
             b"max_records",
             "state",
@@ -736,6 +756,7 @@ class ReadResponse(google.protobuf.message.Message):
     CURSOR_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
+    ARMED_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -754,6 +775,10 @@ class ReadResponse(google.protobuf.message.Message):
     """The owner's chain ended and the read delivered every record the stream retains. No later
     call returns a record.
     """
+    armed: builtins.bool
+    """The read asked to arm, found nothing and armed the stream, so the next append notifies the
+    stream's callers. Never set with records or with `done`.
+    """
     def __init__(
         self,
         *,
@@ -761,10 +786,13 @@ class ReadResponse(google.protobuf.message.Message):
         cursor: builtins.str = ...,
         state: builtins.bytes = ...,
         done: builtins.bool = ...,
+        armed: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "armed",
+            b"armed",
             "cursor",
             b"cursor",
             "done",
@@ -1031,20 +1059,39 @@ class StoreAppendResponse(google.protobuf.message.Message):
 
     FIRST_POSITION_FIELD_NUMBER: builtins.int
     LAST_POSITION_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     first_position: builtins.str
     last_position: builtins.str
+    arm: builtins.int
+    """The topic's arm generation as the append found it, zero when no reader armed the topic.
+    Unset when the store can't tell, and Core then notifies after the append.
+    """
     def __init__(
         self,
         *,
         first_position: builtins.str = ...,
         last_position: builtins.str = ...,
+        arm: builtins.int | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["_arm", b"_arm", "arm", b"arm"]
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "first_position", b"first_position", "last_position", b"last_position"
+            "_arm",
+            b"_arm",
+            "arm",
+            b"arm",
+            "first_position",
+            b"first_position",
+            "last_position",
+            b"last_position",
         ],
     ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["_arm", b"_arm"]
+    ) -> typing_extensions.Literal["arm"] | None: ...
 
 global___StoreAppendResponse = StoreAppendResponse
 
@@ -1056,6 +1103,7 @@ class StoreReadRequest(google.protobuf.message.Message):
     AFTER_POSITION_FIELD_NUMBER: builtins.int
     WAIT_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     @property
     def chain(self) -> global___ChainId: ...
     topic: builtins.str
@@ -1064,6 +1112,10 @@ class StoreReadRequest(google.protobuf.message.Message):
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration: ...
     max_records: builtins.int
+    arm: builtins.bool
+    """When the read ends with no record and the topic is open, arm the topic in the same step that
+    finds it empty, so the next append reports the arm. A store that can't arm ignores it.
+    """
     def __init__(
         self,
         *,
@@ -1072,6 +1124,7 @@ class StoreReadRequest(google.protobuf.message.Message):
         after_position: builtins.str = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         max_records: builtins.int = ...,
+        arm: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["chain", b"chain", "wait", b"wait"]
@@ -1081,6 +1134,8 @@ class StoreReadRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "after_position",
             b"after_position",
+            "arm",
+            b"arm",
             "chain",
             b"chain",
             "max_records",
@@ -1122,6 +1177,7 @@ class StoreReadResponse(google.protobuf.message.Message):
 
     RECORDS_FIELD_NUMBER: builtins.int
     CLOSED_FIELD_NUMBER: builtins.int
+    ARMED_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -1130,16 +1186,21 @@ class StoreReadResponse(google.protobuf.message.Message):
     ]: ...
     closed: builtins.bool
     """The chain or this topic is marked closed."""
+    armed: builtins.bool
+    """The read asked to arm, found no record and armed the topic. Never set with records or with
+    `closed`.
+    """
     def __init__(
         self,
         *,
         records: collections.abc.Iterable[global___StoredRecord] | None = ...,
         closed: builtins.bool = ...,
+        armed: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "closed", b"closed", "records", b"records"
+            "armed", b"armed", "closed", b"closed", "records", b"records"
         ],
     ) -> None: ...
 
@@ -1300,20 +1361,47 @@ global___StageRef = StageRef
 class PromoteResult(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    class ArmsEntry(google.protobuf.message.Message):
+        DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+        KEY_FIELD_NUMBER: builtins.int
+        VALUE_FIELD_NUMBER: builtins.int
+        key: builtins.str
+        value: builtins.int
+        def __init__(
+            self,
+            *,
+            key: builtins.str = ...,
+            value: builtins.int = ...,
+        ) -> None: ...
+        def ClearField(
+            self,
+            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
+        ) -> None: ...
+
     OUTCOME_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
+    ARMS_FIELD_NUMBER: builtins.int
     outcome: global___PromoteOutcome.ValueType
     records: builtins.int
+    @property
+    def arms(
+        self,
+    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.int]:
+        """Each promoted topic's arm generation as the promotion found it, zero when no reader armed
+        the topic. A topic left out means the store can't tell, and Core then notifies it.
+        """
     def __init__(
         self,
         *,
         outcome: global___PromoteOutcome.ValueType = ...,
         records: builtins.int = ...,
+        arms: collections.abc.Mapping[builtins.str, builtins.int] | None = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "outcome", b"outcome", "records", b"records"
+            "arms", b"arms", "outcome", b"outcome", "records", b"records"
         ],
     ) -> None: ...
 

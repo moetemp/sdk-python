@@ -191,6 +191,13 @@ async def test_notifications_are_turned_on_before_the_store_connects(
         store.notify_on_append()
 
 
+def test_every_append_mode_turns_on_notifications_too() -> None:
+    store = MemoryStreams().notify_on_append(every_append=True)
+    assert store._config.notify_on_append
+    assert store._config.notify_every_append
+    assert not MemoryStreams().notify_on_append()._config.notify_every_append
+
+
 # Live: a caller Workflow sees the stream's progress and the close result.
 # These need a server with Nexus progress and the stream notifier, and skip on
 # any other server.

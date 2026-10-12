@@ -282,3 +282,25 @@ def test_the_operation_token_reads_cores_decode_only_vectors(vector: dict[str, A
 def test_the_operation_token_refuses_cores_refused_vectors(token: str):
     with pytest.raises(ValueError):
         StreamOperationToken.from_token(token)
+
+
+def test_a_read_asks_to_arm_and_the_answer_says_it_armed():
+    # A reader that sleeps on progress asks the stream to arm, and only an
+    # armed answer lets it sleep.
+    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), wait_ms=2000, arm=True)
+    document = _to_json(read)
+    assert document["arm"] is True
+    assert _from_json(document, ReadInput) == read
+    armed = _from_json(
+        {"records": [], "next_token": "", "done": False, "armed": True}, ReadOutput
+    )
+    assert armed.armed is True
+    # Core leaves `armed` out when it is false.
+    unarmed = _from_json({"records": [], "next_token": "", "done": False}, ReadOutput)
+    assert not unarmed.armed
+
+
+def test_a_read_without_arm_leaves_it_out():
+    # An outside reader has no callback, and an old handler refuses the member.
+    document = _to_json(ReadInput(stream=StreamRef.for_workflow("chat-1")))
+    assert "arm" not in document

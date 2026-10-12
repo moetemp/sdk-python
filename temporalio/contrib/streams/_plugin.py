@@ -136,18 +136,27 @@ class StreamStorePlugin(SimplePlugin):
         # The Worker looks for this name on its plugins and gives the store to Core.
         return self._store.ref if self._store is not None else None
 
-    def notify_on_append(self, *, max_notifiers: int | None = None) -> Self:
+    def notify_on_append(
+        self, *, max_notifiers: int | None = None, every_append: bool = False
+    ) -> Self:
         """Tell each stream's notifier on the server when the stream moves.
 
-        Core tells it after every append and every Workflow batch that
-        becomes visible, which a caller of a stream-returning Nexus operation
-        sees as progress. Off by default, since most streams have no such
-        caller and each notification costs a call. It needs a server with
-        the stream notifier. Turn it on before a client connects the store.
+        A caller of a stream-returning Nexus operation sees it as progress.
+        Core tells the notifier after an append or a Workflow batch that
+        becomes visible, but only while a reader sleeps on the stream. Such a
+        reader arms the stream with a read that waited and found nothing. A
+        busy stream, whose readers find records on each read, costs no
+        notification. Off by default, since most streams have no such
+        caller. It needs a server with the stream notifier. Turn it on before
+        a client connects the store.
 
         Args:
             max_notifiers: How many streams Core keeps a notifier for,
                 dropping the least recently used. Core's default when unset.
+            every_append: Tell the notifier after every append and every
+                Workflow batch, whether or not a reader armed the stream.
+                For readers that can't arm, such as a hand-written reader
+                over HTTP.
 
         Raises:
             ValueError: A client already connected this store.
@@ -160,6 +169,7 @@ class StreamStorePlugin(SimplePlugin):
                 "turn notifications on before a client connects the stream store"
             )
         self._config.notify_on_append = True
+        self._config.notify_every_append = every_append
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self
