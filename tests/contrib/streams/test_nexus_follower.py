@@ -86,6 +86,8 @@ class _FakeTransport:
     records: list[RecordWire]
     closed: bool = False
     state: bytes = b"core-state"
+    # Whether an empty read that asks to arm arms the stream, as Core's does.
+    arms: bool = True
     requests: list[ReadInput] = field(default_factory=list)
 
     async def read(self, request: ReadInput) -> ReadOutput:
@@ -95,11 +97,16 @@ class _FakeTransport:
             start = [r.token for r in self.records].index(request.after_token) + 1
         page = self.records[start : start + (request.max_records or 100)]
         at_end = start + len(page) >= len(self.records)
+        done = self.closed and at_end
+        armed = bool(request.arm) and self.arms and not page and not done
+        if not page and not armed:
+            await asyncio.sleep(0.01)
         return ReadOutput(
             records=page,
             next_token=page[-1].token if page else request.after_token or "",
-            done=self.closed and at_end,
+            done=done,
             state=self.state,
+            armed=True if armed else None,
         )
 
 
@@ -180,8 +187,8 @@ async def test_a_follower_gets_each_page_up_to_the_position() -> None:
     assert state.after_token == "c5"
     assert state.state == b"core-state"
     assert state.stream == REF
-    # The reads carry the state each answer gave.
-    assert [r.state for r in transport.requests] == [None, b"core-state", b"core-state"]
+    # The reads carry the state each answer gave, up to the empty one that armed.
+    assert [r.state for r in transport.requests] == [None] + [b"core-state"] * 3
 
 
 async def test_a_follower_answers_behind_when_its_budget_runs_out() -> None:
@@ -197,6 +204,57 @@ async def test_a_follower_answers_behind_when_its_budget_runs_out() -> None:
     )
     assert not second.behind
     assert collector.values == ["v1", "v2", "v3", "v4", "v5", "v6"]
+
+
+async def test_a_follower_reads_past_the_position_until_an_answer_arms() -> None:
+    """Records can land after the progress the server sent. The follower reads
+    on until a read that waited finds nothing and arms the stream, so the next
+    append wakes it."""
+    transport, collector = _FakeTransport(_stored(5)), _Collector()
+
+    answer = await _service(transport, collector, max_records=2).on_progress(
+        _context(), _progress("c2")
+    )
+
+    assert collector.values == ["v1", "v2", "v3", "v4", "v5"]
+    assert not answer.behind
+    assert all(r.arm for r in transport.requests)
+    assert all(r.wait_ms == 1000 for r in transport.requests)
+    assert len(transport.requests) == 4
+
+
+async def test_a_follower_that_never_arms_answers_behind() -> None:
+    """With nothing armed no append wakes the follower, so it answers behind
+    at half its budget and the server sends the progress again."""
+    transport = _FakeTransport(_stored(1), arms=False)
+    collector = _Collector()
+
+    answer = await _service(transport, collector).on_progress(
+        _context(timedelta(milliseconds=400)), _progress("c1")
+    )
+
+    assert answer.behind
+    assert collector.values == ["v1"]
+    # Each wait is cut to what is left of the budget.
+    assert all(0 <= (r.wait_ms or 0) <= 200 for r in transport.requests)
+
+
+async def test_the_completion_drains_without_arming() -> None:
+    transport, collector = _FakeTransport(_stored(2), closed=True), _Collector()
+
+    await _service(transport, collector).on_complete(
+        _context(),
+        OnCompleteRequest(
+            success=CONVERTER.payload_converter.to_payload("finished"),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                ReadInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    assert collector.values == ["v1", "v2"]
+    assert [r.arm for r in transport.requests] == [None]
 
 
 async def test_a_lost_answer_repeats_the_batch_with_its_cursors() -> None:
