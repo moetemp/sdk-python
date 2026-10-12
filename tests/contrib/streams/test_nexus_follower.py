@@ -9,7 +9,9 @@ doesn't. The streams live lane fails on those skips.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -54,7 +56,7 @@ from tests.contrib.streams.test_nexus_stream_operation import (
     _skip_without_notifier,
     connect,
 )
-from tests.helpers.nexus import make_nexus_endpoint_name
+from tests.helpers.nexus import end_standalone_operation, make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
 CONVERTER = temporalio.converter.DataConverter.default
@@ -383,8 +385,9 @@ class FollowedOrders:
 
 
 class _LiveFollower(_Collector):
-    def __init__(self) -> None:
+    def __init__(self, max_records: int = 100) -> None:
         super().__init__()
+        self.max_records = max_records
         self.closed = asyncio.Event()
         self.seen: dict[str, str] = {}
 
@@ -409,6 +412,7 @@ class _Lane:
     task_queue: str
     endpoint: str
     ref: StreamRef
+    followed: list[Any] = field(default_factory=list)
 
     def handler(self) -> Any:
         ref = self.ref
@@ -425,13 +429,38 @@ class _Lane:
 
         return Orders()
 
-    def worker(self, *handlers: Any) -> Worker:
-        return Worker(
+    @contextlib.asynccontextmanager
+    async def worker(
+        self, follower: _LiveFollower, *, hands_over: bool = False
+    ) -> AsyncIterator[None]:
+        """A Worker that follows with ``follower``.
+
+        Unless the block ``hands_over`` the operations to a later Worker, they
+        end before the Worker stops, so a test that skips or fails leaves no
+        callback retried against a task queue no one polls.
+        """
+        async with Worker(
             self.client,
             task_queue=self.task_queue,
             workflows=[OwnerUntilDone],
-            nexus_service_handlers=[self.handler(), *handlers],
+            nexus_service_handlers=[self.handler(), self.service(follower)],
+        ):
+            try:
+                yield
+            except BaseException:
+                await self.end(follower)
+                raise
+            if not hands_over:
+                await self.end(follower)
+
+    def service(self, follower: _LiveFollower) -> StreamFollowerService:
+        return StreamFollowerService(
+            {"orders": follower}, client=self.client, max_records=follower.max_records
         )
+
+    async def end(self, follower: _LiveFollower) -> None:
+        for handle in self.followed:
+            await end_standalone_operation(self.client, handle, follower.closed.is_set)
 
     async def own(self) -> None:
         # The notifier is keyed by the owner's run chain, so the owner runs.
@@ -441,7 +470,7 @@ class _Lane:
 
     async def follow(self) -> Any:
         try:
-            return await follow_stream(
+            handle = await follow_stream(
                 self.client,
                 endpoint=self.endpoint,
                 service=FollowedOrders,
@@ -455,6 +484,8 @@ class _Lane:
             if err.status == RPCStatusCode.INVALID_ARGUMENT and "allback" in str(err):
                 pytest.skip(f"{NO_HANDLER_CALLBACKS}: {err}")
             raise
+        self.followed.append(handle)
+        return handle
 
     async def close(
         self, result: Any = None, error: BaseException | None = None
@@ -497,8 +528,7 @@ async def test_live_a_follower_gets_each_batch_then_the_close(
 ) -> None:
     lane = await _lane(client, env)
     follower = _LiveFollower()
-    service = StreamFollowerService({"orders": follower}, client=lane.client)
-    async with lane.worker(service):
+    async with lane.worker(follower):
         await lane.own()
         await lane.follow()
         producer = get_stream_handle(lane.client, lane.ref).producer(
@@ -525,18 +555,14 @@ async def test_live_a_follower_resumes_on_another_worker(
     producer = get_stream_handle(lane.client, lane.ref).producer(
         producer_id="writer", attempt=1
     )
-    async with lane.worker(
-        StreamFollowerService({"orders": first}, client=lane.client)
-    ):
+    async with lane.worker(first, hands_over=True):
         await lane.own()
         await lane.follow()
         await producer.append("a", "b")
         await _until(lambda: "b" in first.ordered())
     # The read position lives on the server's callback, so another Worker,
     # with nothing of the first one's, goes on from it.
-    async with lane.worker(
-        StreamFollowerService({"orders": second}, client=lane.client)
-    ):
+    async with lane.worker(second):
         await producer.append("c")
         await _until(lambda: "c" in second.ordered())
         await lane.close("done")
@@ -551,14 +577,11 @@ async def test_live_a_late_follower_reads_the_backlog_in_pages(
     client: Client, env: WorkflowEnvironment
 ) -> None:
     lane = await _lane(client, env)
-    follower = _LiveFollower()
+    follower = _LiveFollower(max_records=7)
     producer = get_stream_handle(lane.client, lane.ref).producer(
         producer_id="writer", attempt=1
     )
-    service = StreamFollowerService(
-        {"orders": follower}, client=lane.client, max_records=7
-    )
-    async with lane.worker(service):
+    async with lane.worker(follower):
         await lane.own()
         await producer.append(*[f"r{n}" for n in range(50)])
         await lane.follow()
@@ -576,9 +599,7 @@ async def test_live_a_failed_owner_reaches_on_close_as_a_failure(
 ) -> None:
     lane = await _lane(client, env)
     follower = _LiveFollower()
-    async with lane.worker(
-        StreamFollowerService({"orders": follower}, client=lane.client)
-    ):
+    async with lane.worker(follower):
         await lane.own()
         await lane.follow()
         producer = get_stream_handle(lane.client, lane.ref).producer(
