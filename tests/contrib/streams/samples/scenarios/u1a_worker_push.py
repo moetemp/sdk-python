@@ -43,6 +43,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     run,
     until,
 )
+from tests.helpers.nexus import end_standalone_operation
 
 ORDER = topic("order", str)
 STAGES = ["placed", "cooking", "picked up", "delivered"]
@@ -140,7 +141,7 @@ async def main(
         order = await streams.start_workflow(
             OrderWorkflow.run, id=workflow_id, task_queue=task_queue
         )
-        await follow_stream(
+        followed = await follow_stream(
             streams,
             endpoint=name,
             service=OrderService,
@@ -149,16 +150,21 @@ async def main(
             follower="order",
             task_queue=task_queue,
         )
-        for count in range(1, len(STAGES) + 1):
-            await order.signal(OrderWorkflow.advance)
+        try:
+            for count in range(1, len(STAGES) + 1):
+                await order.signal(OrderWorkflow.advance)
 
-            async def reached(count: int = count) -> bool:
-                return len(follower.stages) >= count
+                async def reached(count: int = count) -> bool:
+                    return len(follower.stages) >= count
 
-            # Each stage reaches the app before the next one is made.
-            await until(reached)
-        await asyncio.wait_for(follower.closed.wait(), 30)
-        await order.result()
+                # Each stage reaches the app before the next one is made.
+                await until(reached)
+            await asyncio.wait_for(follower.closed.wait(), 30)
+            await order.result()
+        finally:
+            # Ends the operation while the Worker runs, so a failed run leaves
+            # no callback retried against a task queue no one polls.
+            await end_standalone_operation(streams, followed, follower.closed.is_set)
     assert follower.outcome is not None
     return Outcome(
         stages=list(follower.stages.values()),

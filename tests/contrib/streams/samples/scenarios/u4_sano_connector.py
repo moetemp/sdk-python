@@ -46,6 +46,7 @@ from tests.contrib.streams.samples.scenarios.n4_slack_connector import (
     AgentHandler,
     AgentService,
 )
+from tests.helpers.nexus import end_standalone_operation
 
 
 @dataclass
@@ -107,7 +108,7 @@ async def main(
         ),
         Worker(a, task_queue=task_queue, nexus_service_handlers=[followers]),
     ):
-        await follow_stream(
+        followed = await follow_stream(
             a,
             endpoint=name,
             service=AgentService,
@@ -117,7 +118,12 @@ async def main(
             task_queue=task_queue,
             id=workflow_id,
         )
-        await asyncio.wait_for(connector.closed.wait(), idle_seconds + 30)
+        try:
+            await asyncio.wait_for(connector.closed.wait(), idle_seconds + 30)
+        finally:
+            # Ends the operation while the Worker runs, so a failed run leaves
+            # no callback retried against a task queue no one polls.
+            await end_standalone_operation(a, followed, connector.closed.is_set)
     assert connector.outcome is not None
     return Outcome(
         posts=list(connector.posted.values()),

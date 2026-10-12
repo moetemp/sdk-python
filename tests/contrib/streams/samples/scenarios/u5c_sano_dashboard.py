@@ -48,6 +48,7 @@ from tests.contrib.streams.samples.scenarios.n5c_late_attach import (
     DeliveryHandler,
     DeliveryService,
 )
+from tests.helpers.nexus import end_standalone_operation
 
 STAGES = topic("stages", str)
 BACKLOG = [f"stage {n}" for n in range(50)]
@@ -158,8 +159,10 @@ async def main(
 
         await until(backlog_written)
 
+        followed: list[tuple[Any, Dashboard]] = []
+
         async def dashboard(key: str) -> Any:
-            return await follow_stream(
+            handle = await follow_stream(
                 streams,
                 endpoint=name,
                 service=DeliveryService,
@@ -169,20 +172,28 @@ async def main(
                 task_queue=task_queue,
                 id=f"{workflow_id}-{key}",
             )
+            followed.append((handle, live if key == "live" else after_close))
+            return handle
 
-        await dashboard("live")
+        try:
+            await dashboard("live")
 
-        async def caught_up() -> bool:
-            return len(live.stages) >= len(BACKLOG)
+            async def caught_up() -> bool:
+                return len(live.stages) >= len(BACKLOG)
 
-        await until(caught_up, timeout=60)
-        await delivery.signal(Delivery.go_on)
-        await asyncio.wait_for(live.closed.wait(), 30)
-        await delivery.result()
-        started = asyncio.get_running_loop().time()
-        await dashboard("after-close")
-        await asyncio.wait_for(after_close.closed.wait(), 30)
-        took = asyncio.get_running_loop().time() - started
+            await until(caught_up, timeout=60)
+            await delivery.signal(Delivery.go_on)
+            await asyncio.wait_for(live.closed.wait(), 30)
+            await delivery.result()
+            started = asyncio.get_running_loop().time()
+            await dashboard("after-close")
+            await asyncio.wait_for(after_close.closed.wait(), 30)
+            took = asyncio.get_running_loop().time() - started
+        finally:
+            # Ends the operations while the Worker runs, so a failed run leaves
+            # no callback retried against a task queue no one polls.
+            for handle, shown in followed:
+                await end_standalone_operation(streams, handle, shown.closed.is_set)
     return Outcome(
         live=_followed(live),
         after_close=_followed(after_close),

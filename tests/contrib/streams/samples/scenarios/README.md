@@ -119,7 +119,7 @@ Bridge runs these too, and adds nothing to 1a, 3a, 3b, 3c and 5a.
 ## U5 demos
 
 They need the Bridge server with `nexusoperation.enableStandalone` and
-`nexusoperation.enabledCallbackKinds: [nexusHandler]`, as the live lane sets.
+`nexusoperation.enabledCallbackKinds: [nexus, nexusHandler]`, as the live lane sets.
 
 - **1a, `u1a_worker_push`.** `OrderWorkflow` publishes stages behind a stream operation. The app
   follows with `follow_stream`, and its Worker prints each batch as the server pushes it, then the
