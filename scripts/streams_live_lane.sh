@@ -277,6 +277,30 @@ gate tests/contrib/streams/test_output_commit.py \
 gate tests/contrib/streams/test_samples.py \
   test_path_a_a_client_reads_what_a_workflow_published \
   test_path_b_a_reader_drops_what_a_failed_attempt_wrote
+gate tests/contrib/streams/test_scenario_demos.py \
+  test_s1a_a_backend_sees_every_stage_in_order_then_the_end \
+  test_s2_every_segment_url_resolves_in_order \
+  test_s3a_the_text_matches_and_the_turn_is_visible_at_task_acceptance \
+  test_s3b_a_retry_and_a_failed_turn_read_in_one_order \
+  test_s3c_a_failed_last_attempt_leaves_its_deltas \
+  test_s5a_a_late_dashboard_reads_what_the_app_read \
+  test_s5b_a_dashboard_reads_every_record_of_the_child \
+  test_s6_positions_follow_the_wake_record \
+  test_s7a_the_read_ends_and_the_backend_learns_the_failure \
+  test_s7b_a_retry_is_superseded_and_the_late_write_is_stale \
+  test_s8_a_publisher_replays_with_its_streams_deleted
+gate tests/contrib/streams/test_nexus_scenario_demos.py \
+  test_n1b_a_parent_relays_every_record_and_gets_the_close_result \
+  test_n1c_a_relay_across_namespaces_gets_every_record \
+  test_n2_every_segment_url_crosses_namespaces_and_resolves \
+  test_n3d_an_agent_hears_every_message_whatever_bs_store \
+  test_n4_a_connector_posts_every_message_and_idles_with_no_task \
+  test_n5b_a_dashboard_and_a_relay_both_get_every_record \
+  test_n5c_followers_that_attach_late_get_every_record \
+  test_n6_a_second_operation_follows_the_location_after_the_wake \
+  test_n7a_a_caller_reads_every_stage_then_gets_the_failure \
+  test_n7b_the_reader_marks_the_retry_and_the_stale_write \
+  test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree
