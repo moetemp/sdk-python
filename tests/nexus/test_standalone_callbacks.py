@@ -37,7 +37,7 @@ from temporalio.nexus.system.notification_service import NotificationService
 from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
-from tests.helpers.nexus import make_nexus_endpoint_name
+from tests.helpers.nexus import end_standalone_operation, make_nexus_endpoint_name
 
 # The message a live test skips with when the server refuses the callback or
 # never delivers it. The streams live lane fails on it.
@@ -194,13 +194,18 @@ async def test_live_a_worker_gets_the_completion_of_a_standalone_operation(
             if err.status == RPCStatusCode.INVALID_ARGUMENT and "allback" in str(err):
                 pytest.skip(f"{NO_HANDLER_CALLBACKS}: {err}")
             raise
-        assert await handle.result() == "hello"
         try:
-            completion = await asyncio.wait_for(receiver.completions.get(), 30)
-        except asyncio.TimeoutError:
-            # A server without the callback kind may keep the callback and never
-            # call it.
-            pytest.skip(f"{NO_HANDLER_CALLBACKS}: no OnComplete within 30s")
+            assert await handle.result() == "hello"
+            try:
+                completion = await asyncio.wait_for(receiver.completions.get(), 30)
+            except asyncio.TimeoutError:
+                # A server without the callback kind may keep the callback and never
+                # call it.
+                pytest.skip(f"{NO_HANDLER_CALLBACKS}: no OnComplete within 30s")
+        finally:
+            await end_standalone_operation(
+                client, handle, lambda: bool(receiver.endpoints)
+            )
 
     # The server sends the task with no endpoint, which the Worker serves.
     assert receiver.endpoints == [""]

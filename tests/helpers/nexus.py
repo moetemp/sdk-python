@@ -1,8 +1,13 @@
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import temporalio.api.common.v1
 import temporalio.api.enums.v1
 import temporalio.api.history.v1
+import temporalio.api.workflowservice.v1
+import temporalio.client
+import temporalio.service
 from temporalio.client import WorkflowHistory
 
 
@@ -100,3 +105,40 @@ def assert_links_match(
 
 def _link_sort_key(link: temporalio.api.common.v1.Link) -> bytes:
     return link.SerializeToString(deterministic=True)
+
+
+async def end_standalone_operation(
+    client: temporalio.client.Client,
+    handle: temporalio.client.NexusOperationHandle[Any],
+    served: Callable[[], bool],
+    wait: float = 10.0,
+) -> None:
+    """Leave no standalone operation, nor a callback of one, behind a test.
+
+    Call it while the Worker that takes the operation's callbacks still runs.
+    A callback whose Worker is gone is retried against a task queue no one
+    polls, which slows every later delivery on the server. So the operation is
+    terminated, and if ``served`` doesn't turn true within ``wait`` seconds, as
+    on a server that never calls back, the operation is deleted with its
+    callbacks.
+    """
+    try:
+        await handle.terminate(reason="the test ended")
+    except temporalio.service.RPCError:
+        pass
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait
+    while not served() and loop.time() < deadline:
+        await asyncio.sleep(0.1)
+    if served():
+        return
+    try:
+        await client.workflow_service.delete_nexus_operation_execution(
+            temporalio.api.workflowservice.v1.DeleteNexusOperationExecutionRequest(
+                namespace=client.namespace,
+                operation_id=handle.operation_id,
+                run_id=handle.run_id or "",
+            )
+        )
+    except temporalio.service.RPCError:
+        pass
