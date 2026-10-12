@@ -264,6 +264,7 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_reader_gets_every_record_of_a_burst \
   test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new \
   test_live_a_failed_owner_raises_after_every_record_is_read \
+  test_live_a_completed_owner_ends_the_reader \
   test_live_a_canceled_owner_raises_a_canceled_operation
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
