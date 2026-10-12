@@ -25,6 +25,12 @@ wit_input_dir = (
 wit_path = wit_input_dir / "workflow-service.wit"
 wit_deps_dir = wit_input_dir / "deps"
 output_dir = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
+# The service a Worker implements to take NexusHandler callbacks. Its operations
+# take the notification protos by `$pythonRef`, so it needs no descriptors.
+notification_contract_path = wit_input_dir / "notification-service.nexusrpc.yaml"
+notification_output_dir = (
+    base_dir / "temporalio" / "nexus" / "system" / "notification_service"
+)
 workflow_init_path = base_dir / "temporalio" / "workflow" / "__init__.py"
 workflowservice_request_response_proto = (
     gen_protos.api_proto_dir
@@ -34,10 +40,11 @@ workflowservice_request_response_proto = (
     / "v1"
     / "request_response.proto"
 )
-# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
-# released yet. Once they land upstream, this moves back to a released nexgen version.
+# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13), and the
+# `$pythonRef` support the notification service needs (G19), are not released yet.
+# Once they land upstream, this moves back to a released nexgen version.
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
+NEX_GEN_REVISION = "1e3aa41e232a714c6c87de08268b80efa090faaa"
 nex_gen_root = base_dir / ".nexgen-system" / NEX_GEN_REVISION
 
 
@@ -124,6 +131,8 @@ def generate_nexus_system_api() -> None:
         raise RuntimeError(f"missing WIT source: {wit_path}")
     if not wit_deps_dir.exists():
         raise RuntimeError(f"missing WIT dependency directory: {wit_deps_dir}")
+    if not notification_contract_path.exists():
+        raise RuntimeError(f"missing contract: {notification_contract_path}")
 
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "temporal_api.bin"
@@ -149,6 +158,17 @@ def generate_nexus_system_api() -> None:
             ]
         )
 
+        shutil.rmtree(notification_output_dir, ignore_errors=True)
+        subprocess.check_call(
+            [
+                *command,
+                "python",
+                "--output",
+                str(notification_output_dir),
+                str(notification_contract_path),
+            ]
+        )
+
     (output_dir.parent / "__init__.py").touch()
     generate_workflow_exports()
     subprocess.check_call(
@@ -161,6 +181,7 @@ def generate_nexus_system_api() -> None:
             "I",
             "--fix",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )
@@ -171,6 +192,7 @@ def generate_nexus_system_api() -> None:
             "ruff",
             "format",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )

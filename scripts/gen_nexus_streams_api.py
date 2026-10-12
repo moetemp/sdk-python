@@ -39,7 +39,7 @@ contract_path = (
 output_dir = package_dir / "_generated"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
+NEX_GEN_REVISION = "1e3aa41e232a714c6c87de08268b80efa090faaa"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 
