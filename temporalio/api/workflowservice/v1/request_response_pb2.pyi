@@ -13883,6 +13883,7 @@ class NotifyStreamRequest(google.protobuf.message.Message):
     CLOSE_FIELD_NUMBER: builtins.int
     CLOSE_RESULT_FIELD_NUMBER: builtins.int
     IDENTITY_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamReference: ...
@@ -13903,14 +13904,20 @@ class NotifyStreamRequest(google.protobuf.message.Message):
         exceed 2 KiB in total, counted as UTF-8 bytes.
         """
     close: builtins.bool
-    """Closes the stream: the notifier completes every attached callback with `close_result`, and
-    completes callbacks attached later right away.
+    """Closes the stream: the notifier completes every attached callback with `close_result`, or
+    with `close_failure`, and completes callbacks attached later right away.
     """
     @property
     def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The completion result when `close` is set, such as a summary of the stream. Optional."""
     identity: builtins.str
     """The identity of the producer."""
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Closes the stream with a failure instead of `close_result`. The notifier completes every
+        callback as failed, or as canceled when the failure has canceled info. Needs `close`, and
+        the server rejects a request that sets both `close_result` and `close_failure`.
+        """
     def __init__(
         self,
         *,
@@ -13922,11 +13929,17 @@ class NotifyStreamRequest(google.protobuf.message.Message):
         close: builtins.bool = ...,
         close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         identity: builtins.str = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "close_result", b"close_result", "stream_ref", b"stream_ref"
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "stream_ref",
+            b"stream_ref",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -13934,6 +13947,8 @@ class NotifyStreamRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "close",
             b"close",
+            "close_failure",
+            b"close_failure",
             "close_result",
             b"close_result",
             "counter",
@@ -13995,6 +14010,7 @@ class DescribeStreamNotifierResponse(google.protobuf.message.Message):
     POSITION_FIELD_NUMBER: builtins.int
     CLOSED_FIELD_NUMBER: builtins.int
     CALLBACKS_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
     counter: builtins.int
     """The highest counter the notifier has seen."""
     position: builtins.str
@@ -14008,6 +14024,9 @@ class DescribeStreamNotifierResponse(google.protobuf.message.Message):
         temporalio.api.stream.v1.message_pb2.StreamCallbackInfo
     ]:
         """The callbacks the notifier holds, in the order they were attached."""
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """The failure the stream closed with, when it closed with one."""
     def __init__(
         self,
         *,
@@ -14018,12 +14037,18 @@ class DescribeStreamNotifierResponse(google.protobuf.message.Message):
             temporalio.api.stream.v1.message_pb2.StreamCallbackInfo
         ]
         | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["close_failure", b"close_failure"]
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
             "callbacks",
             b"callbacks",
+            "close_failure",
+            b"close_failure",
             "closed",
             b"closed",
             "counter",
