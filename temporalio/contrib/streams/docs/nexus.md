@@ -169,10 +169,18 @@ Closing the stream completes every operation that handed it out:
 A reader ends when the stream service says the stream is done: the stream
 is closed in the store and the reader has every record.
 
-`result` becomes the operation's result, for example a summary. A cancel
-from the caller detaches its callback and completes that caller's operation
-as canceled. The stream keeps going for any other caller. A start without a
-callback is refused.
+`result` becomes the operation's result, for example a summary. To end the
+work with a failure instead, pass `error=`, as
+`close_workflow_stream(error=ApplicationError("the model gave up"))` or
+`await store.close_stream(client, ref, error=...)`. Every operation then fails
+with that error as its cause, or is canceled when the error is a
+`CancelledError`. The error goes through the data converter's failure
+converter and codec, as a Workflow failure does. A close takes a result or an
+error, never both, and passing both raises `ValueError`. Either way the
+store closes first, so a reader hands over every record and then raises the
+failure as a `NexusOperationError`. A cancel from the caller detaches its
+callback and completes that caller's operation as canceled. The stream keeps
+going for any other caller. A start without a callback is refused.
 
 `temporalio.workflow` also has generated low-level bindings for the
 notifier: `notify_stream`, `attach_stream_callback` and
@@ -343,8 +351,8 @@ Two cases stop a reader that would otherwise read for ever.
   notifications work as before.
 - While callers are attached, the notifier checks the owner Workflow every
   `streamnotifier.ownerCheckInterval` (5 minutes by default). If the owner's
-  run chain closed without closing the stream, the notifier closes it and
-  fails the callers.
+  run chain closed without closing the stream, the notifier closes it by the
+  owner's close status, as the table below says.
 - A closed stream's notifier completes late attaches right away for
   `streamnotifier.closedRetention` (7 days by default, the store's
   retention), then refuses them. Keep it at least as long as the store
@@ -373,20 +381,42 @@ Two cases stop a reader that would otherwise read for ever.
   that closes the stream. A reader's repair then promotes the batch, but a
   repair sends no close. Readers still end once the owner's run chain
   closes, since the store marks the chain closed. The callers don't get the
-  result, and fail at the notifier's next owner check
-  (`streamnotifier.ownerCheckInterval`).
+  result. They get the outcome of the owner's close status at the
+  notifier's next owner check (`streamnotifier.ownerCheckInterval`).
 - When the owner's run chain ends, the Worker that ran the final task
-  closes the notifier of every topic of the chain that's still open, so
-  their callers' operations complete with an empty result. It does so after
-  the final task's own closes, so a topic closed with
-  `close_workflow_stream` keeps its own result. The server keeps the first
+  closes the notifier of every topic of the chain that's still open, by the
+  owner's close status, as the table below says. It does so after the final
+  task's own closes, so a topic closed with `close_workflow_stream` keeps
+  its own result or error. The server keeps the first
   close it gets, so a reader that finds the owner ended closes only the
   store. If the Worker that ran the final task stopped first, the callers
-  fail at the notifier's next owner check instead. Topics written only by an
+  get the same outcome at the notifier's next owner check instead. Topics written only by an
   SDK release from before the store moved into Core aren't listed, and fail
   the same way. So do all topics when the Redis user lacks `+sadd` and
   `+smembers`, which the ACL from before the move doesn't have. Widen it
   with the upgrade (see the Redis guarantees page).
+
+### An owner that ends without closing its stream
+
+The owner's close status decides how its open streams' operations complete,
+as for an operation that runs a Workflow. The Worker that ran the final task
+uses it, and so does the notifier's owner check.
+
+| Owner's close status | The operations | The reader raises |
+|---|---|---|
+| Completed | Complete with an empty result | Nothing. It returns `None`. |
+| Failed | Fail with the Workflow's failure | `NexusOperationError`, with the Workflow's failure as the cause |
+| Canceled | Are canceled | `NexusOperationError`, with a `CancelledError` cause |
+| Terminated | Fail as terminated | `NexusOperationError`, with a `TerminatedError` cause |
+| Timed out | Fail as timed out | `NexusOperationError`, with a `TimeoutError` cause |
+| Not found, or the id moved to another chain | Fail with "the owner Workflow ended without closing the stream" | `NexusOperationError`, with an `ApplicationError` cause |
+
+No Worker runs a final task for a terminated or timed-out owner, so only the
+owner check closes those, after up to `streamnotifier.ownerCheckInterval`.
+The owner check reads no History, so a failed owner that it closes gives an
+`ApplicationError` of type `StreamOwnerFailed` rather than the Workflow's
+own failure. A stream server from before this release ignores a close's
+failure and completes the operations with an empty result.
 
 ## Guarantees
 

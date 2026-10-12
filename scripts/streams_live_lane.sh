@@ -247,7 +247,11 @@ gate tests/contrib/streams/test_nexus_stream_operation.py \
   test_a_workflows_own_publishes_reach_the_caller_as_progress \
   test_an_append_after_an_outside_close_is_refused \
   test_a_worker_flushes_on_stop_and_a_replay_after_it_runs \
-  test_a_worker_without_notifications_still_delivers_the_close_result
+  test_a_worker_without_notifications_still_delivers_the_close_result \
+  test_live_a_failed_owner_fails_the_operation \
+  test_live_a_close_with_an_error_fails_the_operation \
+  test_live_an_outside_close_with_an_error_fails_the_operation \
+  test_live_a_terminated_owner_fails_the_operation
 gate tests/contrib/streams/test_nexus_reader.py \
   test_bodies_reach_the_workflow_decoded_by_the_callers_codec \
   test_live_a_close_with_the_last_publishes_loses_none_of_them \
@@ -258,7 +262,9 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_each_read_carries_the_state_its_last_answer_gave \
   test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
   test_live_a_reader_gets_every_record_of_a_burst \
-  test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new
+  test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new \
+  test_live_a_failed_owner_raises_after_every_record_is_read \
+  test_live_a_canceled_owner_raises_a_canceled_operation
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_output_commit.py \
