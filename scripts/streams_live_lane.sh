@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-1b7e801667da81b91cabe4146ad2cedcaeefd35d}
+SERVER_REF=${SERVER_REF:-7986a44f52245041d1f0898dd06f1766c05394fc}
 PORT_BASE=${PORT_BASE:-7881}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -74,6 +74,10 @@ system.forceSearchAttributesCacheRefreshOnRead:
   - value: true
 streamnotifier.enabled:
   - value: true
+# The owner check closes a stopped owner's stream by its close status, so the
+# terminated and timed-out cases finish in seconds, not minutes.
+streamnotifier.ownerCheckInterval:
+  - value: 2s
 history.enableSignalWithStartFromWorkflow:
   - value: true
 EOF
@@ -162,7 +166,8 @@ fi
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-# The server takes a few seconds to join its own ring, and the tests need the default namespace.
+# The server takes a few seconds to join its own ring. The tests need the default namespace, and
+# the cross-namespace demo needs streams-b.
 uv run --no-sync python - "$GRPC_PORT" <<'EOF'
 import asyncio
 import sys
@@ -177,22 +182,26 @@ from temporalio.service import RPCError, RPCStatusCode
 
 async def main() -> None:
     target = f"127.0.0.1:{sys.argv[1]}"
+    pending = ["default", "streams-b"]
     for _ in range(120):
         try:
             client = await Client.connect(target)
-            await client.workflow_service.register_namespace(
-                RegisterNamespaceRequest(
-                    namespace="default",
-                    workflow_execution_retention_period=Duration(
-                        seconds=int(timedelta(days=1).total_seconds())
-                    ),
-                )
-            )
+            while pending:
+                try:
+                    await client.workflow_service.register_namespace(
+                        RegisterNamespaceRequest(
+                            namespace=pending[0],
+                            workflow_execution_retention_period=Duration(
+                                seconds=int(timedelta(days=1).total_seconds())
+                            ),
+                        )
+                    )
+                except RPCError as err:
+                    if err.status != RPCStatusCode.ALREADY_EXISTS:
+                        raise
+                pending.pop(0)
             return
-        except RPCError as err:
-            if err.status == RPCStatusCode.ALREADY_EXISTS:
-                return
-        except RuntimeError:
+        except (RPCError, RuntimeError):
             pass
         await asyncio.sleep(1)
     raise SystemExit(f"the server on {target} did not come up")
