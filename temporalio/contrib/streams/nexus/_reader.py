@@ -302,9 +302,12 @@ class StreamReader(Generic[T]):
         Never answers with an empty batch. The stream closes in the store
         before the operation completes, so once the operation completes the
         reader reads until the stream service says the stream is done, then
-        answers ``None``. An operation that failed never closed the stream:
-        the reader hands over what a read finds, until a read that waited a
-        moment answers with none, then raises the failure.
+        answers ``None``. An operation fails when its owner closes the stream
+        with an error, or ends without closing it after it failed, was
+        canceled, was terminated or timed out. The store closes before the
+        operation fails, so the reader hands over what reads find until one
+        that waited a moment answers with none, which loses no record, then
+        raises the failure. A canceled owner raises a canceled operation.
 
         Raises:
             temporalio.exceptions.NexusOperationError: A read failed, or the
