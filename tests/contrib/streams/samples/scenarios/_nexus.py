@@ -98,6 +98,30 @@ async def endpoint(
     return name
 
 
+def http_address(client: Client) -> str:
+    """The address of the server's Nexus HTTP ingress.
+
+    ``TEMPORAL_HTTP_ADDRESS`` names it. Without it, the live lane's layout
+    holds: the HTTP port is the gRPC port plus one.
+    """
+    if address := os.environ.get("TEMPORAL_HTTP_ADDRESS"):
+        return address
+    host, port = client.service_client.config.target_host.rsplit(":", 1)
+    return f"{host}:{int(port) + 1}"
+
+
+async def stream_service_url(client: Client, endpoint_name: str) -> str:
+    """The stream service's address on endpoint ``endpoint_name``, for an HTTP caller."""
+    listed = await client.operator_service.list_nexus_endpoints(
+        temporalio.api.operatorservice.v1.ListNexusEndpointsRequest(name=endpoint_name)
+    )
+    [found] = listed.endpoints
+    return (
+        f"http://{http_address(client)}/nexus/endpoints/{found.id}"
+        "/services/temporal.sdk.streams.v1.TemporalStreams"
+    )
+
+
 async def until(check: Callable[[], Awaitable[bool]], timeout: float = 30.0) -> None:
     """Wait until ``check`` answers true.
 

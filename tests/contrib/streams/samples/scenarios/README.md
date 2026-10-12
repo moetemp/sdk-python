@@ -3,7 +3,8 @@
 Each module here runs one scenario of the "Nexus streaming scenarios" page, in the version the
 release can run. A demo starts its own Workers, runs its Workflows, and prints what its backend
 sees. The `s` modules run on Brook, the interim release, and the `n` modules need Bridge, which
-serves streams over Nexus.
+serves streams over Nexus. The `u` modules need U5 too, which pushes a stream's progress to a
+Worker through a standalone Nexus operation.
 
 ## Run them
 
@@ -115,6 +116,25 @@ Bridge runs these too, and adds nothing to 1a, 3a, 3b, 3c and 5a.
   Worker stops, and a `Replayer` replays both of the bookkeeper's runs. Left out: a reset that
   retracts records.
 
+## U5 demos
+
+They need the Bridge server with `nexusoperation.enableStandalone` and
+`nexusoperation.enabledCallbackKinds: [nexusHandler]`, as the live lane sets.
+
+- **1a, `u1a_worker_push`.** `OrderWorkflow` publishes stages behind a stream operation. The app
+  follows with `follow_stream`, and its Worker prints each batch as the server pushes it, then the
+  close. The app code has no read loop. Left out: data in the callback. One callback per record. An
+  endpoint is needed even in one namespace.
+- **4, `u4_sano_connector`.** n4's agent in `streams-b`, with the connector in `default` as a
+  standalone operation and a Worker that posts each message from `on_records`. The Worker holds no
+  store of `streams-b`, so it reads over the Nexus HTTP ingress, at the gRPC port plus one or at
+  `TEMPORAL_HTTP_ADDRESS`. Posts are at least once, so it drops repeats by cursor. Left out: a topic
+  filter.
+- **5c, `u5c_sano_dashboard`.** A dashboard follows after 50 records. It reads the backlog in pages
+  of 10 and is slow, so a call answers `behind` and the server sends the progress again until it
+  caught up. It then follows live. A second dashboard follows after the close and gets the backlog
+  and the close at once. Left out: the backlog as data in the callbacks.
+
 ## What each release demos
 
 Brook has no Nexus and no Workflow reader, so 1b, 1c, 3d, 3e, 4 and 5c have no Brook demo. On
@@ -122,16 +142,16 @@ Bridge, every scenario has a demo.
 
 | Scenario | Brook | Bridge |
 |---|---|---|
-| 1a | `s1a` | `s1a` |
+| 1a | `s1a` | `s1a`, and `u1a` with U5 |
 | 1b | none, a Workflow must read the child's stream | `n1b` |
 | 1c | none, the relay goes through Nexus | `n1c` |
 | 2 | `s2` | `n2` |
 | 3a, 3b, 3c | `s3a`, `s3b`, `s3c` | the same |
 | 3d, 3e | none, the inner loop is behind Nexus | `n3d` |
-| 4 | none, the connector reads across namespaces | `n4` |
+| 4 | none, the connector reads across namespaces | `n4`, and `u4` with U5 |
 | 5a | `s5a` | `s5a` |
 | 5b | `s5b`, the dashboard half | `n5b` |
-| 5c | none, a late caller attaches through Nexus | `n5c` |
+| 5c | none, a late caller attaches through Nexus | `n5c`, and `u5c` with U5 |
 | 6 | `s6`, one namespace | `n6` |
 | 7a | `s7a`, the outcome from the Workflow | `n7a` |
 | 7b | `s7b` | `n7b` |
@@ -139,8 +159,8 @@ Bridge, every scenario has a demo.
 
 ## What no demo shows
 
-- A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
-- A standalone Nexus operation as a caller (4, 5c). Only a Workflow's operation takes progress.
+- A Worker Callback per record (1a, 4, 5c). With U5 a Worker gets a push per progress and reads
+  the records.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Nexus direct calls, so an outside backend can read across namespaces (3d, 3e, 6). Not built.
 - Live video and storage that Temporal manages (2). Out of scope. Whether a store claim resolves

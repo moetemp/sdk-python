@@ -316,6 +316,10 @@ gate tests/contrib/streams/test_nexus_scenario_demos.py \
   test_n7a_a_caller_reads_every_stage_then_gets_the_failure \
   test_n7b_the_reader_marks_the_retry_and_the_stale_write \
   test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone
+gate tests/contrib/streams/test_nexus_scenario_demos.py \
+  test_u1a_the_app_worker_gets_each_stage_pushed_then_the_close \
+  test_u4_a_standalone_connector_posts_each_message_once \
+  test_u5c_dashboards_read_the_backlog_in_pages_and_after_the_close
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree

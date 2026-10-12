@@ -9,9 +9,11 @@ demo runs on memory, and again on Redis when ``STREAMS_REDIS_URL`` is set.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 import pytest
 
@@ -36,6 +38,9 @@ from tests.contrib.streams.samples.scenarios import (
     n7b_reader_marks,
     n8_replay_after_trim,
     s6_location_topic,
+    u1a_worker_push,
+    u4_sano_connector,
+    u5c_sano_dashboard,
 )
 from tests.contrib.streams.samples.scenarios._nexus import NAMESPACE_B, has_namespace
 
@@ -246,3 +251,68 @@ async def test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone(
     assert outcome.books.close_result == "3 entries"
     assert outcome.keys_deleted > 0
     assert outcome.runs_replayed == 2
+
+
+# The U5 demos follow with a standalone operation, so they also need a server
+# that takes NexusHandler callbacks on one. On a server that refuses them, or
+# never calls the Worker, they skip, and the lane's gate fails on that skip.
+NO_HANDLER_CALLBACKS = "no NexusHandler callbacks on a standalone operation"
+
+T = TypeVar("T")
+
+
+async def standalone(demo: Awaitable[T]) -> T:
+    try:
+        return await demo
+    except RPCError as err:
+        if err.status == RPCStatusCode.INVALID_ARGUMENT and "allback" in str(err):
+            pytest.skip(f"{NO_HANDLER_CALLBACKS}: {err}")
+        raise
+    except (asyncio.TimeoutError, TimeoutError) as err:
+        pytest.skip(f"{NO_HANDLER_CALLBACKS}: the follower never finished ({err!r})")
+
+
+async def test_u1a_the_app_worker_gets_each_stage_pushed_then_the_close(
+    lane: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("u1a")
+    outcome: Any = await standalone(
+        u1a_worker_push.main(
+            lane, task_queue, workflow_id=workflow_id, new_store=new_store
+        )
+    )
+    assert outcome.stages == u1a_worker_push.STAGES
+    assert outcome.close_result == "4 stages"
+    # Each stage was pushed before the next was made.
+    assert outcome.batches >= len(u1a_worker_push.STAGES)
+
+
+async def test_u4_a_standalone_connector_posts_each_message_once(
+    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("u4")
+    outcome: Any = await standalone(
+        u4_sano_connector.main(
+            two_namespaces, task_queue, workflow_id=workflow_id, new_store=new_store
+        )
+    )
+    assert outcome.posts == ["the build is green", "the release is out"]
+    assert outcome.close_result == "2 messages"
+
+
+async def test_u5c_dashboards_read_the_backlog_in_pages_and_after_the_close(
+    lane: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("u5c")
+    outcome: Any = await standalone(
+        u5c_sano_dashboard.main(
+            lane, task_queue, workflow_id=workflow_id, new_store=new_store
+        )
+    )
+    stages = u5c_sano_dashboard.BACKLOG + u5c_sano_dashboard.LIVE
+    for followed in (outcome.live, outcome.after_close):
+        assert followed.stages == stages
+        assert followed.close_result == "55 stages"
+    # The backlog came in pages of 10, so the live dashboard took several calls.
+    assert outcome.live.pages >= 6, outcome.live.pages
+    assert outcome.after_close_seconds < 15, outcome.after_close_seconds
