@@ -1042,11 +1042,11 @@ async def test_live_a_workflow_reads_every_record_then_none(
 
 @workflow.defn(name="LiveEndingOwner")
 class LiveEndingOwner:
-    """Publishes its tokens on its own stream, then fails when told to, or
-    waits until it is canceled. It never closes its stream itself."""
+    """Publishes its tokens on its own stream, then completes or fails when
+    told to, or waits until it is canceled. It never closes its stream."""
 
     def __init__(self) -> None:
-        self._fail = False
+        self._end = ""
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
@@ -1055,14 +1055,15 @@ class LiveEndingOwner:
             writer.publish(Token(text))
             await workflow.sleep(timedelta(milliseconds=100))
         writer.finish()
-        await workflow.wait_condition(lambda: self._fail)
-        raise ApplicationError(
-            "the model gave up", type="OwnerGaveUp", non_retryable=True
-        )
+        await workflow.wait_condition(lambda: bool(self._end))
+        if self._end == "fail":
+            raise ApplicationError(
+                "the model gave up", type="OwnerGaveUp", non_retryable=True
+            )
 
     @workflow.signal
-    def fail(self) -> None:
-        self._fail = True
+    def end(self, how: str) -> None:
+        self._end = how
 
 
 @dataclass
@@ -1152,10 +1153,10 @@ async def _read_an_ending_owner(
             await asyncio.sleep(0.1)
         else:
             pytest.fail("the owner never finished publishing")
-        if end == "fail":
-            await owner.signal(LiveEndingOwner.fail)
-        else:
+        if end == "cancel":
             await owner.cancel()
+        else:
+            await owner.signal(LiveEndingOwner.end, end)
         ending = await asyncio.wait_for(caller.result(), 30)
     assert ending.texts == texts, "a record was lost before the failure"
     return ending
@@ -1168,6 +1169,15 @@ async def test_live_a_failed_owner_raises_after_every_record_is_read(
     stream, so the reader hands over every record, then raises the failure."""
     ending = await _read_an_ending_owner(client, env, "fail")
     assert (ending.cause, ending.cause_type) == ("ApplicationError", "OwnerGaveUp")
+
+
+async def test_live_a_completed_owner_ends_the_reader(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    """The owner completed without closing its stream, so its callers complete
+    with an empty result, and the reader ends."""
+    ending = await _read_an_ending_owner(client, env, "complete")
+    assert (ending.cause, ending.cause_type) == ("", "")
 
 
 async def test_live_a_canceled_owner_raises_a_canceled_operation(
