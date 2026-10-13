@@ -471,7 +471,10 @@ follower as progress. A callback attached later with
 `NexusClient.start_operation(..., completion_callbacks=[NexusHandlerCallback(...)])`
 is the general form `follow_stream` uses. A Worker takes those calls with a
 handler of `temporalio.nexus.system.notification_service.NotificationService`,
-for any standalone operation, stream or not.
+for any standalone operation, stream or not. The service and its models are
+generated from api's `nexus/notification-service.wit`. The Worker decodes the
+callback's `source_context` and the operation's result with its data
+converter, so a handler gets the values, not payloads.
 
 ## Limits and timeouts
 

@@ -30,12 +30,6 @@ from nexusrpc.handler import StartOperationContext, service_handler, sync_operat
 import temporalio.converter
 import temporalio.nexus
 from temporalio.api.common.v1 import Payload
-from temporalio.api.notificationservice.v1 import (
-    OnCompleteRequest,
-    OnCompleteResponse,
-    OnProgressRequest,
-    OnProgressResponse,
-)
 from temporalio.bridge.proto.streams import NexusLimits
 from temporalio.client import Client, NexusHandlerCallback, NexusOperationHandle
 from temporalio.contrib.streams._errors import StreamRecordError
@@ -57,7 +51,14 @@ from temporalio.contrib.streams.nexus._handler import serve_in_core
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
 from temporalio.contrib.streams.nexus._reader import ReadStaleRecord, ReadSupersession
 from temporalio.converter import WorkflowSerializationContext
-from temporalio.nexus.system.notification_service import NotificationService
+from temporalio.nexus.system.notification_service import (
+    NotificationService,
+    OnCompleteRequest,
+    OnCompleteRequestResultFailure,
+    OnCompleteResponse,
+    OnProgressRequest,
+    OnProgressResponse,
+)
 
 __all__ = [
     "FollowBatch",
@@ -331,7 +332,7 @@ class StreamFollowerService:
             stream = stream_ref_from_token(input.operation_token)
         except ValueError as error:
             raise _refused(f"the progress names no stream: {error}") from None
-        position = _state_in(input.receiver_state, stream)
+        position = _state_in(input.receiver_state or b"", stream)
         end = _budget_end(ctx)
         behind = False
         while True:
@@ -365,15 +366,10 @@ class StreamFollowerService:
         if position is not None:
             await self._drain(ctx, followed, position)
         outcome = FollowOutcome(stream=position.stream if position else None)
-        converter = self._converter()
-        if input.HasField("failure"):
-            error = converter.failure_converter.from_failure(
-                input.failure, converter.payload_converter
-            )
-            outcome = dataclasses.replace(outcome, error=error)
-        elif input.HasField("success"):
-            result = converter.payload_converter.from_payload(input.success)
-            outcome = dataclasses.replace(outcome, result=result)
+        if isinstance(input.result, OnCompleteRequestResultFailure):
+            outcome = dataclasses.replace(outcome, error=input.result.value)
+        else:
+            outcome = dataclasses.replace(outcome, result=input.result.value)
         await followed.follower.on_close(outcome)
         return OnCompleteResponse()
 
@@ -480,7 +476,7 @@ class StreamFollowerService:
                 )
             )
 
-    def _followed(self, source_context: Payload) -> _Followed:
+    def _followed(self, source_context: Any) -> _Followed:
         key = _context(source_context).get("follower")
         followed = self._followers.get(key) if isinstance(key, str) else None
         if followed is None:
@@ -491,7 +487,7 @@ class StreamFollowerService:
             )
         return followed
 
-    async def _stream_of(self, source_context: Payload) -> StreamRef | None:
+    async def _stream_of(self, source_context: Any) -> StreamRef | None:
         # A completion carries no token. With no progress taken, the operation
         # itself still names the stream.
         operation_id = _context(source_context).get("operation_id")
@@ -620,14 +616,10 @@ def _item_type(follower: StreamFollower[Any]) -> type | None:
     return item if isinstance(item, type) else None
 
 
-def _context(source_context: Payload) -> dict[str, Any]:
-    if not source_context.data and not source_context.metadata:
-        return {}
-    try:
-        value = _CONTRACT.from_payload(source_context)
-    except Exception:
-        return {}
-    return value if isinstance(value, dict) else {}
+def _context(source_context: Any) -> dict[str, Any]:
+    # The Worker decodes the context with its payload converter, so the one
+    # follow_stream sent arrives as a dict.
+    return source_context if isinstance(source_context, dict) else {}
 
 
 def _transfer(value: Any) -> Any:
