@@ -3,10 +3,14 @@
 A configuration class is registered once, on the client:
 ``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks
 Core for the store it names. Core serves that one store to the client's
-handles and to every Worker built from the client, so a Worker's output
+handles and to every Worker built from the client, so a Workflow's publish
 and an outside read meet in the same place.
 
-On a Worker the plugin registers the built-in Activity that
+On a Worker the plugin hands Core the store, which commits a Workflow's
+records with its Workflow Task, and adds one interceptor. The interceptor
+tells Workflow code, through the Worker's extern functions, that the Worker
+has a store, so a publish on a Worker without one fails at the call. The
+plugin also registers the built-in Activity that
 :func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
 """
 
@@ -17,6 +21,8 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import temporalio.bridge.client
+import temporalio.worker
+import temporalio.workflow
 from temporalio.bridge.proto.streams import (
     DeleteOwnerRequest,
     StreamOwnerKind,
@@ -34,6 +40,8 @@ if TYPE_CHECKING:
     from temporalio.worker import WorkerConfig
 
 __all__ = ["StreamStorePlugin"]
+
+_WORKFLOW_EXTERN = "__temporal_contrib_streams_store"
 
 T = TypeVar("T")
 
@@ -92,7 +100,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Check that the Worker's client carries this store, and add the publish Activity.
+        """Hand the client's store to the Worker, and add the publish Activity.
 
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
@@ -111,6 +119,11 @@ class StreamStorePlugin(SimplePlugin):
                 f"stream store {self.name()!r} must be registered on the Worker's "
                 "client, as Client.connect(..., plugins=[store])"
             )
+        held = list(config.get("interceptors") or [])
+        # The same plugin on the client and the Worker configures the Worker twice.
+        if not any(isinstance(i, _StreamsInterceptor) for i in held):
+            held.append(_StreamsInterceptor())
+        config["interceptors"] = held
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._workflow_activity import publish_activity
 
@@ -203,6 +216,14 @@ def _two_stores(held: StreamStorePlugin, new: StreamStorePlugin) -> str:
     )
 
 
+class _StreamsInterceptor(temporalio.worker.Interceptor):
+    def workflow_interceptor_class(
+        self, input: temporalio.worker.WorkflowInterceptorClassInput
+    ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
+        input.unsafe_extern_functions[_WORKFLOW_EXTERN] = lambda: True
+        return None
+
+
 def store_for_client(client: Client) -> StreamStorePlugin:
     """The store registered on ``client``.
 
@@ -216,3 +237,8 @@ def store_for_client(client: Client) -> StreamStorePlugin:
         "no stream store is registered on this client; pass one as a plugin, for "
         "example Client.connect(..., plugins=[RedisStreams(...)])"
     )
+
+
+def worker_has_store() -> bool:
+    """Whether the Worker running the current Workflow has a stream store."""
+    return _WORKFLOW_EXTERN in temporalio.workflow.extern_functions()

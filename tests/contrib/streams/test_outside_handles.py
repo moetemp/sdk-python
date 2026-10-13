@@ -22,6 +22,7 @@ from temporalio.contrib.streams import (
     BEGINNING,
     Cursor,
     RecordKind,
+    StreamClosedError,
     StreamCursorError,
     StreamNotFoundError,
     StreamProducerError,
@@ -31,6 +32,7 @@ from temporalio.contrib.streams import (
     activity_handle,
     get_stream_handle,
     topic,
+    workflow_writer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import (
@@ -42,9 +44,9 @@ from temporalio.converter import (
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
+from tests.contrib.streams.test_workflow_writer import EVENTS, Publisher
 from tests.helpers import new_worker
 
-EVENTS = topic("events", dict)
 TOKENS = topic("tokens", str)
 
 
@@ -182,6 +184,26 @@ async def test_a_client_handle_follows_the_chain_or_pins_a_run(client: Client):
         get_stream_handle(streams_client, pinned.ref, run_id="other")
     with pytest.raises(ValueError, match="no stream store is registered"):
         get_stream_handle(client, "wf")
+
+
+async def test_a_client_producer_and_the_workflow_share_a_topic(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, Publisher) as worker:
+        handle = await streams_client.start_workflow(
+            Publisher.run, 0, id=workflow_id, task_queue=worker.task_queue
+        )
+        await handle.result()
+    stream = get_stream_handle(streams_client, workflow_id)
+    records = await read_all(stream.read(topic=EVENTS))
+    assert [(r.producer_id, r.value) for r in records] == [
+        ("", {"step": "init"}),
+        ("", None),
+    ]
+    # The chain closed, so an outside producer is refused there.
+    outside = stream.producer(topic=EVENTS, producer_id="backend", attempt=1)
+    with pytest.raises(StreamClosedError):
+        await outside.append({"from": "backend"})
 
 
 async def test_a_producer_retry_dedupes_and_a_divergent_one_is_refused(
@@ -369,14 +391,15 @@ async def append_one_token() -> None:
 class PublishesThenRunsAnActivity:
     @workflow.run
     async def run(self) -> None:
+        workflow_writer(TOKENS).publish("from the workflow")
         await workflow.execute_activity(
             append_one_token, start_to_close_timeout=timedelta(seconds=10)
         )
 
 
 async def test_both_sides_use_the_workflows_serialization_context(client: Client):
-    # The stream is the Workflow's, so its producers and readers encode with
-    # the Workflow's context.
+    # The Workflow's records are encoded with its context, so readers and the
+    # other producers on its stream must use the same one.
     keyed = await connect_with(
         client, MemoryStreams(), DataConverter(payload_codec=WorkflowKeyedCodec())
     )
@@ -390,7 +413,7 @@ async def test_both_sides_use_the_workflows_serialization_context(client: Client
             task_queue=worker.task_queue,
         )
     records = await read_all(get_stream_handle(keyed, workflow_id).read(topic=TOKENS))
-    assert [r.value for r in records] == ["from the activity"]
+    assert [r.value for r in records] == ["from the workflow", "from the activity"]
 
 
 @activity.defn

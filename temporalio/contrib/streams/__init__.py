@@ -6,7 +6,8 @@
 A Workflow owns a stream. Producers outside Workflow code, such as the
 Workflow's Activities and clients, append to it, and outside readers consume
 it from a cursor. Records live in a store the application runs, which
-Core reaches for every SDK. Record bodies never reach the server.
+Core reaches for every SDK. Record bodies never reach the server. A Workflow
+Task that publishes adds one marker event with a small manifest.
 
 The contract:
 
@@ -35,6 +36,7 @@ A store is configured as a plugin:
 client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
+- Workflow code publishes to its own stream with :func:`workflow_writer`.
 - Workflow code publishes to its own stream with
   :func:`workflow_activity_writer`, which runs a built-in Activity for each
   call.
@@ -85,7 +87,11 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamOwnerKind, StreamRef
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
-from temporalio.contrib.streams._workflow import workflow_reader
+from temporalio.contrib.streams._workflow import (
+    WorkflowStreamWriter,
+    workflow_reader,
+    workflow_writer,
+)
 from temporalio.contrib.streams._workflow_activity import (
     WorkflowActivityStreamWriter,
     workflow_activity_writer,
@@ -117,10 +123,12 @@ __all__ = [
     "StreamTopic",
     "StreamUnsupportedError",
     "Supersession",
+    "WorkflowStreamWriter",
     "WorkflowActivityStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
     "workflow_activity_writer",
     "workflow_reader",
+    "workflow_writer",
 ]

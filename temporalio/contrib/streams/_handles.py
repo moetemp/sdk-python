@@ -486,8 +486,8 @@ def activity_handle() -> ActivityStreamHandle:
 
     A Local Activity has no stream producer in this release. Its attempt is
     not durable, so after a Worker crash it runs again as the same attempt,
-    and the store refuses its first append as stale. Use a regular Activity
-    instead.
+    and the store refuses its first append as stale. Publish from the
+    Workflow instead, which commits with the Workflow Task.
 
     Raises:
         StreamUnsupportedError: The Activity is a Local Activity, or it was
@@ -500,7 +500,7 @@ def activity_handle() -> ActivityStreamHandle:
     if info.is_local:
         raise StreamUnsupportedError(
             "a Local Activity has no stream producer in this release, since its "
-            "attempt isn't durable; use a regular Activity instead"
+            "attempt isn't durable; publish from the Workflow instead"
         )
     if info.workflow_id is None or info.workflow_run_id is None:
         raise StreamUnsupportedError(

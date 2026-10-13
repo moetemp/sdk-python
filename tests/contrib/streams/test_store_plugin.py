@@ -21,7 +21,7 @@ from temporalio.bridge.proto.streams import (
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamError, StreamNotFoundError
-from temporalio.contrib.streams._plugin import call
+from temporalio.contrib.streams._plugin import _StreamsInterceptor, call
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.worker import Worker
@@ -42,16 +42,20 @@ async def test_one_store_per_client(client: Client):
 async def test_a_worker_takes_the_store_of_its_client(client: Client):
     store = MemoryStreams()
     streams_client = await connect_with(client, store)
-    Worker(streams_client, task_queue=str(uuid.uuid4()), activities=[_noop])
+    worker = Worker(streams_client, task_queue=str(uuid.uuid4()), activities=[_noop])
+    interceptors = worker.config(active_config=True).get("interceptors", [])
+    assert len([i for i in interceptors if isinstance(i, _StreamsInterceptor)]) == 1
     assert store._temporal_stream_store is not None
-    # The store on the client and the Worker configures the Worker twice.
+    # The store on the client and the Worker still adds one interceptor.
     with pytest.warns(UserWarning, match="same plugin type"):
-        Worker(
+        worker = Worker(
             streams_client,
             task_queue=str(uuid.uuid4()),
             activities=[_noop],
             plugins=[store],
         )
+    interceptors = worker.config(active_config=True).get("interceptors", [])
+    assert len([i for i in interceptors if isinstance(i, _StreamsInterceptor)]) == 1
 
 
 async def test_a_store_on_the_worker_alone_is_refused(client: Client):

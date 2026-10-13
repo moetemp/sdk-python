@@ -3,18 +3,20 @@
 > This package is experimental and may change in future versions.
 
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
-it through a built-in Activity, and its Activities and any client append to
-it. Outside readers follow it from a cursor. Records live in the
-application's Redis and never pass through Temporal or its History. Core
-runs the store for every SDK, so Python reads what any other SDK writes.
-Appends add nothing to History. A Workflow's publish adds the events of one
-Activity.
+it, and so do its Activities and any client. Outside readers follow it from
+a cursor. Records live in the application's Redis and never pass through
+Temporal or its History. Core runs the store for every SDK, so Python reads
+what any other SDK writes. A Workflow Task that publishes adds one marker
+event to History, which carries a small manifest of what it published and
+counts toward the History limits. Appends from Activities and clients add
+nothing to History. A publish through `workflow_activity_writer` adds the
+events of one Activity instead.
 
 ## Register
 
 Register the store once, on the client, with `Client.connect`. Connecting
-the client connects the store, and the Activities of every Worker built
-from that client append through it. There's nothing extra to install.
+the client connects the store, and every Worker built from that client
+publishes through it. There's nothing extra to install.
 
 ```python
 from temporalio.client import Client
@@ -71,9 +73,10 @@ The sample runs in full in `tests/contrib/streams/samples/`.
 
 ## A Workflow publishes through an Activity
 
-Workflow code can't do I/O, so `workflow_activity_writer` runs a built-in
-Activity for each call. The store plugin registers that Activity on every
-Worker built from the client, so there's nothing to register.
+`workflow_writer` publishes with the Workflow Task. `workflow_activity_writer`
+runs a built-in Activity for each call instead. The store plugin registers
+that Activity on every Worker built from the client, so there's nothing to
+register.
 
 ```python
 PROGRESS = topic("progress", dict)
