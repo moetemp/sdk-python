@@ -73,7 +73,7 @@ temporalio-sdk-core = { version = "0.10.0", path = "./sdk-core/crates/sdk-core",
     "prometheus",
     "streams",
 ] }
-# The stream stores Core serves to Python. Redis takes the rustls provider the
+# The stream stores Core serves to Python and its Workers. Redis takes the rustls provider the
 # process installs, so it follows the tls-ring and tls-aws-lc features above.
 temporalio-streams = { version = "0.1.0", path = "./sdk-core/crates/streams", features = ["redis"] }
 tokio = "1.26"

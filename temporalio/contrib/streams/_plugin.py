@@ -3,8 +3,8 @@
 A configuration class is registered once, on the client:
 ``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks
 Core for the store it names. Core serves that one store to the client's
-handles and to the Activities of every Worker built from the client, so an
-Activity's append and an outside read meet in the same place.
+handles and to every Worker built from the client, so a Worker's output
+and an outside read meet in the same place.
 
 On a Worker the plugin registers the built-in Activity that
 :func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
@@ -28,6 +28,7 @@ from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.plugin import SimplePlugin
 
 if TYPE_CHECKING:
+    from temporalio.bridge.temporal_sdk_bridge import StreamStoreRef
     from temporalio.client import Client, ClientConfig
     from temporalio.service import ConnectConfig, ServiceClient
     from temporalio.worker import WorkerConfig
@@ -119,6 +120,11 @@ class StreamStorePlugin(SimplePlugin):
             activities.append(publish_activity)
         config["activities"] = activities
         return config
+
+    @property
+    def _temporal_stream_store(self) -> StreamStoreRef | None:
+        # The Worker looks for this name on its plugins and gives the store to Core.
+        return self._store.ref if self._store is not None else None
 
     async def delete_workflow_streams(self, namespace: str, workflow_id: str) -> int:
         """Delete every stream of ``workflow_id`` in ``namespace``.

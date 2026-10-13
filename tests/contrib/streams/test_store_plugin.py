@@ -43,6 +43,7 @@ async def test_a_worker_takes_the_store_of_its_client(client: Client):
     store = MemoryStreams()
     streams_client = await connect_with(client, store)
     Worker(streams_client, task_queue=str(uuid.uuid4()), activities=[_noop])
+    assert store._temporal_stream_store is not None
     # The store on the client and the Worker configures the Worker twice.
     with pytest.warns(UserWarning, match="same plugin type"):
         Worker(

@@ -28,7 +28,7 @@ class StreamCallFailure(Exception):
 
 
 class StreamStore:
-    """The stream store Core serves to this process."""
+    """The stream store Core serves to this process and its Workers."""
 
     @staticmethod
     async def connect(
