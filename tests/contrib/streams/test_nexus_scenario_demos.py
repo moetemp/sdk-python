@@ -119,15 +119,15 @@ def test_run_names_a_valid_endpoint_after_a_module_with_underscores(
         operator_service=SimpleNamespace(create_nexus_endpoint=create_nexus_endpoint),
     )
 
-    async def connect(*args: Any, **kwargs: Any) -> Any:
+    async def connect(*_args: Any, **_kwargs: Any) -> Any:
         return client
 
-    async def main(_client: Any, task_queue: str, **kwargs: Any) -> None:
+    async def main(_client: Any, task_queue: str, **_kwargs: Any) -> None:
         await _nexus.endpoint(_client, task_queue)
 
     path = n1c_cross_namespace_relay.__file__
     monkeypatch.setattr(sys, "argv", [path])
-    monkeypatch.setattr(_nexus.Client, "connect", connect)
+    monkeypatch.setattr(Client, "connect", connect)
     _nexus.run(main)
     [name] = names
     assert ENDPOINT_NAME.match(name), name
