@@ -25,9 +25,9 @@ wit_input_dir = (
 wit_path = wit_input_dir / "workflow-service.wit"
 wit_deps_dir = wit_input_dir / "deps"
 output_dir = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
-# The service a Worker implements to take NexusHandler callbacks. Its operations
-# take the notification protos by `$pythonRef`, so it needs no descriptors.
-notification_contract_path = wit_input_dir / "notification-service.nexusrpc.yaml"
+# The service a Worker implements to take NexusHandler callbacks. The server calls
+# it, not a Workflow, so it gets plain definitions and no System Nexus caller.
+notification_wit_path = wit_input_dir / "notification-service.wit"
 notification_output_dir = (
     base_dir / "temporalio" / "nexus" / "system" / "notification_service"
 )
@@ -40,11 +40,18 @@ workflowservice_request_response_proto = (
     / "v1"
     / "request_response.proto"
 )
-# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13), and the
-# `$pythonRef` support the notification service needs (G19), are not released yet.
-# Once they land upstream, this moves back to a released nexgen version.
+notificationservice_request_response_proto = (
+    gen_protos.api_proto_dir
+    / "temporal"
+    / "api"
+    / "notificationservice"
+    / "v1"
+    / "request_response.proto"
+)
+# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
+# released yet. Once they land upstream, this moves back to a released nexgen version.
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "1e3aa41e232a714c6c87de08268b80efa090faaa"
+NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
 nex_gen_root = base_dir / ".nexgen-system" / NEX_GEN_REVISION
 
 
@@ -86,6 +93,7 @@ def build_descriptor_set(descriptor_path: Path) -> None:
             "--include_imports",
             f"--descriptor_set_out={descriptor_path}",
             str(workflowservice_request_response_proto),
+            str(notificationservice_request_response_proto),
         ]
     )
 
@@ -131,8 +139,8 @@ def generate_nexus_system_api() -> None:
         raise RuntimeError(f"missing WIT source: {wit_path}")
     if not wit_deps_dir.exists():
         raise RuntimeError(f"missing WIT dependency directory: {wit_deps_dir}")
-    if not notification_contract_path.exists():
-        raise RuntimeError(f"missing contract: {notification_contract_path}")
+    if not notification_wit_path.exists():
+        raise RuntimeError(f"missing WIT source: {notification_wit_path}")
 
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "temporal_api.bin"
@@ -163,9 +171,14 @@ def generate_nexus_system_api() -> None:
             [
                 *command,
                 "python",
+                str(notification_wit_path),
+                str(wit_deps_dir),
+                "--support-package",
+                "temporalio.nexus.system._support",
+                "--descriptors",
+                str(descriptor_path),
                 "--output",
                 str(notification_output_dir),
-                str(notification_contract_path),
             ]
         )
 
