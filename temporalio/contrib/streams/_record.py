@@ -42,9 +42,9 @@ class RecordKind(enum.IntEnum):
     FINISH = 2
     """The producer in ``producer_id`` will write nothing more on this topic.
 
-    An empty ``producer_id`` names the owning Workflow. A Workflow's
-    ``FINISH`` covers one run: after Continue-as-New the next run can publish
-    on the topic again, under the same empty ``producer_id``. It does not end
+    The owning Workflow writes as ``@<run id>``. A Workflow's ``FINISH``
+    covers one run: after Continue-as-New the next run can publish on the
+    topic again, as a producer of its own. It does not end
     a read and says nothing about the producer's outcome: an Activity can
     still fail after it wrote ``FINISH``.
     """
@@ -101,7 +101,8 @@ class StreamRecord(Generic[T]):
     cursor: Cursor
     topic: str
     producer_id: str = ""
-    """Who wrote it, or empty when the owning Workflow wrote it."""
+    """Who wrote it. The owning Workflow writes as ``@<run id>``, and an
+    Activity as ``<Activity id>@<scheduling run id>``."""
     attempt: int = 0
     """The producer's attempt, or 0 when the producer declared none."""
     sequence: int = 0
@@ -111,7 +112,7 @@ class StreamRecord(Generic[T]):
 
     A stream follows its Workflow's run chain, so this tells a successor run
     or a reset branch apart. An Activity's record leaves it empty, and the
-    scheduling run is in its ``producer_id``, as ``<Activity id>@<run id>``.
+    scheduling run is in its ``producer_id``.
     """
     value: T | None = None
     """The published value. Set on ``DATA`` only."""
