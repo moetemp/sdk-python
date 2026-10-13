@@ -10,7 +10,10 @@ as itself: Core derives its producer id as
 ``<Activity id>@<scheduling run id>`` and its Temporal attempt is the
 producer attempt, so a retry is reported to readers as ``SUPERSEDED``. The
 run is part of the id because a stream outlives a run, and Activity ids
-repeat across the runs of a chain.
+repeat across the runs of a chain. A Local Activity writes as
+``local-<call number>@<scheduling run id>``, with an attempt that grows
+across its reruns (see ``_local_activity``). Its attempt doesn't fit the
+Activity form's 32 bits, so it writes as a named producer.
 
 Any process holding a client reaches a Workflow's stream by Workflow id and
 writes with a producer id and attempt of its own.
@@ -39,6 +42,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams._body import batch_digest, content_hash, encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams._errors import StreamUnsupportedError
+from temporalio.contrib.streams._local_activity import LocalCall, current_local_call
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     call,
@@ -79,6 +83,7 @@ class StreamProducer(Generic[T]):
         producer_id: str,
         attempt: int,
         activity: ActivityProducer | None = None,
+        local_call: LocalCall | None = None,
     ) -> None:
         """Prefer :meth:`StreamHandle.producer`."""
         self._handle = handle
@@ -86,6 +91,7 @@ class StreamProducer(Generic[T]):
         self._producer_id = producer_id
         self._attempt = attempt
         self._activity = activity
+        self._local_call = local_call
         self._sequence = 1
         self._last = BEGINNING
         # A batch reads the sequence, then awaits the codec and Core, then
@@ -99,7 +105,11 @@ class StreamProducer(Generic[T]):
 
     @property
     def attempt(self) -> int:
-        """The attempt this producer writes."""
+        """The attempt this producer writes.
+
+        In a Local Activity it is 0 until the first append asks the server
+        for it.
+        """
         return self._attempt
 
     async def append(self, *values: T) -> Cursor:
@@ -146,6 +156,8 @@ class StreamProducer(Generic[T]):
             return await self._write(RecordKind.FINISH, [None])
 
     async def _write(self, kind: RecordKind, values: Any) -> Cursor:
+        if self._local_call is not None:
+            self._attempt = await self._local_call.attempt(self._handle._client)
         converter = self._handle._converter
         wires = [
             to_wire(
@@ -392,11 +404,13 @@ class ActivityStreamHandle:
         inner: StreamHandle,
         identity: ActivityProducer,
         producers: dict[str, StreamProducer[Any]],
+        local_call: LocalCall | None = None,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.activity_handle`."""
         self._inner = inner
         self._identity = identity
         self._producers = producers
+        self._local_call = local_call
 
     @property
     def ref(self) -> StreamRef:
@@ -458,6 +472,15 @@ class ActivityStreamHandle:
         retry makes readers see ``SUPERSEDED``. A retry starts a new sequence,
         and the store deduplicates a repeated append within one attempt.
 
+        In a Local Activity the producer id is
+        ``local-<call number>@<scheduling run id>``, where the number counts
+        the run's Local Activity calls in order. Before the first append the
+        producer asks the server for the run's History length ``h`` and the
+        pending Workflow Task's attempt ``t``, and with the Local Activity's
+        attempt ``a`` writes attempt ``(h * 100_000 + t) * 10_000 + a``. So a
+        rerun after a Worker crash or a failed Workflow Task, and a local
+        retry, each write a higher attempt.
+
         Every call in one attempt returns the same producer for a topic, so
         two parts of the Activity that each ask for it number their records
         in one sequence.
@@ -465,14 +488,24 @@ class ActivityStreamHandle:
         name, _ = self._inner._resolve(topic, None)
         producer = self._producers.get(name)
         if producer is None:
-            identity = self._identity
-            producer = self._producers[name] = StreamProducer(
-                self._inner,
-                name,
-                f"{identity.activity_id}@{identity.run_id}",
-                identity.attempt,
-                activity=identity,
-            )
+            identity, local_call = self._identity, self._local_call
+            if local_call is not None:
+                producer = StreamProducer(
+                    self._inner,
+                    name,
+                    f"{local_call.producer_id_prefix}@{identity.run_id}",
+                    0,
+                    local_call=local_call,
+                )
+            else:
+                producer = StreamProducer(
+                    self._inner,
+                    name,
+                    f"{identity.activity_id}@{identity.run_id}",
+                    identity.attempt,
+                    activity=identity,
+                )
+            self._producers[name] = producer
         return producer
 
 
@@ -484,29 +517,36 @@ def activity_handle() -> ActivityStreamHandle:
     :func:`get_stream_handle` with ``temporalio.activity.client()`` and a
     producer id of your own.
 
-    A Local Activity has no stream producer in this release. Its attempt is
-    not durable, so after a Worker crash it runs again as the same attempt,
-    and the store refuses its first append as stale. Use a regular Activity
-    instead.
+    A Local Activity writes too, while the Workflow Task that runs it is
+    still open. Its attempt is not durable, so the store plugin's Worker
+    interceptor numbers each call for a producer id that survives a rerun,
+    and its first append asks the server for an attempt that grows across
+    reruns. See :meth:`ActivityStreamHandle.producer`.
 
     Raises:
-        StreamUnsupportedError: The Activity is a Local Activity, or it was
-            not scheduled by a Workflow, since streams owned by an Activity
-            are not supported in this release.
+        StreamUnsupportedError: The Activity was not scheduled by a
+            Workflow, since streams owned by an Activity are not supported
+            in this release. Or it is a Local Activity that the Worker's
+            stream interceptor did not number. Its first append raises it
+            when its History or attempts are too long to encode.
         ValueError: No stream store is registered on the Worker's client.
         RuntimeError: Not called from inside an Activity.
     """
     info = temporalio.activity.info()
-    if info.is_local:
-        raise StreamUnsupportedError(
-            "a Local Activity has no stream producer in this release, since its "
-            "attempt isn't durable; use a regular Activity instead"
-        )
     if info.workflow_id is None or info.workflow_run_id is None:
         raise StreamUnsupportedError(
             "this Activity was not scheduled by a Workflow, and streams owned by "
             "an Activity are not supported in this release"
         )
+    local_call = None
+    if info.is_local:
+        local_call = current_local_call()
+        if local_call is None:
+            raise StreamUnsupportedError(
+                "this Local Activity was scheduled without the stream store's "
+                "Worker interceptor, so it has no producer identity that survives "
+                "a rerun; build the Worker from a client that carries the store"
+            )
     client = temporalio.activity.client()
     ref = StreamRef.for_workflow(info.workflow_id, run_id=info.workflow_run_id)
     identity = ActivityProducer(
@@ -516,7 +556,7 @@ def activity_handle() -> ActivityStreamHandle:
         attempt=info.attempt,
     )
     inner = StreamHandle(store_for_client(client), client, ref)
-    return ActivityStreamHandle(inner, identity, _attempt_producers())
+    return ActivityStreamHandle(inner, identity, _attempt_producers(), local_call)
 
 
 # The producers of each running Activity attempt, by topic, under the id of the
