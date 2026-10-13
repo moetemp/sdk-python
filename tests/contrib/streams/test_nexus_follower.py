@@ -562,8 +562,7 @@ async def _lane(client: Client, env: WorkflowEnvironment) -> _Lane:
     task_queue = f"follower-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
-    # The follower reads up to the progress position and never arms the stream.
-    store = MemoryStreams().notify_on_append(every_append=True)
+    store = MemoryStreams().notify_on_append()
     return _Lane(await connect(client, store), store, task_queue, endpoint, ref)
 
 
@@ -619,6 +618,10 @@ async def test_live_a_follower_resumes_on_another_worker(
         await lane.follow()
         await producer.append("a", "b")
         await _until(lambda: "b" in first.ordered())
+        # The call answers after its last read waited a second and armed the
+        # stream. A Worker that stops before that loses the answer, and the
+        # server sends the progress again from the earlier position.
+        await asyncio.sleep(3)
     # The read position lives on the server's callback, so another Worker,
     # with nothing of the first one's, goes on from it.
     async with lane.worker(second):
