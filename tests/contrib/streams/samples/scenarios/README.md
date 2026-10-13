@@ -46,7 +46,7 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_nexus
   and storage that Temporal manages.
 - **3a, `s3a_token_deltas`.** The Workflow publishes the turn on `turns`, and the model Activity
   appends deltas on `deltas`. The backend reads both topics at once. The Activity sees `turn
-  started` already, since the publish is visible when its Workflow Task is accepted. Left out: the
+  started` already, since the publish is visible when its activation completes. Left out: the
   native stream. Redis or memory stands in for it.
 - **3b, `s3b_redis_turns`.** Two turns on one topic in Redis. Turn 1's Activity is retried, so
   `SUPERSEDED` comes before the retry's deltas. Turn 2 fails on every attempt, and the Workflow
