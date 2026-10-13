@@ -125,6 +125,11 @@ class ProcessOrder:
   `StreamClosedError`, after a short closing window.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
+- **Limits per task.** A Workflow's record holds at most 1.5 MiB, and one
+  activation publishes at most 16 MiB of records. One Workflow Task can
+  publish to a few hundred topics before its manifest reaches the budget.
+  The publish that would cross a limit raises `StreamError`. Catch it.
+  Uncaught, it fails the Workflow Task, and every retry fails the same way.
 - **Not in this release.** Reading a stream inside a Workflow, and streams
   owned by an Activity or by no one, raise `StreamUnsupportedError`.
 
