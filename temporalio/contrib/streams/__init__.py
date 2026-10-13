@@ -14,12 +14,31 @@ The contract:
    record of a producer's newer attempt, it yields a
    :attr:`RecordKind.SUPERSEDED` record first. No store holds that record,
    so every store reports a retry the same way.
+2. **A cursor belongs to one stream.** Hand it back to resume strictly after
+   the record it names. A cursor from another store or another stream is
+   refused with :class:`StreamCursorError`, and one whose record
+   retention dropped with :class:`StreamExpiredError`. A read with no cursor
+   starts at :data:`BEGINNING` or :data:`END`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
 as an ordinary payload.
 """
 
+from temporalio.contrib.streams._cursor import BEGINNING, END
+from temporalio.contrib.streams._errors import (
+    StreamClosedError,
+    StreamCursorError,
+    StreamError,
+    StreamExpiredError,
+    StreamNotFoundError,
+    StreamOutcomeUnknownError,
+    StreamProducerError,
+    StreamRecordError,
+    StreamRefusedError,
+    StreamStorageError,
+    StreamUnsupportedError,
+)
 from temporalio.contrib.streams._record import (
     Cursor,
     RecordKind,
@@ -28,8 +47,21 @@ from temporalio.contrib.streams._record import (
 )
 
 __all__ = [
+    "BEGINNING",
     "Cursor",
+    "END",
     "RecordKind",
+    "StreamClosedError",
+    "StreamCursorError",
+    "StreamError",
+    "StreamExpiredError",
+    "StreamNotFoundError",
+    "StreamOutcomeUnknownError",
+    "StreamProducerError",
     "StreamRecord",
+    "StreamRecordError",
+    "StreamRefusedError",
+    "StreamStorageError",
+    "StreamUnsupportedError",
     "Supersession",
 ]
