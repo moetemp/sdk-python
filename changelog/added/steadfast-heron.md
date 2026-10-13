@@ -1,0 +1,1 @@
+Add experimental `temporalio.contrib.streams.workflow_writer`, so a Workflow publishes to its own stream with its Workflow Task. Its records become visible when the task is accepted, and a `Replayer` replays a publishing Workflow with no store.
