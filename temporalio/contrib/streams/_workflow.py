@@ -4,8 +4,9 @@ The writer converts and hashes values on the Workflow thread and adds the
 records to the activation's ``WorkflowOutputStreamCommit``. Nothing here does
 I/O. The Worker's completion encoder runs each body through the payload
 codec, and Core stages the records, records a marker of them, and makes them
-visible once the Workflow Task is accepted. Reading a stream inside a
-Workflow is not part of this release.
+visible once the Workflow Task is accepted. While replaying, the same
+records go without bodies, and Core checks them against the marker. Reading
+a stream inside a Workflow is not part of this release.
 """
 
 from __future__ import annotations
@@ -28,6 +29,22 @@ __all__ = ["WorkflowStreamWriter", "workflow_reader", "workflow_writer"]
 
 T = TypeVar("T")
 
+MANIFEST_BUDGET_BYTES = 48 * 1024
+"""The largest manifest one publishing completion may produce.
+
+Core refuses a manifest over 64 KiB by failing the Workflow Task, again on
+every retry, and it takes one commit per completion. A publish that would
+take the completion's manifest past this budget is refused at the call
+instead, which leaves room under Core's limit for the fields this bound
+estimates.
+"""
+
+# Upper bounds, in bytes, on what the manifest spends: once per completion
+# (versions, stage token, floor, run id, store name, the segment's header),
+# and per topic (its entry, counts, fingerprint and segment count) on top of
+# the topic name itself.
+_MANIFEST_FIXED_BYTES = 512
+_MANIFEST_TOPIC_BYTES = 72
 # The largest body one record may carry, the same limit the stream service
 # keeps for a record that crosses Nexus.
 _MAX_RECORD_BYTES = 3 << 19
@@ -45,15 +62,18 @@ class _RunStreams:
         # and every workflow_writer() call returns a new writer.
         self.finished: set[str] = set()
         self.commit: WorkflowOutputStreamCommit | None = None
+        self.topics: set[str] = set()
+        self.manifest_bound = _MANIFEST_FIXED_BYTES
         self.activation_bytes = 0
 
     def add(self, record: OutputRecord) -> None:
         """Add ``record`` to this activation's commit.
 
         Raises:
-            StreamError: The record's body is over the per-record limit, or
-                it would take this activation's bodies past their budget.
-                Nothing is added.
+            StreamError: The record's body is over the per-record limit, it
+                would take this activation's bodies past their budget, or it
+                would take this completion's manifest past
+                :data:`MANIFEST_BUDGET_BYTES`. Nothing is added.
         """
         if record.logical_size > _MAX_RECORD_BYTES:
             raise StreamError(
@@ -62,7 +82,9 @@ class _RunStreams:
             )
         commit = workflow._Runtime.current().workflow_stream_commit()
         if commit is not self.commit:
-            self.commit, self.activation_bytes = commit, 0
+            self.commit, self.topics = commit, set()
+            self.manifest_bound = _MANIFEST_FIXED_BYTES
+            self.activation_bytes = 0
         total = self.activation_bytes + record.logical_size
         if total > _MAX_ACTIVATION_BYTES:
             raise StreamError(
@@ -70,6 +92,18 @@ class _RunStreams:
                 f"would take this activation past {_MAX_ACTIVATION_BYTES} bytes "
                 "of records; publish the rest after the Workflow next waits"
             )
+        bound = self.manifest_bound
+        if record.topic not in self.topics:
+            bound += _MANIFEST_TOPIC_BYTES + len(record.topic.encode())
+            if bound > MANIFEST_BUDGET_BYTES:
+                raise StreamError(
+                    f"publishing to {record.topic!r} would take this Workflow Task's "
+                    f"stream manifest past {MANIFEST_BUDGET_BYTES} bytes, with "
+                    f"{len(self.topics)} topics already published in this "
+                    "activation; spread the topics across Workflow Tasks"
+                )
+            self.topics.add(record.topic)
+        self.manifest_bound = bound
         self.activation_bytes = total
         commit.records.append(record)
 
@@ -94,7 +128,8 @@ def _publish(record: OutputRecord, action: str) -> None:
         raise workflow.ReadOnlyContextError(
             f"While in read-only function, action attempted: {action}"
         )
-    if not worker_has_store():
+    # Replaying needs no store, since nothing is stored again.
+    if not workflow.unsafe.is_replaying() and not worker_has_store():
         raise ValueError(
             "no stream store is registered on this Workflow's Worker; register "
             "one on its client, for example Client.connect(..., plugins=[store])"
@@ -135,9 +170,13 @@ class WorkflowStreamWriter(Generic[T]):
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator, which commit nothing.
             temporalio.contrib.streams.StreamError: The value's payload is
-                over 1.5 MiB, or it would take this activation's records past
-                16 MiB. Nothing is published. Catch it: uncaught, it fails the
-                Workflow Task, and every retry fails the same way.
+                over 1.5 MiB, it would take this activation's records past
+                16 MiB, or this activation already published to so many
+                topics that one more would take the Workflow Task's manifest
+                past its budget. Nothing is published. Publish the rest after
+                the Workflow next waits. Catch it: uncaught, it fails the
+                Workflow Task, and every retry runs the same code and fails
+                the same way.
         """
         if self._topic in _run_streams().finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
@@ -147,8 +186,9 @@ class WorkflowStreamWriter(Generic[T]):
             kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
             content_hash=content_hash(payload),
             logical_size=payload.ByteSize(),
-            body=payload,
         )
+        if not workflow.unsafe.is_replaying():
+            record.body.CopyFrom(payload)
         _publish(record, "publish to a stream")
 
     def finish(self) -> None:
@@ -162,6 +202,9 @@ class WorkflowStreamWriter(Generic[T]):
             ValueError: The Worker has no stream store.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator, which commit nothing.
+            temporalio.contrib.streams.StreamError: The ``FINISH`` record would
+                take the Workflow Task's manifest past its budget; the topic
+                stays open.
         """
         state = _run_streams()
         if self._topic in state.finished:
