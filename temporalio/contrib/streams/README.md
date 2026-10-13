@@ -97,7 +97,8 @@ Both samples run in full in `tests/contrib/streams/samples/`.
 
 ## A Workflow publishes through an Activity
 
-`workflow_writer` publishes with the Workflow Task. `workflow_activity_writer`
+`workflow_writer` publishes from Workflow code, and each record is visible
+when the activation that published it completes. `workflow_activity_writer`
 runs a built-in Activity for each call instead. The store plugin registers
 that Activity on every Worker built from the client, so there's nothing to
 register.
