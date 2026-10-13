@@ -6,8 +6,9 @@
 publishes arrive as Signals, readers poll with Updates, and the records
 live in the Workflow's state and History. `temporalio.contrib.streams`
 keeps the records in your Redis instead. Publishing costs no Signals, and
-records stay out of History. Readers do not need a running Worker, and any
-number of readers can follow one stream.
+records stay out of History. A Workflow Task that publishes adds one marker
+event with a small manifest, far less than a Signal per batch. Readers do
+not need a running Worker, and any number of readers can follow one stream.
 This page maps one to the other.
 
 ## What maps
@@ -15,14 +16,15 @@ This page maps one to the other.
 | Workflow Streams | Streams |
 |---|---|
 | `WorkflowStream()` in `@workflow.init` | Nothing to construct. Register `RedisStreams` once, on the client. |
-| `stream.topic("events", type=E).publish(e)` in the Workflow | `await workflow_activity_writer(topic("events", E)).publish(e)`, which runs a built-in Activity |
+| `stream.topic("events", type=E).publish(e)` in the Workflow | `workflow_writer(topic("events", E)).publish(e)` |
+| The same, through an Activity | `await workflow_activity_writer(topic("events", E)).publish(e)`, which runs a built-in Activity |
 | `WorkflowStreamClient.from_within_activity()` and `topic(...).publish(...)` in an Activity | `activity_handle().producer(topic=...).append(...)` |
 | `WorkflowStreamClient.create(client, workflow_id)` and `topic(...).publish(...)` | `get_stream_handle(client, workflow_id).producer(topic=..., producer_id=..., attempt=...).append(...)` |
 | `client.subscribe(["events"], result_type=E)` | `get_stream_handle(client, workflow_id).read(topic=topic("events", E))` |
 | Integer offsets, `from_offset=` | Opaque cursors: keep `record.cursor`, pass `after=cursor` |
 | Publisher dedupe by publisher id and sequence | Producer id, attempt and sequence. A retry of the newest batch is written once. |
 | `stream.continue_as_new(...)` and `prior_state` | Nothing. The stream follows the run chain. |
-| `batch_interval`, `force_flush` | Each `append` is one atomic batch. |
+| `batch_interval`, `force_flush` | Each `append` is one atomic batch. A Workflow's publishes in one Workflow Task commit together. |
 | `get_offset()` | `latest()` returns the newest cursor |
 
 Differences to plan for:
@@ -33,6 +35,8 @@ Differences to plan for:
   `producer_id` and `attempt`, and raises the attempt when it restarts its
   work. A retry inside an attempt deduplicates. A new attempt makes readers
   see `SUPERSEDED` first.
+- **A Workflow's publish is visible when its Workflow Task is accepted**,
+  not when a Signal is processed.
 - **Retention is time-based.** Records expire `retention` after they were
   written (7 days by default). There is no `truncate(up_to_offset)`.
 - **Payload codec.** Workflow Streams runs the codec once per Signal or
@@ -61,12 +65,13 @@ Differences to plan for:
    both libraries is two streams.
 3. For Workflows already running, switch at a natural boundary, such as the
    next run after Continue-as-New, or let them finish on Workflow Streams.
-   A publish from Workflow code schedules an Activity, so every new publish
-   point needs Workflow versioning, like any new command. For example:
+   Every new publish point needs Workflow versioning, like any new command:
+   a publish adds a marker to its Workflow Task, so a running Workflow that
+   replays new code past it fails as nondeterministic. For example:
 
    ```python
    if workflow.patched("publish-to-streams"):
-       await workflow_activity_writer(TOKENS).publish(token)
+       workflow_writer(TOKENS).publish(token)
    else:
        stream.topic("tokens").publish(token)
    ```
@@ -98,3 +103,5 @@ these changes reach application code:
   first runs, not by the `read()` call, because Core checks the cursor.
 - **A read from `END` starts at its first iteration.** To catch the next
   record without a gap, position the reader with `latest()` first.
+- **Replay needs no store.** A `Replayer` replays a publishing Workflow with
+  no stream plugin, since replay stores nothing again.

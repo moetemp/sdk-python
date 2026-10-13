@@ -6,7 +6,8 @@ This page is the contract another SDK, or a tool, follows to read and write
 the same streams in Redis as Core's store, which every Core-based SDK uses.
 Everything here is part of the stored format: change it and existing
 streams stop working. The canonical scripts are in `crates/streams/lua/` of
-the Core repository: `append.lua`, with the trim and refresh in `keep.lua`.
+the Core repository: `append.lua`, `stage.lua` and `promote.lua`, with the
+trim and refresh they share in `keep.lua`.
 
 ## Redis
 
@@ -36,6 +37,8 @@ Workflow's run chain:
 | `:t:<topic>` | stream | The log of one topic |
 | `:t:<topic>:meta` | hash | Dedupe state, the tombstone of that log, and `closed` = `1` once the topic is closed |
 | `:chain` | hash | `closed` = `1` once the run chain has ended |
+| `:stage:<token>` | list | A staged Workflow publish: topic, record, topic, record, ... |
+| `:stages` | hash | Every stage not yet promoted or aborted |
 
 ## Log entries
 
@@ -52,9 +55,9 @@ use it:
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
-| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>` |
-| `attempt` | 6 | The producer's attempt |
-| `sequence` | 7 | The record's position in its attempt, starting at 1 |
+| `producer_id` | 5 | Who wrote it; empty when the owning Workflow did. An Activity writes as `<activity id>@<scheduling run id>` |
+| `attempt` | 6 | The producer's attempt; 0 for the owning Workflow |
+| `sequence` | 7 | The record's position in its attempt, starting at 1; 0 for the owning Workflow |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
 
@@ -62,6 +65,8 @@ Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
   deterministic protobuf serialization, taken before the payload codec.
   Only the writer that made it compares it, since protobuf's deterministic
   serialization is stable within one implementation, not across languages.
+- `temporal.io/run-id`: the run that published the record, on records the
+  owning Workflow published.
 
 The entry id that Redis assigns is the record's position. Readers never
 see a `SUPERSEDED` record in the log: a reader synthesizes one when a
@@ -110,6 +115,50 @@ Trim and refresh:
 Every writer of a chain must use the same retention. A writer with a
 shorter one trims records that other writers' readers expect to keep, so
 the shortest retention wins.
+
+## A Workflow's own publish
+
+1. Lang sends each record's topic, kind, body, content hash and
+   plaintext size in the completion's output commit, and Core builds the
+   stored records and the manifest from them. The manifest and its
+   fingerprint live only in the History marker, a Core-local proto, so they
+   are not part of the stored format. The fingerprint never covers the run
+   id, since a reset run replays the markers of its base run.
+2. Stage: one script runs `RPUSH stage <topic> <record> ...` (in chunks of
+   1000 values, since Lua's `unpack` is bounded), sets
+   `PEXPIRE stage <retention + 30 days>`, and sets
+   `HSET stages <token> <run id>\x1f<history floor>\x1f<topic>\x1f...`.
+   Topic names hold no control characters, so `\x1f` can't appear in one.
+   It sets `PEXPIRE stages <retention + 30 days>` only when `PTTL stages`
+   is lower, so the hash outlives every stage it lists.
+3. The Workflow Task's commit is recorded by Core in a
+   `core_external_stream` marker whose output manifest carries the stage
+   token.
+4. Promote, once History shows that marker: one script first checks that
+   every record's topic is among the topics it was given, and writes nothing
+   if not. Then it deletes the `stages` field. If the stage still exists,
+   it `XADD`s each record to its
+   topic's log in order, trims and refreshes each log as above, and deletes
+   the stage. Promoting twice does nothing. The script returns the number
+   of records added, or -1 when the `stages` field existed but the stage
+   was gone: retention dropped committed output, and Core logs a
+   warning.
+5. Abort, once History shows that the stage's commit cannot happen: delete
+   the stage and its `stages` field. That is when the staging Workflow Task
+   failed or timed out, when the run closed without the marker, or when a
+   completion carries other markers at the same history floor and not this
+   stage's token. Every commit of one attempt rides that attempt's
+   completion, so such a stage belongs to an attempt that failed. A Worker
+   applies that last rule only to a stage it held across an eviction of the
+   run, since its own attempt may still be committing.
+6. Repair: a reader settles the `stages` fields a stopped Worker left. It
+   takes the stages pending at that moment by run start time and then
+   history floor, and stops at the first stage History has not decided yet.
+   A stage whose run History can't find is left to its expiry, since a
+   replica behind a failover may not have the run yet. Order holds only
+   among the stages one repair settles: a later run's Worker promotes its
+   own output at once, so a stopped Worker's output that a reader repairs
+   later lands after it (a known limit of DD-41).
 
 ## Cursors
 
