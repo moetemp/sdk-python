@@ -24,7 +24,7 @@ This page maps one to the other.
 | Integer offsets, `from_offset=` | Opaque cursors: keep `record.cursor`, pass `after=cursor` |
 | Publisher dedupe by publisher id and sequence | Producer id, attempt and sequence. A retry of the newest batch is written once. |
 | `stream.continue_as_new(...)` and `prior_state` | Nothing. The stream follows the run chain. |
-| `batch_interval`, `force_flush` | Each `append` is one atomic batch. A Workflow's publishes in one Workflow Task commit together. |
+| `batch_interval`, `force_flush` | Each `append` is one atomic batch. A Workflow's publishes in one activation are appended together when it completes. |
 | `get_offset()` | `latest()` returns the newest cursor |
 
 Differences to plan for:
@@ -35,8 +35,9 @@ Differences to plan for:
   `producer_id` and `attempt`, and raises the attempt when it restarts its
   work. A retry inside an attempt deduplicates. A new attempt makes readers
   see `SUPERSEDED` first.
-- **A Workflow's publish is visible when its Workflow Task is accepted**,
-  not when a Signal is processed.
+- **A Workflow's publish is visible when the activation that published it
+  completes**, before its Workflow Task completes. If the task then fails,
+  its records stay, and readers see `SUPERSEDED` before the rerun's records.
 - **Retention is time-based.** Records expire `retention` after they were
   written (7 days by default). There is no `truncate(up_to_offset)`.
 - **Payload codec.** Workflow Streams runs the codec once per Signal or

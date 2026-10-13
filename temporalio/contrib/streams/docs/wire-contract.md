@@ -6,8 +6,7 @@ This page is the contract another SDK, or a tool, follows to read and write
 the same streams in Redis as Core's store, which every Core-based SDK uses.
 Everything here is part of the stored format: change it and existing
 streams stop working. The canonical scripts are in `crates/streams/lua/` of
-the Core repository: `append.lua`, `stage.lua` and `promote.lua`, with the
-trim and refresh they share in `keep.lua`.
+the Core repository: `append.lua`, with the trim and refresh in `keep.lua`.
 
 ## Redis
 
@@ -37,8 +36,6 @@ Workflow's run chain:
 | `:t:<topic>` | stream | The log of one topic |
 | `:t:<topic>:meta` | hash | Dedupe state, the tombstone of that log, and `closed` = `1` once the topic is closed |
 | `:chain` | hash | `closed` = `1` once the run chain has ended |
-| `:stage:<token>` | list | A staged Workflow publish: topic, record, topic, record, ... |
-| `:stages` | hash | Every stage not yet promoted or aborted |
 
 ## Log entries
 
@@ -55,9 +52,9 @@ use it:
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
-| `producer_id` | 5 | Who wrote it; empty when the owning Workflow did. An Activity writes as `<activity id>@<scheduling run id>` |
-| `attempt` | 6 | The producer's attempt; 0 for the owning Workflow |
-| `sequence` | 7 | The record's position in its attempt, starting at 1; 0 for the owning Workflow |
+| `producer_id` | 5 | Who wrote it. The owning Workflow writes as `@<run id>`, an Activity as `<activity id>@<scheduling run id>`, and a Local Activity as `__temporal_local_<call number>@<scheduling run id>` |
+| `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53 |
+| `sequence` | 7 | The record's position in its attempt, starting at 1. A Workflow run's records go on from the run's earlier ones |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
 
@@ -124,41 +121,29 @@ the shortest retention wins.
    fingerprint live only in the History marker, a Core-local proto, so they
    are not part of the stored format. The fingerprint never covers the run
    id, since a reset run replays the markers of its base run.
-2. Stage: one script runs `RPUSH stage <topic> <record> ...` (in chunks of
-   1000 values, since Lua's `unpack` is bounded), sets
-   `PEXPIRE stage <retention + 30 days>`, and sets
-   `HSET stages <token> <run id>\x1f<history floor>\x1f<topic>\x1f...`.
-   Topic names hold no control characters, so `\x1f` can't appear in one.
-   It sets `PEXPIRE stages <retention + 30 days>` only when `PTTL stages`
-   is lower, so the hash outlives every stage it lists.
-3. The Workflow Task's commit is recorded by Core in a
-   `core_external_stream` marker whose output manifest carries the stage
-   token.
-4. Promote, once History shows that marker: one script first checks that
-   every record's topic is among the topics it was given, and writes nothing
-   if not. Then it deletes the `stages` field. If the stage still exists,
-   it `XADD`s each record to its
-   topic's log in order, trims and refreshes each log as above, and deletes
-   the stage. Promoting twice does nothing. The script returns the number
-   of records added, or -1 when the `stages` field existed but the stage
-   was gone: retention dropped committed output, and Core logs a
-   warning.
-5. Abort, once History shows that the stage's commit cannot happen: delete
-   the stage and its `stages` field. That is when the staging Workflow Task
-   failed or timed out, when the run closed without the marker, or when a
-   completion carries other markers at the same history floor and not this
-   stage's token. Every commit of one attempt rides that attempt's
-   completion, so such a stage belongs to an attempt that failed. A Worker
-   applies that last rule only to a stage it held across an eviction of the
-   run, since its own attempt may still be committing.
-6. Repair: a reader settles the `stages` fields a stopped Worker left. It
-   takes the stages pending at that moment by run start time and then
-   history floor, and stops at the first stage History has not decided yet.
-   A stage whose run History can't find is left to its expiry, since a
-   replica behind a failover may not have the run yet. Order holds only
-   among the stages one repair settles: a later run's Worker promotes its
-   own output at once, so a stopped Worker's output that a reader repairs
-   later lands after it (a known limit of DD-41).
+2. Append: when the activation completes, Core appends the commit's records
+   with the append script above, one batch per topic in order of first
+   publish, as the producer `@<run id>`, before it reports the Workflow
+   Task. The batch digest is the topic's fingerprint from the manifest, so
+   a repeat after a lost answer deduplicates whatever the codec did.
+3. Attempt: 1, plus each Workflow Task attempt of the run that History
+   shows ran and did not complete: every `WorkflowTaskFailed` event, every
+   `WorkflowTaskTimedOut` event but a schedule-to-start one, and `attempt`
+   minus 2 for each `WorkflowTaskScheduled` event at attempt 2 or above,
+   which counts the attempts the server writes no event for. Successive
+   tasks keep the attempt, and a rerun of a task that failed gets a higher
+   one.
+4. Sequence: a topic's first record from a run is 1. Each batch goes on
+   from the records the run committed to that topic before it, in History
+   markers and in earlier activations of the same task. A rerun sends the
+   same sequences under its higher attempt, so the store never refuses it
+   as stale.
+5. Core records the manifest in a `core_external_stream` marker ahead of
+   the task's other commands. Replay compares the records lang commits
+   again with it and writes nothing to Redis.
+6. Close: a topic the commit closed, with its `FINISH` record already
+   appended, is marked closed once Temporal accepts the Workflow Task. A
+   rerun of a refused task can still append to it.
 
 ## Cursors
 
