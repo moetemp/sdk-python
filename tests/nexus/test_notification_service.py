@@ -18,16 +18,18 @@ from nexusrpc.handler import StartOperationContext, service_handler, sync_operat
 import temporalio.api.nexus.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
-from temporalio.api.notificationservice.v1 import (
+from temporalio.api.notificationservice import v1 as notificationservice
+from temporalio.bridge._visitor import PayloadVisitor
+from temporalio.bridge._visitor_functions import VisitorFunctions
+from temporalio.bridge.proto.nexus import NexusTaskCompletion
+from temporalio.nexus.system.notification_service import (
+    NotificationService,
     OnCompleteRequest,
+    OnCompleteRequestResultSuccess,
     OnCompleteResponse,
     OnProgressRequest,
     OnProgressResponse,
 )
-from temporalio.bridge._visitor import PayloadVisitor
-from temporalio.bridge._visitor_functions import VisitorFunctions
-from temporalio.bridge.proto.nexus import NexusTaskCompletion
-from temporalio.nexus.system.notification_service import NotificationService
 from temporalio.worker._nexus import _NexusTaskCancellation, _NexusWorker
 
 SERVICE = "temporal.api.notificationservice.v1.NotificationService"
@@ -93,7 +95,10 @@ async def _client_payload(value: str) -> Payload:
     return payload
 
 
-def _server_payload(request: OnProgressRequest | OnCompleteRequest) -> Payload:
+def _server_payload(
+    request: notificationservice.OnProgressRequest
+    | notificationservice.OnCompleteRequest,
+) -> Payload:
     # The server's EncodeSystemPayload.
     return Payload(
         metadata={
@@ -153,7 +158,7 @@ def test_the_generated_definition_names_the_wire_operations() -> None:
 
 async def test_a_receiver_decodes_progress_as_the_server_encodes_it() -> None:
     receiver = _Receiver()
-    request = OnProgressRequest(
+    request = notificationservice.OnProgressRequest(
         source_context=await _client_payload("orders"),
         operation_token="token",
         receiver_state=b"state",
@@ -167,24 +172,25 @@ async def test_a_receiver_decodes_progress_as_the_server_encodes_it() -> None:
     [got] = receiver.progress
     assert got.operation_token == "token"
     assert got.receiver_state == b"state"
+    assert got.progress is not None
     assert got.progress.position == "7"
     assert got.progress.counter == 3
-    # The codec decoded the client's payload inside the system payload.
-    assert "test-codec" not in got.source_context.metadata
-    assert _CONVERTER.payload_converter.from_payload(got.source_context) == "orders"
+    # The codec decoded the client's payload inside the system payload, and the
+    # payload converter decoded the value.
+    assert got.source_context == "orders"
 
     sent = await _as_sent(response)
     # The server reads the answer as a protobuf, so the codec leaves it alone.
     assert sent.metadata["encoding"] == b"binary/protobuf"
     assert "test-codec" not in sent.metadata
-    assert OnProgressResponse.FromString(sent.data) == OnProgressResponse(
-        receiver_state=b"next", behind=True
-    )
+    assert notificationservice.OnProgressResponse.FromString(
+        sent.data
+    ) == notificationservice.OnProgressResponse(receiver_state=b"next", behind=True)
 
 
 async def test_a_receiver_decodes_a_completion_as_the_server_encodes_it() -> None:
     receiver = _Receiver()
-    request = OnCompleteRequest(
+    request = notificationservice.OnCompleteRequest(
         success=await _client_payload("done"),
         source_context=await _client_payload("orders"),
         receiver_state=b"state",
@@ -194,8 +200,8 @@ async def test_a_receiver_decodes_a_completion_as_the_server_encodes_it() -> Non
 
     assert response.HasField("sync_success"), response
     [got] = receiver.completions
-    assert _CONVERTER.payload_converter.from_payload(got.success) == "done"
-    assert _CONVERTER.payload_converter.from_payload(got.source_context) == "orders"
+    assert got.result == OnCompleteRequestResultSuccess("done")
+    assert got.source_context == "orders"
     assert got.receiver_state == b"state"
     sent = await _as_sent(response)
     assert sent.metadata["encoding"] == b"binary/protobuf"
