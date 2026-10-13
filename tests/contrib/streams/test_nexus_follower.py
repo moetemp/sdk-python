@@ -24,11 +24,6 @@ import pytest
 import temporalio.api.workflowservice.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
-from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
-from temporalio.api.notificationservice.v1 import (
-    OnCompleteRequest,
-    OnProgressRequest,
-)
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
@@ -47,6 +42,14 @@ from temporalio.contrib.streams.nexus import (
 )
 from temporalio.contrib.streams.nexus._generated import StreamOperationToken
 from temporalio.contrib.streams.nexus._generated.models import RecordWireSuperseded
+from temporalio.exceptions import ApplicationError
+from temporalio.nexus.system.notification_service import (
+    NexusOperationProgress,
+    OnCompleteRequest,
+    OnCompleteRequestResultFailure,
+    OnCompleteRequestResultSuccess,
+    OnProgressRequest,
+)
 from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -153,19 +156,18 @@ def _context(left: timedelta = timedelta(seconds=10)) -> Any:
     )
 
 
-def _source_context(**extra: Any) -> Payload:
-    return CONVERTER.payload_converter.to_payload({"follower": "orders", **extra})
+def _source_context(**extra: Any) -> dict[str, Any]:
+    # What the Worker hands over after it decodes follow_stream's context.
+    return {"follower": "orders", **extra}
 
 
-def _progress(position: str, state: bytes = b"") -> OnProgressRequest:
-    request = OnProgressRequest(
+def _progress(position: str, state: bytes | None = None) -> OnProgressRequest:
+    return OnProgressRequest(
+        progress=NexusOperationProgress(position=position, counter=1),
         source_context=_source_context(),
         operation_token=_token(),
         receiver_state=state,
     )
-    request.progress.position = position
-    request.progress.counter = 1
-    return request
 
 
 async def test_a_follower_gets_each_page_up_to_the_position() -> None:
@@ -181,7 +183,9 @@ async def test_a_follower_gets_each_page_up_to_the_position() -> None:
     assert collector.batches[-1].cursor.token == "c5"
     assert not answer.behind
     state = CONVERTER.payload_converter.from_payload(
-        Payload(metadata={"encoding": b"json/plain"}, data=answer.receiver_state),
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
         ReadInput,
     )
     assert state.after_token == "c5"
@@ -245,7 +249,7 @@ async def test_the_completion_drains_without_arming() -> None:
     await _service(transport, collector).on_complete(
         _context(),
         OnCompleteRequest(
-            success=CONVERTER.payload_converter.to_payload("finished"),
+            result=OnCompleteRequestResultSuccess("finished"),
             source_context=_source_context(),
             receiver_state=CONVERTER.payload_converter.to_payload(
                 ReadInput(stream=REF)
@@ -282,7 +286,7 @@ async def test_the_completion_reads_the_rest_then_closes() -> None:
     await service.on_complete(
         _context(),
         OnCompleteRequest(
-            success=CONVERTER.payload_converter.to_payload("finished"),
+            result=OnCompleteRequestResultSuccess("finished"),
             source_context=_source_context(),
             receiver_state=taken.receiver_state,
         ),
@@ -303,9 +307,8 @@ async def test_a_failed_operation_reaches_on_close_as_its_failure() -> None:
     await service.on_complete(
         _context(),
         OnCompleteRequest(
-            failure=Failure(
-                message="owner failed",
-                application_failure_info=ApplicationFailureInfo(type="Boom"),
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("owner failed", type="Boom")
             ),
             source_context=_source_context(),
             receiver_state=taken.receiver_state,
@@ -354,9 +357,11 @@ async def test_a_state_over_the_cap_keeps_the_cursor() -> None:
         _context(), _progress("c2")
     )
 
-    assert len(answer.receiver_state) <= 8 * 1024
+    assert len(answer.receiver_state or b"") <= 8 * 1024
     state = CONVERTER.payload_converter.from_payload(
-        Payload(metadata={"encoding": b"json/plain"}, data=answer.receiver_state),
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
         ReadInput,
     )
     assert state.after_token == "c2"
@@ -366,7 +371,7 @@ async def test_a_state_over_the_cap_keeps_the_cursor() -> None:
 async def test_an_unknown_follower_is_refused() -> None:
     transport, collector = _FakeTransport(_stored(1)), _Collector()
     request = _progress("c1")
-    request.source_context.CopyFrom(_source_context(follower="nobody"))
+    request.source_context = _source_context(follower="nobody")
 
     with pytest.raises(nexusrpc.HandlerError) as raised:
         await _service(transport, collector).on_progress(_context(), request)

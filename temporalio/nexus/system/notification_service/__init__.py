@@ -2,8 +2,30 @@
 
 from __future__ import annotations
 
+from .models import (
+    NexusOperationProgress,
+    NexusOperationProgressOperation,
+    NexusOperationProgressOperationScheduledEventId,
+    OnCompleteRequest,
+    OnCompleteRequestResult,
+    OnCompleteRequestResultFailure,
+    OnCompleteRequestResultSuccess,
+    OnCompleteResponse,
+    OnProgressRequest,
+    OnProgressResponse,
+)
 from .services import NotificationService
 
 __all__ = [
+    "NexusOperationProgress",
+    "NexusOperationProgressOperation",
+    "NexusOperationProgressOperationScheduledEventId",
+    "OnCompleteRequest",
+    "OnCompleteRequestResult",
+    "OnCompleteRequestResultSuccess",
+    "OnCompleteRequestResultFailure",
+    "OnCompleteResponse",
+    "OnProgressRequest",
+    "OnProgressResponse",
     "NotificationService",
 ]

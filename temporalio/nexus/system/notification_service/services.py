@@ -4,25 +4,27 @@ from __future__ import annotations
 
 from nexusrpc import Operation, service
 
-import temporalio.api.notificationservice.v1
+from .models import (
+    OnCompleteRequest,
+    OnCompleteResponse,
+    OnProgressRequest,
+    OnProgressResponse,
+)
 
 
 @service(name="temporal.api.notificationservice.v1.NotificationService")
 class NotificationService:
-    """Receives the completion and the progress of a source operation, such as a standalone
-    Nexus operation, on a Worker.
+    """
+    .. warning::
+        This API is experimental and subject to change.
     """
 
     on_complete: Operation[
-        temporalio.api.notificationservice.v1.OnCompleteRequest,
-        temporalio.api.notificationservice.v1.OnCompleteResponse,
+        OnCompleteRequest,
+        OnCompleteResponse,
     ] = Operation(name="OnComplete")
-    """Receives the completion of the source operation. Called once."""
 
     on_progress: Operation[
-        temporalio.api.notificationservice.v1.OnProgressRequest,
-        temporalio.api.notificationservice.v1.OnProgressResponse,
+        OnProgressRequest,
+        OnProgressResponse,
     ] = Operation(name="OnProgress")
-    """Receives the progress of the source operation. Called any number of times, in any
-    order relative to OnComplete.
-    """
