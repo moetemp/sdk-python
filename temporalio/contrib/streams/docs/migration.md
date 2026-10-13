@@ -17,6 +17,7 @@ This page maps one to the other.
 |---|---|
 | `WorkflowStream()` in `@workflow.init` | Nothing to construct. Register `RedisStreams` once, on the client. |
 | `stream.topic("events", type=E).publish(e)` in the Workflow | `workflow_writer(topic("events", E)).publish(e)` |
+| The same, through an Activity | `await workflow_activity_writer(topic("events", E)).publish(e)`, which runs a built-in Activity |
 | `WorkflowStreamClient.from_within_activity()` and `topic(...).publish(...)` in an Activity | `activity_handle().producer(topic=...).append(...)` |
 | `WorkflowStreamClient.create(client, workflow_id)` and `topic(...).publish(...)` | `get_stream_handle(client, workflow_id).producer(topic=..., producer_id=..., attempt=...).append(...)` |
 | `client.subscribe(["events"], result_type=E)` | `get_stream_handle(client, workflow_id).read(topic=topic("events", E))` |
