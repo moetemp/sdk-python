@@ -33,6 +33,36 @@ a warning when it sees another policy. For tests and local development,
 `temporalio.contrib.streams.memory.MemoryStreams` keeps streams in the
 process.
 
+## Path A: a Workflow publishes, a client reads
+
+Define a topic once with the type its records decode to, publish from the
+Workflow, and read from a client. A Workflow's own publish becomes visible
+when its Workflow Task is accepted, and never if the task fails.
+
+```python
+PROGRESS = topic("progress", dict)
+
+@workflow.defn
+class ProcessOrder:
+    @workflow.run
+    async def run(self, order_id: str) -> str:
+        progress = workflow_writer(PROGRESS)
+        for step in ("reserved", "charged", "shipped"):
+            progress.publish({"order": order_id, "step": step})
+            await workflow.sleep(timedelta(milliseconds=100))
+        progress.finish()
+        return "done"
+
+async for record in get_stream_handle(client, "order-1").read(topic=PROGRESS):
+    if record.kind is RecordKind.DATA:
+        print(record.value["step"])
+```
+
+The read ends when the Workflow's run chain closes. It follows
+Continue-as-New, and `record.run_id` says which run published each record.
+To resume later, keep the last `record.cursor` and pass it back as
+`read(after=cursor)`.
+
 ## Path B: an Activity streams to its Workflow
 
 An Activity writes to the stream of the Workflow that scheduled it, as
@@ -63,13 +93,7 @@ async for record in get_stream_handle(client, "answer-1").read(topic=TOKENS):
 right. With several producers on a topic, keep the text per
 `record.producer_id` and clear only that producer's.
 
-The read ends when the Workflow's run chain closes. It follows
-Continue-as-New, and an Activity's `record.producer_id` names the run that
-scheduled it.
-To resume later, keep the last `record.cursor` and pass it back as
-`read(after=cursor)`.
-
-The sample runs in full in `tests/contrib/streams/samples/`.
+Both samples run in full in `tests/contrib/streams/samples/`.
 
 ## A Workflow publishes through an Activity
 
