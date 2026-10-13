@@ -112,7 +112,9 @@ Both samples run in full in `tests/contrib/streams/samples/`.
   The publish that would cross a limit raises `StreamError`. Catch it.
   Uncaught, it fails the Workflow Task, and every retry fails the same way.
 - **Not in this release.** Reading a stream inside a Workflow, and streams
-  owned by an Activity or by no one, raise `StreamUnsupportedError`.
+  owned by an Activity or by no one, raise `StreamUnsupportedError`. A
+  Workflow can read through a stream-returning Nexus operation with
+  `StreamReader` (see [Streams over Nexus](docs/nexus.md)).
 
 ## Further reading
 
