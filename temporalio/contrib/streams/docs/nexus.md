@@ -467,18 +467,20 @@ converter, so a handler gets the values, not payloads.
   starts a new one while a reader still drains, the reader can hand over
   the new chain's records. Give each stream owner its own Workflow id, or
   reuse an id only after its readers finish.
-- `close_workflow_stream` closes the stream after Core promotes the Workflow
-  Task's records. The store closes first, then the notifier. A failed
-  promotion and each failed close step are tried again with backoff, from
-  1 second up to 1 minute, until they land or the Worker stops. A close the
-  server refuses for good, such as one for a stream it doesn't know, isn't
-  retried.
-- What's left is a Worker that stops before it promotes the Workflow Task
-  that closes the stream. A reader's repair then promotes the batch, but a
-  repair sends no close. Readers still end once the owner's run chain
-  closes, since the store marks the chain closed. The callers don't get the
-  result. They get the outcome of the owner's close status at the
-  notifier's next owner check (`streamnotifier.ownerCheckInterval`).
+- `close_workflow_stream` closes the stream after the server accepts the
+  Workflow Task that closed it. The topic's FINISH record is already in the
+  store, since Core appends a Workflow's records when its activation
+  completes. The store closes first, then the notifier. Each failed close
+  step is tried again with backoff, from 1 second up to 1 minute, until it
+  lands or the Worker stops. A close the server refuses for good, such as
+  one for a stream it doesn't know, isn't retried.
+- A Worker that stops before the server accepts that task closes nothing,
+  and the task's rerun closes the stream. What's left is a Worker that
+  stops after the server accepted the task and before the close landed.
+  Readers still end once the owner's run chain closes, since the store
+  marks the chain closed. The callers don't get the result. They get the
+  outcome of the owner's close status at the notifier's next owner check
+  (`streamnotifier.ownerCheckInterval`).
 - When the owner's run chain ends, the Worker that ran the final task
   closes the notifier of every topic of the chain that's still open, by the
   owner's close status, as the table below says. It does so after the final
