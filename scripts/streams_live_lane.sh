@@ -280,7 +280,7 @@ gate tests/contrib/streams/test_samples.py \
 gate tests/contrib/streams/test_scenario_demos.py \
   test_s1a_a_backend_sees_every_stage_in_order_then_the_end \
   test_s2_every_segment_url_resolves_in_order \
-  test_s3a_the_text_matches_and_the_turn_is_visible_at_task_acceptance \
+  test_s3a_the_text_matches_and_the_turn_is_visible_at_activation_end \
   test_s3b_a_retry_and_a_failed_turn_read_in_one_order \
   test_s3c_a_failed_last_attempt_leaves_its_deltas \
   test_s5a_a_late_dashboard_reads_what_the_app_read \
