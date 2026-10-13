@@ -384,6 +384,61 @@ async def test_a_publish_right_after_a_rejected_update_commits(client: Client):
         get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
     )
     assert record.value == {"after": "rejected update"}
+    # The rejected Update's task left no History, and it published nothing,
+    # so the run's attempt and sequence start where they would without it.
+    assert (record.attempt, record.sequence) == (1, 1)
+
+
+@workflow.defn
+class PublishFromAnUpdateHandler:
+    def __init__(self) -> None:
+        self.done = False
+
+    @workflow.run
+    async def run(self) -> None:
+        workflow_writer(EVENTS).publish({"from": "run"})
+        await workflow.wait_condition(lambda: self.done)
+        workflow_writer(EVENTS).publish({"from": "after"})
+
+    @workflow.update
+    def note(self, value: str) -> None:
+        workflow_writer(EVENTS).publish({"from": value})
+
+    @note.validator
+    def check_note(self, value: str) -> None:
+        if not value:
+            raise ValueError("an empty note is rejected")
+
+    @workflow.signal
+    def finish(self) -> None:
+        self.done = True
+
+
+async def test_an_update_handler_publish_is_written_with_its_task(client: Client):
+    # The Update runs in a speculative task. Its commit adds the marker command,
+    # so the server writes that task to History like any other.
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, PublishFromAnUpdateHandler) as worker:
+        handle = await streams_client.start_workflow(
+            PublishFromAnUpdateHandler.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowUpdateFailedError):
+            await handle.execute_update(PublishFromAnUpdateHandler.note, "")
+        await handle.execute_update(PublishFromAnUpdateHandler.note, "update")
+        await handle.signal(PublishFromAnUpdateHandler.finish)
+        await handle.result()
+    assert len(await output_markers(handle)) == 3
+    records = await read_all(
+        get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
+    )
+    assert [(r.value, r.attempt, r.sequence) for r in records] == [
+        ({"from": "run"}, 1, 1),
+        ({"from": "update"}, 1, 2),
+        ({"from": "after"}, 1, 3),
+    ]
 
 
 @workflow.defn
