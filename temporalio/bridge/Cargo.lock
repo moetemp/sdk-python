@@ -2808,6 +2808,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "temporalio-common-wasm",
  "temporalio-protos",
  "thiserror",
