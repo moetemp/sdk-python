@@ -419,7 +419,8 @@ async def test_a_workflows_own_publishes_reach_the_caller_as_progress(
     task_queue = f"stream-owner-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
-    store = MemoryStreams().notify_on_append()
+    # The caller waits on progress and never reads, so it never arms the stream.
+    store = MemoryStreams().notify_on_append(every_append=True)
     streams_client = await connect(client, store)
 
     async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:

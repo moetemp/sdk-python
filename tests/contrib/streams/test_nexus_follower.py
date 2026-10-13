@@ -562,7 +562,8 @@ async def _lane(client: Client, env: WorkflowEnvironment) -> _Lane:
     task_queue = f"follower-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
-    store = MemoryStreams().notify_on_append()
+    # The follower reads up to the progress position and never arms the stream.
+    store = MemoryStreams().notify_on_append(every_append=True)
     return _Lane(await connect(client, store), store, task_queue, endpoint, ref)
 
 
