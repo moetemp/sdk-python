@@ -1,1 +1,1 @@
-Core: Experimental: `StreamStore` has `disarm` and `newest_or_arm`, and its read, append and promote messages carry the arm. The Redis store keeps it in each topic's meta as `arm` and `arm_seq`, which changes the append and promote script hashes.
+Core: Experimental: `StreamStore` has `disarm` and `newest_or_arm`, and its read and append messages carry the arm. The Redis store keeps it in each topic's meta as `arm` and `arm_seq`, which changes the append script hash.

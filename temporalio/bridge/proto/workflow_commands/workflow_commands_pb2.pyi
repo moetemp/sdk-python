@@ -370,9 +370,10 @@ global___WorkflowCommand = WorkflowCommand
 class WorkflowOutputStreamCommit(google.protobuf.message.Message):
     """The stream records this activation published, sent with its completion.
 
-    Core builds the output manifest from them and records it in a `core_external_stream` marker
-    ordered before the completion's other commands, so the records become visible exactly when the
-    Workflow Task is accepted. While replaying, lang sends the same records without bodies, and
+    Core appends the records to the stream store when it gets this completion, so readers see them
+    before the Workflow Task completes. Core also builds the output manifest from them and records it
+    in a `core_external_stream` marker ordered before the completion's other commands. While
+    replaying, lang sends the same records without bodies, and
     Core compares the manifest it builds from them with the recorded one. A mismatch, a commit
     where none was recorded, or a recorded manifest the replayed task doesn't commit again is
     nondeterminism. Core takes one commit per completion.
@@ -394,8 +395,8 @@ class WorkflowOutputStreamCommit(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         global___OutputClose
     ]:
-        """The topics this activation closed. Readers end once the output is promoted, and an
-        operation that handed out a closed topic completes with its result. Each close needs its
+        """The topics this activation closed. Core closes them once the server accepts the Workflow
+        Task, so a task that runs again can still publish to them. An operation that handed out a closed topic completes with its result. Each close needs its
         topic's FINISH record in `records`, so the marker proves it.
         """
     def __init__(
@@ -424,8 +425,8 @@ class OutputClose(google.protobuf.message.Message):
     topic: builtins.str
     @property
     def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """After lang's payload codec. Sent again while replaying, since a close that History proves
-        may still need sending.
+        """After lang's payload codec. Sent again while replaying, since a close whose completion had no
+        known answer is sent once replay finds its commit in History.
         """
     @property
     def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
