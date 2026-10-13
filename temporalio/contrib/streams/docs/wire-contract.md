@@ -52,8 +52,8 @@ use it:
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
-| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>` |
-| `attempt` | 6 | The producer's attempt |
+| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, and a Local Activity as `local-<call number>@<scheduling run id>` |
+| `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:

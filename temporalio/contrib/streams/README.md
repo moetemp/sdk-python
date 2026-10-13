@@ -69,6 +69,35 @@ To resume later, keep the last `record.cursor` and pass it back as
 
 The sample runs in full in `tests/contrib/streams/samples/`.
 
+## A Local Activity streams to its Workflow
+
+A Local Activity calls `activity_handle()` the same way, and its records
+are visible while the Workflow Task that runs it is still open. So an agent
+loop that runs its model calls as Local Activities streams their tokens.
+
+A Local Activity's attempt is not durable: after a Worker crash or a failed
+Workflow Task, the same call runs again from attempt 1. So it writes with
+an identity of its own:
+
+- **Producer id.** `local-<n>@<scheduling run id>`, where `n` counts the
+  run's Local Activity calls in order. The store plugin's Worker interceptor
+  stamps the number on each call in a header, so it stays the same across
+  reruns, and across a retry that backs off longer than
+  `local_retry_threshold`, which gets a new Activity id.
+- **Attempt.** Before the first append, the producer asks the server for
+  the run's History length `h` and the pending Workflow Task's attempt `t`.
+  With the Local Activity's attempt `a`, it writes attempt
+  `(h * 100_000 + t) * 10_000 + a`. Each rerun runs in a later Workflow Task
+  attempt, so the attempt grows, and readers see `SUPERSEDED` before the
+  rerun's records. A retry inside one attempt is written once, as for any
+  producer.
+
+The first append of each Local Activity attempt waits for that one
+`DescribeWorkflowExecution` call, so the Worker's identity needs permission
+to describe the Workflow. A Local Activity past attempt 9,999, or in a
+Workflow Task past attempt 99,999, raises `StreamUnsupportedError` on its
+first append.
+
 ## A Workflow publishes through an Activity
 
 Workflow code can't do I/O, so `workflow_activity_writer` runs a built-in
