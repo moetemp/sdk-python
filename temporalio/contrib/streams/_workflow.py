@@ -41,9 +41,9 @@ estimates.
 """
 
 # Upper bounds, in bytes, on what the manifest spends: once per completion
-# (versions, stage token, floor, run id, store name, the segment's header),
-# and per topic (its entry, counts, fingerprint and segment count) on top of
-# the topic name itself.
+# (versions, floor, run id, store name, the segment's header), and per topic
+# (its entry, counts, fingerprint and segment count) on top of the topic name
+# itself.
 _MANIFEST_FIXED_BYTES = 512
 _MANIFEST_TOPIC_BYTES = 72
 # The largest body one record may carry, the same limit the stream service
