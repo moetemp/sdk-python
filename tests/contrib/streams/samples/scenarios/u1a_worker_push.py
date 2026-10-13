@@ -1,4 +1,4 @@
-"""Scenario 1a with U5: the app's Worker gets each stage pushed, with no long-poll.
+"""Scenario 1a with a Worker follower: each stage is pushed to the app's Worker.
 
 ``OrderWorkflow`` publishes the order's stages and closes its stream when the
 order is delivered. A stream operation names the order's stream. The app

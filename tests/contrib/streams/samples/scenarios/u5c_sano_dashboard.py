@@ -1,4 +1,4 @@
-"""Scenario 5c with U5: dashboards follow a delivery as standalone operations.
+"""Scenario 5c with Worker followers: dashboards follow a delivery as standalone operations.
 
 ``Delivery`` publishes 50 stages, waits, then publishes 5 more and closes its
 stream. A first dashboard starts following after the 50. It reads the
