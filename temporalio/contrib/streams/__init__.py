@@ -43,6 +43,10 @@ context then reaches a stream the same way:
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.
 
+In this release only a Workflow owns a stream, and only Activities and
+clients read one. Reading inside a Workflow (:func:`workflow_reader`) and
+the other owner kinds raise :class:`StreamUnsupportedError`.
+
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
 as an ordinary payload.
@@ -78,6 +82,7 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamOwnerKind, StreamRef
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
+from temporalio.contrib.streams._workflow import workflow_reader
 
 __all__ = [
     "ActivityStreamHandle",
@@ -108,4 +113,5 @@ __all__ = [
     "activity_handle",
     "get_stream_handle",
     "topic",
+    "workflow_reader",
 ]

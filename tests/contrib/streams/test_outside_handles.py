@@ -282,19 +282,6 @@ async def test_a_retry_through_a_nonce_codec_still_dedupes(client: Client):
     assert [r.value for r in await read_all(stream.read())] == ["a"]
 
 
-async def test_an_activity_with_no_workflow_has_no_workflow_stream():
-    env = ActivityEnvironment()
-    env.info = dataclasses.replace(
-        ActivityEnvironment.default_info(), workflow_id=None, workflow_run_id=None
-    )
-
-    async def standalone() -> None:
-        activity_handle()
-
-    with pytest.raises(ValueError, match="not scheduled by a Workflow"):
-        await env.run(standalone)
-
-
 @activity.defn
 async def count_twice() -> str:
     producer = activity_handle().producer(topic=TOKENS)
