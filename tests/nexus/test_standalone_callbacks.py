@@ -21,19 +21,20 @@ from nexusrpc.handler import StartOperationContext, service_handler, sync_operat
 import temporalio.api.workflowservice.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
-from temporalio.api.notificationservice.v1 import (
-    OnCompleteRequest,
-    OnCompleteResponse,
-    OnProgressRequest,
-    OnProgressResponse,
-)
 from temporalio.client import (
     Client,
     NexusClient,
     NexusHandlerCallback,
     NexusOperationHandle,
 )
-from temporalio.nexus.system.notification_service import NotificationService
+from temporalio.nexus.system.notification_service import (
+    NotificationService,
+    OnCompleteRequest,
+    OnCompleteRequestResultSuccess,
+    OnCompleteResponse,
+    OnProgressRequest,
+    OnProgressResponse,
+)
 from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -209,6 +210,5 @@ async def test_live_a_worker_gets_the_completion_of_a_standalone_operation(
 
     # The server sends the task with no endpoint, which the Worker serves.
     assert receiver.endpoints == [""]
-    converter = client.data_converter.payload_converter
-    assert converter.from_payload(completion.success) == "hello"
-    assert converter.from_payload(completion.source_context) == "context"
+    assert completion.result == OnCompleteRequestResultSuccess("hello")
+    assert completion.source_context == "context"
