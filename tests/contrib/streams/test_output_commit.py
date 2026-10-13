@@ -1,8 +1,8 @@
 """A Workflow's own publish rides the completion of the activation that made it.
 
 The writer adds the records to the completion's commit, the Worker's
-completion encoder runs each body through the codec, and Core records a
-marker of them and makes them visible once the Workflow Task is accepted.
+completion encoder runs each body through the codec, and Core appends them
+when the activation completes and records a marker of them.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamClosedError,
     StreamStorePlugin,
+    Supersession,
     activity_handle,
     get_stream_handle,
     topic,
@@ -84,7 +85,6 @@ async def test_an_accepted_task_commits_its_output_in_a_marker(client: Client):
     (marker,) = await output_markers(handle)
     manifest = marker.output
     assert manifest.run_id == handle.result_run_id
-    assert manifest.stage_token
     assert [(t.topic, t.record_count, t.finished) for t in manifest.topics] == [
         ("events", 3, True),
         ("other", 1, False),
@@ -97,6 +97,10 @@ async def test_an_accepted_task_commits_its_output_in_a_marker(client: Client):
         {"n": 3},
     ]
     assert events[-1].kind is RecordKind.FINISH
+    # The run writes as one producer, numbering each topic from one.
+    assert [(r.producer_id, r.attempt, r.sequence) for r in events] == [
+        (f"@{handle.result_run_id}", 1, sequence) for sequence in (1, 2, 3)
+    ]
     assert [r.value for r in await read_all(stream.read(topic=OTHER))] == [{"n": 2}]
 
 
@@ -115,7 +119,7 @@ class FailsItsFirstTask:
             raise RuntimeError("fail this Workflow Task once")
 
 
-async def test_a_failed_task_publishes_nothing(client: Client):
+async def test_a_failed_activation_publishes_nothing(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
     workflow_id = new_workflow_id()
     async with new_worker(streams_client, FailsItsFirstTask) as worker:
@@ -137,8 +141,9 @@ async def test_a_failed_task_publishes_nothing(client: Client):
     records = await read_all(
         get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
     )
-    # Only the retry's record: the failed task's completion never reached Core.
-    assert [r.value for r in records] == [{"attempt": 2}]
+    # Only the retry's record: the failed activation's completion carried no
+    # commit. The failed task is in History, so the retry writes as attempt 2.
+    assert [(r.value, r.attempt) for r in records] == [({"attempt": 2}, 2)]
 
 
 class NonceCodec(PayloadCodec):
@@ -224,11 +229,116 @@ async def test_two_publishing_completions_in_one_task_commit_in_order(
 
     markers = await output_markers(handle)
     assert len(markers) == 2
-    assert markers[0].output.stage_token != markers[1].output.stage_token
     records = await read_all(
         get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
     )
-    assert [r.value for r in records] == [{"n": "before"}, {"n": "after"}]
+    assert [(r.value, r.sequence) for r in records] == [
+        ({"n": "before"}, 1),
+        ({"n": "after"}, 2),
+    ]
+
+
+_released: dict[str, asyncio.Event] = {}
+
+
+@activity.defn
+async def wait_for_release(key: str) -> None:
+    await _released[key].wait()
+
+
+@workflow.defn
+class PublishThenWaitInALocalActivity:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        workflow_writer(EVENTS).publish({"n": "before"})
+        await workflow.execute_local_activity(
+            wait_for_release, key, start_to_close_timeout=timedelta(seconds=30)
+        )
+        workflow_writer(EVENTS).publish({"n": "after"})
+
+
+async def test_a_publish_is_visible_while_its_task_runs_a_local_activity(
+    client: Client,
+):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    _released[workflow_id] = asyncio.Event()
+    async with new_worker(
+        streams_client,
+        PublishThenWaitInALocalActivity,
+        activities=[wait_for_release],
+    ) as worker:
+        handle = await streams_client.start_workflow(
+            PublishThenWaitInALocalActivity.run,
+            workflow_id,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        reader = get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
+        try:
+            first = await asyncio.wait_for(anext(reader), 10)
+        finally:
+            await reader.aclose()
+        assert first.value == {"n": "before"}
+        # The first Workflow Task still runs the local activity, so the server
+        # has not accepted the task that published the record.
+        completed = [
+            event
+            async for event in handle.fetch_history_events()
+            if event.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED
+        ]
+        assert completed == []
+        _released[workflow_id].set()
+        await handle.result()
+
+
+_reruns: dict[str, int] = {}
+
+
+# Unsandboxed so the counter survives the failed task.
+@workflow.defn(sandboxed=False)
+class FailsAfterItsRecordIsVisible:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        workflow_writer(EVENTS).publish({"n": 1})
+        await workflow.execute_local_activity(
+            nothing, start_to_close_timeout=timedelta(seconds=10)
+        )
+        _reruns[key] = _reruns.get(key, 0) + 1
+        if _reruns[key] == 1:
+            raise RuntimeError("fail this Workflow Task once")
+        workflow_writer(EVENTS).finish()
+
+
+async def test_a_rerun_of_a_failed_task_supersedes_what_it_published(
+    client: Client,
+):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams_client, FailsAfterItsRecordIsVisible, activities=[nothing]
+    ) as worker:
+        handle = await streams_client.start_workflow(
+            FailsAfterItsRecordIsVisible.run,
+            workflow_id,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    records = await read_all(
+        get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
+    )
+    producer = f"@{handle.result_run_id}"
+    # The first activation's record was visible before the task failed. The
+    # rerun publishes it again as the run's next attempt, with the same
+    # sequence, and readers see the change.
+    assert [(r.kind, r.value, r.attempt, r.sequence) for r in records] == [
+        (RecordKind.DATA, {"n": 1}, 1, 1),
+        (RecordKind.SUPERSEDED, None, 2, 0),
+        (RecordKind.DATA, {"n": 1}, 2, 1),
+        (RecordKind.FINISH, None, 2, 2),
+    ]
+    assert records[1].supersession == Supersession(producer, 1, 2)
 
 
 @workflow.defn
@@ -274,6 +384,61 @@ async def test_a_publish_right_after_a_rejected_update_commits(client: Client):
         get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
     )
     assert record.value == {"after": "rejected update"}
+    # The rejected Update's task left no History, and it published nothing,
+    # so the run's attempt and sequence start where they would without it.
+    assert (record.attempt, record.sequence) == (1, 1)
+
+
+@workflow.defn
+class PublishFromAnUpdateHandler:
+    def __init__(self) -> None:
+        self.done = False
+
+    @workflow.run
+    async def run(self) -> None:
+        workflow_writer(EVENTS).publish({"from": "run"})
+        await workflow.wait_condition(lambda: self.done)
+        workflow_writer(EVENTS).publish({"from": "after"})
+
+    @workflow.update
+    def note(self, value: str) -> None:
+        workflow_writer(EVENTS).publish({"from": value})
+
+    @note.validator
+    def check_note(self, value: str) -> None:
+        if not value:
+            raise ValueError("an empty note is rejected")
+
+    @workflow.signal
+    def finish(self) -> None:
+        self.done = True
+
+
+async def test_an_update_handler_publish_is_written_with_its_task(client: Client):
+    # The Update runs in a speculative task. Its commit adds the marker command,
+    # so the server writes that task to History like any other.
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, PublishFromAnUpdateHandler) as worker:
+        handle = await streams_client.start_workflow(
+            PublishFromAnUpdateHandler.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowUpdateFailedError):
+            await handle.execute_update(PublishFromAnUpdateHandler.note, "")
+        await handle.execute_update(PublishFromAnUpdateHandler.note, "update")
+        await handle.signal(PublishFromAnUpdateHandler.finish)
+        await handle.result()
+    assert len(await output_markers(handle)) == 3
+    records = await read_all(
+        get_stream_handle(streams_client, workflow_id).read(topic=EVENTS)
+    )
+    assert [(r.value, r.attempt, r.sequence) for r in records] == [
+        ({"from": "run"}, 1, 1),
+        ({"from": "update"}, 1, 2),
+        ({"from": "after"}, 1, 3),
+    ]
 
 
 @workflow.defn
@@ -350,8 +515,8 @@ async def test_a_committed_close_leaves_the_topic_closed(client: Client, backing
             ClosesItsTopic.run, id=workflow_id, task_queue=worker.task_queue
         )
         stream = get_stream_handle(streams_client, workflow_id)
-        # Core closes the topic in the background once the task's records are
-        # promoted, so the case waits for the refusal.
+        # Core closes the topic in the background once the server accepts the
+        # task, so the case waits for the refusal.
         closed = False
         for attempt in range(1, 51):
             producer = stream.producer(
