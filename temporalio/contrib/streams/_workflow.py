@@ -3,10 +3,11 @@
 The writer converts and hashes values on the Workflow thread and adds the
 records to the activation's ``WorkflowOutputStreamCommit``. Nothing here does
 I/O. The Worker's completion encoder runs each body through the payload
-codec, and Core stages the records, records a marker of them, and makes them
-visible once the Workflow Task is accepted. While replaying, the same
-records go without bodies, and Core checks them against the marker. Reading
-a stream inside a Workflow is not part of this release.
+codec, and Core appends the records to the store when the activation
+completes, before the Workflow Task completes, and records a marker of them.
+While replaying, the same records go without bodies, and Core checks them
+against the marker. Reading a stream inside a Workflow is not part of this
+release.
 """
 
 from __future__ import annotations
@@ -40,17 +41,17 @@ estimates.
 """
 
 # Upper bounds, in bytes, on what the manifest spends: once per completion
-# (versions, stage token, floor, run id, store name, the segment's header),
-# and per topic (its entry, counts, fingerprint and segment count) on top of
-# the topic name itself.
+# (versions, floor, run id, store name, the segment's header), and per topic
+# (its entry, counts, fingerprint and segment count) on top of the topic name
+# itself.
 _MANIFEST_FIXED_BYTES = 512
 _MANIFEST_TOPIC_BYTES = 72
 # The largest body one record may carry, the same limit the stream service
 # keeps for a record that crosses Nexus.
 _MAX_RECORD_BYTES = 3 << 19
-# The most body bytes one activation may publish. Core stages them in one store
-# call before the completion goes out, and a call too large fails the Workflow
-# Task on every retry.
+# The most body bytes one activation may publish. Core appends them when the
+# activation completes, and a call too large fails the Workflow Task on every
+# retry.
 _MAX_ACTIVATION_BYTES = 16 << 20
 
 
@@ -157,12 +158,15 @@ class WorkflowStreamWriter(Generic[T]):
         """Append ``value`` to this topic.
 
         Synchronous: the value is converted with the Workflow's payload
-        converter here and committed with this Workflow Task. A
+        converter here and committed with this activation. A
         :class:`temporalio.common.RawValue` passes through pre-encoded.
 
-        The record becomes visible to readers when the Workflow Task that
-        published it is accepted, and never if the task fails. Its body goes
-        through the Workflow's payload codec before it is stored.
+        The record becomes visible to readers when the activation that
+        published it completes, before the Workflow Task completes. If the
+        task then fails or times out, the record stays, and the task's rerun
+        publishes again under the run's next attempt, which readers see as
+        ``SUPERSEDED``. Its body goes through the Workflow's payload codec
+        before it is stored.
 
         Raises:
             ValueError: The topic was already finished in this run, or the
