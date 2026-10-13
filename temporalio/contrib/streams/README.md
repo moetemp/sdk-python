@@ -37,7 +37,9 @@ process.
 
 Define a topic once with the type its records decode to, publish from the
 Workflow, and read from a client. A Workflow's own publish becomes visible
-when its Workflow Task is accepted, and never if the task fails.
+when the activation that published it completes, before its Workflow Task
+completes. A long task that runs Local Activities shows each record as soon
+as it is published.
 
 ```python
 PROGRESS = topic("progress", dict)
@@ -62,6 +64,12 @@ The read ends when the Workflow's run chain closes. It follows
 Continue-as-New, and `record.run_id` says which run published each record.
 To resume later, keep the last `record.cursor` and pass it back as
 `read(after=cursor)`.
+
+Each run writes as the producer `@<run id>`. If a Workflow Task fails or
+times out after it published, its records stay, and the task's rerun
+publishes again under the run's next attempt. Readers first see a
+`SUPERSEDED` record, as they do for an Activity retry, so they can drop what
+the failed attempt wrote.
 
 ## Path B: an Activity streams to its Workflow
 
@@ -97,7 +105,8 @@ Both samples run in full in `tests/contrib/streams/samples/`.
 
 ## A Workflow publishes through an Activity
 
-`workflow_writer` publishes with the Workflow Task. `workflow_activity_writer`
+`workflow_writer` publishes from Workflow code, and each record is visible
+when the activation that published it completes. `workflow_activity_writer`
 runs a built-in Activity for each call instead. The store plugin registers
 that Activity on every Worker built from the client, so there's nothing to
 register.
