@@ -40,12 +40,18 @@ from temporalio.contrib.streams import (
     activity_handle,
     get_stream_handle,
     topic,
+    workflow_writer,
 )
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 EVENTS = topic("events", dict)
+
+# Publish clock readings of Workflow publishes, by (Workflow id, index). The
+# Workflow runs unsandboxed so it can write here; the payload itself stays
+# deterministic.
+_workflow_sent: dict[tuple[str, int], int] = {}
 
 
 def _now() -> int:
@@ -86,6 +92,21 @@ class Owner:
         self.done = True
 
 
+@workflow.defn(sandboxed=False)
+class WorkflowPublisher:
+    """Publishes ``count`` records, one per Workflow Task."""
+
+    @workflow.run
+    async def run(self, count: int, gap_ms: int) -> None:
+        writer = workflow_writer(EVENTS)
+        for index in range(count):
+            key = (workflow.info().workflow_id, index)
+            if not workflow.unsafe.is_replaying():
+                _workflow_sent.setdefault(key, _now())
+            writer.publish({"i": index})
+            await workflow.sleep(timedelta(milliseconds=gap_ms))
+
+
 @activity.defn
 async def produce(count: int, gap_ms: int) -> None:
     producer = activity_handle().producer(topic=EVENTS)
@@ -114,7 +135,7 @@ class Bench:
         return get_stream_handle(self.client, workflow_id, topic=EVENTS)
 
     async def read(
-        self, workflow_id: str, count: int
+        self, workflow_id: str, count: int, sent: dict[int, int] | None = None
     ) -> tuple[list[float], int, float]:
         """Read ``count`` records; return latencies, bytes and the finish clock."""
         latencies: list[float] = []
@@ -126,7 +147,8 @@ class Bench:
                     continue
                 received = _now()
                 value = record.value
-                latencies.append((received - value["t"]) / 1e6)
+                started = value["t"] if sent is None else sent[value["i"]]
+                latencies.append((received - started) / 1e6)
                 received_bytes += len(value.get("pad", ""))
                 if len(latencies) == count:
                     break
@@ -158,6 +180,30 @@ async def perf04_activity(bench: Bench, count: int, gap_ms: int) -> dict[str, An
         "first_append_ms": round(latencies[0], 2),
         **_percentiles(latencies[1:]),
     }
+
+
+async def perf04_workflow(bench: Bench, count: int, gap_ms: int) -> dict[str, Any]:
+    workflow_id = f"bench-wf-{uuid.uuid4().hex}"
+    handle = await bench.client.start_workflow(
+        WorkflowPublisher.run,
+        args=[count, gap_ms],
+        id=workflow_id,
+        task_queue=bench.task_queue,
+    )
+    # The publish clock is filled in as the Workflow runs, so the reader
+    # looks each record up on receipt.
+    latencies, _, _ = await bench.read(workflow_id, count, sent=_SentView(workflow_id))
+    await handle.result()
+    return {"scenario": "perf04-workflow", "gap_ms": gap_ms, **_percentiles(latencies)}
+
+
+class _SentView(dict):
+    def __init__(self, workflow_id: str) -> None:
+        super().__init__()
+        self._workflow_id = workflow_id
+
+    def __getitem__(self, index: int) -> int:
+        return _workflow_sent[(self._workflow_id, index)]
 
 
 async def _produce_load(
@@ -314,7 +360,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "scenario",
-        choices=["perf04-activity", "perf05a"],
+        choices=["perf04-activity", "perf04-workflow", "perf05a"],
     )
     parser.add_argument("--redis", required=True)
     parser.add_argument("--count", type=int, default=300)
@@ -338,7 +384,7 @@ async def main(argv: Sequence[str] | None = None) -> None:
         async with Worker(
             client,
             task_queue=task_queue,
-            workflows=[Owner, ActivityPublisher],
+            workflows=[Owner, WorkflowPublisher, ActivityPublisher],
             activities=[produce],
             max_cached_workflows=5000,
             max_concurrent_activities=1000,
@@ -346,6 +392,8 @@ async def main(argv: Sequence[str] | None = None) -> None:
             bench = Bench(client, task_queue)
             if args.scenario == "perf04-activity":
                 result = await perf04_activity(bench, args.count, args.gap_ms)
+            elif args.scenario == "perf04-workflow":
+                result = await perf04_workflow(bench, args.count, args.gap_ms)
             else:
                 result = await load(
                     bench,
