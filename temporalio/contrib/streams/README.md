@@ -85,3 +85,4 @@ The sample runs in full in `tests/contrib/streams/samples/`.
 ## Further reading
 
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
+- [Stream wire contract](docs/wire-contract.md)
