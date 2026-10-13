@@ -6,11 +6,12 @@ Core for the store it names. Core serves that one store to the client's
 handles and to every Worker built from the client, so a Workflow's publish
 and an outside read meet in the same place.
 
-On a Worker the plugin hands Core the store, which commits a Workflow's
-records with its Workflow Task, and adds one interceptor. The interceptor
-tells Workflow code, through the Worker's extern functions, that the Worker
-has a store, so a publish on a Worker without one fails at the call. The
-plugin also registers the built-in Activity that
+On a Worker the plugin hands Core the store, which appends a Workflow's
+records when the activation that published them completes. It adds two
+interceptors. One tells Workflow code, through the Worker's extern
+functions, that the Worker has a store, so a publish on a Worker without
+one fails at the call. The other gives a Local Activity a producer
+identity. The plugin also registers the built-in Activity that
 :func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
 """
 
@@ -102,6 +103,10 @@ class StreamStorePlugin(SimplePlugin):
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
         """Hand the client's store to the Worker, and add the publish Activity.
 
+        Also adds the interceptors that tell Workflow code the Worker has a
+        store and that stamp each Local Activity call, so a Local Activity can
+        publish.
+
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
                 or that client was not made with ``Client.connect``. A
@@ -125,6 +130,7 @@ class StreamStorePlugin(SimplePlugin):
             held.append(_StreamsInterceptor())
         config["interceptors"] = held
         # Imported here, since the Activity reaches the store through this module.
+        from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow_activity import publish_activity
 
         activities = list(config.get("activities") or [])
@@ -132,6 +138,11 @@ class StreamStorePlugin(SimplePlugin):
         if publish_activity not in activities:
             activities.append(publish_activity)
         config["activities"] = activities
+        interceptors = list(config.get("interceptors") or [])
+        # Two would number each Local Activity call twice.
+        if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
+            interceptors.append(StreamsInterceptor())
+        config["interceptors"] = interceptors
         return config
 
     @property
