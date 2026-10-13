@@ -477,7 +477,10 @@ for any standalone operation, stream or not.
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata
   at most 2 KiB. The server refuses larger ones.
 - A stream's notifier holds at most `streamnotifier.maxCallbacks` callers
-  (100 by default). An attach beyond that is refused.
+  (2,000 by default), and callbacks of at most
+  `streamnotifier.maxCallbackBytes` in total (4 MiB by default). A full
+  notifier first drops its oldest callbacks that already completed. If that
+  does not make room, it refuses the attach.
 - A read answer holds at most 1 MiB of records
   (`TemporalStreamsHandler(..., max_answer_bytes=...)`). The reader goes on
   with the next read.
