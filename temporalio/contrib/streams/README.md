@@ -9,7 +9,8 @@ Temporal or its History. Core runs the store for every SDK, so Python reads
 what any other SDK writes. A Workflow Task that publishes adds one marker
 event to History, which carries a small manifest of what it published and
 counts toward the History limits. Appends from Activities and clients add
-nothing to History.
+nothing to History. A publish through `workflow_activity_writer` adds the
+events of one Activity instead.
 
 ## Register
 
@@ -93,6 +94,48 @@ right. With several producers on a topic, keep the text per
 `record.producer_id` and clear only that producer's.
 
 Both samples run in full in `tests/contrib/streams/samples/`.
+
+## A Workflow publishes through an Activity
+
+`workflow_writer` publishes with the Workflow Task. `workflow_activity_writer`
+runs a built-in Activity for each call instead. The store plugin registers
+that Activity on every Worker built from the client, so there's nothing to
+register.
+
+```python
+PROGRESS = topic("progress", dict)
+
+@workflow.defn
+class ProcessOrder:
+    @workflow.run
+    async def run(self, order_id: str) -> str:
+        progress = workflow_activity_writer(PROGRESS)
+        for step in ("reserved", "charged", "shipped"):
+            await progress.publish({"order": order_id, "step": step})
+        await progress.publish_batch([{"order": order_id, "step": "done"}])
+        await progress.finish()
+        return "done"
+```
+
+- **Order.** Each call waits for its Activity. Calls on one topic of a run
+  go one at a time, in the order they were made, even across writers.
+- **Visibility.** A record is visible once the Activity's append is
+  accepted. That is after the Workflow Task that scheduled the Activity is
+  accepted, so a failed task publishes nothing.
+- **Identity.** The Activity writes as itself, like any Activity. A retry
+  starts a new attempt, so readers see `SUPERSEDED` before the records the
+  retry wrote. An append whose outcome is unknown is repeated in the same
+  attempt, and the store writes it once.
+- **Options.** `task_queue` picks where the Activity runs (the Workflow's
+  task queue by default). `start_to_close_timeout` is 30 seconds by
+  default. `schedule_to_close_timeout` and `retry_policy` default to
+  Temporal's Activity defaults, so a publish retries until the store
+  answers. A closed stream fails the publish at once.
+- **Codec.** The values are converted once, in the Workflow, with its
+  payload converter. The payload codec encodes them in the Activity's input,
+  and again on each record body when the Activity stores it.
+- **Size.** A record holds at most 1.5 MiB. A batch rides in the
+  Activity's input, so the server's payload size limit bounds it.
 
 ## What to know
 
