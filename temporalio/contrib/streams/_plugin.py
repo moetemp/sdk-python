@@ -7,7 +7,8 @@ handles and to every Worker built from the client, so a Worker's output
 and an outside read meet in the same place.
 
 On a Worker the plugin registers the built-in Activity that
-:func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
+:func:`temporalio.contrib.streams.workflow_activity_writer` schedules, and
+the interceptor that gives a Local Activity a producer identity.
 """
 
 from __future__ import annotations
@@ -94,6 +95,9 @@ class StreamStorePlugin(SimplePlugin):
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
         """Check that the Worker's client carries this store, and add the publish Activity.
 
+        Also adds the interceptor that stamps each Local Activity call, so a
+        Local Activity can publish.
+
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
                 or that client was not made with ``Client.connect``. A
@@ -112,6 +116,7 @@ class StreamStorePlugin(SimplePlugin):
                 "client, as Client.connect(..., plugins=[store])"
             )
         # Imported here, since the Activity reaches the store through this module.
+        from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow_activity import publish_activity
 
         activities = list(config.get("activities") or [])
@@ -119,6 +124,11 @@ class StreamStorePlugin(SimplePlugin):
         if publish_activity not in activities:
             activities.append(publish_activity)
         config["activities"] = activities
+        interceptors = list(config.get("interceptors") or [])
+        # Two would number each Local Activity call twice.
+        if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
+            interceptors.append(StreamsInterceptor())
+        config["interceptors"] = interceptors
         return config
 
     @property
