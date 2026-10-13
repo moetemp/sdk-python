@@ -172,8 +172,9 @@ async def test_n4_a_connector_posts_every_message_and_idles_with_no_task(
     )
     assert outcome.posts == ["the build is green", "the release is out"]
     assert outcome.close_result == "2 messages"
-    # The agent idles 10 s, and the connector has no Workflow Task meanwhile.
-    assert outcome.longest_quiet_seconds >= 8, outcome.longest_quiet_seconds
+    # The agent idles 10 s. The connector's last read waits its 2 s idle wait
+    # and arms the stream, then the connector has no Workflow Task.
+    assert outcome.longest_quiet_seconds >= 6, outcome.longest_quiet_seconds
 
 
 async def test_n5c_followers_that_attach_late_get_every_record(
