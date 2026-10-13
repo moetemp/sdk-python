@@ -9,7 +9,9 @@ and an outside read meet in the same place.
 On a Worker the plugin hands Core the store, which commits a Workflow's
 records with its Workflow Task, and adds one interceptor. The interceptor
 tells Workflow code, through the Worker's extern functions, that the Worker
-has a store, so a publish on a Worker without one fails at the call.
+has a store, so a publish on a Worker without one fails at the call. The
+plugin also registers the built-in Activity that
+:func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
 """
 
 from __future__ import annotations
@@ -98,7 +100,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Hand the client's store to the Worker.
+        """Hand the client's store to the Worker, and add the publish Activity.
 
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
@@ -122,6 +124,14 @@ class StreamStorePlugin(SimplePlugin):
         if not any(isinstance(i, _StreamsInterceptor) for i in held):
             held.append(_StreamsInterceptor())
         config["interceptors"] = held
+        # Imported here, since the Activity reaches the store through this module.
+        from temporalio.contrib.streams._workflow_activity import publish_activity
+
+        activities = list(config.get("activities") or [])
+        # The same plugin on the client and the Worker configures the Worker twice.
+        if publish_activity not in activities:
+            activities.append(publish_activity)
+        config["activities"] = activities
         return config
 
     @property
