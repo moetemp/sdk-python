@@ -20,9 +20,10 @@ another team's service, needs a feed of results while the work runs. For
 example a model's tokens, the steps of a long job, or messages for a chat
 channel.
 
-Inside one namespace you do not need Nexus. A Workflow or a client can read a
+Inside one namespace a client or an Activity does not need Nexus. It can read a
 stream it knows the reference of directly, as in the
-[package README](../README.md).
+[package README](../README.md). A Workflow reads only through a
+stream-returning operation.
 
 ## Server setup
 
@@ -434,9 +435,9 @@ for any standalone operation, stream or not.
   at most 2 KiB. The server refuses larger ones.
 - A stream's notifier holds at most `streamnotifier.maxCallbacks` callers
   (100 by default). An attach beyond that is refused.
-- A read answer holds at most 1 MiB of records
-  (`TemporalStreamsHandler(..., max_answer_bytes=...)`). The reader goes on
-  with the next read.
+- A read answer holds about 1 MiB of records past the first record
+  (`TemporalStreamsHandler(..., max_answer_bytes=...)`). The first record can
+  be up to 1.5 MiB. The reader goes on with the next read.
 - If a stream gets no attach and no notification for
   `streamnotifier.idleTimeout` (7 days by default), the notifier fails the
   callers waiting on it. The stream stays open, and later attaches and
