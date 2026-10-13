@@ -79,8 +79,9 @@ A Local Activity's attempt is not durable: after a Worker crash or a failed
 Workflow Task, the same call runs again from attempt 1. So it writes with
 an identity of its own:
 
-- **Producer id.** `local-<n>@<scheduling run id>`, where `n` counts the
-  run's Local Activity calls in order. The store plugin's Worker interceptor
+- **Producer id.** `__temporal_local_<n>@<scheduling run id>`, where `n`
+  counts the run's Local Activity calls in order. The `__temporal` prefix is
+  reserved, so no user Activity id writes as the same producer. The store plugin's Worker interceptor
   stamps the number on each call in a header, so it stays the same across
   reruns, and across a retry that backs off longer than
   `local_retry_threshold`, which gets a new Activity id.
@@ -92,11 +93,19 @@ an identity of its own:
   rerun's records. A retry inside one attempt is written once, as for any
   producer.
 
-The first append of each Local Activity attempt waits for that one
-`DescribeWorkflowExecution` call, so the Worker's identity needs permission
-to describe the Workflow. A Local Activity past attempt 9,999, or in a
-Workflow Task past attempt 99,999, raises `StreamUnsupportedError` on its
-first append.
+Known limits:
+
+- **One describe call.** Each Local Activity attempt makes one
+  `DescribeWorkflowExecution` call before its first append, so its first
+  record waits one round trip to the server. Later appends make no call.
+- **Describe permission.** The Worker's identity needs permission to
+  describe the Workflow.
+- **Ford removes the call.** Workflow code doesn't see the Workflow Task
+  attempt, so the server is asked for it. Ford's Core can supply the task
+  attempt to the Local Activity, which removes the call.
+- **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
+  Task past attempt 99,999, raises `StreamUnsupportedError` on its first
+  append.
 
 ## A Workflow publishes through an Activity
 
