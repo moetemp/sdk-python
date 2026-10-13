@@ -60,9 +60,10 @@ async def test_a_workflow_publishes_and_a_client_reads(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
     workflow_id = new_workflow_id()
     async with new_worker(streams_client, Publisher) as worker:
-        await streams_client.execute_workflow(
+        handle = await streams_client.start_workflow(
             Publisher.run, 3, id=workflow_id, task_queue=worker.task_queue
         )
+        await handle.result()
     stream = get_stream_handle(streams_client, workflow_id)
     records = await read_all(stream.read(topic=EVENTS))
     assert [r.kind for r in records] == [RecordKind.DATA] * 4 + [RecordKind.FINISH]
@@ -72,9 +73,11 @@ async def test_a_workflow_publishes_and_a_client_reads(client: Client):
         {"step": 1},
         {"step": 2},
     ]
-    # The owning Workflow writes with no producer identity: its task is the
-    # boundary, not a producer attempt.
-    assert {(r.producer_id, r.attempt, r.sequence) for r in records} == {("", 0, 0)}
+    # The run is the producer, and its sequence runs across its tasks. No task
+    # failed, so every record is from its first attempt.
+    assert [(r.producer_id, r.attempt, r.sequence) for r in records] == [
+        (f"@{handle.result_run_id}", 1, sequence) for sequence in range(1, 6)
+    ]
     (default,) = await read_all(stream.read(result_type=str))
     assert default.value == "on the default topic"
     assert default.topic == DEFAULT_TOPIC
@@ -193,7 +196,7 @@ class PublishesTooMuch:
 async def test_a_record_or_an_activation_too_large_is_refused_at_the_call(
     client: Client,
 ):
-    # Core stages an activation's bodies in one store call, so a body or an
+    # Core appends an activation's bodies when it completes, so a body or an
     # activation without a bound fails the task on every retry.
     streams_client = await connect_with(client, MemoryStreams())
     workflow_id = new_workflow_id()

@@ -197,7 +197,7 @@ class ExternalStreamMarkerData(google.protobuf.message.Message):
     terminal_boundary: global___ExternalStreamBoundary.ValueType
     @property
     def output(self) -> global___ExternalOutputStreamManifest:
-        """The output staged for this Workflow Task."""
+        """The output this Workflow Task published."""
     def __init__(
         self,
         *,
@@ -226,16 +226,14 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
     """Compact proof of the stream output one Workflow Task published, built by Core from the records
     in the completion's `WorkflowOutputStreamCommit`.
 
-    This message contains no record payloads. The stage token names the batch held in the stream
-    store, while the remaining fields let replay check the Workflow's logical output and let a cold
-    reader settle the held batch against History.
+    This message contains no record payloads. Core appends the records to the stream store when
+    lang completes the activation, and these fields let replay check the Workflow's logical output.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     SCHEMA_VERSION_FIELD_NUMBER: builtins.int
     FINGERPRINT_VERSION_FIELD_NUMBER: builtins.int
-    STAGE_TOKEN_FIELD_NUMBER: builtins.int
     HISTORY_FLOOR_EVENT_ID_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     TOPICS_FIELD_NUMBER: builtins.int
@@ -244,7 +242,6 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
     PROVIDER_FORMAT_VERSION_FIELD_NUMBER: builtins.int
     schema_version: builtins.int
     fingerprint_version: builtins.int
-    stage_token: builtins.str
     history_floor_event_id: builtins.int
     """The event immediately preceding this Workflow Task's WorkflowTaskScheduled event in the
     ordered History view used to build its activation.
@@ -264,9 +261,9 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
     ]:
         """One entry per activation segment, including segments which published no output."""
     provider_id: builtins.str
-    """The stream store that holds the batch. Reconciliation refuses to interpret the batch through
-    a different store or store format. Replay compares neither, since a store can be renamed,
-    swapped for a Replayer or change its stage layout without changing the output.
+    """The stream store the records went to, and the layout it keeps them in. Replay compares
+    neither, since a store can be renamed, swapped for a Replayer or change its layout without
+    changing the output.
     """
     provider_format_version: builtins.int
     def __init__(
@@ -274,7 +271,6 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
         *,
         schema_version: builtins.int = ...,
         fingerprint_version: builtins.int = ...,
-        stage_token: builtins.str = ...,
         history_floor_event_id: builtins.int = ...,
         run_id: builtins.str = ...,
         topics: collections.abc.Iterable[global___ExternalOutputTopicManifest]
@@ -301,8 +297,6 @@ class ExternalOutputStreamManifest(google.protobuf.message.Message):
             b"schema_version",
             "segments",
             b"segments",
-            "stage_token",
-            b"stage_token",
             "topics",
             b"topics",
         ],
