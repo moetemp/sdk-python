@@ -42,9 +42,17 @@ def store_of(client: Client) -> StreamStorePlugin:
     raise ValueError("the client carries no stream store")
 
 
+def who(record: StreamRecord[Any]) -> str:
+    """``workflow`` for the owning Workflow, which writes as ``@<run id>``, and
+    the producer id for anyone else."""
+    if record.producer_id.startswith("@"):
+        return "workflow"
+    return record.producer_id
+
+
 def describe(record: StreamRecord[Any]) -> str:
     """One line for a record, as a backend logs it."""
-    who = record.producer_id or "workflow"
+    writer = who(record)
     if record.kind is RecordKind.SUPERSEDED and record.supersession is not None:
         change = record.supersession
         return (
@@ -52,10 +60,10 @@ def describe(record: StreamRecord[Any]) -> str:
             f"-> {change.attempt}"
         )
     if record.kind is RecordKind.FINISH:
-        return f"FINISH {who}"
+        return f"FINISH {writer}"
     stale = " (stale)" if record.stale else ""
-    attempt = f" attempt {record.attempt}" if record.producer_id else ""
-    return f"{who}{attempt}: {record.value!r}{stale}"
+    attempt = f" attempt {record.attempt}" if writer != "workflow" else ""
+    return f"{writer}{attempt}: {record.value!r}{stale}"
 
 
 async def follow(
@@ -92,14 +100,15 @@ async def follow(
 def label(record: StreamRecord[Any]) -> str:
     """A short label for a record, for a demo's result.
 
-    A producer's record carries its attempt, and the owner's carries none.
+    A producer's record carries its attempt, and the owning Workflow's
+    carries none.
     """
     if record.kind is RecordKind.SUPERSEDED:
         return "SUPERSEDED"
     if record.kind is RecordKind.FINISH:
         return "FINISH"
     text = str(record.value)
-    if record.producer_id:
+    if who(record) != "workflow":
         text = f"{text}@{record.attempt}"
     return f"{text} stale" if record.stale else text
 
