@@ -64,6 +64,7 @@ def test_each_core_failure_kind_raises_its_error():
         StreamFailureKind.STREAM_FAILURE_KIND_RECORD: StreamRecordError,
         StreamFailureKind.STREAM_FAILURE_KIND_STORAGE: StreamStorageError,
         StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED: StreamUnsupportedError,
+        StreamFailureKind.STREAM_FAILURE_KIND_INVALID_ARGUMENT: ValueError,
     }
     # Every kind Core defines has its error, so a new kind fails here first.
     assert set(expected) == set(StreamFailureKind.values()) - {
