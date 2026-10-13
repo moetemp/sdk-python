@@ -3,8 +3,8 @@
 The Workflow publishes ``turn started`` and ``turn finished`` on ``turns``.
 The model Activity appends the deltas on ``deltas`` as its own producer.
 The backend reads both topics at once. The ``turns`` records become visible
-when the Workflow Task that publishes them is accepted, so the Activity,
-which that task scheduled, already sees ``turn started``.
+when the activation that publishes them completes, so the Activity, which
+that activation scheduled, already sees ``turn started``.
 
 Left out: the native stream. Redis or memory stands in for it, so appends
 never contend with the Workflow's own writes.
@@ -44,8 +44,8 @@ class Turn:
 
 @activity.defn
 async def model(prompt: str) -> Turn:
-    # The task that scheduled this Activity published the turn, and it was
-    # accepted before the Activity ran, so the record is there already.
+    # The activation that scheduled this Activity published the turn, and Core
+    # appended it when that activation completed, so the record is there.
     newest = await activity_handle().latest(topic=TURNS)
     deltas = activity_handle().producer(topic=DELTAS)
     words = ["Here", " is", " an", " answer", " to ", prompt]
