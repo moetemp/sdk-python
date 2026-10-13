@@ -19,6 +19,9 @@ The contract:
    refused with :class:`StreamCursorError`, and one whose record
    retention dropped with :class:`StreamExpiredError`. A read with no cursor
    starts at :data:`BEGINNING` or :data:`END`.
+3. **Topics are defined once.** :func:`topic` defines a topic with the type
+   its records decode to, and every party shares that definition. A call
+   that names no topic addresses :data:`DEFAULT_TOPIC`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
@@ -45,10 +48,13 @@ from temporalio.contrib.streams._record import (
     StreamRecord,
     Supersession,
 )
+from temporalio.contrib.streams._ref import StreamOwnerKind, StreamRef
+from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
 
 __all__ = [
     "BEGINNING",
     "Cursor",
+    "DEFAULT_TOPIC",
     "END",
     "RecordKind",
     "StreamClosedError",
@@ -57,11 +63,15 @@ __all__ = [
     "StreamExpiredError",
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
+    "StreamOwnerKind",
     "StreamProducerError",
     "StreamRecord",
     "StreamRecordError",
+    "StreamRef",
     "StreamRefusedError",
     "StreamStorageError",
+    "StreamTopic",
     "StreamUnsupportedError",
     "Supersession",
+    "topic",
 ]
