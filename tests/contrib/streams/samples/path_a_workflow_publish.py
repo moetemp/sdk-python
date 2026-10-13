@@ -1,8 +1,7 @@
 """Path A: a Workflow publishes its progress, and a client reads it.
 
-The Workflow's publish becomes visible when its Workflow Task is accepted,
-and never if the task fails. The client follows the stream until the
-Workflow closes.
+The Workflow's publish becomes visible when the activation that published it
+completes. The client follows the stream until the Workflow closes.
 """
 
 from __future__ import annotations
