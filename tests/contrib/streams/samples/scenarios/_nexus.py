@@ -147,7 +147,8 @@ def run(main: Callable[..., Awaitable[Any]]) -> None:
         client = await Client.connect(
             os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
         )
-        name = os.path.basename(sys.argv[0]).removesuffix(".py")
+        # The task queue names the endpoint, and an endpoint name takes no underscore.
+        name = os.path.basename(sys.argv[0]).removesuffix(".py").replace("_", "-")
         result = await main(
             client,
             f"{name}-{uuid.uuid4().hex}",
