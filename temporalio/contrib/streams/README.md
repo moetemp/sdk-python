@@ -37,7 +37,9 @@ process.
 
 Define a topic once with the type its records decode to, publish from the
 Workflow, and read from a client. A Workflow's own publish becomes visible
-when its Workflow Task is accepted, and never if the task fails.
+when the activation that published it completes, before its Workflow Task
+completes. A long task that runs Local Activities shows each record as soon
+as it is published.
 
 ```python
 PROGRESS = topic("progress", dict)
@@ -62,6 +64,12 @@ The read ends when the Workflow's run chain closes. It follows
 Continue-as-New, and `record.run_id` says which run published each record.
 To resume later, keep the last `record.cursor` and pass it back as
 `read(after=cursor)`.
+
+Each run writes as the producer `@<run id>`. If a Workflow Task fails or
+times out after it published, its records stay, and the task's rerun
+publishes again under the run's next attempt. Readers first see a
+`SUPERSEDED` record, as they do for an Activity retry, so they can drop what
+the failed attempt wrote.
 
 ## Path B: an Activity streams to its Workflow
 
@@ -95,9 +103,48 @@ right. With several producers on a topic, keep the text per
 
 Both samples run in full in `tests/contrib/streams/samples/`.
 
+## A Local Activity streams to its Workflow
+
+A Local Activity calls `activity_handle()` the same way, and its records
+are visible while the Workflow Task that runs it is still open. So an agent
+loop that runs its model calls as Local Activities streams their tokens.
+
+A Local Activity's attempt is not durable: after a Worker crash or a failed
+Workflow Task, the same call runs again from attempt 1. So it writes with
+an identity of its own:
+
+- **Producer id.** `__temporal_local_<n>@<scheduling run id>`, where `n`
+  counts the run's Local Activity calls in order. The `__temporal` prefix is
+  reserved, so no user Activity id writes as the same producer. The store plugin's Worker interceptor
+  stamps the number on each call in a header, so it stays the same across
+  reruns, and across a retry that backs off longer than
+  `local_retry_threshold`, which gets a new Activity id.
+- **Attempt.** Before the first append, the producer asks the server for
+  the run's History length `h` and the pending Workflow Task's attempt `t`.
+  With the Local Activity's attempt `a`, it writes attempt
+  `(h * 100_000 + t) * 10_000 + a`. Each rerun runs in a later Workflow Task
+  attempt, so the attempt grows, and readers see `SUPERSEDED` before the
+  rerun's records. A retry inside one attempt is written once, as for any
+  producer.
+
+Known limits:
+
+- **One describe call.** Each Local Activity attempt makes one
+  `DescribeWorkflowExecution` call before its first append, so its first
+  record waits one round trip to the server. Later appends make no call.
+- **Describe permission.** The Worker's identity needs permission to
+  describe the Workflow.
+- **Ford removes the call.** Workflow code doesn't see the Workflow Task
+  attempt, so the server is asked for it. Ford's Core can supply the task
+  attempt to the Local Activity, which removes the call.
+- **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
+  Task past attempt 99,999, raises `StreamUnsupportedError` on its first
+  append.
+
 ## A Workflow publishes through an Activity
 
-`workflow_writer` publishes with the Workflow Task. `workflow_activity_writer`
+`workflow_writer` publishes from Workflow code, and each record is visible
+when the activation that published it completes. `workflow_activity_writer`
 runs a built-in Activity for each call instead. The store plugin registers
 that Activity on every Worker built from the client, so there's nothing to
 register.
