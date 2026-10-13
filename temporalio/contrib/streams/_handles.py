@@ -11,7 +11,7 @@ as itself: Core derives its producer id as
 producer attempt, so a retry is reported to readers as ``SUPERSEDED``. The
 run is part of the id because a stream outlives a run, and Activity ids
 repeat across the runs of a chain. A Local Activity writes as
-``local-<call number>@<scheduling run id>``, with an attempt that grows
+``__temporal_local_<call number>@<scheduling run id>``, with an attempt that grows
 across its reruns (see ``_local_activity``). Its attempt doesn't fit the
 Activity form's 32 bits, so it writes as a named producer.
 
@@ -473,7 +473,7 @@ class ActivityStreamHandle:
         and the store deduplicates a repeated append within one attempt.
 
         In a Local Activity the producer id is
-        ``local-<call number>@<scheduling run id>``, where the number counts
+        ``__temporal_local_<call number>@<scheduling run id>``, where the number counts
         the run's Local Activity calls in order. Before the first append the
         producer asks the server for the run's History length ``h`` and the
         pending Workflow Task's attempt ``t``, and with the Local Activity's

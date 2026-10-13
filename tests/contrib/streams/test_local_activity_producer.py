@@ -132,7 +132,7 @@ async def test_a_local_activity_streams_while_its_task_runs(streams: Client):
         released[workflow_id].set()
         producer_id = await handle.result()
     run_id = handle.result_run_id
-    assert producer_id == f"local-1@{run_id}"
+    assert producer_id == f"__temporal_local_1@{run_id}"
     assert [r.value for r in early] == ["a", "b"]
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert [r.kind for r in records] == [RecordKind.DATA] * 2 + [RecordKind.FINISH]
@@ -318,7 +318,9 @@ async def test_a_backed_off_retry_keeps_its_producer_id(streams: Client):
         RecordKind.DATA,
         RecordKind.FINISH,
     ]
-    assert {r.producer_id for r in records} == {f"local-1@{handle.result_run_id}"}
+    assert {r.producer_id for r in records} == {
+        f"__temporal_local_1@{handle.result_run_id}"
+    }
     assert [r.value for r in records if r.kind is RecordKind.DATA] == [
         "attempt 1",
         "attempt 2",
@@ -358,7 +360,7 @@ async def test_each_local_activity_call_is_its_own_producer(client: Client):
         )
         ids = await handle.result()
     run_id = handle.result_run_id
-    assert ids == [f"local-1@{run_id}", f"local-2@{run_id}"]
+    assert ids == [f"__temporal_local_1@{run_id}", f"__temporal_local_2@{run_id}"]
     history = await handle.fetch_history()
     markers = [
         e.marker_recorded_event_attributes

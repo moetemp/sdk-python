@@ -8,7 +8,7 @@ store plugin gives each call an identity that holds across reruns:
 - **Producer id.** The plugin's Workflow interceptor numbers the run's Local
   Activity calls in the order Workflow code makes them, which replay
   repeats, and stamps the number on the call in a header. The producer id is
-  ``local-<number>@<run id>``. The Activity id is not used, since a retry
+  ``__temporal_local_<number>@<run id>``. The Activity id is not used, since a retry
   that backs off longer than ``local_retry_threshold`` is scheduled again
   under a new one.
 - **Producer attempt.** Before its first append, the Local Activity asks
@@ -88,7 +88,7 @@ class LocalCall:
     @property
     def producer_id_prefix(self) -> str:
         """What comes before ``@<run id>`` in the producer id."""
-        return f"local-{self.number}"
+        return f"__temporal_local_{self.number}"
 
     async def attempt(self, client: Client) -> int:
         """The producer attempt of the running Local Activity attempt.
