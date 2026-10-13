@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import pytest
@@ -26,6 +29,7 @@ from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.service import RPCError, RPCStatusCode
 from tests.contrib.streams.samples.scenarios import (
+    _nexus,
     n1b_parent_relay,
     n1c_cross_namespace_relay,
     n2_dashcam_relay,
@@ -94,6 +98,39 @@ def ids(name: str) -> tuple[str, str]:
     # Ids of their own, so runs that share a server never collide.
     suffix = uuid.uuid4().hex
     return f"{name}-{suffix}", f"{name}-wf-{suffix}"
+
+
+#: The server's rule for endpoint names, ``EndpointNameRegex`` in temporal's
+#: ``service/frontend/nexus_endpoint_client.go``.
+ENDPOINT_NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9\-]*[a-zA-Z0-9]$")
+
+
+def test_run_names_a_valid_endpoint_after_a_module_with_underscores(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # `python -m` puts the module's file in argv[0], and module names carry underscores.
+    names: list[str] = []
+
+    async def create_nexus_endpoint(request: Any) -> None:
+        names.append(request.spec.name)
+
+    client = SimpleNamespace(
+        namespace="default",
+        operator_service=SimpleNamespace(create_nexus_endpoint=create_nexus_endpoint),
+    )
+
+    async def connect(*args: Any, **kwargs: Any) -> Any:
+        return client
+
+    async def main(_client: Any, task_queue: str, **kwargs: Any) -> None:
+        await _nexus.endpoint(_client, task_queue)
+
+    path = n1c_cross_namespace_relay.__file__
+    monkeypatch.setattr(sys, "argv", [path])
+    monkeypatch.setattr(_nexus.Client, "connect", connect)
+    _nexus.run(main)
+    [name] = names
+    assert ENDPOINT_NAME.match(name), name
 
 
 async def test_n1b_a_parent_relays_every_record_and_gets_the_close_result(
