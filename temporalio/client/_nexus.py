@@ -473,11 +473,12 @@ class NexusHandlerCallback:
 
     Pass it to :py:meth:`NexusClient.start_operation`. When the operation
     completes, the server starts ``operation`` of ``service`` on
-    ``task_queue``, in the operation's namespace, with a
-    ``temporalio.api.notificationservice.v1.OnCompleteRequest``. With
-    ``progress_operation`` set, it also starts that operation with each
-    ``temporalio.api.notificationservice.v1.OnProgressRequest`` the operation
-    reports, any number of times and in any order relative to the completion.
+    ``task_queue``, in the operation's namespace, with an
+    :py:class:`temporalio.nexus.system.notification_service.OnCompleteRequest`.
+    With ``progress_operation`` set, it also starts that operation with each
+    :py:class:`temporalio.nexus.system.notification_service.OnProgressRequest`
+    the operation reports, any number of times and in any order relative to the
+    completion.
     A Worker serves both with a handler of
     :py:class:`temporalio.nexus.system.notification_service.NotificationService`,
     and needs no Nexus endpoint for it.
