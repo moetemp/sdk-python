@@ -1,4 +1,4 @@
-"""Scenario 4 with U5: a Slack connector follows an agent in another namespace, with no Workflow.
+"""Scenario 4 with a Worker follower: a Slack connector follows an agent in another namespace.
 
 The agent runs in namespace ``streams-b``, as in ``n4``: it publishes a
 message, idles 10 s, publishes another, and closes its stream. The connector
