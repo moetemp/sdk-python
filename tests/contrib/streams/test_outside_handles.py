@@ -196,9 +196,10 @@ async def test_a_client_producer_and_the_workflow_share_a_topic(client: Client):
         await handle.result()
     stream = get_stream_handle(streams_client, workflow_id)
     records = await read_all(stream.read(topic=EVENTS))
+    # The Workflow writes as its run.
     assert [(r.producer_id, r.value) for r in records] == [
-        ("", {"step": "init"}),
-        ("", None),
+        (f"@{handle.result_run_id}", {"step": "init"}),
+        (f"@{handle.result_run_id}", None),
     ]
     # The chain closed, so an outside producer is refused there.
     outside = stream.producer(topic=EVENTS, producer_id="backend", attempt=1)
