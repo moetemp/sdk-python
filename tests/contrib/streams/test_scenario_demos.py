@@ -73,7 +73,7 @@ async def test_s2_every_segment_url_resolves_in_order(streams: Client):
     assert fetched == [b"segment 0", b"segment 1", b"segment 2"]
 
 
-async def test_s3a_the_text_matches_and_the_turn_is_visible_at_task_acceptance(
+async def test_s3a_the_text_matches_and_the_turn_is_visible_at_activation_end(
     streams: Client,
 ):
     task_queue, workflow_id = ids("s3a")
