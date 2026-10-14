@@ -331,7 +331,7 @@ reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT, after=positi
 ```
 
 A `ReadPosition` holds the cursor and the stream service's read state, at
-most about 87 KiB, so it passes as a Workflow argument. With it, the new
+most about 22 KiB, so it passes as a Workflow argument. With it, the new
 run's superseded and stale marks stay exact for every producer. A bare
 cursor works too, but it tells the service only the cursor record's
 producer.
