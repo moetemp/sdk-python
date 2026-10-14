@@ -216,9 +216,13 @@ Known limits:
   if workflow.info().is_continue_as_new_suggested():
       workflow.continue_as_new(args=[prompt])
   ```
-- **Readers track 1,000 producers.** Each flush is a producer. A read keeps
-  the newest attempt of its last 1,000 producers, so it misses
-  `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
+- **Readers track a bounded set of producers.** Each flush is a producer. A
+  read keeps the newest attempt of the producers it saw most recently, at
+  most 1,000, in a read state of at most 16 KiB. A flush's producer id,
+  `__temporal_local_<n>@<run id>`, is about 57 bytes, so the state holds
+  about 200 flushes. A read misses `SUPERSEDED` only for a flush that reruns
+  after that many newer flushes, which at ten flushes a second is about 20
+  seconds of publishing.
 
 ## What to know
 
