@@ -47,6 +47,15 @@ _BATCH = 100
 # Once the operation completes, a read waits this long for a record, so a
 # reader waiting for the stream's end does not spin.
 _DRAIN_WAIT_MS = 2000
+# How long a reader waits for progress before it reads again anyway. A
+# producer that dies between its append and its notify sends no progress, so
+# only a read finds that record. The wait doubles while nothing arrives.
+_FIRST_RECHECK = timedelta(minutes=1)
+_MAX_RECHECK = timedelta(hours=1)
+
+
+class _RecheckDue(Exception):
+    pass
 
 
 class StreamIncompleteError(StreamError):
@@ -189,6 +198,12 @@ class StreamReader(Generic[T]):
     over the new chain's records. Give each stream's owner a Workflow id of
     its own, or let the reader finish before the id is reused.
 
+    A reader that waits for progress reads again once a minute passes with
+    none, then after 2, 4 and so on up to 1 hour while the stream stays
+    quiet. A producer that dies between its append and its notify sends no
+    progress, so this read is what finds its record. Each such read costs a
+    timer and a read in History.
+
     Every read is a Nexus operation result in the caller's History, about
     three events and up to one read answer (1 MiB of records) each. To read a
     long stream, Continue-as-New before History grows too large: pass
@@ -272,6 +287,7 @@ class StreamReader(Generic[T]):
         self._supersessions: list[ReadSupersession] = []
         self._stale_records: list[ReadStaleRecord] = []
         self._undecodable: StreamRecordError | None = None
+        self._recheck = _FIRST_RECHECK
 
     @property
     def cursor(self) -> Cursor:
@@ -332,6 +348,7 @@ class StreamReader(Generic[T]):
             if not self._stream_done and (reads_on or not self._caught_up):
                 batch = await self._read()
                 if batch:
+                    self._recheck = _FIRST_RECHECK
                     self._handed_over += len(batch)
                     if reads_on:
                         self._drain_since = workflow.now()
@@ -359,7 +376,12 @@ class StreamReader(Generic[T]):
                 # Raises the operation's failure, if it failed.
                 await self._handle
                 return None
-            progress = await self._next_progress()
+            try:
+                progress = await self._next_progress()
+            except _RecheckDue:
+                self._caught_up = False
+                continue
+            self._recheck = _FIRST_RECHECK
             if progress is None:
                 # Records may have landed after the last progress.
                 self._operation_resolved = True
@@ -375,7 +397,14 @@ class StreamReader(Generic[T]):
 
     async def _next_progress(self) -> workflow.NexusOperationProgress | None:
         if not self._stream_done:
-            return await self._handle.progress(after_counter=self._counter)
+            try:
+                return await asyncio.wait_for(
+                    self._handle.progress(after_counter=self._counter),
+                    self._recheck.total_seconds(),
+                )
+            except asyncio.TimeoutError:
+                self._recheck = min(self._recheck * 2, _MAX_RECHECK)
+                raise _RecheckDue from None
         # No record follows the stream's end, so only the completion is left,
         # and a completion that never comes would hold the caller open.
         if self._done_since is None:
