@@ -238,6 +238,10 @@ gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
   test_a_worker_flushes_notifications_after_it_stops
+gate tests/contrib/streams/test_sleeping_reader_demos.py \
+  test_j1_a_client_wakes_on_each_burst_and_ends_at_the_close \
+  test_j2_a_connector_posts_every_message_once_in_order \
+  test_j3_a_tail_reads_every_line_of_a_sparse_log
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree

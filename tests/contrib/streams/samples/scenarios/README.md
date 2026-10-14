@@ -32,16 +32,32 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
   2 appends after `SUPERSEDED`. Attempt 1 then appends late, and the record arrives marked `stale`.
   Left out: fencing and a retraction at the timeout.
 
+## Readers that sleep
+
+These demos need a server with the stream notifier and the Workflow wake target. Run them with
+the live lane, `scripts/streams_live_lane.sh`, or against such a server on `TEMPORAL_ADDRESS`.
+They turn on `notify_on_append()` themselves.
+
+- **`j1_sleeping_client`.** The owner publishes three bursts with gaps longer than the idle wait,
+  then closes its stream. A client reader sleeps on the notifier in each gap and wakes on the next
+  burst.
+- **`j2_slack_connector`.** A connector Workflow follows a channel's stream in the same namespace
+  and posts each message through an Activity. Between messages it sleeps with no task. Left out:
+  Slack itself, and a channel in another namespace, which needs Nexus.
+- **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
+  closes its stream with its status. A client tail sleeps between lines.
+
 The demos of 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code with its Workflow
 Task, which this release does not have.
 
 ## Scenarios with no demo in this release
 
-This release has no Nexus and no Workflow reader, so these scenarios can't run in any version.
+This release has no Nexus. A Workflow reader in the same namespace covers part of 1b and 4, as
+`j2_slack_connector` shows, but not across namespaces.
 
 | Scenario | Why |
 |---|---|
-| 1b | A parent Workflow must read the child's stream to relay it. |
+| 1b | The relay's caller sees the stream as a Nexus operation's progress. |
 | 1c | The relay goes through Nexus to a stream in another namespace. |
 | 3d | The inner loop runs behind Nexus in another namespace. |
 | 3e | As 3d, with the inner loop's deltas in Redis. |
@@ -53,6 +69,6 @@ This release has no Nexus and no Workflow reader, so these scenarios can't run i
 - A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope.
-- A close that carries a failure (7a). The read ends at the close, and the outcome comes from the
-  Workflow.
+- A close that carries a failure (7a) to a client reader. A client read ends at the close, and the
+  outcome comes from the Workflow. A Workflow reader raises it, as the live lane checks.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.

@@ -22,16 +22,20 @@ from temporalio.contrib.streams.redis import RedisStreams
 FOLLOW_TIMEOUT = 30.0
 
 
-def store() -> StreamStorePlugin:
+def store(*, notify: bool = False) -> StreamStorePlugin:
     """Redis when ``STREAMS_REDIS_URL`` is set, else this process's memory.
 
     Each Redis store gets a key prefix of its own, so demos that share a
-    Redis never see each other's records.
+    Redis never see each other's records. ``notify`` turns on the
+    notifications that wake a sleeping reader.
     """
     url = os.environ.get("STREAMS_REDIS_URL")
-    if url:
-        return RedisStreams(url, key_prefix=f"scenario-{uuid.uuid4().hex}")
-    return MemoryStreams()
+    plugin: StreamStorePlugin = (
+        RedisStreams(url, key_prefix=f"scenario-{uuid.uuid4().hex}")
+        if url
+        else MemoryStreams()
+    )
+    return plugin.notify_on_append() if notify else plugin
 
 
 def store_of(client: Client) -> StreamStorePlugin:
@@ -109,16 +113,19 @@ def values(records: list[StreamRecord[Any]]) -> list[Any]:
     return [r.value for r in records if r.kind is RecordKind.DATA]
 
 
-def run(main: Callable[..., Awaitable[Any]]) -> None:
+def run(main: Callable[..., Awaitable[Any]], *, notify: bool = False) -> None:
     """Run a demo's ``main`` against a dev server, from the command line.
 
     ``TEMPORAL_ADDRESS`` names the server (``localhost:7233`` by default),
-    and ``STREAMS_REDIS_URL`` picks Redis over memory.
+    and ``STREAMS_REDIS_URL`` picks Redis over memory. ``notify`` is for the
+    demos of readers that sleep, which need a server with the stream
+    notifier.
     """
 
     async def go() -> None:
         client = await Client.connect(
-            os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"), plugins=[store()]
+            os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
+            plugins=[store(notify=notify)],
         )
         name = os.path.basename(sys.argv[0]).removesuffix(".py")
         result = await main(
