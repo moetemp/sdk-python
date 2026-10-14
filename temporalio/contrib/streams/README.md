@@ -279,7 +279,8 @@ replay reads them from the store again. The store keeps what the reader read
 for `floor_lease` (the retention by default) after its last read or replay,
 so a run that goes longer than that should Continue-as-New.
 `replay_from_store=False` records each batch in History, for a History that
-replays with no store.
+replays with no store. See
+[Positions or recorded](docs/notifications.md#positions-or-recorded) to choose.
 
 A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See

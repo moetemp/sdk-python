@@ -129,6 +129,30 @@ class Connector:
   reads. Change it with `cutoff=TaskCutoff(commands=..., time=...)`.
 - A read that fails for good, for example on an owner that does not exist,
   fails with an `ApplicationError` whose type names the stream error.
+- Each marker has a summary that says what the read did, for example
+  `stream read tokens after the start` or `stream unsubscribe tokens`. The UI
+  shows it on the marker, since every read marker has the same Activity type.
+- The read and close Activities run only as the Local Activities that the
+  stream API schedules. Workflow code that calls one as a normal Activity
+  gets a non-retryable `StreamUnsupportedError`.
+
+### Positions or recorded
+
+A Workflow reader keeps what it read in one of two ways. Choose per use case.
+
+| | Positions (default) | Recorded |
+|---|---|---|
+| Option | `replay_from_store=True` | `replay_from_store=False` |
+| History per read | The range, a digest and Core's read state | Every record of the batch |
+| Replay reads | The store, through the store plugin | History only |
+| Replay needs | The store, and the reader's hold on the range | Nothing outside History |
+| Run length | Continue-as-New before `floor_lease` passes | Bounded by History size |
+
+Use positions for a reader that reads a lot or reads large records, such as
+a connector that follows a busy stream. Use recorded batches for a History
+that has to replay with no store, for example one you ship to another team
+or keep past the store's retention, or for a run that waits longer than
+`floor_lease` between reads.
 
 ### Replay from the store
 
