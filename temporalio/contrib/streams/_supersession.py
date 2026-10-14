@@ -20,10 +20,13 @@ __all__ = ["SupersessionTracker", "track_supersession"]
 
 T = TypeVar("T")
 
-# The most producers a read's state remembers the newest attempt of. Past it
-# the read reports no SUPERSEDED for the producers it forgot, so holding their
-# records would only use memory.
+# The bounds of a read's state in Core, which forgets the producer it saw
+# least recently past either one. The read reports no SUPERSEDED for a
+# producer it forgot, so holding that producer's records would only use
+# memory. Core counts each producer as its id plus about 20 bytes.
 _MAX_PRODUCERS = 1_000
+_MAX_STATE_BYTES = 16 << 10
+_PRODUCER_OVERHEAD = 20
 
 
 class SupersessionTracker(Generic[T]):
@@ -31,12 +34,14 @@ class SupersessionTracker(Generic[T]):
 
     Feed it every record of one read, in order, with :meth:`observe`. It
     holds each record that can still be withdrawn, under its producer,
-    until it is withdrawn or :meth:`forget` drops its producer. It holds
-    the records of at most ``max_producers`` producers, and drops the
-    producer it saw least recently past that. The read's own state forgets
-    the producer it saw least recently too, past 1,000 producers or 16 KiB,
-    so a producer the tracker dropped gets no ``SUPERSEDED`` either. A stream that a Workflow writer publishes to has
-    a producer per flush, so this bound is what keeps such a read's memory
+    until it is withdrawn or :meth:`forget` drops its producer. It keeps
+    the producers it saw most recently, at most ``max_producers`` of them
+    and no more than fit in 16 KiB at their id's length plus 20 bytes each,
+    and drops the producer it saw least recently past that. The read's own
+    state in Core forgets producers by the same rule, so a producer the
+    tracker dropped gets no ``SUPERSEDED`` either. For the producer ids of
+    a Workflow writer's flushes, that is about 200 producers. Such a stream
+    has a producer per flush, so this bound is what keeps a read's memory
     from growing with the stream.
 
     A record with an empty ``producer_id`` or no attempt can't be
@@ -53,6 +58,7 @@ class SupersessionTracker(Generic[T]):
             raise ValueError(f"max_producers must be at least 1, got {max_producers}")
         self._max_producers = max_producers
         self._held: OrderedDict[str, list[tuple[int, StreamRecord[T]]]] = OrderedDict()
+        self._bytes = 0
         self._count = 0
 
     def observe(self, record: StreamRecord[T]) -> list[StreamRecord[T]]:
@@ -74,16 +80,24 @@ class SupersessionTracker(Generic[T]):
             if kept:
                 self._held[supersession.producer_id] = kept
             else:
-                self._held.pop(supersession.producer_id, None)
+                self.forget(supersession.producer_id)
             return withdrawn
         if record.stale:
+            # Core counts a stale record as a sight of its producer.
+            if record.producer_id in self._held:
+                self._held.move_to_end(record.producer_id)
             return [record]
         if record.producer_id and record.attempt > 0:
             self._count += 1
-            self._held.setdefault(record.producer_id, []).append((self._count, record))
+            if record.producer_id not in self._held:
+                self._held[record.producer_id] = []
+                self._bytes += _size(record.producer_id)
+            self._held[record.producer_id].append((self._count, record))
             self._held.move_to_end(record.producer_id)
-            while len(self._held) > self._max_producers:
-                self._held.popitem(last=False)
+            while len(self._held) > 1 and (
+                len(self._held) > self._max_producers or self._bytes > _MAX_STATE_BYTES
+            ):
+                self.forget(next(iter(self._held)))
         return []
 
     def standing(self) -> list[StreamRecord[T]]:
@@ -98,7 +112,12 @@ class SupersessionTracker(Generic[T]):
         once the Activity behind it completed. A later ``SUPERSEDED`` for it
         then withdraws nothing.
         """
-        self._held.pop(producer_id, None)
+        if self._held.pop(producer_id, None) is not None:
+            self._bytes -= _size(producer_id)
+
+
+def _size(producer_id: str) -> int:
+    return len(producer_id.encode()) + _PRODUCER_OVERHEAD
 
 
 async def track_supersession(
