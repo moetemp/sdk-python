@@ -15,8 +15,10 @@ from typing import Any
 import pytest
 
 from temporalio import activity, workflow
+from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
-from temporalio.api.stream.v1 import StreamWake
+from temporalio.api.stream.v1 import StreamReference, StreamWake
+from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
 from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersession
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
@@ -39,6 +41,7 @@ from temporalio.contrib.streams._workflow import (
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import connect_with, new_workflow_id
@@ -473,6 +476,23 @@ class ReadsOnAServerWithoutANotifier:
 
 
 async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
+    try:
+        await client.workflow_service.describe_stream_notifier(
+            DescribeStreamNotifierRequest(
+                namespace=client.namespace,
+                stream_ref=StreamReference(
+                    owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
+                    workflow_id="probe",
+                    run_id="probe",
+                    topic="tokens",
+                ),
+            )
+        )
+    except RPCError as error:
+        if error.status != RPCStatusCode.UNIMPLEMENTED:
+            pytest.skip("the server has the stream notifier")
+    else:
+        pytest.skip("the server has the stream notifier")
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(
         streams_client, Waits, ReadsOnAServerWithoutANotifier
@@ -485,6 +505,4 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
             task_queue=worker.task_queue,
         )
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
-    if said == "read":
-        pytest.skip("the server has the stream notifier")
     assert said == "failed: StreamUnsupportedError"
