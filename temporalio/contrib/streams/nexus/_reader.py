@@ -348,6 +348,7 @@ class StreamReader(Generic[T]):
         self._recheck = _FIRST_RECHECK
         self._replay_from_store = replay_from_store
         self._reader_id = str(_next_reader()) if replay_from_store else ""
+        self._direct_reads = 0
 
     @property
     def cursor(self) -> Cursor:
@@ -578,11 +579,12 @@ class StreamReader(Generic[T]):
         try:
             raw = await workflow.execute_local_activity(
                 DIRECT_READ_ACTIVITY,
-                args=[self._endpoint, self._reader_id, input],
+                args=[self._endpoint, self._reader_id, input, self._direct_reads + 1],
                 result_type=RawValue,
                 start_to_close_timeout=wait + _DIRECT_READ_SLACK,
                 summary=f"stream read {input.stream.topic}",
             )
+            self._direct_reads += 1
         except (ActivityError, ApplicationError) as error:
             unsupported = _unsupported(error)
             if unsupported is None:
