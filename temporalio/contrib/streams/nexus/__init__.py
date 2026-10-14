@@ -42,21 +42,30 @@ from the owning Workflow.
 
 A caller Workflow reads such a stream with :class:`StreamReader`: it waits on
 the operation's progress and reads through this service as Nexus operations
-of the Workflow, so a replay hands over the same batches.
+of the Workflow, so a replay hands over the same batches. With
+``replay_from_store=True`` it reads in a Local Activity through a
+:class:`StreamDirectTransport` that :class:`StreamDirectReads` maps the
+endpoint to, and History keeps only each read's range and digest.
+:class:`ClientTransport` calls ``ExecuteSyncNexusOperation`` with the
+caller's own client, and :class:`HttpTransport` the HTTP ingress of a
+self-hosted server.
 
 A Worker follows such a stream with no Workflow. :func:`follow_stream` starts
 the operation as a standalone operation with a callback to the Worker, and
 :class:`StreamFollowerService` on that Worker hands each new batch to a
 :class:`StreamFollower`, then the close. It reads through
 :class:`StoreTransport` on its client's store, or through
-:class:`TemporalStreamsHttpClient` for a stream in another namespace or store.
+:class:`ClientTransport` or :class:`TemporalStreamsHttpClient` for a stream
+in another namespace or store.
 """
 
 from temporalio.contrib.streams import StreamRef
 from temporalio.contrib.streams.nexus._direct import (
+    ClientTransport,
     HttpTransport,
     StreamDirectReads,
     StreamDirectTransport,
+    StreamServiceCallError,
 )
 from temporalio.contrib.streams.nexus._follower import (
     FollowBatch,
@@ -99,6 +108,7 @@ from temporalio.contrib.streams.nexus._reader import (
 __all__ = [
     "AppendInput",
     "AppendOutput",
+    "ClientTransport",
     "FollowBatch",
     "FollowOutcome",
     "HTTPStatusError",
@@ -121,6 +131,7 @@ __all__ = [
     "StreamReadTransport",
     "StreamReader",
     "StreamRef",
+    "StreamServiceCallError",
     "TemporalStreams",
     "TemporalStreamsHandler",
     "TemporalStreamsHttpClient",

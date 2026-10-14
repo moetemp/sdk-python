@@ -396,7 +396,8 @@ reads = StreamDirectReads(
 client = await Client.connect(address, data_converter=converter, plugins=[reads])
 ```
 
-`HttpTransport` calls the endpoint over the server's Nexus HTTP ingress.
+Two transports ship. `HttpTransport` calls the endpoint over the server's
+Nexus HTTP ingress.
 
 - It works on a self-hosted server only. Temporal Cloud has no HTTP ingress
   for endpoints.
@@ -409,6 +410,38 @@ client = await Client.connect(address, data_converter=converter, plugins=[reads]
 - Give it the codec of the handler's namespace as `payload_codec`, the same
   one the caller's data converter has. The input then crosses encoded, and
   the transport decodes the answer.
+
+`ClientTransport` calls the endpoint with the caller's own client, through
+the `ExecuteSyncNexusOperation` RPC:
+
+```python
+from temporalio.contrib.streams.nexus import ClientTransport, StreamDirectReads
+
+client = await Client.connect(address, data_converter=converter)
+reads = StreamDirectReads({ENDPOINT: ClientTransport(client, ENDPOINT)})
+worker_client = await Client.connect(
+    address, data_converter=converter, plugins=[reads]
+)
+```
+
+- It takes the caller's own credential, and the server checks it against the
+  caller's namespace. The endpoint is found by name as the caller's
+  namespace sees it, so the endpoint's allowed callers apply.
+- The server tells the handler the caller's namespace, which `authorize`
+  gets as `StreamAccess.caller_namespace`. Only this RPC sets it. Over the
+  HTTP ingress and from a Workflow's Nexus call it is `None`.
+- It needs a server with the RPC turned on
+  (`frontend.enableExecuteSyncNexusOperation`, off by default). Temporal Cloud
+  doesn't serve it yet.
+- It encodes the input and decodes the answer with the client's payload
+  codec, under the wrappers that turn reads back into batches. So the
+  handler's namespace must use the same codec.
+- A `Replayer` has no client, so the transport brings its own. Any client of
+  the caller's namespace does.
+
+The same transport serves a Worker that follows a stream behind an endpoint:
+`StreamFollowerService(followers, client=client,
+transport=ClientTransport(client, ENDPOINT))`.
 
 A direct read names a floor holder, `<caller namespace>/<run id>/<reader
 number>`. The handler's store keeps the records after the read's start for
@@ -424,7 +457,7 @@ A replay that misses the cache needs the endpoint and the records:
 |---|---|
 | Other records, cursor or count | The Workflow Task fails as nondeterminism |
 | The records gone, after the floor lease lapsed | The Workflow Task fails with `StreamReplayRangeLostError` and is retried |
-| The store down, the endpoint gone, 401, 403, 429, 5xx or a timeout | The Workflow Task fails and is retried |
+| The store down, the endpoint gone, 401, 403, 429, 5xx, `NotFound`, `NamespaceNotActive` or a timeout | The Workflow Task fails and is retried |
 | No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
 
 A live read on a Worker with no transport for the endpoint fails its Local
@@ -683,7 +716,8 @@ each call. It gets a `StreamAccess` (`operation`, `stream`, the Nexus
 `context` with the caller's headers, for an append `producer_id` and
 `attempt`, and for a direct read or its `read_range` the `floor_holder`) and
 answers whether to serve it. The caller picks the holder, so treat it as a
-claim. A refused call fails as
+claim. A call through `ExecuteSyncNexusOperation` also carries
+`caller_namespace`, which the server vouches for, so a rule can key on it. A refused call fails as
 unauthorized.
 
 Parked reads hold Nexus task slots on the handler's Worker for up to a few

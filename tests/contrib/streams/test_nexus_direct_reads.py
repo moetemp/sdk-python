@@ -6,11 +6,22 @@ import base64
 import dataclasses
 import json
 from collections.abc import Sequence
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
 from temporalio.api.common.v1 import Payload
+from temporalio.api.enums.v1 import NexusHandlerErrorRetryBehavior
+from temporalio.api.failure.v1 import (
+    ApplicationFailureInfo,
+    Failure,
+    NexusHandlerFailureInfo,
+)
+from temporalio.api.workflowservice.v1 import (
+    ExecuteSyncNexusOperationRequest,
+    ExecuteSyncNexusOperationResponse,
+)
 from temporalio.client import ClientConfig
 from temporalio.contrib.streams import (
     StreamError,
@@ -23,14 +34,17 @@ from temporalio.contrib.streams import (
 from temporalio.contrib.streams._replay_reads import ReadChain
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
+    ClientTransport,
     HttpTransport,
     ReadInput,
     ReadOutput,
     RecordWire,
     StreamDirectReads,
+    StreamServiceCallError,
 )
 from temporalio.contrib.streams.nexus._direct import (
     _DirectReadCodec,
+    _transfer,
     answer_of,
     innermost_codec,
     positions_payload,
@@ -40,6 +54,7 @@ from temporalio.contrib.streams.nexus._generated import (
     ReadRangeInput,
 )
 from temporalio.contrib.streams.nexus._generated import client as generated_client
+from temporalio.contrib.streams.nexus._handler import _caller_namespace
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.worker import ReplayerConfig
 from temporalio.workflow import NondeterminismError
@@ -369,3 +384,180 @@ async def test_the_http_transport_keeps_an_unnamed_failure(
     with pytest.raises(generated_client.HTTPStatusError) as raised:
         await HttpTransport("http://stub").read(ReadInput(stream=_STREAM))
     assert raised.value.retryable
+
+
+class FakeWorkflowService:
+    """Answers ``execute_sync_nexus_operation`` from a list, and keeps the requests."""
+
+    def __init__(self, *answers: ExecuteSyncNexusOperationResponse | Exception) -> None:
+        self.answers = list(answers)
+        self.requests: list[ExecuteSyncNexusOperationRequest] = []
+
+    async def execute_sync_nexus_operation(
+        self, req: ExecuteSyncNexusOperationRequest, **_kwargs: Any
+    ) -> ExecuteSyncNexusOperationResponse:
+        self.requests.append(req)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def fake_client(service: FakeWorkflowService, codec: PayloadCodec | None = None) -> Any:
+    converter = dataclasses.replace(DataConverter.default, payload_codec=codec)
+    return SimpleNamespace(
+        namespace="caller-ns",
+        identity="caller@host",
+        data_converter=converter,
+        workflow_service=service,
+    )
+
+
+def answered(output: ReadOutput) -> ExecuteSyncNexusOperationResponse:
+    return ExecuteSyncNexusOperationResponse(
+        result=Payload(
+            metadata={"encoding": b"json/plain"},
+            data=json.dumps(_transfer(output)).encode(),
+        )
+    )
+
+
+async def test_the_client_transport_round_trips_through_the_inner_codec():
+    _, answer = live(record("c1", "a"))
+    codec = Base64Codec()
+    [encoded] = await codec.encode([answered(answer).result])
+    service = FakeWorkflowService(ExecuteSyncNexusOperationResponse(result=encoded))
+    # The client's codec is wrapped, as on a client that carries the plugin.
+    plugin = StreamDirectReads({})
+    client = fake_client(service, codec_of(plugin, codec))
+    got = await ClientTransport(client, "e").read(ReadInput(stream=_STREAM))
+    assert got == answer
+    [request] = service.requests
+    assert (request.namespace, request.endpoint, request.operation) == (
+        "caller-ns",
+        "e",
+        "read",
+    )
+    assert request.service == "temporal.sdk.streams.v1.TemporalStreams"
+    assert request.request_id
+    # The input crossed encoded once, with the codec under the wrapper.
+    [plain] = await codec.decode([request.input])
+    assert plain.metadata["encoding"] == b"json/plain"
+    assert json.loads(plain.data)["stream"]["workflow_id"] == "owner"
+
+
+async def test_the_client_transport_serves_a_replay_from_the_replay_codec():
+    range, answer = live(record("c1", "a"))
+    codec = Base64Codec()
+    [encoded] = await codec.encode(
+        [
+            answered(
+                ReadOutput(records=answer.records, next_token="c1", done=False)
+            ).result
+        ]
+    )
+    service = FakeWorkflowService(ExecuteSyncNexusOperationResponse(result=encoded))
+    holder: dict[str, Any] = {}
+    plugin = StreamDirectReads(
+        {"e": cast(Any, LateTransport(lambda: holder["transport"]))}
+    )
+    replay_codec = codec_of(plugin, codec)
+    holder["transport"] = ClientTransport(fake_client(service, replay_codec), "e")
+    batch = await turned_back(replay_codec, positions_payload("e", range, answer))
+    assert batch.records == answer.records
+    assert [r.operation for r in service.requests] == ["read_range"]
+
+
+class LateTransport:
+    """A transport made after the plugin, as the client it needs is."""
+
+    def __init__(self, get: Any) -> None:
+        self._get = get
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        return await self._get().read(request)
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        return await self._get().read_range(request)
+
+
+def handler_failure(
+    kind: str,
+    *,
+    retry: NexusHandlerErrorRetryBehavior.ValueType = NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_UNSPECIFIED,
+    cause_type: str | None = None,
+) -> ExecuteSyncNexusOperationResponse:
+    failure = Failure(
+        message="refused",
+        nexus_handler_failure_info=NexusHandlerFailureInfo(
+            type=kind, retry_behavior=retry
+        ),
+    )
+    if cause_type is not None:
+        failure.cause.CopyFrom(
+            Failure(
+                message="the cause",
+                application_failure_info=ApplicationFailureInfo(type=cause_type),
+            )
+        )
+    return ExecuteSyncNexusOperationResponse(failure=failure)
+
+
+@pytest.mark.parametrize(
+    "cause_type,raised",
+    [
+        ("StreamReplayMismatchError", StreamReplayMismatchError),
+        ("StreamReplayRangeLostError", StreamReplayRangeLostError),
+        ("StreamStorageError", StreamStorageError),
+    ],
+)
+async def test_the_client_transport_raises_the_class_the_handler_named(
+    cause_type: str, raised: type[Exception]
+):
+    service = FakeWorkflowService(handler_failure("BAD_REQUEST", cause_type=cause_type))
+    range, _ = live(record("c1", "a"))
+    with pytest.raises(raised, match="the cause"):
+        await ClientTransport(fake_client(service), "e").read_range(range)
+
+
+@pytest.mark.parametrize(
+    "kind,retry,retryable",
+    [
+        ("UNAUTHORIZED", None, False),
+        ("UNAVAILABLE", None, True),
+        ("INTERNAL", "non_retryable", False),
+        ("BAD_REQUEST", "retryable", True),
+    ],
+)
+async def test_the_client_transport_keeps_an_unnamed_failure_and_its_retry(
+    kind: str, retry: str | None, retryable: bool
+):
+    behavior = {
+        None: NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_UNSPECIFIED,
+        "retryable": NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_RETRYABLE,
+        "non_retryable": NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_NON_RETRYABLE,
+    }[retry]
+    service = FakeWorkflowService(handler_failure(kind, retry=behavior))
+    with pytest.raises(StreamServiceCallError) as raised:
+        await ClientTransport(fake_client(service), "e").read(ReadInput(stream=_STREAM))
+    assert raised.value.failure_type == kind
+    assert raised.value.retryable is retryable
+
+
+async def test_the_client_transport_refuses_an_answer_its_codec_cannot_read():
+    service = FakeWorkflowService(
+        ExecuteSyncNexusOperationResponse(
+            result=Payload(metadata={"encoding": b"binary/encrypted"}, data=b"x")
+        )
+    )
+    with pytest.raises(ValueError, match="codec"):
+        await ClientTransport(fake_client(service), "e").read(ReadInput(stream=_STREAM))
+
+
+def test_authorize_sees_the_caller_namespace_the_server_set():
+    def ctx(headers: dict[str, str]) -> Any:
+        return SimpleNamespace(headers=headers)
+
+    assert _caller_namespace(ctx({"temporal-caller-namespace": "a"})) == "a"
+    assert _caller_namespace(ctx({"Temporal-Caller-Namespace": "a"})) == "a"
+    assert _caller_namespace(ctx({"other": "a"})) is None

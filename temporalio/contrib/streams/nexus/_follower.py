@@ -97,9 +97,12 @@ class StreamReadTransport(Protocol):
         This API is experimental and may change in future versions.
 
     :class:`StoreTransport` reads on the store of a client.
-    :class:`temporalio.contrib.streams.nexus.TemporalStreamsHttpClient` reads
-    through a Nexus endpoint's HTTP ingress, for a stream in another namespace
-    or another store.
+    :class:`temporalio.contrib.streams.nexus.ClientTransport` reads through a
+    Nexus endpoint with the caller's own client, for a stream in another
+    namespace or another store.
+    :class:`temporalio.contrib.streams.nexus.TemporalStreamsHttpClient` and
+    :class:`temporalio.contrib.streams.nexus.HttpTransport` read through the
+    endpoint's HTTP ingress on a self-hosted server.
     """
 
     async def read(self, request: ReadInput) -> ReadOutput:
@@ -289,7 +292,9 @@ class StreamFollowerService:
                 whose store a :class:`StoreTransport` reads when no
                 ``transport`` is given. Usually the Worker's client.
             transport: How to read. Defaults to a :class:`StoreTransport` on
-                ``client``.
+                ``client``. For a stream behind an endpoint, pass
+                ``ClientTransport(client, endpoint)``, which reads with the
+                Worker's own credential.
             max_records: The most records one read asks for.
             max_receiver_state_bytes: The server's cap on a callback's
                 receiver state, ``callback.nexusHandler.receiverStateMaxSize``.
