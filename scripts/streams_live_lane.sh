@@ -301,6 +301,18 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_canceled_owner_raises_a_canceled_operation
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
+gate tests/contrib/streams/test_nexus_scenario_demos.py \
+  test_n1b_a_parent_relays_every_record_and_gets_the_close_result \
+  test_n1c_a_relay_across_namespaces_gets_every_record \
+  test_n2_every_segment_url_crosses_namespaces_and_resolves \
+  test_n3d_an_agent_hears_every_message_whatever_bs_store \
+  test_n4_a_connector_posts_every_message_and_idles_with_no_task \
+  test_n5b_a_dashboard_and_a_relay_both_get_every_record \
+  test_n5c_followers_that_attach_late_get_every_record \
+  test_n6_a_second_operation_follows_the_location_after_the_wake \
+  test_n7a_a_caller_reads_every_stage_then_gets_the_failure \
+  test_n7b_the_reader_marks_the_retry_and_the_stale_write \
+  test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree

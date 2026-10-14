@@ -16,11 +16,21 @@ STREAMS_REDIS_URL=redis://localhost:6379 \
 
 `TEMPORAL_ADDRESS` names another server. Without `STREAMS_REDIS_URL` a demo uses `MemoryStreams`.
 
-The tests run every demo on the test server, on memory and again on Redis when
-`STREAMS_REDIS_URL` is set:
+A Bridge demo needs a server with the stream notifier and Nexus operation progress, and the
+cross-namespace demos need the namespace `streams-b`. `scripts/streams_live_lane.sh` builds and
+starts such a server, registers `streams-b`, and runs every demo test:
+
+```sh
+TEMPORAL_ADDRESS=127.0.0.1:7961 \
+  python -m tests.contrib.streams.samples.scenarios.n1c_cross_namespace_relay
+```
+
+The tests run every demo on memory, and again on Redis when `STREAMS_REDIS_URL` is set:
 
 ```sh
 STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scenario_demos.py
+STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_nexus_scenario_demos.py \
+  -E 127.0.0.1:7961
 ```
 
 ## The demos
@@ -50,25 +60,58 @@ They turn on `notify_on_append()` themselves.
 The demos of 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code with its Workflow
 Task, which this release does not have.
 
-## Scenarios with no demo in this release
+## Bridge demos
 
-This release has no Nexus. A Workflow reader in the same namespace covers part of 1b and 4, as
-`j2_slack_connector` shows, but not across namespaces.
+- **1b, `n1b_parent_relay`.** The parent `Order` starts the child `Delivery`, then a stream
+  operation on an endpoint in its own namespace whose `open_stream` names `Delivery`'s stream. It
+  reads with `StreamReader` and republishes with `workflow_writer`, and the backend long-polls the
+  parent's stream. The operation completes with the close result. Left out: System Nexus
+  `ReadStream` and records in progress callbacks.
+- **1c, `n1c_cross_namespace_relay`.** As 1b, with `Delivery` and the handler in namespace
+  `streams-b` and the caller in `default`. Only B's Worker holds B's store. Left out: records in
+  progress callbacks.
+- **2, `n2_dashcam_relay`.** s2's `Segment` URLs, appended in B, reach a Workflow in `default`
+  through the 1c path and resolve. Left out: live video, and a store claim across Nexus.
+- **3d, 3e, `n3d_inner_loop`.** `AgentWorkflow` in `default` follows `TurnWorkflow`'s `message`
+  topic in `streams-b`, one topic per operation. The test runs B on memory (3d) and on Redis (3e),
+  and the agent hears the same. Left out: a backend that polls `delta` across namespaces.
+- **4, `n4_slack_connector`.** A `Connector` Workflow in `default` follows the agent's `message`
+  topic in `streams-b` and posts each message through an Activity. While the agent idles 10 s, the
+  connector's History has no Workflow Task. Left out: a standalone Nexus operation as the caller,
+  and a Worker Callback per delivery.
+- **5b, `n5b_dashboard_and_relay`.** A dashboard and 1b's relay read `Delivery`'s stream at the
+  same time, and both get every record.
+- **5c, `n5c_late_attach`.** Followers start the operation at once, after three records, and after
+  the close. Each reads the backlog from `BEGINNING`, and all get every record and the close result.
+  The last one completes at once. Left out: a standalone Nexus operation as the dashboard, and a
+  pushed backlog.
+- **6, `n6_location_operation`.** A `Tracker` in `default` follows `events` in `streams-b`, and
+  after `tracking started` it follows `location` through a second operation. The test counts the
+  reads in its History. Left out: a backend outside any Workflow that polls `location` in B.
+- **7a, `n7a_failed_delivery`.** `Delivery` fails with `CourierLost`, closes with
+  `close_workflow_stream(error=...)`, or is terminated. The caller reads every stage, then `next()`
+  raises `NexusOperationError` with the failure as its cause. A failed owner that never closed its
+  stream gives the owner check's `StreamOwnerFailed`, not `CourierLost`.
+- **7b, `n7b_reader_marks`.** s7b's courier Activity behind a stream operation. The caller's
+  `reader.supersessions` has the takeover, and `reader.stale_records` has the late record.
+- **8, `n8_replay_after_trim`.** A `Bookkeeper` continues as new with `reader.position` and reads on
+  after it, across the owner's own Continue-as-New. The owner's streams are then deleted and its
+  Worker stops, and a `Replayer` replays both of the bookkeeper's runs. Left out: a reset that
+  retracts records.
 
-| Scenario | Why |
-|---|---|
-| 1b | The relay's caller sees the stream as a Nexus operation's progress. |
-| 1c | The relay goes through Nexus to a stream in another namespace. |
-| 3d | The inner loop runs behind Nexus in another namespace. |
-| 3e | As 3d, with the inner loop's deltas in Redis. |
-| 4 | The connector reads a stream in another namespace. |
-| 5c | A late caller attaches to the stream through Nexus. |
+Bridge adds demos of 1b, 1c, 3d, 3e, 4 and 5c, which need Nexus, and Nexus versions of 2, 5b, 6,
+7a, 7b and 8.
 
 ## What no demo shows
 
 - A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
+- A standalone Nexus operation as a caller (4, 5c). Only a Workflow's operation takes progress.
+- Nexus direct calls, so an outside backend can read across namespaces (3d, 3e, 6). Not built.
+- Records in progress callbacks (1b, 1c). Progress is a notification, and the records come from
+  reads that the caller's History records.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
-- Live video and storage that Temporal manages (2). Out of scope.
+- Live video and storage that Temporal manages (2). Out of scope. Whether a store claim resolves
+  across Nexus is still open.
 - A close that carries a failure (7a) to a client reader. A client read ends at the close, and the
   outcome comes from the Workflow. A Workflow reader raises it, as the live lane checks.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.
