@@ -350,6 +350,12 @@ Two cases stop a reader that would otherwise read for ever.
   completing it with that stream's close result. The server attaches only
   to the chain that holds the id now. A reference that names no run
   attaches to the new chain.
+- A producer that dies between its append and its notify sends no
+  progress. A Workflow `StreamReader` that waits for progress reads again
+  once a minute passes with none, then after 2, 4 and so on up to 1 hour
+  while the stream stays quiet, on Workflow timers. So such a record
+  reaches the reader at the latest one recheck later. Each recheck adds a
+  timer and a read to the caller's History.
 - If a caller answers a progress delivery with 404, its operation is
   already closed, and the notifier drops that caller. Any other refusal
   turns progress off for that caller, and it still gets the completion.
