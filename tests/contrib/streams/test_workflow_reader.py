@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -123,7 +124,12 @@ class ReadsBatches:
         self, owner: str, stop_after: int, after: StreamPosition | None
     ) -> list[list[str]]:
         batches: list[list[str]] = []
-        reader = workflow_reader(owner, topic=TOKENS, after=after or StreamPosition(""))
+        reader = workflow_reader(
+            owner,
+            topic=TOKENS,
+            after=after or StreamPosition(""),
+            close_wait=timedelta(seconds=3),
+        )
         async with reader:
             async for batch in reader:
                 batches.append([_describe(r) for r in batch.records])
@@ -292,6 +298,33 @@ async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Cli
     assert isinstance(cause, ApplicationError)
     assert cause.type == "AgentGaveUp"
     assert cause.message == "the agent gave up"
+
+
+async def test_a_close_wake_after_the_end_still_raises_its_failure(client: Client):
+    # The store closes before the notifier, so a busy reader reaches the end
+    # first. It waits a moment for the close's wake, then raises its failure.
+    failure = Failure(
+        message="the agent gave up",
+        application_failure_info=ApplicationFailureInfo(type="AgentGaveUp"),
+    )
+
+    async def drive(handle: Any, fake: FakeReads) -> None:
+        await fake.until(1)
+        await asyncio.sleep(0.5)
+        await handle.signal(
+            ReadsBatches.wake,
+            StreamWake(
+                subscription_id="1", counter=4, closed=True, close_failure=failure
+            ),
+        )
+
+    with pytest.raises(WorkflowFailureError) as raised:
+        await _run_reader(
+            client,
+            [ReadResponse(records=[data("c1", "x")], cursor="c1", done=True)],
+            drive,
+        )
+    assert _failure_type(raised.value.cause) == "AgentGaveUp"
 
 
 async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):

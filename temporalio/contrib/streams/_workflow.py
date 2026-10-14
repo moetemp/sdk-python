@@ -17,6 +17,7 @@ wake on the next Workflow Task scheduled event, so a wake adds no event.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import timedelta
@@ -165,6 +166,7 @@ class _ReaderState:
     armed_at: int | None = None
     attach: bool = True
     done: bool = False
+    close_waited: bool = False
     failure_raised: bool = False
 
 
@@ -198,9 +200,11 @@ class WorkflowStreamReader(Generic[T]):
         max_records: int,
         start_to_close_timeout: timedelta,
         cutoff: TaskCutoff | None,
+        close_wait: timedelta = timedelta(seconds=10),
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
         self._cutoff = cutoff
+        self._close_wait = close_wait
         self._ref = ref
         self._topic = topic
         self._result_type = result_type
@@ -273,6 +277,7 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
+                await self._wait_for_close()
                 raise self._end()
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
@@ -302,6 +307,31 @@ class WorkflowStreamReader(Generic[T]):
             or seconds >= self._cutoff.time.total_seconds()
         ):
             runtime._request_task_heartbeat()
+
+    async def _wait_for_close(self) -> None:
+        """Give the close's wake a moment to arrive after the store ended the read.
+
+        The store closes before the notifier, so a busy reader can reach the
+        end before the wake that carries the outcome. An owner that ended
+        with no close sends no such wake soon, so the wait is bounded.
+        """
+        state = self._state
+        if state.close_waited or state.attach:
+            return
+        state.close_waited = True
+
+        def closed() -> bool:
+            wake = wake_state(self.subscription_id)
+            return wake is not None and wake.closed
+
+        if closed():
+            return
+        try:
+            await workflow.wait_condition(
+                closed, timeout=self._close_wait.total_seconds()
+            )
+        except asyncio.TimeoutError:
+            pass
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
@@ -396,6 +426,7 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -410,6 +441,7 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -424,6 +456,7 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[Any]: ...
 
 
@@ -437,6 +470,7 @@ def workflow_reader(
     max_records: int = 100,
     start_to_close_timeout: timedelta | None = None,
     cutoff: TaskCutoff | None = TaskCutoff(),
+    close_wait: timedelta = timedelta(seconds=10),
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
 
@@ -472,6 +506,10 @@ def workflow_reader(
             a busy reader doesn't hold back the rest of the Workflow. 100
             commands or 2 seconds by default. ``None`` leaves the task to
             the Local Activity heartbeat.
+        close_wait: How long a reader that reached the end waits for the
+            close's outcome, which the notifier sends after the store
+            closed. 10 seconds by default. A wait that runs out costs a
+            timer, and the reader then ends with no outcome.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -507,6 +545,7 @@ def workflow_reader(
         max_records,
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
         cutoff,
+        close_wait,
     )
 
 
