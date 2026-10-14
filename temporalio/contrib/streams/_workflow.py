@@ -35,7 +35,7 @@ from temporalio.bridge.proto.streams import (
 )
 from temporalio.common import RawValue
 from temporalio.contrib.streams._body import decode_body
-from temporalio.contrib.streams._cursor import BEGINNING
+from temporalio.contrib.streams._cursor import BEGINNING, END
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
     StreamCursorError,
@@ -676,6 +676,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         state=request.state,
         records_digest=response.records_digest,
         floor_holder=floor_holder,
+        start_from_end=request.after == END.token,
     )
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
