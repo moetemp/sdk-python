@@ -113,6 +113,17 @@ Every writer of a chain must use the same retention. A writer with a
 shorter one trims records that other writers' readers expect to keep, so
 the shortest retention wins.
 
+## Retiring a producer attempt
+
+A producer attempt that will write nothing more can drop its dedupe state
+with `HDEL meta <high-water field>`, the field named in step 1 above. It
+touches no record. A missing field or `meta` is not a failure. Do it only
+after the attempt's last append returned, since a retry of an earlier batch
+would find no field to compare with and land a second time. Readers lose
+nothing: a store compares a batch only with its own attempt's field, and
+readers find a newer attempt from the records. A `workflow_writer` flush
+retires its attempt this way.
+
 ## Cursors
 
 A cursor token is `redis:<stream hash>:<entry id>`.
