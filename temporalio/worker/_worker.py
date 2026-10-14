@@ -487,6 +487,8 @@ class Worker:
         self._shutdown_complete_event = asyncio.Event()
         self._async_context_inner_task: asyncio.Task | None = None
         self._async_context_run_task: asyncio.Task | None = None
+        self._async_context_exiting = False
+        self._async_context_failed_on_exit = False
         self._async_context_run_exception: BaseException | None = None
 
         self._activity_worker: _ActivityWorker | None = None
@@ -960,26 +962,50 @@ class Worker:
                 await self.run()
             except BaseException as err:
                 self._async_context_run_exception = err
-                self._async_context_inner_task.cancel()  # type: ignore[union-attr]
+                if self._async_context_exiting:
+                    # Exit awaits this task, so a cancel of the caller arrives
+                    # here and has to go back to it. Any other error is raised
+                    # by __aexit__.
+                    if isinstance(err, asyncio.CancelledError):
+                        raise
+                    self._async_context_failed_on_exit = True
+                else:
+                    self._async_context_inner_task.cancel()  # type: ignore[union-attr]
 
         self._async_context_run_task = asyncio.create_task(run())
         return self
 
     async def __aexit__(self, exc_type: type[BaseException] | None, *args: Any) -> None:
-        """Same as :py:meth:`shutdown` for use by ``async with``.
+        """Shut the worker down and wait for :py:meth:`run` to return.
+
+        Like :py:meth:`shutdown`, and it also waits for each plugin's
+        ``run_worker`` to return, so a plugin's work after the worker stops,
+        such as a flush, runs to its end. A plugin whose work never ends keeps
+        the block open.
 
         Note, this will raise the worker fatal error if one occurred and the
-        inner task cancellation was not inadvertently swallowed/wrapped.
+        inner task cancellation was not inadvertently swallowed/wrapped. It also
+        raises an error from a plugin's work after the worker stopped, and one
+        that ends the worker while it shuts down, when the block itself raised
+        nothing.
         """
-        # Wait for shutdown then run complete
         if not self._async_context_run_task:
             raise RuntimeError("Never started")
+        # Set before shutdown, so an error raised as shutdown completes comes
+        # back as itself rather than as a cancel of the caller.
+        self._async_context_exiting = True
         await self.shutdown()
-        # Cancel our run task
-        self._async_context_run_task.cancel()
-        # Only re-raise our exception if present and exc_type is cancel
-        if exc_type is asyncio.CancelledError and self._async_context_run_exception:
-            raise self._async_context_run_exception
+        # A plugin's run_worker can still have work of its own after the Worker
+        # stopped, such as a flush, so the run task finishes instead of being
+        # cancelled.
+        await self._async_context_run_task
+        error = self._async_context_run_exception
+        if error is None:
+            return
+        if exc_type is asyncio.CancelledError or (
+            exc_type is None and self._async_context_failed_on_exit
+        ):
+            raise error
 
 
 class WorkerConfig(TypedDict, total=False):
