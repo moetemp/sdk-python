@@ -68,6 +68,22 @@ class StreamService:
             "Read", req, temporalio.bridge.proto.streams.ReadResponse
         )
 
+    async def read_range(
+        self, req: temporalio.bridge.proto.streams.ReadRangeRequest
+    ) -> temporalio.bridge.proto.streams.ReadResponse:
+        """Invokes the StreamService.read_range call."""
+        return await self._store.call(
+            "ReadRange", req, temporalio.bridge.proto.streams.ReadResponse
+        )
+
+    async def release_floor(
+        self, req: temporalio.bridge.proto.streams.ReleaseFloorRequest
+    ) -> temporalio.bridge.proto.streams.ReleaseFloorResponse:
+        """Invokes the StreamService.release_floor call."""
+        return await self._store.call(
+            "ReleaseFloor", req, temporalio.bridge.proto.streams.ReleaseFloorResponse
+        )
+
     async def retire_producer(
         self, req: temporalio.bridge.proto.streams.RetireProducerRequest
     ) -> temporalio.bridge.proto.streams.RetireProducerResponse:
