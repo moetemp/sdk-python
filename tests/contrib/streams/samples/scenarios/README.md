@@ -69,6 +69,6 @@ This release has no Nexus. A Workflow reader in the same namespace covers part o
 - A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope.
-- A close that carries a failure (7a) to a client reader. A client read ends at the close, and the
-  outcome comes from the Workflow. A Workflow reader raises it, as the live lane checks.
+- A close that carries a failure (7a). A client read and a Workflow reader both raise the failure
+  after the last record, as the live lane checks, but no demo shows it.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.
