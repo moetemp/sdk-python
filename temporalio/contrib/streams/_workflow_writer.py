@@ -36,6 +36,7 @@ from typing import Any, Generic, TypeVar, overload
 import temporalio.activity
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload, Payloads
+from temporalio.bridge.proto.streams import NamedProducer, RetireProducerRequest
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams._errors import (
@@ -48,6 +49,7 @@ from temporalio.contrib.streams._errors import (
 )
 from temporalio.contrib.streams._handles import StreamProducer, activity_handle
 from temporalio.contrib.streams._local_activity import _WorkflowInbound
+from temporalio.contrib.streams._plugin import call
 from temporalio.contrib.streams._record import Cursor
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.exceptions import ApplicationError
@@ -568,6 +570,10 @@ async def publish_activity(
     Before it appends, it waits until ``min_interval_ms`` passed since the
     previous flush of the same topic and run started in this process. It
     waits before the append, so a cancel during the wait has written nothing.
+
+    After its last append returned, it retires its own producer attempt, so
+    the store drops that attempt's dedupe state rather than keep it for the
+    stream's retention.
     """
     if values.payload.metadata.get("encoding") != _PAYLOADS_ENCODING:
         raise ApplicationError(
@@ -587,7 +593,34 @@ async def publish_activity(
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
+    if batch or finish:
+        await _retire(producer)
     return cursor.token
+
+
+async def _retire(producer: StreamProducer[Any]) -> None:
+    # Each flush is a producer that never writes again once its attempt
+    # returned, so its dedupe state is dead weight. A rerun writes a higher
+    # attempt, and readers find it from the records, so losing this call
+    # costs only store memory until retention.
+    request = RetireProducerRequest(stream=producer._handle._address(producer._topic))
+    if producer._activity is not None:
+        request.activity.CopyFrom(producer._activity)
+    else:
+        request.named.CopyFrom(
+            NamedProducer(producer_id=producer.producer_id, attempt=producer.attempt)
+        )
+    try:
+        service = await producer._handle._plugin._service_for(producer._handle._client)
+        await call(service.retire_producer(request))
+    except Exception:
+        temporalio.activity.logger.warning(
+            "Could not retire stream producer %s attempt %s; the store keeps its "
+            "dedupe state until retention",
+            producer.producer_id,
+            producer.attempt,
+            exc_info=True,
+        )
 
 
 async def _append(producer: StreamProducer[Any], batch: list[RawValue]) -> Cursor:

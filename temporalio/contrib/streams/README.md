@@ -207,13 +207,13 @@ Known limits:
   Worker needs the store. A retry that backs off longer than
   `local_retry_threshold` waits on a Workflow timer. By default a flush
   retries until the store answers, and the run can't end until it lands.
-- **Store state per flush.** Each flush leaves one dedupe field, about
-  235 bytes, in its topic's Redis meta hash. The store drops a field only
-  `retention` after its last write, so a topic holds one per flush of the
-  last `retention`. At the default interval, a run that flushes all the time
-  holds at most about 6 million fields a week, and a run that flushes every
-  5 seconds about 120,000 (about 28 MB). Size Redis for it, or shorten
-  `retention`.
+- **Store state per flush.** A flush keeps one dedupe field, about 235
+  bytes, in its topic's Redis meta hash while it runs. Once its last append
+  returned, it retires its producer attempt, which deletes that field, so a
+  topic holds about one field per flush in flight. The retire is best
+  effort: if it fails, or a Worker dies before it, the field stays until
+  `retention` after its last write. The flush interval bounds how many such
+  leftovers a run can make.
 - **Readers track 1,000 producers.** Each flush is a producer. A read keeps
   the newest attempt of its last 1,000 producers, so it misses
   `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
