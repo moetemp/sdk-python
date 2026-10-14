@@ -1951,7 +1951,7 @@ class WorkflowServiceServicer(object):
         operation returns a stream calls it with the caller's callback when the operation starts.
 
         (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -1963,7 +1963,7 @@ class WorkflowServiceServicer(object):
         when the caller cancels the operation.
 
         (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -1975,7 +1975,7 @@ class WorkflowServiceServicer(object):
         completes them. Producers fold their notifications and keep at most one call in flight.
 
         (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -1983,10 +1983,10 @@ class WorkflowServiceServicer(object):
 
     def DescribeStreamNotifier(self, request, context):
         """DescribeStreamNotifier returns the state of the notifier of a stream and its callbacks. It is
-        for operators and tools.
+        for operators and tools, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -1996,10 +1996,11 @@ class WorkflowServiceServicer(object):
         """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
         or the stream is closed. It returns with no change after a wait limit set by the server
         (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-        found nothing and armed the topic, in place of another blocking read on the store.
+        found nothing and armed the topic, in place of another blocking read on the store. It is a
+        long poll, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
