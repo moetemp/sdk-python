@@ -37,7 +37,8 @@ An Activity writes to the stream of the Workflow that scheduled it, as
 itself: its Activity id with the scheduling run id, and its Temporal
 attempt. The run id keeps two runs of a chain apart, since Activity ids
 restart in each run. When a retry starts writing, readers first see a
-`SUPERSEDED` record, so they can drop what the failed attempt wrote.
+`SUPERSEDED` record, so they can drop what this Activity's failed attempt
+wrote.
 
 ```python
 TOKENS = topic("tokens", str)
@@ -57,13 +58,16 @@ async for record in get_stream_handle(client, "answer-1").read(topic=TOKENS):
         text.append(record.value)
 ```
 
-`SUPERSEDED` is per producer. This topic has one, so clearing everything is
-right. With several producers on a topic, keep the text per
-`record.producer_id` and clear only that producer's.
+`SUPERSEDED` is per producer attempt. It withdraws only what the producer
+in `record.producer_id` wrote in its earlier attempts. It doesn't cancel
+the stream, and the records of other producers stay valid. This topic has
+one producer, so clearing everything is right. With several producers on a
+topic, keep the text per `record.producer_id` and clear only that
+producer's.
 
-The read ends when the Workflow's run chain closes. It follows
-Continue-as-New, and an Activity's `record.producer_id` names the run that
-scheduled it.
+Every read follows the Workflow's run chain across Continue-as-New and ends
+when the chain closes. A reader can't pin one run. An Activity's
+`record.producer_id` names the run that scheduled it.
 To resume later, keep the last `record.cursor` and pass it back as
 `read(after=cursor)`.
 
