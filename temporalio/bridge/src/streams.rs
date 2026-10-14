@@ -12,7 +12,8 @@ use crate::{client::ClientRef, runtime};
 // whatever store raised it.
 create_exception!(temporal_sdk_bridge, StreamFailureError, PyException);
 
-/// The stream service one connect call built over its store, so two calls get two stores.
+/// The stream service one connect call built over its store, so two calls get two stores. Python
+/// passes it in a Worker's config, which takes a copy.
 #[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct StreamStoreRef {
