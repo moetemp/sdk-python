@@ -23,7 +23,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
 from tests.contrib.streams.test_workflow_writer import STEPS, redis_store
 from tests.helpers import new_worker
@@ -144,3 +144,51 @@ async def test_a_writer_refuses_a_publish_after_the_close(
             task_queue=worker.task_queue,
         )
     assert "already finished" in said
+
+
+# Workflow ids whose task already failed once, in this process.
+_failed_once: set[str] = set()
+
+
+@workflow.defn
+class ClosesThenFailsItsTask:
+    """Fails the task that ran the flushes and the close, once, so they all run again."""
+
+    @workflow.run
+    async def run(self) -> str:
+        writer = workflow_writer(STEPS)
+        writer.publish("one")
+        writer.publish("two")
+        await close_workflow_stream(STEPS, result="done")
+        if workflow.info().workflow_id not in _failed_once:
+            _failed_once.add(workflow.info().workflow_id)
+            raise RuntimeError("fail this Workflow Task")
+        return "closed"
+
+
+async def test_a_rerun_after_the_close_finds_its_flushes_landed(
+    streams: Client,
+):
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams,
+        ClosesThenFailsItsTask,
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        result = await asyncio.wait_for(
+            streams.execute_workflow(
+                ClosesThenFailsItsTask.run,
+                id=workflow_id,
+                task_queue=worker.task_queue,
+            ),
+            30,
+        )
+    assert result == "closed"
+    assert workflow_id in _failed_once
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    # The first run of the task wrote everything once. The rerun wrote nothing.
+    assert [(r.kind, r.value) for r in records] == [
+        (RecordKind.DATA, "one"),
+        (RecordKind.DATA, "two"),
+        (RecordKind.FINISH, None),
+    ]
