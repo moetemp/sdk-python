@@ -29,6 +29,8 @@ class RedisStreams(StreamStorePlugin):
         retention: timedelta = timedelta(days=7),
         blocking_reads_per_node: int | None = None,
         response_timeout: timedelta | None = None,
+        floor_lease: timedelta | None = None,
+        floor_release_grace: timedelta | None = None,
     ) -> None:
         """Create the store's configuration.
 
@@ -50,6 +52,11 @@ class RedisStreams(StreamStorePlugin):
                 unset.
             response_timeout: How long a short call waits for its reply.
                 Core's default when unset.
+            floor_lease: How long a Workflow reader with
+                ``replay_from_store=True`` holds the records it read against
+                retention after its last read. ``retention`` when unset.
+            floor_release_grace: How long such a hold lasts after the reader
+                ended and released it. One day when unset.
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty, or
@@ -73,6 +80,10 @@ class RedisStreams(StreamStorePlugin):
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
+        if floor_lease is not None:
+            config.floor_lease.FromTimedelta(floor_lease)
+        if floor_release_grace is not None:
+            config.floor_release_grace.FromTimedelta(floor_release_grace)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
             StreamStoreConfig(redis=config),
