@@ -249,7 +249,8 @@ gate tests/contrib/streams/test_sleeping_reader_demos.py \
   test_j2_a_connector_posts_every_message_once_in_order \
   test_j3_a_tail_reads_every_line_of_a_sparse_log \
   test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage \
-  test_j7a_both_readers_raise_the_close_error_after_the_last_record
+  test_j7a_both_readers_raise_the_close_error_after_the_last_record \
+  test_j8_only_a_reader_that_records_batches_replays_with_no_store
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed

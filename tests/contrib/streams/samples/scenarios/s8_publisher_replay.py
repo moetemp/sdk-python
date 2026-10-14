@@ -8,7 +8,8 @@ Replayer needs the store plugin, which adds the interceptor that
 demo gives the Replayer a Redis store at a port where nothing listens.
 The replay takes each flush's result from its marker and passes.
 
-Left out: a Workflow that reads a stream.
+Left out: a Workflow that reads a stream. ``j8_replay_opt_out`` replays
+one.
 
 Run with ``python -m tests.contrib.streams.samples.scenarios.s8_publisher_replay``.
 """
