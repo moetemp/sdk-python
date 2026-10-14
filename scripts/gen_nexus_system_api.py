@@ -25,12 +25,26 @@ wit_input_dir = (
 wit_path = wit_input_dir / "workflow-service.wit"
 wit_deps_dir = wit_input_dir / "deps"
 output_dir = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
+# The service a Worker implements to take NexusHandler callbacks. The server calls
+# it, not a Workflow, so it gets plain definitions and no System Nexus caller.
+notification_wit_path = wit_input_dir / "notification-service.wit"
+notification_output_dir = (
+    base_dir / "temporalio" / "nexus" / "system" / "notification_service"
+)
 workflow_init_path = base_dir / "temporalio" / "workflow" / "__init__.py"
 workflowservice_request_response_proto = (
     gen_protos.api_proto_dir
     / "temporal"
     / "api"
     / "workflowservice"
+    / "v1"
+    / "request_response.proto"
+)
+notificationservice_request_response_proto = (
+    gen_protos.api_proto_dir
+    / "temporal"
+    / "api"
+    / "notificationservice"
     / "v1"
     / "request_response.proto"
 )
@@ -79,6 +93,7 @@ def build_descriptor_set(descriptor_path: Path) -> None:
             "--include_imports",
             f"--descriptor_set_out={descriptor_path}",
             str(workflowservice_request_response_proto),
+            str(notificationservice_request_response_proto),
         ]
     )
 
@@ -124,6 +139,8 @@ def generate_nexus_system_api() -> None:
         raise RuntimeError(f"missing WIT source: {wit_path}")
     if not wit_deps_dir.exists():
         raise RuntimeError(f"missing WIT dependency directory: {wit_deps_dir}")
+    if not notification_wit_path.exists():
+        raise RuntimeError(f"missing WIT source: {notification_wit_path}")
 
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "temporal_api.bin"
@@ -149,6 +166,22 @@ def generate_nexus_system_api() -> None:
             ]
         )
 
+        shutil.rmtree(notification_output_dir, ignore_errors=True)
+        subprocess.check_call(
+            [
+                *command,
+                "python",
+                str(notification_wit_path),
+                str(wit_deps_dir),
+                "--support-package",
+                "temporalio.nexus.system._support",
+                "--descriptors",
+                str(descriptor_path),
+                "--output",
+                str(notification_output_dir),
+            ]
+        )
+
     (output_dir.parent / "__init__.py").touch()
     generate_workflow_exports()
     subprocess.check_call(
@@ -161,6 +194,7 @@ def generate_nexus_system_api() -> None:
             "I",
             "--fix",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )
@@ -171,6 +205,7 @@ def generate_nexus_system_api() -> None:
             "ruff",
             "format",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )

@@ -636,22 +636,6 @@ class PayloadVisitor:
         elif o.HasField("failure"):
             await self._visit_temporal_api_failure_v1_Failure(fs, o.failure)
 
-    async def _visit_temporal_api_notificationservice_v1_OnCompleteRequest(
-        self, fs: VisitorFunctions, o: Any
-    ):
-        if o.HasField("source_context"):
-            await self._visit_temporal_api_common_v1_Payload(fs, o.source_context)
-        if o.HasField("success"):
-            await self._visit_temporal_api_common_v1_Payload(fs, o.success)
-        elif o.HasField("failure"):
-            await self._visit_temporal_api_failure_v1_Failure(fs, o.failure)
-
-    async def _visit_temporal_api_notificationservice_v1_OnProgressRequest(
-        self, fs: VisitorFunctions, o: Any
-    ):
-        if o.HasField("source_context"):
-            await self._visit_temporal_api_common_v1_Payload(fs, o.source_context)
-
     async def _visit_temporal_api_common_v1_Header(self, fs: VisitorFunctions, o: Any):
         for v in o.fields.values():
             await self._visit_temporal_api_common_v1_Payload(fs, v)
@@ -708,6 +692,32 @@ class PayloadVisitor:
             await self._visit_temporal_api_failure_v1_Failure(fs, o.close_failure)
 
     async def _visit_temporal_api_workflowservice_v1_NotifyStreamResponse(
+        self, fs: VisitorFunctions, o: Any
+    ) -> None:
+        pass
+
+    async def _visit_temporal_api_notificationservice_v1_OnCompleteRequest(
+        self, fs: VisitorFunctions, o: Any
+    ):
+        if o.HasField("source_context"):
+            await self._visit_temporal_api_common_v1_Payload(fs, o.source_context)
+        if o.HasField("success"):
+            await self._visit_temporal_api_common_v1_Payload(fs, o.success)
+        elif o.HasField("failure"):
+            await self._visit_temporal_api_failure_v1_Failure(fs, o.failure)
+
+    async def _visit_temporal_api_notificationservice_v1_OnCompleteResponse(
+        self, fs: VisitorFunctions, o: Any
+    ) -> None:
+        pass
+
+    async def _visit_temporal_api_notificationservice_v1_OnProgressRequest(
+        self, fs: VisitorFunctions, o: Any
+    ):
+        if o.HasField("source_context"):
+            await self._visit_temporal_api_common_v1_Payload(fs, o.source_context)
+
+    async def _visit_temporal_api_notificationservice_v1_OnProgressResponse(
         self, fs: VisitorFunctions, o: Any
     ) -> None:
         pass

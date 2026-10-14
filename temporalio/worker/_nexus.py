@@ -471,7 +471,15 @@ class _NexusWorker:  # type:ignore[reportUnusedClass]
                     )
                 )
             elif isinstance(result, nexusrpc.handler.StartOperationResultSync):
-                [payload] = data_converter.payload_converter.to_payloads([result.value])
+                payload_converter = data_converter.payload_converter
+                if temporalio.nexus.system._is_system_payload(start_request.payload):
+                    # The server sent a system payload, such as a NexusHandler
+                    # callback's progress, and reads the answer without a codec.
+                    payload_converter = temporalio.nexus.system._get_payload_converter(
+                        data_converter.payload_converter,
+                        data_converter.failure_converter,
+                    )
+                [payload] = payload_converter.to_payloads([result.value])
                 return temporalio.api.nexus.v1.StartOperationResponse(
                     sync_success=temporalio.api.nexus.v1.StartOperationResponse.Sync(
                         payload=payload,
