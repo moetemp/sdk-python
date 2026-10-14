@@ -39,6 +39,7 @@ from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
     _RunWriters,
     publish_activity,
+    run_then_drain,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
@@ -453,3 +454,13 @@ async def test_the_activity_refuses_input_that_is_not_a_payloads_message():
             publish_activity, "steps", False, RawValue(Payload(data=b"x"))
         )
     assert raised.value.non_retryable
+
+
+async def test_closing_the_run_outside_its_loop_does_not_drain():
+    async def never() -> None:
+        await asyncio.Event().wait()
+
+    run = run_then_drain(never())
+    run.send(None)
+    # Closing throws GeneratorExit into the run, outside any Workflow loop.
+    run.close()
