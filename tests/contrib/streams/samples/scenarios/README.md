@@ -47,8 +47,9 @@ They turn on `notify_on_append()` themselves.
 - **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
   closes its stream with its status. A client tail sleeps between lines.
 
-The demos of 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code with its Workflow
-Task, which this release does not have.
+The scenarios 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code. This release
+does that with `workflow_writer`, through Local Activities rather than with the Workflow Task,
+but no demo here shows those scenarios yet.
 
 ## Scenarios with no demo in this release
 
