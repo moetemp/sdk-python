@@ -59,8 +59,9 @@ They turn on `notify_on_append()` themselves.
 - **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
   closes its stream with its status. A client tail sleeps between lines.
 
-The demos of 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code with its Workflow
-Task, which this release does not have.
+The scenarios 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code. This release
+does that with `workflow_writer`, through Local Activities rather than with the Workflow Task,
+but no demo here shows those scenarios yet.
 
 ## Bridge demos
 
@@ -133,6 +134,6 @@ They need the Bridge server with `nexusoperation.enableStandalone` and
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope. Whether a store claim resolves
   across Nexus is still open.
-- A close that carries a failure (7a) to a client reader. A client read ends at the close, and the
-  outcome comes from the Workflow. A Workflow reader raises it, as the live lane checks.
+- A client reader of a close that carries a failure (7a). A client read raises the failure after the
+  last record, as the live lane checks, but only the Nexus caller has a demo, `n7a_failed_delivery`.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.
