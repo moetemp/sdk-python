@@ -7,6 +7,7 @@ reaches a Workflow's stream by Workflow id through its store.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from collections.abc import Sequence
@@ -81,7 +82,10 @@ async def stream_tokens(tokens: list[str]) -> bool:
         raise ApplicationError("retry me")
     await producer.append(*tokens[attempt:])
     await producer.finish()
-    return stream.ref == StreamRef.for_workflow(activity.info().workflow_id or "")
+    info = activity.info()
+    return stream.ref == StreamRef.for_workflow(
+        info.workflow_id or "", chain_run_id=info.workflow_run_id
+    )
 
 
 @workflow.defn
@@ -105,13 +109,13 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
     async with new_worker(
         streams_client, RunsStreamingActivity, activities=[stream_tokens]
     ) as worker:
-        follows_chain = await streams_client.execute_workflow(
+        names_its_chain = await streams_client.execute_workflow(
             RunsStreamingActivity.run,
             ["a", "b", "c"],
             id=workflow_id,
             task_queue=worker.task_queue,
         )
-    assert follows_chain
+    assert names_its_chain
     records = await read_all(
         get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
@@ -181,6 +185,12 @@ async def test_a_client_handle_follows_the_chain(client: Client):
     assert get_stream_handle(streams_client, events.ref).ref == events.ref
     with pytest.raises(ValueError, match="carries its own topic"):
         get_stream_handle(streams_client, events.ref, topic=TOKENS)
+    named = get_stream_handle(streams_client, "wf", chain_run_id="run")
+    assert named.ref == StreamRef.for_workflow("wf", chain_run_id="run")
+    # Appends and positions name the chain's run. A read decides at its start.
+    assert named._address("output").run_id == "run"
+    with pytest.raises(ValueError, match="chain_run_id"):
+        get_stream_handle(streams_client, named.ref, chain_run_id="other")
     with pytest.raises(ValueError, match="no stream store is registered"):
         get_stream_handle(client, "wf")
 
@@ -283,19 +293,107 @@ async def test_a_retry_through_a_nonce_codec_still_dedupes(client: Client):
     assert [r.value for r in await read_all(stream.read())] == ["a"]
 
 
-async def test_an_activity_reads_the_chain_and_writes_to_its_run(client: Client):
+async def test_an_activity_handle_names_the_chain_of_its_run(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
     env = ActivityEnvironment(client=streams_client)
 
-    async def addresses() -> tuple[str, str]:
-        inner = activity_handle()._inner
-        return (
-            inner._address("output").run_id,
-            inner._address("output", producer=True).run_id,
-        )
+    async def chain_run_id() -> str | None:
+        return activity_handle().ref.chain_run_id
 
-    read, write = await env.run(addresses)
-    assert (read, write) == ("", ActivityEnvironment.default_info().workflow_run_id)
+    assert await env.run(chain_run_id) == (
+        ActivityEnvironment.default_info().workflow_run_id
+    )
+
+
+@workflow.defn
+class ContinuesThenWaits:
+    def __init__(self) -> None:
+        self.done = False
+
+    @workflow.run
+    async def run(self, runs_left: int) -> None:
+        if runs_left:
+            workflow.continue_as_new(runs_left - 1)
+        await workflow.wait_condition(lambda: self.done)
+
+    @workflow.signal
+    def finish(self) -> None:
+        self.done = True
+
+
+async def wait_for_run_after(client: Client, workflow_id: str, run_id: str) -> None:
+    async def continued() -> None:
+        while (
+            await client.get_workflow_handle(workflow_id).describe()
+        ).run_id == run_id:
+            await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(continued(), 10)
+
+
+async def test_a_read_on_a_named_chain_follows_continue_as_new(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, ContinuesThenWaits) as worker:
+        handle = await streams_client.start_workflow(
+            ContinuesThenWaits.run, 1, id=workflow_id, task_queue=worker.task_queue
+        )
+        first_run = handle.first_execution_run_id or ""
+        await wait_for_run_after(streams_client, workflow_id, first_run)
+        stream = get_stream_handle(
+            streams_client, workflow_id, topic=TOKENS, chain_run_id=first_run
+        )
+        producer = stream.producer(producer_id="p", attempt=1)
+        await producer.append("x")
+        reader = stream.read()
+        first = await asyncio.wait_for(anext(reader), 10)
+        waiting = asyncio.ensure_future(anext(reader))
+        # Past Core's first owner check while the read waits. A read pinned to
+        # the named run would end there, since that run closed at
+        # Continue-as-New.
+        await asyncio.sleep(1.5)
+        await producer.append("y")
+        second = await asyncio.wait_for(waiting, 10)
+        await streams_client.get_workflow_handle(workflow_id).signal(
+            ContinuesThenWaits.finish
+        )
+        rest = await read_all(reader)
+    assert [first.value, second.value] == ["x", "y"]
+    assert rest == []
+
+
+async def test_a_named_chain_stays_apart_from_a_newer_chain(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams_client, ContinuesThenWaits) as worker:
+        old = await streams_client.start_workflow(
+            ContinuesThenWaits.run, 0, id=workflow_id, task_queue=worker.task_queue
+        )
+        old_run = old.first_execution_run_id or ""
+        await (
+            get_stream_handle(streams_client, workflow_id, chain_run_id=old_run)
+            .producer(producer_id="p", attempt=1)
+            .append("old")
+        )
+        await old.signal(ContinuesThenWaits.finish)
+        await old.result()
+        new = await streams_client.start_workflow(
+            ContinuesThenWaits.run, 0, id=workflow_id, task_queue=worker.task_queue
+        )
+        await (
+            get_stream_handle(streams_client, workflow_id)
+            .producer(producer_id="p", attempt=1)
+            .append("new")
+        )
+        # The old chain ended, so its read delivers what it holds and ends.
+        old_records = await read_all(
+            get_stream_handle(streams_client, workflow_id, chain_run_id=old_run).read()
+        )
+        await new.signal(ContinuesThenWaits.finish)
+        await new.result()
+    new_records = await read_all(get_stream_handle(streams_client, workflow_id).read())
+    assert [r.value for r in old_records] == ["old"]
+    assert [r.value for r in new_records] == ["new"]
 
 
 @activity.defn
