@@ -35,6 +35,8 @@ __all__ = [
     "StreamProducerError",
     "StreamRecordError",
     "StreamRefusedError",
+    "StreamReplayMismatchError",
+    "StreamReplayRangeLostError",
     "StreamStorageError",
     "StreamUnsupportedError",
 ]
@@ -149,6 +151,23 @@ class StreamUnsupportedError(StreamError):
     """The capability is not offered by this release or by this store."""
 
 
+class StreamReplayMismatchError(StreamError):
+    """A replay read found other records than the read it repeats.
+
+    Other content, another count or another end. A positions-only Workflow
+    reader reports it as nondeterminism, so the Workflow Task fails.
+    """
+
+
+class StreamReplayRangeLostError(StreamError):
+    """A replay read found that the store no longer holds the range it repeats.
+
+    Retention trimmed the records, or the stream was deleted. The Workflow
+    Task fails and is retried, so an operator can restore the store, reset
+    the Workflow past the read, or replay with recorded batches.
+    """
+
+
 _BY_KIND: dict[int, type[StreamError]] = {
     StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT: StreamProducerError,
     StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_STALE: StreamProducerError,
@@ -160,6 +179,8 @@ _BY_KIND: dict[int, type[StreamError]] = {
     StreamFailureKind.STREAM_FAILURE_KIND_NOT_FOUND: StreamNotFoundError,
     StreamFailureKind.STREAM_FAILURE_KIND_STORAGE: StreamStorageError,
     StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED: StreamUnsupportedError,
+    StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_MISMATCH: StreamReplayMismatchError,
+    StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamReplayRangeLostError,
 }
 
 
