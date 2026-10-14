@@ -200,6 +200,22 @@ Known limits:
   effort: if it fails, or a Worker dies before it, the field stays until
   `retention` after its last write. The flush interval bounds how many such
   leftovers a run can make.
+- **History events.** Each flush adds one marker event. While flushes run
+  back to back, the Workflow Task stays open, and Core heartbeats it about
+  every 8 seconds (80% of the default 10 second task timeout), which adds
+  three Workflow Task events. So a topic that publishes all the time adds
+  about ten events a second, and reaches the default limit of 51,200
+  History events in under 90 minutes. Two busy topics take half that. A
+  long-running publisher should Continue-as-New when
+  `workflow.info().is_continue_as_new_suggested()` is true. The interceptor
+  flushes every buffer before the run continues as new, and the next run
+  publishes to the same stream:
+
+  ```python
+  steps.publish(step)
+  if workflow.info().is_continue_as_new_suggested():
+      workflow.continue_as_new(args=[prompt])
+  ```
 - **Readers track 1,000 producers.** Each flush is a producer. A read keeps
   the newest attempt of its last 1,000 producers, so it misses
   `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.

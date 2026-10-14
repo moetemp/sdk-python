@@ -413,7 +413,10 @@ def workflow_writer(
     Each flush is one Local Activity and adds one marker event to History
     when its Workflow Task completes. Its records are visible as soon as
     its append is accepted, before that task completes. The values ride in
-    the Local Activity's input, not in History.
+    the Local Activity's input, not in History. A topic that publishes all
+    the time adds up to about ten markers a second, so a long-running
+    publisher should Continue-as-New when
+    :meth:`temporalio.workflow.Info.is_continue_as_new_suggested` is true.
 
     Args:
         topic: A :func:`temporalio.contrib.streams.topic` definition, whose
