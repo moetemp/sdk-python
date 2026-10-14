@@ -15,7 +15,7 @@ This page maps one to the other.
 | Workflow Streams | Streams |
 |---|---|
 | `WorkflowStream()` in `@workflow.init` | Nothing to construct. Register `RedisStreams` once, on the client. |
-| `stream.topic("events", type=E).publish(e)` in the Workflow | `await workflow_activity_writer(topic("events", E)).publish(e)`, which runs a built-in Activity |
+| `stream.topic("events", type=E).publish(e)` in the Workflow | `workflow_writer(topic("events", E)).publish(e)`, which flushes through a built-in Local Activity |
 | `WorkflowStreamClient.from_within_activity()` and `topic(...).publish(...)` in an Activity | `activity_handle().producer(topic=...).append(...)` |
 | `WorkflowStreamClient.create(client, workflow_id)` and `topic(...).publish(...)` | `get_stream_handle(client, workflow_id).producer(topic=..., producer_id=..., attempt=...).append(...)` |
 | `client.subscribe(["events"], result_type=E)` | `get_stream_handle(client, workflow_id).read(topic=topic("events", E))` |
@@ -61,12 +61,13 @@ Differences to plan for:
    both libraries is two streams.
 3. For Workflows already running, switch at a natural boundary, such as the
    next run after Continue-as-New, or let them finish on Workflow Streams.
-   A publish from Workflow code schedules an Activity, so every new publish
-   point needs Workflow versioning, like any new command. For example:
+   A flush from Workflow code schedules a Local Activity, so every new
+   publish point needs Workflow versioning, like any new command. For
+   example:
 
    ```python
    if workflow.patched("publish-to-streams"):
-       await workflow_activity_writer(TOKENS).publish(token)
+       workflow_writer(TOKENS).publish(token)
    else:
        stream.topic("tokens").publish(token)
    ```

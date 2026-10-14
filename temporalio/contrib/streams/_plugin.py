@@ -7,8 +7,7 @@ handles and to the Activities of every Worker built from the client, so an
 Activity's append and an outside read meet in the same place.
 
 On a Worker the plugin registers the built-in Activity that
-:func:`temporalio.contrib.streams.workflow_writer` runs as a Local Activity
-and :func:`temporalio.contrib.streams.workflow_activity_writer` schedules,
+:func:`temporalio.contrib.streams.workflow_writer` runs as a Local Activity,
 and the interceptor that gives a Local Activity a producer identity and
 drains the Workflow writers when a run ends. On a Replayer it adds the
 interceptor only, so a replay schedules the same drain.
