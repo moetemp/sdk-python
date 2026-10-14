@@ -31,27 +31,57 @@ import logging
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, overload
 
+import temporalio.activity
 from temporalio import workflow
-from temporalio.api.common.v1 import Payload
-from temporalio.common import RetryPolicy
+from temporalio.api.common.v1 import Payload, Payloads
+from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib.streams._cursor import BEGINNING
-from temporalio.contrib.streams._errors import StreamError, StreamUnsupportedError
+from temporalio.contrib.streams._errors import (
+    StreamClosedError,
+    StreamError,
+    StreamNotFoundError,
+    StreamOutcomeUnknownError,
+    StreamProducerError,
+    StreamUnsupportedError,
+)
+from temporalio.contrib.streams._handles import StreamProducer, activity_handle
 from temporalio.contrib.streams._local_activity import _WorkflowInbound
 from temporalio.contrib.streams._record import Cursor
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
-from temporalio.contrib.streams._workflow_activity import (
-    _MAX_RECORD_BYTES,
-    PUBLISH_ACTIVITY,
-    _raw_payloads,
-)
+from temporalio.exceptions import ApplicationError
 
-__all__ = ["WorkflowStreamWriter", "run_then_drain", "workflow_writer"]
+__all__ = [
+    "PUBLISH_ACTIVITY",
+    "WorkflowStreamWriter",
+    "publish_activity",
+    "run_then_drain",
+    "workflow_writer",
+]
 
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
+PUBLISH_ACTIVITY = "__temporal_streams_publish"
+"""The name the built-in publish Activity is registered under."""
+
 _DEFAULT_START_TO_CLOSE = timedelta(seconds=10)
+# The same per-record limit the stream service keeps, checked in the Workflow
+# so an oversized value fails at the call and schedules nothing.
+_MAX_RECORD_BYTES = 3 << 19
+_PAYLOADS_ENCODING = b"binary/protobuf"
+_PAYLOADS_TYPE = Payloads.DESCRIPTOR.full_name.encode()
+# Repeats of one batch on the same producer that the store answers with the
+# original position, before the Activity gives up and its retry runs.
+_OUTCOME_UNKNOWN_REPEATS = 3
+# Errors that the same append raises again on every attempt.
+_FINAL_ERRORS = (
+    ValueError,
+    StreamClosedError,
+    StreamNotFoundError,
+    StreamProducerError,
+    StreamUnsupportedError,
+)
 # Bounds on one flush, so a burst of publishes splits into several Local
 # Activities rather than one oversized input.
 _MAX_BATCH_RECORDS = 1_000
@@ -445,3 +475,51 @@ def _ends_the_workflow(error: BaseException) -> bool:
         # A cancelled run with no cancel request is being evicted.
         return workflow.cancellation_reason() is not None
     return workflow.is_failure_exception(error)
+
+
+def _raw_payloads(payloads: list[Payload]) -> RawValue:
+    # Encoded here rather than by the converter, so a converter without
+    # protobuf support still carries the batch.
+    return RawValue(
+        Payload(
+            metadata={"encoding": _PAYLOADS_ENCODING, "messageType": _PAYLOADS_TYPE},
+            data=Payloads(payloads=payloads).SerializeToString(),
+        )
+    )
+
+
+@temporalio.activity.defn(name=PUBLISH_ACTIVITY)
+async def publish_activity(topic: str, finish: bool, values: RawValue) -> str:
+    """Append a Workflow's batch to its own stream, as this Activity attempt.
+
+    A flush runs it as a Local Activity, so it writes as a Local Activity
+    producer. The store plugin registers it on every Worker built from a
+    client that carries a store. Returns the cursor token of the last record
+    written.
+    """
+    if values.payload.metadata.get("encoding") != _PAYLOADS_ENCODING:
+        raise ApplicationError(
+            "the stream publish input is not a Payloads message", non_retryable=True
+        )
+    batch = [RawValue(p) for p in Payloads.FromString(values.payload.data).payloads]
+    producer = activity_handle().producer(topic=topic)
+    try:
+        cursor = await _append(producer, batch) if batch else BEGINNING
+        if finish:
+            cursor = await producer.finish()
+    except _FINAL_ERRORS as error:
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
+    return cursor.token
+
+
+async def _append(producer: StreamProducer[Any], batch: list[RawValue]) -> Cursor:
+    for repeat in range(1, _OUTCOME_UNKNOWN_REPEATS):
+        try:
+            return await producer.append(*batch)
+        except StreamOutcomeUnknownError:
+            # The producer kept its sequence, so the same batch again is
+            # written once.
+            await asyncio.sleep(0.1 * 2**repeat)
+    return await producer.append(*batch)

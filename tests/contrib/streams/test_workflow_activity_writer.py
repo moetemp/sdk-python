@@ -28,9 +28,9 @@ from temporalio.contrib.streams import (
     topic,
     workflow_activity_writer,
 )
-from temporalio.contrib.streams._workflow_activity import (
+from temporalio.contrib.streams._workflow_activity import _RunTopics
+from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
-    _RunTopics,
     publish_activity,
 )
 from temporalio.contrib.streams.memory import MemoryStreams

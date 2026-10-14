@@ -119,7 +119,7 @@ class StreamStorePlugin(SimplePlugin):
             )
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
-        from temporalio.contrib.streams._workflow_activity import publish_activity
+        from temporalio.contrib.streams._workflow_writer import publish_activity
 
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures the Worker twice.
