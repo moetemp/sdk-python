@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Awaitable, Callable
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 import nexusrpc
@@ -24,6 +24,7 @@ from temporalio.bridge.proto.streams import (
     NexusLimits,
     NexusResumeRequest,
 )
+from temporalio.client import Client
 from temporalio.contrib.streams._body import decode_bodies, decode_body, encode_bodies
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._ref import StreamRef
@@ -167,34 +168,13 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         transfer: Any,
     ) -> Any:
         """Serve one operation in Core, running the codec when Core asks."""
-        client = temporalio.nexus.client()
-        service = await store_for_client(client)._nexus_service_for(client)
-        request = NexusCall(
-            input=json.dumps(transfer).encode(),
-            limits=self._limits,
-            namespace=client.namespace,
+        return await serve_in_core(
+            temporalio.nexus.client(),
+            operation,
+            transfer,
+            self._limits,
+            ctx.request_deadline,
         )
-        if ctx.request_deadline is not None:
-            deadline = ctx.request_deadline
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=timezone.utc)
-            request.deadline.FromDatetime(deadline)
-        if operation == "append":
-            step = await call(service.nexus_append(request))
-        else:
-            step = await call(service.nexus_read(request))
-        while step.HasField("codec"):
-            results = await _run_codec(client.data_converter, step.codec)
-            step = await call(
-                service.nexus_resume(
-                    NexusResumeRequest(
-                        continuation=step.codec.continuation, results=results
-                    )
-                )
-            )
-        if step.HasField("failure"):
-            raise _handler_error(step.failure)
-        return json.loads(step.output)
 
     async def _check(self, access: StreamAccess) -> None:
         if self._authorize is None:
@@ -216,6 +196,51 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
             type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
             retryable_override=False,
         )
+
+
+async def serve_in_core(
+    client: Client,
+    operation: str,
+    transfer: Any,
+    limits: NexusLimits,
+    deadline: datetime | None,
+) -> Any:
+    """Serve one stream service operation in Core, on the store of ``client``.
+
+    ``transfer`` is the input's JSON transfer form, and the answer is the
+    output's. Core runs every rule of the contract and asks for the codec of
+    ``client`` when a body crosses it.
+
+    Raises:
+        nexusrpc.HandlerError: Core refused the call.
+        ValueError: No stream store is registered on ``client``.
+    """
+    service = await store_for_client(client)._nexus_service_for(client)
+    request = NexusCall(
+        input=json.dumps(transfer).encode(),
+        limits=limits,
+        namespace=client.namespace,
+    )
+    if deadline is not None:
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        request.deadline.FromDatetime(deadline)
+    if operation == "append":
+        step = await call(service.nexus_append(request))
+    else:
+        step = await call(service.nexus_read(request))
+    while step.HasField("codec"):
+        results = await _run_codec(client.data_converter, step.codec)
+        step = await call(
+            service.nexus_resume(
+                NexusResumeRequest(
+                    continuation=step.codec.continuation, results=results
+                )
+            )
+        )
+    if step.HasField("failure"):
+        raise _handler_error(step.failure)
+    return json.loads(step.output)
 
 
 async def _run_codec(converter: DataConverter, work: CodecWork) -> list[CodecResult]:
