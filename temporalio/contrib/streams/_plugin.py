@@ -67,6 +67,8 @@ class StreamStorePlugin(SimplePlugin):
         self._service_client: ServiceClient | None = None
         # Whether Client.connect connected the store, which a Worker needs.
         self._connected_by_connect = False
+        # Set once the server answered that it has no stream notifier.
+        self._notifier_unsupported = False
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
@@ -167,7 +169,8 @@ class StreamStorePlugin(SimplePlugin):
         read, costs no notification. Off by default, since most streams have
         no sleeping reader. It needs a server with the stream notifier. Turn
         it on before a client connects the store, in every process that
-        appends.
+        appends or reads, since a client reader sleeps on the notifier only
+        with it on.
 
         Args:
             max_notifiers: How many streams Core keeps a notifier for,
@@ -194,6 +197,15 @@ class StreamStorePlugin(SimplePlugin):
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self
+
+    def _waits_on_notifier(self) -> bool:
+        """Whether a client reader sleeps on the stream's notifier when the stream is idle.
+
+        Only with notifications on, since without them no producer in the
+        deployment tells the notifier, and a sleeping reader would wake only
+        at the server's wait limit.
+        """
+        return self._config.notify_on_append and not self._notifier_unsupported
 
     async def close_stream(
         self,

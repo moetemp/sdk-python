@@ -36,9 +36,12 @@ from temporalio.bridge.proto.streams import (
     LatestRequest,
     NamedProducer,
     ReadRequest,
+    ReadResponse,
     StreamAddress,
     StreamOwnerKind,
+    WaitForNotificationRequest,
 )
+from temporalio.bridge.streams_generated import StreamService
 from temporalio.client import Client
 from temporalio.contrib.streams._body import batch_digest, content_hash, encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
@@ -71,6 +74,8 @@ __all__ = [
 T = TypeVar("T")
 
 _READ_WAIT = timedelta(seconds=30)
+# How long a read that sleeps on the notifier waits in the store before it arms.
+_IDLE_WAIT = timedelta(seconds=2)
 
 
 class StreamProducer(Generic[T]):
@@ -291,6 +296,16 @@ class StreamHandle:
         result is a generator, so a caller that stops early calls
         ``aclose()`` on it.
 
+        With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
+        on, an idle read sleeps on the stream's notifier on the server. A read
+        that waits 2 seconds and finds nothing arms the stream, then waits
+        until a producer notifies, the stream closes, or the server's wait
+        limit (60 seconds by default) passes, and then reads again. That read
+        also finds records whose notification was lost. Without
+        notifications, or on a server without the stream notifier, an idle
+        read waits in the store instead, which holds a store connection while
+        it waits.
+
         The read starts when the generator first runs, not when this call
         returns, and ``END`` is resolved then. A reader that must not miss
         the next record, such as one about to send something the Workflow
@@ -327,7 +342,7 @@ class StreamHandle:
         service = await self._plugin._service_for(self._client)
         address = self._address(topic, run_id=await self._read_run_id())
         request = ReadRequest(stream=address, after=after.token)
-        request.wait.FromTimedelta(_READ_WAIT)
+        self._sleep_on_notifier(request, self._plugin._waits_on_notifier())
         while True:
             response = await call(service.read(request))
             for record in response.records:
@@ -336,6 +351,35 @@ class StreamHandle:
                 return
             request.after = response.cursor
             request.state = response.state
+            if response.armed:
+                await self._wait_for_notification(service, request, response)
+
+    @staticmethod
+    def _sleep_on_notifier(request: ReadRequest, sleep: bool) -> None:
+        # A read that sleeps on the notifier waits only its idle time in the
+        # store, and the store arms the stream when that wait finds nothing.
+        request.arm = sleep
+        request.wait.FromTimedelta(_IDLE_WAIT if sleep else _READ_WAIT)
+
+    async def _wait_for_notification(
+        self, service: StreamService, request: ReadRequest, armed: ReadResponse
+    ) -> None:
+        """Wait until the stream moves past the armed read, closes, or the poll ends.
+
+        Every answer leads to a read with ``arm``. After the server's wait
+        limit, that read finds records whose notification was lost, or arms
+        again.
+        """
+        wait = WaitForNotificationRequest(
+            stream=request.stream, after_counter=armed.wake_after
+        )
+        try:
+            await call(service.wait_for_notification(wait))
+        except StreamUnsupportedError:
+            # The server has no stream notifier, so the store's blocking read is
+            # the only way to wait, for this read and the process's later ones.
+            self._plugin._notifier_unsupported = True
+            self._sleep_on_notifier(request, False)
 
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """The cursor of the newest record on ``topic``, or ``BEGINNING`` when empty.
