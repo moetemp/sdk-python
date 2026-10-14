@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import pytest
+
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     Cursor,
@@ -75,6 +77,23 @@ def test_unattributed_records_are_never_withdrawn_and_forget_drops_a_producer():
     assert tracker.observe(superseded("a", 1, 2)) == []
     # Neither is held: one can't be withdrawn, the other was forgotten.
     assert tracker.standing() == []
+
+
+def test_the_tracker_holds_the_producers_it_saw_most_recently():
+    tracker: SupersessionTracker[str] = SupersessionTracker(max_producers=2)
+    for producer in ("a", "b"):
+        tracker.observe(data(producer, 1, f"{producer}1"))
+    # Seeing a again makes b the producer seen least recently.
+    tracker.observe(data("a", 1, "a2"))
+    tracker.observe(data("c", 1, "c1"))
+    assert [r.value for r in tracker.standing()] == ["a1", "a2", "c1"]
+    assert tracker.observe(superseded("b", 1, 2)) == []
+    assert [r.value for r in tracker.observe(superseded("a", 1, 2))] == ["a1", "a2"]
+
+
+def test_the_tracker_needs_room_for_one_producer():
+    with pytest.raises(ValueError, match="max_producers"):
+        SupersessionTracker(max_producers=0)
 
 
 async def test_track_supersession_pairs_records_and_closes_the_read():
