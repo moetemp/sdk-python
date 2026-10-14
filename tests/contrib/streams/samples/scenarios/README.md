@@ -31,6 +31,10 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
 - **2, `s2_dashcam_reference`.** The courier appends a `Segment` with a URL for each segment. The
   backend fetches each one from an object store, which a dict stands in for. Left out: live video
   and storage that Temporal manages.
+- **3a to 3c, `s3_chat_turn`.** `Chat` publishes the turn's start and end on `turns` with
+  `workflow_writer`. Its Activity appends tokens on `tokens`, and attempt 1 fails after two. The
+  UI reads `tokens` through `track_supersession`, takes back the two tokens at `SUPERSEDED`, and
+  shows only attempt 2's answer. Left out: a model, and server fencing and retraction.
 - **5a, `s5a_late_dashboard`.** The courier appends two stages before anyone reads. A late
   dashboard reads from `BEGINNING` and gets all four stages. A live view reads from `END` and gets
   only the two that come after it started. Left out: the relay half of 5b.
@@ -46,9 +50,9 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
   replays its History with a store at a port where nothing listens. Each flush's result comes from
   its marker. Left out: a Workflow that reads a stream.
 
-The scenarios 3a, 3b, 3c and 5b publish from Workflow code too, but no demo here shows them yet.
 This release publishes from Workflow code with `workflow_writer`, through Local Activities rather
-than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity.
+than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. 5b
+has no demo of its own: its dashboard half is 5a, and its relay half needs a Workflow reader.
 
 ## Scenarios with no demo in this release
 

@@ -20,6 +20,7 @@ from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples.scenarios import (
     s1a_order_tracking,
     s2_dashcam_reference,
+    s3_chat_turn,
     s5a_late_dashboard,
     s6_location_topic,
     s7a_failed_delivery,
@@ -61,6 +62,14 @@ async def test_s2_every_segment_url_resolves_in_order(streams: Client):
         streams, task_queue, workflow_id=workflow_id
     )
     assert fetched == [b"segment 0", b"segment 1", b"segment 2"]
+
+
+async def test_s3_a_retry_takes_back_only_the_partial_answer(streams: Client):
+    task_queue, workflow_id = ids("s3")
+    outcome = await s3_chat_turn.main(streams, task_queue, workflow_id=workflow_id)
+    assert outcome.turns == ["turn started", "turn ended"]
+    assert outcome.shown == s3_chat_turn.ANSWER
+    assert outcome.withdrawn == s3_chat_turn.ANSWER[:2]
 
 
 async def test_s5a_a_late_dashboard_reads_from_the_start_and_a_live_view_from_the_end(
