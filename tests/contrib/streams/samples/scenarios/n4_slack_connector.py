@@ -4,8 +4,9 @@ The agent runs in namespace ``streams-b``. It publishes a message, idles,
 publishes another, and closes its stream. A ``Connector`` Workflow in
 ``default`` follows the agent's ``message`` topic through a stream operation
 and posts each message through an Activity, as the ``nexus_slack_router``
-sample does. While the agent idles, the connector gets no progress, so its
-History has no Workflow Task in the gap.
+sample does. While the agent idles, the connector gets no progress, so after
+one read that waits its idle wait and arms the stream, its History has no
+Workflow Task in the gap.
 
 Left out: a standalone Nexus operation as the caller, and a Worker Callback
 per delivery. Neither is built, so the connector is a small Workflow.

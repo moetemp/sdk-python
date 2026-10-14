@@ -844,6 +844,158 @@ async def test_each_read_sends_the_state_the_last_answer_gave(
     assert reader.position.state == base64.b64encode(b"s3").decode()
 
 
+class _OpenHandle:
+    """An open operation handle that logs each progress wait in ``calls``."""
+
+    operation_token = _CompletedHandle.operation_token
+    latest_progress = None
+
+    def __init__(self, calls: list[tuple[Any, ...]], waits: int) -> None:
+        self._calls = calls
+        self._waits = waits
+
+    async def progress(self, *, after_counter: int = 0) -> Any:
+        self._calls.append(("progress", after_counter))
+        if self._waits == 0:
+            return None
+        self._waits -= 1
+        return types.SimpleNamespace(counter=after_counter + 1)
+
+    def __await__(self) -> Any:
+        async def result() -> str:
+            return "summary"
+
+        return result().__await__()
+
+
+def _fake_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[ReadOutput],
+    calls: list[tuple[Any, ...]],
+) -> None:
+    class FakeClient:
+        async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
+            calls.append(("read", input.arm, input.wait_ms))
+            return answers.pop(0)
+
+    fake_workflow = types.SimpleNamespace(
+        create_nexus_client=lambda **_kwargs: FakeClient(),
+        payload_converter=lambda: converter,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(reader_module, "workflow", fake_workflow)
+
+
+async def test_each_read_asks_to_arm_and_waits_the_idle_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read with records answers at once, so only a gap longer than the idle
+    wait arms the stream and puts the reader to sleep on progress."""
+    calls: list[tuple[Any, ...]] = []
+    _fake_reads(
+        monkeypatch,
+        [
+            answer(record(1, text="a")),
+            ReadOutput(records=[], next_token="cursor-1", done=False, armed=True),
+            answer(record(2, text="b")),
+            ReadOutput(records=[], next_token="cursor-2", done=False, armed=True),
+            # The drain after the completion waits, but never arms.
+            answer(cursor="cursor-2", done=True),
+        ],
+        calls,
+    )
+    reader = StreamReader(
+        _OpenHandle(calls, waits=1),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+    )
+    assert await reader.next() == [Token("a")]
+    assert await reader.next() == [Token("b")]
+    assert await reader.next() is None
+    assert calls == [
+        ("read", True, 2000),
+        ("read", True, 2000),
+        ("progress", 0),
+        ("read", True, 2000),
+        ("read", True, 2000),
+        ("progress", 1),
+        ("read", None, 2000),
+    ]
+
+
+async def test_an_empty_unarmed_answer_falls_back_to_the_progress_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A History from before readers armed holds empty answers without
+    ``armed``, and the reader must wait on progress after them as it did then."""
+    calls: list[tuple[Any, ...]] = []
+    _fake_reads(
+        monkeypatch,
+        [
+            answer(cursor=""),
+            answer(record(1, text="a")),
+        ],
+        calls,
+    )
+    reader = StreamReader(
+        _OpenHandle(calls, waits=1),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        idle_wait=timedelta(0),
+    )
+    assert await reader.next() == [Token("a")]
+    # An idle wait of zero arms on the first empty read.
+    assert calls == [("read", True, 0), ("progress", 0), ("read", True, 0)]
+
+
+def test_the_idle_wait_is_not_negative() -> None:
+    with pytest.raises(ValueError, match="idle_wait"):
+        StreamReader(
+            _OpenHandle([], waits=0),  # type: ignore[arg-type]
+            item_type=Token,
+            endpoint=ENDPOINT,
+            idle_wait=timedelta(seconds=-1),
+        )
+
+
+def _base_read_input(after_token: str | None, *, drain: bool = False) -> Payload:
+    """A read as the reader sent it before it armed: no ``arm``, no idle wait."""
+    return converter.to_payload(
+        ReadInput(
+            stream=STREAM,
+            after_token=after_token,
+            max_records=100,
+            wait_ms=2000 if drain else 0,
+        )
+    )
+
+
+async def test_a_history_from_before_readers_armed_replays() -> None:
+    """The reads of an older reader carry other inputs, and their answers no
+    ``armed``. Core matches a scheduled Nexus operation by its event type, so
+    the History replays with no patch."""
+    history = stream_history()
+    inputs = iter(
+        [
+            _base_read_input(None),
+            _base_read_input("cursor-2"),
+            _base_read_input("cursor-2"),
+            _base_read_input("cursor-3"),
+            _base_read_input("cursor-3", drain=True),
+        ]
+    )
+    for event in history.events:
+        if event.HasField("nexus_operation_scheduled_event_attributes"):
+            attributes = event.nexus_operation_scheduled_event_attributes
+            if attributes.operation == "read":
+                attributes.input.CopyFrom(next(inputs))
+    assert next(inputs, None) is None
+    await replay(history)
+    assert seen == [
+        Seen(batches=[[Token("a"), Token("b")], [Token("c")]], after_end=None)
+    ]
+
+
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
     """A read's answer is one Nexus operation result, encoded by the handler
     Worker's codec with the bodies inside it in the clear. The caller Worker's

@@ -5,7 +5,8 @@ reports progress whenever the stream moves and completes the operation when
 the stream closes; the operation token names the stream. The reader turns
 that into batches of typed records: it reads from its cursor through the
 stream service on a Nexus endpoint, and waits for progress once a read finds
-nothing new.
+nothing new. A read that waits its idle wait and finds nothing arms the stream,
+so the next append notifies the operation's callers.
 
 Every read is a Nexus operation of the Workflow, so History records what each
 read answered, and a replay hands over the same batches at the same points.
@@ -203,6 +204,15 @@ class StreamReader(Generic[T]):
     ``StreamExpiredError`` as its cause. A new reader with no ``after`` starts
     again at the oldest record still kept.
 
+    Each read before the completion waits up to ``idle_wait`` for a record
+    and asks the stream service to arm the stream. A read with records
+    answers at once, so a busy stream costs no notification. A read that
+    waits the whole ``idle_wait`` and finds nothing arms the stream, and the
+    reader waits for progress. The stream's next append then notifies the
+    operation's callers once. A shorter ``idle_wait`` wakes the reader on
+    shorter gaps, at the cost of a notification and a progress Workflow Task
+    for each such gap.
+
     Bodies reach Workflow code decoded: the stream service decodes each body
     with its Worker's data converter, payload codec included, and the read's
     result travels back as one Nexus operation result, which this Worker's
@@ -218,6 +228,7 @@ class StreamReader(Generic[T]):
         endpoint: str,
         after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
+        idle_wait: timedelta = timedelta(seconds=2),
     ) -> None:
         """Read the stream ``handle``'s operation returns.
 
@@ -236,12 +247,20 @@ class StreamReader(Generic[T]):
                 find nothing, or a stream that ended may wait for its
                 operation to complete, before the reader raises
                 :class:`StreamIncompleteError`.
+            idle_wait: How long a read waits for a record before it arms the
+                stream and the reader waits for progress. Zero arms on the
+                first empty read. Keep it well below the 10 second timeout of
+                a Nexus request.
 
         Raises:
-            ValueError: ``drain_limit`` is not positive.
+            ValueError: ``drain_limit`` is not positive, or ``idle_wait`` is
+                negative.
         """
         if drain_limit <= timedelta(0):
             raise ValueError("drain_limit must be positive")
+        if idle_wait < timedelta(0):
+            raise ValueError("idle_wait must not be negative")
+        self._idle_wait_ms = idle_wait // timedelta(milliseconds=1)
         self._handle = handle
         self._item_type = item_type
         self._endpoint = endpoint
@@ -298,7 +317,9 @@ class StreamReader(Generic[T]):
         """The next batch of records, or ``None`` once the stream has ended.
 
         Reads on while reads answer with records, and waits for the
-        operation to report progress only once a read answers with none.
+        operation to report progress only once a read answers with none. A
+        read like that waited ``idle_wait`` and armed the stream. An empty
+        answer that did not arm waits for progress too.
         Never answers with an empty batch. The stream closes in the store
         before the operation completes, so once the operation completes the
         reader reads until the stream service says the stream is done, then
@@ -460,14 +481,17 @@ class StreamReader(Generic[T]):
         client = workflow.create_nexus_client(
             service=TemporalStreams, endpoint=self._endpoint
         )
+        # After the completion no progress follows, so a drain read never arms.
+        arm = not self._operation_resolved
         self._answer = await client.execute_operation(
             TemporalStreams.read,
             ReadInput(
                 stream=self._stream,
                 after_token=self._cursor or None,
                 max_records=_BATCH,
-                wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else 0,
+                wait_ms=self._idle_wait_ms if arm else _DRAIN_WAIT_MS,
                 state=self._state,
+                arm=True if arm else None,
             ),
         )
         self._pending = list(self._answer.records)
