@@ -230,6 +230,13 @@ Known limits:
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window.
+- **Readers before the owner.** A read of a Workflow that Temporal doesn't
+  know yet waits for `owner_start_grace` (60 seconds by default, set on
+  `RedisStreams` or `MemoryStreams`), counted from the read's first owner
+  check. So a reader can start before the Workflow does. After the grace,
+  the read raises `StreamNotFoundError`, so a wrong Workflow id fails after
+  the grace, not at once. Appends and `latest()` don't wait. Zero turns the
+  grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
 - **Not in this release.** Reading a stream inside a Workflow, and streams
