@@ -236,6 +236,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     DO_UPDATE_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_START_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_FIELD_NUMBER: builtins.int
+    RESOLVE_STREAM_WAKE_FIELD_NUMBER: builtins.int
     REMOVE_FROM_CACHE_FIELD_NUMBER: builtins.int
     @property
     def initialize_workflow(self) -> global___InitializeWorkflow:
@@ -296,6 +297,11 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     def resolve_nexus_operation(self) -> global___ResolveNexusOperation:
         """A nexus operation resolved."""
     @property
+    def resolve_stream_wake(self) -> global___ResolveStreamWake:
+        """A stream that one of the Workflow's readers subscribed to moved or closed. Numbers 17
+        and 18 are left to the external stream replay job and to Nexus operation progress.
+        """
+    @property
     def remove_from_cache(self) -> global___RemoveFromCache:
         """Remove the workflow identified by the [WorkflowActivation] containing this job from the
         cache after performing the activation. It is guaranteed that this will be the only job
@@ -323,6 +329,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
         do_update: global___DoUpdate | None = ...,
         resolve_nexus_operation_start: global___ResolveNexusOperationStart | None = ...,
         resolve_nexus_operation: global___ResolveNexusOperation | None = ...,
+        resolve_stream_wake: global___ResolveStreamWake | None = ...,
         remove_from_cache: global___RemoveFromCache | None = ...,
     ) -> None: ...
     def HasField(
@@ -356,6 +363,8 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
+            "resolve_stream_wake",
+            b"resolve_stream_wake",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
@@ -395,6 +404,8 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
+            "resolve_stream_wake",
+            b"resolve_stream_wake",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
@@ -422,6 +433,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             "do_update",
             "resolve_nexus_operation_start",
             "resolve_nexus_operation",
+            "resolve_stream_wake",
             "remove_from_cache",
         ]
         | None
@@ -1452,6 +1464,114 @@ class ResolveNexusOperation(google.protobuf.message.Message):
     ) -> None: ...
 
 global___ResolveNexusOperation = ResolveNexusOperation
+
+class ResolveStreamWake(google.protobuf.message.Message):
+    """A wake for one of the Workflow's stream readers, as the server folded it onto this Workflow
+    Task's scheduled event.
+
+    Core issues at most one per subscription per Workflow Task, in the task's first activation. It
+    comes from History, so replay issues the same job at the same point. A wake says that the
+    stream moved, not what it holds, so the reader reads the stream itself.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class MetadataEntry(google.protobuf.message.Message):
+        DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+        KEY_FIELD_NUMBER: builtins.int
+        VALUE_FIELD_NUMBER: builtins.int
+        key: builtins.str
+        value: builtins.str
+        def __init__(
+            self,
+            *,
+            key: builtins.str = ...,
+            value: builtins.str = ...,
+        ) -> None: ...
+        def ClearField(
+            self,
+            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
+        ) -> None: ...
+
+    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    POSITION_FIELD_NUMBER: builtins.int
+    COUNTER_FIELD_NUMBER: builtins.int
+    METADATA_FIELD_NUMBER: builtins.int
+    RECHECK_FIELD_NUMBER: builtins.int
+    CLOSED_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    RESUBSCRIBE_FIELD_NUMBER: builtins.int
+    subscription_id: builtins.str
+    """The subscription id the reader subscribed with."""
+    position: builtins.str
+    """The position that came with `counter`, in the producer's terms."""
+    counter: builtins.int
+    """The highest counter the stream's notifier has seen. The reader reads when it is above the
+    `wake_after` of the read that armed the stream.
+    """
+    @property
+    def metadata(
+        self,
+    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
+        """The metadata that came with `counter`."""
+    recheck: builtins.bool
+    """The notifier asks the reader to read again whatever the counter, after a quiet period."""
+    closed: builtins.bool
+    """The stream closed. The reader reads to its end, then sees the outcome."""
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """The result the stream closed with, when it gave one."""
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """The failure the stream closed with, when it closed with one."""
+    resubscribe: builtins.bool
+    """The notifier dropped the subscription. The reader subscribes again."""
+    def __init__(
+        self,
+        *,
+        subscription_id: builtins.str = ...,
+        position: builtins.str = ...,
+        counter: builtins.int = ...,
+        metadata: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
+        recheck: builtins.bool = ...,
+        closed: builtins.bool = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        resubscribe: builtins.bool = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure", b"close_failure", "close_result", b"close_result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "closed",
+            b"closed",
+            "counter",
+            b"counter",
+            "metadata",
+            b"metadata",
+            "position",
+            b"position",
+            "recheck",
+            b"recheck",
+            "resubscribe",
+            b"resubscribe",
+            "subscription_id",
+            b"subscription_id",
+        ],
+    ) -> None: ...
+
+global___ResolveStreamWake = ResolveStreamWake
 
 class RemoveFromCache(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

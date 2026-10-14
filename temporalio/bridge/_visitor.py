@@ -308,6 +308,14 @@ class PayloadVisitor:
         if o.HasField("result"):
             await self._visit_coresdk_nexus_NexusOperationResult(fs, o.result)
 
+    async def _visit_coresdk_workflow_activation_ResolveStreamWake(
+        self, fs: VisitorFunctions, o: Any
+    ):
+        if o.HasField("close_result"):
+            await self._visit_temporal_api_common_v1_Payload(fs, o.close_result)
+        if o.HasField("close_failure"):
+            await self._visit_temporal_api_failure_v1_Failure(fs, o.close_failure)
+
     async def _visit_coresdk_workflow_activation_WorkflowActivationJob(
         self, fs: VisitorFunctions, o: Any
     ):
@@ -352,6 +360,10 @@ class PayloadVisitor:
         elif o.HasField("resolve_nexus_operation"):
             await self._visit_coresdk_workflow_activation_ResolveNexusOperation(
                 fs, o.resolve_nexus_operation
+            )
+        elif o.HasField("resolve_stream_wake"):
+            await self._visit_coresdk_workflow_activation_ResolveStreamWake(
+                fs, o.resolve_stream_wake
             )
 
     async def _visit_coresdk_workflow_activation_WorkflowActivation(
