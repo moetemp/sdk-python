@@ -18,11 +18,13 @@ from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples.scenarios import (
+    s1a_order_tracking,
     s2_dashcam_reference,
     s5a_late_dashboard,
     s6_location_topic,
     s7a_failed_delivery,
     s7b_retried_courier,
+    s8_publisher_replay,
 )
 
 
@@ -43,6 +45,14 @@ def ids(name: str) -> tuple[str, str]:
     # Ids of their own, so runs that share a dev server never collide.
     suffix = uuid.uuid4().hex
     return f"{name}-{suffix}", f"{name}-wf-{suffix}"
+
+
+async def test_s1a_the_app_shows_the_workflow_and_courier_stages_in_order(
+    streams: Client,
+):
+    task_queue, workflow_id = ids("s1a")
+    stages = await s1a_order_tracking.main(streams, task_queue, workflow_id=workflow_id)
+    assert stages == ["placed", "picked up", "out for delivery", "delivered"]
 
 
 async def test_s2_every_segment_url_resolves_in_order(streams: Client):
@@ -96,3 +106,13 @@ async def test_s7b_a_retry_is_superseded_and_the_late_write_is_stale(streams: Cl
         "attempt 2 at the depot@2",
         "attempt 1 late@1 stale",
     ]
+
+
+async def test_s8_a_publisher_replays_with_no_store(streams: Client):
+    task_queue, workflow_id = ids("s8")
+    outcome = await s8_publisher_replay.main(
+        streams, task_queue, workflow_id=workflow_id
+    )
+    assert outcome.stages == ["placed", "packed", "shipped"]
+    # One marker for each flush, and at least two flushes.
+    assert outcome.markers >= 2
