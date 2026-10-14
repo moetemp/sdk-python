@@ -890,6 +890,7 @@ class ReadRangeRequest(google.protobuf.message.Message):
     STATE_FIELD_NUMBER: builtins.int
     RECORDS_DIGEST_FIELD_NUMBER: builtins.int
     FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    START_FROM_END_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress:
         """The stream, as the read named it."""
@@ -906,6 +907,10 @@ class ReadRangeRequest(google.protobuf.message.Message):
     """The answer's `records_digest`."""
     floor_holder: builtins.str
     """As in `ReadRequest`, so a replay holds the records for its own run."""
+    start_from_end: builtins.bool
+    """Set when the read's `after` was `$end`. That read looked up no record at the start it found,
+    and the replay must not either, or a newer attempt there reads as superseded.
+    """
     def __init__(
         self,
         *,
@@ -917,6 +922,7 @@ class ReadRangeRequest(google.protobuf.message.Message):
         state: builtins.bytes = ...,
         records_digest: builtins.bytes = ...,
         floor_holder: builtins.str = ...,
+        start_from_end: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["stream", b"stream"]
@@ -932,6 +938,8 @@ class ReadRangeRequest(google.protobuf.message.Message):
             b"floor_holder",
             "records_digest",
             b"records_digest",
+            "start_from_end",
+            b"start_from_end",
             "state",
             b"state",
             "stored_records",
