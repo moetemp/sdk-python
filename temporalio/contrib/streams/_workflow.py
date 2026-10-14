@@ -680,10 +680,17 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
     store._batches.put(range, response)
-    return RawValue(positions_payload(range, response, read_run_id))
+    return RawValue(
+        positions_payload(range, response, read_run_id, info.workflow_run_id or "")
+    )
 
 
 def _result(response: ReadResponse, read_run_id: str) -> RawValue:
     # Encoded here rather than by the converter, so a converter without
-    # protobuf support still carries the batch.
-    return RawValue(batch_payload(response, read_run_id))
+    # protobuf support still carries the batch. The run that read goes with
+    # it, so a reset run tells that run from its own.
+    return RawValue(
+        batch_payload(
+            response, read_run_id, temporalio.activity.info().workflow_run_id or ""
+        )
+    )
