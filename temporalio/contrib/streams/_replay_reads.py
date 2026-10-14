@@ -45,6 +45,7 @@ POSITIONS_TYPE = b"temporal.io/stream-read-positions"
 
 _RESPONSE_TYPE = ReadResponse.DESCRIPTOR.full_name.encode()
 _READ_RUN_ID_KEY = "temporal.io/stream-read-run-id"
+_READ_BY_RUN_ID_KEY = "temporal.io/stream-read-by-run-id"
 # Batches the read Activity read in this process, so the live Workflow Task
 # turns its result back without a second store read.
 _CACHE_SIZE = 256
@@ -89,13 +90,19 @@ class BatchCache:
 
 
 def positions_payload(
-    range: ReadRangeRequest, answer: ReadResponse, read_run_id: str
+    range: ReadRangeRequest,
+    answer: ReadResponse,
+    read_run_id: str,
+    read_by: str | None = None,
 ) -> Payload:
-    """The result a positions-only read records: its range, and its answer without records."""
+    """The result a positions-only read records: its range, and its answer without records.
+
+    ``read_by`` is the run that read, which a reset run tells from its own.
+    """
     without_records = ReadResponse()
     without_records.CopyFrom(answer)
     del without_records.records[:]
-    return Payload(
+    payload = Payload(
         metadata={
             "encoding": b"binary/protobuf",
             "messageType": POSITIONS_TYPE,
@@ -108,11 +115,16 @@ def positions_payload(
             ]
         ).SerializeToString(),
     )
+    if read_by is not None:
+        payload.metadata[_READ_BY_RUN_ID_KEY] = read_by.encode()
+    return payload
 
 
-def batch_payload(response: ReadResponse, read_run_id: str) -> Payload:
+def batch_payload(
+    response: ReadResponse, read_run_id: str, read_by: str | None = None
+) -> Payload:
     """The result a recorded read records, and what a positions-only one turns back into."""
-    return Payload(
+    payload = Payload(
         metadata={
             "encoding": b"binary/protobuf",
             "messageType": _RESPONSE_TYPE,
@@ -120,6 +132,9 @@ def batch_payload(response: ReadResponse, read_run_id: str) -> Payload:
         },
         data=response.SerializeToString(),
     )
+    if read_by is not None:
+        payload.metadata[_READ_BY_RUN_ID_KEY] = read_by.encode()
+    return payload
 
 
 def is_positions(payload: Payload) -> bool:
@@ -182,16 +197,18 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
         range = ReadRangeRequest.FromString(parts[0].data)
         answer = ReadResponse.FromString(parts[1].data)
         read_run_id = payload.metadata.get(_READ_RUN_ID_KEY, b"").decode()
+        read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
+        read_by_text = read_by.decode() if read_by is not None else None
         if range.stored_records == 0:
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
-            return batch_payload(answer, read_run_id)
+            return batch_payload(answer, read_run_id, read_by_text)
         cached = self._plugin._batches.take(range)
         if cached is not None:
-            return batch_payload(cached, read_run_id)
+            return batch_payload(cached, read_run_id, read_by_text)
         records = await self._read_range(range)
         answer.records.extend(records.records)
-        return batch_payload(answer, read_run_id)
+        return batch_payload(answer, read_run_id, read_by_text)
 
     async def _read_range(self, range: ReadRangeRequest) -> ReadResponse:
         # Imported here, since the plugin module imports this one.
