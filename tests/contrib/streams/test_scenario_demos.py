@@ -19,6 +19,9 @@ from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples.scenarios import (
     s2_dashcam_reference,
+    s5a_late_dashboard,
+    s6_location_topic,
+    s7a_failed_delivery,
     s7b_retried_courier,
 )
 
@@ -48,6 +51,38 @@ async def test_s2_every_segment_url_resolves_in_order(streams: Client):
         streams, task_queue, workflow_id=workflow_id
     )
     assert fetched == [b"segment 0", b"segment 1", b"segment 2"]
+
+
+async def test_s5a_a_late_dashboard_reads_from_the_start_and_a_live_view_from_the_end(
+    streams: Client,
+):
+    task_queue, workflow_id = ids("s5a")
+    outcome = await s5a_late_dashboard.main(
+        streams, task_queue, workflow_id=workflow_id
+    )
+    assert outcome.dashboard == [
+        "picked up",
+        "at the hub",
+        "out for delivery",
+        "delivered",
+    ]
+    assert outcome.live == ["out for delivery", "delivered"]
+
+
+async def test_s6_a_record_opens_a_second_read_from_the_start(streams: Client):
+    task_queue, workflow_id = ids("s6")
+    outcome = await s6_location_topic.main(streams, task_queue, workflow_id=workflow_id)
+    assert outcome.events == ["picked up", "tracking started", "delivered"]
+    assert outcome.locations == ["52.37,4.89", "52.36,4.90", "52.35,4.91"]
+
+
+async def test_s7a_the_read_ends_and_the_workflow_gives_the_failure(streams: Client):
+    task_queue, workflow_id = ids("s7a")
+    outcome = await s7a_failed_delivery.main(
+        streams, task_queue, workflow_id=workflow_id
+    )
+    assert outcome.stages == ["picked up", "at the hub"]
+    assert outcome.failure_type == "CourierLost"
 
 
 async def test_s7b_a_retry_is_superseded_and_the_late_write_is_stale(streams: Client):
