@@ -91,6 +91,20 @@ def test_the_tracker_holds_the_producers_it_saw_most_recently():
     assert [r.value for r in tracker.observe(superseded("a", 1, 2))] == ["a1", "a2"]
 
 
+def test_the_tracker_holds_producer_ids_up_to_the_read_states_bytes():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    # Ids as long as a Workflow writer's flushes, about 57 bytes.
+    ids = [f"__temporal_local_{n}@{n:036d}" for n in range(300)]
+    for producer in ids:
+        tracker.observe(data(producer, 1, producer))
+    held = {r.producer_id for r in tracker.standing()}
+    budget = 16 << 10
+    assert sum(len(p) + 20 for p in held) <= budget
+    assert sum(len(p) + 20 for p in held) + len(ids[0]) + 20 > budget
+    # The ones it kept are the newest.
+    assert held == set(ids[-len(held) :])
+
+
 def test_the_tracker_needs_room_for_one_producer():
     with pytest.raises(ValueError, match="max_producers"):
         SupersessionTracker(max_producers=0)
