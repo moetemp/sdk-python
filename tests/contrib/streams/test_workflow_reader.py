@@ -9,16 +9,21 @@ Jetty lane.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from temporalio import activity, workflow
+from temporalio.api.common.v1 import WorkflowExecution
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
 from temporalio.api.stream.v1 import StreamReference, StreamWake
-from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
+from temporalio.api.workflowservice.v1 import (
+    DescribeStreamNotifierRequest,
+    ResetWorkflowExecutionRequest,
+)
 from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersession
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
@@ -344,6 +349,60 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
         ("1", 1),
         ("", 1),
     ]
+
+
+async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
+    global _fake
+    _fake = fake = FakeReads(
+        [armed("c0", 5), ReadResponse(records=[data("c1", "x")], cursor="c1")]
+    )
+    async with new_worker(client, ReadsBatches, activities=[fake_read]) as worker:
+        handle = await client.start_workflow(
+            ReadsBatches.run,
+            args=["owner", 1, None],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await fake.until(1)
+        # A wake below the armed counter wakes nothing, but ends one more task
+        # that the reset can go back to, past the armed read's marker.
+        await handle.signal(
+            ReadsBatches.wake, StreamWake(subscription_id="1", counter=1)
+        )
+
+        async def task_after_signal() -> int:
+            while True:
+                events = list((await handle.fetch_history()).events)
+                signaled = [
+                    e.event_id
+                    for e in events
+                    if e.HasField("workflow_execution_signaled_event_attributes")
+                ]
+                completed = [
+                    e.event_id
+                    for e in events
+                    if e.HasField("workflow_task_completed_event_attributes")
+                ]
+                if signaled and completed and completed[-1] > signaled[0]:
+                    return completed[-1]
+                await asyncio.sleep(0.05)
+
+        event_id = await asyncio.wait_for(task_after_signal(), 10)
+        reset = await client.workflow_service.reset_workflow_execution(
+            ResetWorkflowExecutionRequest(
+                namespace=client.namespace,
+                workflow_execution=WorkflowExecution(workflow_id=handle.id),
+                reason="test",
+                workflow_task_finish_event_id=event_id,
+                request_id=str(uuid.uuid4()),
+            )
+        )
+        new_run = client.get_workflow_handle(handle.id, run_id=reset.run_id)
+        batches = await asyncio.wait_for(new_run.result(), 20)
+    assert batches == [["data x"]]
+    # The reset run replayed the first read, then attached itself to read.
+    attach = fake.inputs[1]
+    assert attach.subscription_id == "1" and attach.arm and not attach.unsubscribe
 
 
 async def test_a_reader_stopped_early_detaches(client: Client):
