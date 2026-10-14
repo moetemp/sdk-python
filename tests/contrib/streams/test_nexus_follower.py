@@ -30,6 +30,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import StreamRef, get_stream_handle
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
+    ClientTransport,
     FollowBatch,
     FollowOutcome,
     ReadInput,
@@ -38,6 +39,7 @@ from temporalio.contrib.streams.nexus import (
     StoreTransport,
     StreamFollowerService,
     StreamOperationHandler,
+    TemporalStreamsHandler,
     follow_stream,
 )
 from temporalio.contrib.streams.nexus._generated import StreamOperationToken
@@ -476,6 +478,8 @@ class _Lane:
     endpoint: str
     ref: StreamRef
     followed: list[Any] = field(default_factory=list)
+    transport: Any = None
+    """How the follower reads. Its client's store when ``None``."""
 
     def handler(self) -> Any:
         ref = self.ref
@@ -506,7 +510,12 @@ class _Lane:
             self.client,
             task_queue=self.task_queue,
             workflows=[OwnerUntilDone],
-            nexus_service_handlers=[self.handler(), self.service(follower)],
+            nexus_service_handlers=[
+                self.handler(),
+                self.service(follower),
+                # The stream service, for a transport that reads through the endpoint.
+                TemporalStreamsHandler(),
+            ],
         ):
             try:
                 yield
@@ -518,7 +527,10 @@ class _Lane:
 
     def service(self, follower: _LiveFollower) -> StreamFollowerService:
         return StreamFollowerService(
-            {"orders": follower}, client=self.client, max_records=follower.max_records
+            {"orders": follower},
+            client=self.client,
+            transport=self.transport,
+            max_records=follower.max_records,
         )
 
     async def end(self, follower: _LiveFollower) -> None:
@@ -608,6 +620,30 @@ async def test_live_a_follower_gets_each_batch_then_the_close(
     [outcome] = follower.outcomes
     assert outcome.result == "done"
     assert outcome.stream == lane.ref
+
+
+async def test_live_a_follower_reads_through_the_client_transport(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    lane.transport = ClientTransport(lane.client, lane.endpoint)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append("a")
+        await _until(lambda: "a" in follower.ordered())
+        await producer.append("b", "c")
+        await _until(lambda: "c" in follower.ordered())
+        await lane.close("done")
+        await _closed(follower)
+
+    assert follower.ordered() == ["a", "b", "c"]
+    [outcome] = follower.outcomes
+    assert outcome.result == "done"
 
 
 async def test_live_a_follower_resumes_on_another_worker(

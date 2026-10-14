@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from types import SimpleNamespace
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import pytest
 
@@ -317,25 +317,42 @@ class XorCodec(PayloadCodec):
         ]
 
 
+#: Both direct-read transports. ``client`` needs a server with
+#: ``frontend.enableExecuteSyncNexusOperation`` on, as the live lane sets.
+TRANSPORTS = ["http", "client"]
+#: The caller namespace each transport lets ``authorize`` see.
+CALLER_NAMESPACES: dict[str, set[str | None]] = {"http": {None}, "client": {"default"}}
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_n9_a_direct_reader_records_ranges_and_replays_from_the_endpoint(
-    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+    two_namespaces: Client,
+    new_store: Callable[[], StreamStorePlugin],
+    transport: Literal["http", "client"],
 ):
     task_queue, workflow_id = ids("n9")
     outcome = await n9_direct_reads.main(
-        two_namespaces, task_queue, workflow_id=workflow_id, new_store=new_store
+        two_namespaces,
+        task_queue,
+        workflow_id=workflow_id,
+        new_store=new_store,
+        transport=transport,
     )
     assert outcome.entries == ["a", "b", "later 1"]
     assert outcome.replay_failure is None
     # Every read is a Local Activity marker that holds no record. Its size is
-    # the range and two copies of Core's read state, the read's and the
-    # answer's, which grows with the producers the reader saw.
+    # mostly Core's read state, which grows with the producers the reader saw.
     assert outcome.recorded_reads == 0
     assert outcome.marker_bytes
     assert max(outcome.marker_bytes) < 2048, outcome.marker_bytes
+    assert outcome.caller_namespaces == CALLER_NAMESPACES[transport]
 
 
+@pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_n9_a_shared_encryption_codec_crosses_both_ways(
-    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+    two_namespaces: Client,
+    new_store: Callable[[], StreamStorePlugin],
+    transport: Literal["http", "client"],
 ):
     task_queue, workflow_id = ids("n9-codec")
     outcome = await n9_direct_reads.main(
@@ -344,6 +361,7 @@ async def test_n9_a_shared_encryption_codec_crosses_both_ways(
         workflow_id=workflow_id,
         new_store=new_store,
         codec=XorCodec(),
+        transport=transport,
     )
     assert outcome.entries == ["a", "b", "later 1"]
     assert max(outcome.marker_bytes) < 2048, outcome.marker_bytes
@@ -362,7 +380,10 @@ def trimming_store(floor_lease: timedelta) -> Callable[[], StreamStorePlugin]:
     )
 
 
-async def test_n9_a_trim_below_the_floor_keeps_the_range(two_namespaces: Client):
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_n9_a_trim_below_the_floor_keeps_the_range(
+    two_namespaces: Client, transport: Literal["http", "client"]
+):
     task_queue, workflow_id = ids("n9-trim")
     outcome = await n9_direct_reads.main(
         two_namespaces,
@@ -370,6 +391,7 @@ async def test_n9_a_trim_below_the_floor_keeps_the_range(two_namespaces: Client)
         workflow_id=workflow_id,
         new_store=trimming_store(timedelta(minutes=10)),
         gap=timedelta(seconds=5),
+        transport=transport,
     )
     # The store trimmed past retention while nobody read, but the reader's
     # floor kept a and b, so the new Worker's replay read them again.
@@ -378,8 +400,9 @@ async def test_n9_a_trim_below_the_floor_keeps_the_range(two_namespaces: Client)
     assert outcome.entries[:2] == ["a", "b"]
 
 
+@pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task(
-    two_namespaces: Client,
+    two_namespaces: Client, transport: Literal["http", "client"]
 ):
     task_queue, workflow_id = ids("n9-lost")
     outcome = await n9_direct_reads.main(
@@ -388,10 +411,28 @@ async def test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task(
         workflow_id=workflow_id,
         new_store=trimming_store(timedelta(seconds=1)),
         gap=timedelta(seconds=5),
+        transport=transport,
     )
     assert outcome.entries is None
     assert outcome.replay_failure is not None
     assert "StreamReplayRangeLostError" in outcome.replay_failure
+
+
+async def test_n9_authorize_refuses_a_caller_namespace_the_server_vouched_for(
+    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("n9-refused")
+    outcome = await n9_direct_reads.main(
+        two_namespaces,
+        task_queue,
+        workflow_id=workflow_id,
+        new_store=new_store,
+        transport="client",
+        refuse_caller="default",
+    )
+    assert outcome.caller_namespaces == {"default"}
+    assert outcome.workflow_failure is not None
+    assert "may not read" in outcome.workflow_failure
 
 
 # The U5 demos follow with a standalone operation, so they also need a server

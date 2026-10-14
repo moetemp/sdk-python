@@ -1,0 +1,1 @@
+Experimental: the live lane turns on `ExecuteSyncNexusOperation` and runs the direct-read demo over both transports, with `authorize` keyed on the caller namespace, and a Worker follower that reads through `ClientTransport`.
