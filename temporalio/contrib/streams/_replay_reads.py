@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import temporalio.workflow
@@ -24,6 +25,7 @@ from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.bridge.proto.streams import ReadRangeRequest, ReadResponse
 from temporalio.contrib.streams._body import decode_body
 from temporalio.contrib.streams._errors import (
+    StreamError,
     StreamReplayMismatchError,
     StreamUnsupportedError,
 )
@@ -46,9 +48,45 @@ POSITIONS_TYPE = b"temporal.io/stream-read-positions"
 _RESPONSE_TYPE = ReadResponse.DESCRIPTOR.full_name.encode()
 _READ_RUN_ID_KEY = "temporal.io/stream-read-run-id"
 _READ_BY_RUN_ID_KEY = "temporal.io/stream-read-by-run-id"
+_READ_CHAIN_KEY = "temporal.io/stream-read-chain"
+_READ_SEQ_KEY = "temporal.io/stream-read-seq"
 # Batches the read Activity read in this process, so the live Workflow Task
 # turns its result back without a second store read.
 _CACHE_SIZE = 256
+# Readers whose last answer state this process keeps, so a replay can give
+# each read the input state its marker leaves out.
+_CHAIN_SIZE = 4_096
+
+
+@dataclass(frozen=True)
+class ReadChain:
+    """Where one read sits among its reader's reads."""
+
+    reader: str
+    """The reading Workflow's id and the reader's id in its run."""
+    seq: int
+    """How many reads the reader made, this one included."""
+
+
+class ReadStates:
+    """The newest answer state of each reader, in the order this process decoded them."""
+
+    def __init__(self, size: int = _CHAIN_SIZE) -> None:
+        """Keep the states of up to ``size`` readers."""
+        self._size = size
+        self._states: OrderedDict[str, tuple[int, bytes]] = OrderedDict()
+
+    def put(self, chain: ReadChain, state: bytes) -> None:
+        """Keep ``state`` as the answer of the read at ``chain``."""
+        self._states[chain.reader] = (chain.seq, state)
+        self._states.move_to_end(chain.reader)
+        while len(self._states) > self._size:
+            self._states.popitem(last=False)
+
+    def before(self, chain: ReadChain) -> bytes | None:
+        """The answer state of the read just before ``chain``, if this process decoded it."""
+        seq, state = self._states.get(chain.reader, (0, b""))
+        return state if seq == chain.seq - 1 else None
 
 
 class BatchCache:
@@ -94,10 +132,13 @@ def positions_payload(
     answer: ReadResponse,
     read_run_id: str,
     read_by: str | None = None,
+    chain: ReadChain | None = None,
 ) -> Payload:
     """The result a positions-only read records: its range, and its answer without records.
 
     ``read_by`` is the run that read, which a reset run tells from its own.
+    With ``chain`` past the reader's first read, the range leaves out its
+    input state, which is the previous read's answer state.
     """
     without_records = ReadResponse()
     without_records.CopyFrom(answer)
@@ -117,6 +158,9 @@ def positions_payload(
     )
     if read_by is not None:
         payload.metadata[_READ_BY_RUN_ID_KEY] = read_by.encode()
+    if chain is not None:
+        payload.metadata[_READ_CHAIN_KEY] = chain.reader.encode()
+        payload.metadata[_READ_SEQ_KEY] = str(chain.seq).encode()
     return payload
 
 
@@ -199,16 +243,30 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
         read_run_id = payload.metadata.get(_READ_RUN_ID_KEY, b"").decode()
         read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
         read_by_text = read_by.decode() if read_by is not None else None
+        chain = _chain_of(payload)
         if range.stored_records == 0:
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
-            return batch_payload(answer, read_run_id, read_by_text)
-        cached = self._plugin._batches.take(range)
-        if cached is not None:
-            return batch_payload(cached, read_run_id, read_by_text)
-        records = await self._read_range(range)
-        answer.records.extend(records.records)
-        return batch_payload(answer, read_run_id, read_by_text)
+            batch = answer
+        elif (cached := self._plugin._batches.take(range)) is not None:
+            batch = cached
+        else:
+            if chain is not None and chain.seq > 1:
+                state = self._plugin._read_states.before(chain)
+                if state is None:
+                    raise StreamError(
+                        "a positions-only stream read replays from the answer state "
+                        "of the reader's previous read, which this process has not "
+                        "decoded yet; the Workflow Task fails and its retry replays "
+                        "the History from the start"
+                    )
+                range.state = state
+            records = await self._read_range(range)
+            answer.records.extend(records.records)
+            batch = answer
+        if chain is not None:
+            self._plugin._read_states.put(chain, answer.state)
+        return batch_payload(batch, read_run_id, read_by_text)
 
     async def _read_range(self, range: ReadRangeRequest) -> ReadResponse:
         # Imported here, since the plugin module imports this one.
@@ -238,6 +296,14 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
                 body = await decode_body(converter, record.stored.body)
                 record.stored.body.CopyFrom(body)
         return response
+
+
+def _chain_of(payload: Payload) -> ReadChain | None:
+    reader = payload.metadata.get(_READ_CHAIN_KEY)
+    seq = payload.metadata.get(_READ_SEQ_KEY)
+    if reader is None or seq is None:
+        return None
+    return ReadChain(reader.decode(), int(seq.decode()))
 
 
 def wrap_codec(plugin: StreamStorePlugin, converter: Any) -> DataConverter:

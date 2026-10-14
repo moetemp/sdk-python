@@ -72,9 +72,10 @@ class StreamStorePlugin(SimplePlugin):
         # Set once the server answered that it has no stream notifier.
         self._notifier_unsupported = False
         # Imported here, since that module imports this one.
-        from temporalio.contrib.streams._replay_reads import BatchCache
+        from temporalio.contrib.streams._replay_reads import BatchCache, ReadStates
 
         self._batches = BatchCache()
+        self._read_states = ReadStates()
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
