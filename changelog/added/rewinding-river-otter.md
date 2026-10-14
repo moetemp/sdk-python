@@ -1,0 +1,1 @@
+Experimental: `TemporalStreamsHandler` serves the stream service's new `read_range` operation, and `StreamAccess` carries the `floor_holder` a read or a `read_range` names, so `authorize` can check both.

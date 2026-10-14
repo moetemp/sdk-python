@@ -61,6 +61,7 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHandler,
     TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._generated import ReadRangeInput
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.contrib.streams.nexus._handler import _handler_error
 from temporalio.converter import DataConverter, PayloadCodec
@@ -914,6 +915,88 @@ async def test_an_authorizer_sees_each_call_and_can_refuse(
         ("append", "p"),
         ("append", "intruder"),
         ("read", None),
+    ]
+    assert all(access.stream == ref for access in seen)
+
+
+async def test_a_read_range_answers_the_records_a_holders_read_got(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "a", "b", "c")
+    answer = await service.caller.read(
+        ReadInput(stream=ref, max_records=2, wait_ms=0, floor_holder="ns/run/1")
+    )
+    assert answer.replay is not None
+    again = await service.caller.read_range(
+        ReadRangeInput(
+            stream=ref,
+            chain_first_run_id=answer.replay.chain_first_run_id,
+            after_token=answer.replay.after_token,
+            to_token=answer.next_token,
+            stored_records=answer.replay.stored_records,
+            records_digest=answer.replay.records_digest,
+            floor_holder="ns/run/1",
+        )
+    )
+    assert texts(again) == texts(answer) == ["a", "b"]
+    assert again.next_token == answer.next_token
+
+
+async def test_a_read_range_with_another_digest_is_a_mismatch(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "a")
+    answer = await service.caller.read(
+        ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+    )
+    assert answer.replay is not None
+    with pytest.raises(HTTPStatusError) as refused:
+        await service.caller.read_range(
+            ReadRangeInput(
+                stream=ref,
+                chain_first_run_id=answer.replay.chain_first_run_id,
+                after_token=answer.replay.after_token,
+                to_token=answer.next_token,
+                stored_records=answer.replay.stored_records,
+                records_digest=b"\x00" * len(answer.replay.records_digest),
+            )
+        )
+    assert refused.value.status == 400
+    assert refused_as(refused.value) == "StreamReplayMismatchError"
+
+
+async def test_an_authorizer_sees_the_floor_holder_and_can_refuse_a_read_range(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return access.operation != "read_range"
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "a")
+        answer = await service.caller.read(
+            ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+        )
+        assert answer.replay is not None
+        with pytest.raises(HTTPStatusError) as refused:
+            await service.caller.read_range(
+                ReadRangeInput(
+                    stream=ref,
+                    chain_first_run_id=answer.replay.chain_first_run_id,
+                    after_token=answer.replay.after_token,
+                    to_token=answer.next_token,
+                    stored_records=answer.replay.stored_records,
+                    records_digest=answer.replay.records_digest,
+                    floor_holder="ns/run/1",
+                )
+            )
+
+    assert refused.value.status == 403
+    assert [(access.operation, access.floor_holder) for access in seen] == [
+        ("append", None),
+        ("read", "ns/run/1"),
+        ("read_range", "ns/run/1"),
     ]
     assert all(access.stream == ref for access in seen)
 
