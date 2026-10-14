@@ -25,7 +25,7 @@ from temporalio.bridge.proto.streams.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/core/streams/streams.proto\x12\x0f\x63oresdk.streams\x1a\x1egoogle/protobuf/duration.proto\x1a$temporal/api/common/v1/message.proto\x1a%temporal/sdk/streams/v1/message.proto"\x86\x01\n\x11StreamStoreConfig\x12\x32\n\x05redis\x18\x01 \x01(\x0b\x32!.coresdk.streams.RedisStoreConfigH\x00\x12\x34\n\x06memory\x18\x02 \x01(\x0b\x32".coresdk.streams.MemoryStoreConfigH\x00\x42\x07\n\x05store"\xc9\x01\n\x10RedisStoreConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x05 \x01(\r\x12\x33\n\x10response_timeout\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration"\x13\n\x11MemoryStoreConfig"\x8c\x01\n\rStreamAddress\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x34\n\nowner_kind\x18\x02 \x01(\x0e\x32 .coresdk.streams.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t\x12\x0e\n\x06run_id\x18\x04 \x01(\t\x12\r\n\x05topic\x18\x05 \x01(\t"G\n\x07\x43hainId\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x14\n\x0c\x66irst_run_id\x18\x03 \x01(\t"5\n\rNamedProducer\x12\x13\n\x0bproducer_id\x18\x01 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x02 \x01(\x03"]\n\x10\x41\x63tivityProducer\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x13\n\x0b\x61\x63tivity_id\x18\x03 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x05"\x8c\x01\n\x0c\x41ppendRecord\x12\x37\n\x04kind\x18\x01 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamRecordKind\x12-\n\x04\x62ody\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x14\n\x0c\x63ontent_hash\x18\x03 \x01(\x0c"\x85\x02\n\rAppendRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12/\n\x05named\x18\x02 \x01(\x0b\x32\x1e.coresdk.streams.NamedProducerH\x00\x12\x35\n\x08\x61\x63tivity\x18\x03 \x01(\x0b\x32!.coresdk.streams.ActivityProducerH\x00\x12\x10\n\x08sequence\x18\x04 \x01(\x03\x12.\n\x07records\x18\x05 \x03(\x0b\x32\x1d.coresdk.streams.AppendRecord\x12\x0e\n\x06\x64igest\x18\x06 \x01(\x0c\x42\n\n\x08producer";\n\x0e\x41ppendResponse\x12\x14\n\x0c\x66irst_cursor\x18\x01 \x01(\t\x12\x13\n\x0blast_cursor\x18\x02 \x01(\t"\x99\x01\n\x0bReadRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12\r\n\x05\x61\x66ter\x18\x02 \x01(\t\x12\'\n\x04wait\x18\x03 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x13\n\x0bmax_records\x18\x04 \x01(\r\x12\r\n\x05state\x18\x05 \x01(\x0c"]\n\x0cSupersession\x12\r\n\x05topic\x18\x01 \x01(\t\x12\x13\n\x0bproducer_id\x18\x02 \x01(\t\x12\x18\n\x10previous_attempt\x18\x03 \x01(\x03\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x03"\xa3\x01\n\nReadRecord\x12\x0e\n\x06\x63ursor\x18\x01 \x01(\t\x12\x37\n\x06stored\x18\x02 \x01(\x0b\x32%.temporal.sdk.streams.v1.StreamRecordH\x00\x12\x33\n\nsuperseded\x18\x03 \x01(\x0b\x32\x1d.coresdk.streams.SupersessionH\x00\x12\r\n\x05stale\x18\x04 \x01(\x08\x42\x08\n\x06record"i\n\x0cReadResponse\x12,\n\x07records\x18\x01 \x03(\x0b\x32\x1b.coresdk.streams.ReadRecord\x12\x0e\n\x06\x63ursor\x18\x02 \x01(\t\x12\r\n\x05state\x18\x03 \x01(\x0c\x12\x0c\n\x04\x64one\x18\x04 \x01(\x08"?\n\rLatestRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress" \n\x0eLatestResponse\x12\x0e\n\x06\x63ursor\x18\x01 \x01(\t">\n\x0c\x43loseRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress"\x0f\n\rCloseResponse"r\n\x12\x44\x65leteOwnerRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x34\n\nowner_kind\x18\x02 \x01(\x0e\x32 .coresdk.streams.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t"&\n\x13\x44\x65leteOwnerResponse\x12\x0f\n\x07\x64\x65leted\x18\x01 \x01(\x04"b\n\rStreamFailure\x12\x30\n\x04kind\x18\x01 \x01(\x0e\x32".coresdk.streams.StreamFailureKind\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0e\n\x06\x63ursor\x18\x03 \x01(\t"\xa5\x01\n\x12StoreAppendRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t\x12\x13\n\x0bproducer_id\x18\x03 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x03\x12\x10\n\x08sequence\x18\x05 \x01(\x03\x12\x0e\n\x06\x64igest\x18\x06 \x01(\x0c\x12\x0f\n\x07records\x18\x07 \x03(\x0c"D\n\x13StoreAppendResponse\x12\x16\n\x0e\x66irst_position\x18\x01 \x01(\t\x12\x15\n\rlast_position\x18\x02 \x01(\t"\xa0\x01\n\x10StoreReadRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t\x12\x16\n\x0e\x61\x66ter_position\x18\x03 \x01(\t\x12\'\n\x04wait\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x13\n\x0bmax_records\x18\x05 \x01(\r"0\n\x0cStoredRecord\x12\x10\n\x08position\x18\x01 \x01(\t\x12\x0e\n\x06record\x18\x02 \x01(\x0c"S\n\x11StoreReadResponse\x12.\n\x07records\x18\x01 \x03(\x0b\x32\x1d.coresdk.streams.StoredRecord\x12\x0e\n\x06\x63losed\x18\x02 \x01(\x08"L\n\x12StoreLatestRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t"\'\n\x13StoreLatestResponse\x12\x10\n\x08position\x18\x01 \x01(\t*T\n\x0fStreamOwnerKind\x12!\n\x1dSTREAM_OWNER_KIND_UNSPECIFIED\x10\x00\x12\x1e\n\x1aSTREAM_OWNER_KIND_WORKFLOW\x10\x01*\xea\x03\n\x11StreamFailureKind\x12#\n\x1fSTREAM_FAILURE_KIND_UNSPECIFIED\x10\x00\x12*\n&STREAM_FAILURE_KIND_PRODUCER_DIVERGENT\x10\x01\x12&\n"STREAM_FAILURE_KIND_PRODUCER_STALE\x10\x02\x12\'\n#STREAM_FAILURE_KIND_OUTCOME_UNKNOWN\x10\x03\x12\x1f\n\x1bSTREAM_FAILURE_KIND_REFUSED\x10\x04\x12\x1e\n\x1aSTREAM_FAILURE_KIND_CLOSED\x10\x05\x12\x1e\n\x1aSTREAM_FAILURE_KIND_CURSOR\x10\x06\x12\x1f\n\x1bSTREAM_FAILURE_KIND_EXPIRED\x10\x07\x12!\n\x1dSTREAM_FAILURE_KIND_NOT_FOUND\x10\x08\x12\x1e\n\x1aSTREAM_FAILURE_KIND_RECORD\x10\t\x12\x1f\n\x1bSTREAM_FAILURE_KIND_STORAGE\x10\n\x12#\n\x1fSTREAM_FAILURE_KIND_UNSUPPORTED\x10\x0b\x12(\n$STREAM_FAILURE_KIND_INVALID_ARGUMENT\x10\x0c\x32\x8c\x03\n\rStreamService\x12I\n\x06\x41ppend\x12\x1e.coresdk.streams.AppendRequest\x1a\x1f.coresdk.streams.AppendResponse\x12\x43\n\x04Read\x12\x1c.coresdk.streams.ReadRequest\x1a\x1d.coresdk.streams.ReadResponse\x12I\n\x06Latest\x12\x1e.coresdk.streams.LatestRequest\x1a\x1f.coresdk.streams.LatestResponse\x12\x46\n\x05\x43lose\x12\x1d.coresdk.streams.CloseRequest\x1a\x1e.coresdk.streams.CloseResponse\x12X\n\x0b\x44\x65leteOwner\x12#.coresdk.streams.DeleteOwnerRequest\x1a$.coresdk.streams.DeleteOwnerResponseB-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
+    b'\n\'temporal/sdk/core/streams/streams.proto\x12\x0f\x63oresdk.streams\x1a\x1egoogle/protobuf/duration.proto\x1a$temporal/api/common/v1/message.proto\x1a%temporal/sdk/streams/v1/message.proto"\x86\x01\n\x11StreamStoreConfig\x12\x32\n\x05redis\x18\x01 \x01(\x0b\x32!.coresdk.streams.RedisStoreConfigH\x00\x12\x34\n\x06memory\x18\x02 \x01(\x0b\x32".coresdk.streams.MemoryStoreConfigH\x00\x42\x07\n\x05store"\xc9\x01\n\x10RedisStoreConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x05 \x01(\r\x12\x33\n\x10response_timeout\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration"\x13\n\x11MemoryStoreConfig"\x8c\x01\n\rStreamAddress\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x34\n\nowner_kind\x18\x02 \x01(\x0e\x32 .coresdk.streams.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t\x12\x0e\n\x06run_id\x18\x04 \x01(\t\x12\r\n\x05topic\x18\x05 \x01(\t"G\n\x07\x43hainId\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x14\n\x0c\x66irst_run_id\x18\x03 \x01(\t"5\n\rNamedProducer\x12\x13\n\x0bproducer_id\x18\x01 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x02 \x01(\x03"]\n\x10\x41\x63tivityProducer\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x13\n\x0b\x61\x63tivity_id\x18\x03 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x05"\x8c\x01\n\x0c\x41ppendRecord\x12\x37\n\x04kind\x18\x01 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamRecordKind\x12-\n\x04\x62ody\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x14\n\x0c\x63ontent_hash\x18\x03 \x01(\x0c"\x85\x02\n\rAppendRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12/\n\x05named\x18\x02 \x01(\x0b\x32\x1e.coresdk.streams.NamedProducerH\x00\x12\x35\n\x08\x61\x63tivity\x18\x03 \x01(\x0b\x32!.coresdk.streams.ActivityProducerH\x00\x12\x10\n\x08sequence\x18\x04 \x01(\x03\x12.\n\x07records\x18\x05 \x03(\x0b\x32\x1d.coresdk.streams.AppendRecord\x12\x0e\n\x06\x64igest\x18\x06 \x01(\x0c\x42\n\n\x08producer";\n\x0e\x41ppendResponse\x12\x14\n\x0c\x66irst_cursor\x18\x01 \x01(\t\x12\x13\n\x0blast_cursor\x18\x02 \x01(\t"\x99\x01\n\x0bReadRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12\r\n\x05\x61\x66ter\x18\x02 \x01(\t\x12\'\n\x04wait\x18\x03 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x13\n\x0bmax_records\x18\x04 \x01(\r\x12\r\n\x05state\x18\x05 \x01(\x0c"]\n\x0cSupersession\x12\r\n\x05topic\x18\x01 \x01(\t\x12\x13\n\x0bproducer_id\x18\x02 \x01(\t\x12\x18\n\x10previous_attempt\x18\x03 \x01(\x03\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x03"\xa3\x01\n\nReadRecord\x12\x0e\n\x06\x63ursor\x18\x01 \x01(\t\x12\x37\n\x06stored\x18\x02 \x01(\x0b\x32%.temporal.sdk.streams.v1.StreamRecordH\x00\x12\x33\n\nsuperseded\x18\x03 \x01(\x0b\x32\x1d.coresdk.streams.SupersessionH\x00\x12\r\n\x05stale\x18\x04 \x01(\x08\x42\x08\n\x06record"i\n\x0cReadResponse\x12,\n\x07records\x18\x01 \x03(\x0b\x32\x1b.coresdk.streams.ReadRecord\x12\x0e\n\x06\x63ursor\x18\x02 \x01(\t\x12\r\n\x05state\x18\x03 \x01(\x0c\x12\x0c\n\x04\x64one\x18\x04 \x01(\x08"?\n\rLatestRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress" \n\x0eLatestResponse\x12\x0e\n\x06\x63ursor\x18\x01 \x01(\t">\n\x0c\x43loseRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress"\x0f\n\rCloseResponse"r\n\x12\x44\x65leteOwnerRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x34\n\nowner_kind\x18\x02 \x01(\x0e\x32 .coresdk.streams.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x03 \x01(\t"&\n\x13\x44\x65leteOwnerResponse\x12\x0f\n\x07\x64\x65leted\x18\x01 \x01(\x04"\xbb\x01\n\x15RetireProducerRequest\x12.\n\x06stream\x18\x01 \x01(\x0b\x32\x1e.coresdk.streams.StreamAddress\x12/\n\x05named\x18\x02 \x01(\x0b\x32\x1e.coresdk.streams.NamedProducerH\x00\x12\x35\n\x08\x61\x63tivity\x18\x03 \x01(\x0b\x32!.coresdk.streams.ActivityProducerH\x00\x42\n\n\x08producer"\x18\n\x16RetireProducerResponse"b\n\rStreamFailure\x12\x30\n\x04kind\x18\x01 \x01(\x0e\x32".coresdk.streams.StreamFailureKind\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x0e\n\x06\x63ursor\x18\x03 \x01(\t"\xa5\x01\n\x12StoreAppendRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t\x12\x13\n\x0bproducer_id\x18\x03 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x04 \x01(\x03\x12\x10\n\x08sequence\x18\x05 \x01(\x03\x12\x0e\n\x06\x64igest\x18\x06 \x01(\x0c\x12\x0f\n\x07records\x18\x07 \x03(\x0c"D\n\x13StoreAppendResponse\x12\x16\n\x0e\x66irst_position\x18\x01 \x01(\t\x12\x15\n\rlast_position\x18\x02 \x01(\t"\xa0\x01\n\x10StoreReadRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t\x12\x16\n\x0e\x61\x66ter_position\x18\x03 \x01(\t\x12\'\n\x04wait\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x13\n\x0bmax_records\x18\x05 \x01(\r"0\n\x0cStoredRecord\x12\x10\n\x08position\x18\x01 \x01(\t\x12\x0e\n\x06record\x18\x02 \x01(\x0c"S\n\x11StoreReadResponse\x12.\n\x07records\x18\x01 \x03(\x0b\x32\x1d.coresdk.streams.StoredRecord\x12\x0e\n\x06\x63losed\x18\x02 \x01(\x08"L\n\x12StoreLatestRequest\x12\'\n\x05\x63hain\x18\x01 \x01(\x0b\x32\x18.coresdk.streams.ChainId\x12\r\n\x05topic\x18\x02 \x01(\t"\'\n\x13StoreLatestResponse\x12\x10\n\x08position\x18\x01 \x01(\t*T\n\x0fStreamOwnerKind\x12!\n\x1dSTREAM_OWNER_KIND_UNSPECIFIED\x10\x00\x12\x1e\n\x1aSTREAM_OWNER_KIND_WORKFLOW\x10\x01*\xea\x03\n\x11StreamFailureKind\x12#\n\x1fSTREAM_FAILURE_KIND_UNSPECIFIED\x10\x00\x12*\n&STREAM_FAILURE_KIND_PRODUCER_DIVERGENT\x10\x01\x12&\n"STREAM_FAILURE_KIND_PRODUCER_STALE\x10\x02\x12\'\n#STREAM_FAILURE_KIND_OUTCOME_UNKNOWN\x10\x03\x12\x1f\n\x1bSTREAM_FAILURE_KIND_REFUSED\x10\x04\x12\x1e\n\x1aSTREAM_FAILURE_KIND_CLOSED\x10\x05\x12\x1e\n\x1aSTREAM_FAILURE_KIND_CURSOR\x10\x06\x12\x1f\n\x1bSTREAM_FAILURE_KIND_EXPIRED\x10\x07\x12!\n\x1dSTREAM_FAILURE_KIND_NOT_FOUND\x10\x08\x12\x1e\n\x1aSTREAM_FAILURE_KIND_RECORD\x10\t\x12\x1f\n\x1bSTREAM_FAILURE_KIND_STORAGE\x10\n\x12#\n\x1fSTREAM_FAILURE_KIND_UNSUPPORTED\x10\x0b\x12(\n$STREAM_FAILURE_KIND_INVALID_ARGUMENT\x10\x0c\x32\xef\x03\n\rStreamService\x12I\n\x06\x41ppend\x12\x1e.coresdk.streams.AppendRequest\x1a\x1f.coresdk.streams.AppendResponse\x12\x43\n\x04Read\x12\x1c.coresdk.streams.ReadRequest\x1a\x1d.coresdk.streams.ReadResponse\x12I\n\x06Latest\x12\x1e.coresdk.streams.LatestRequest\x1a\x1f.coresdk.streams.LatestResponse\x12\x46\n\x05\x43lose\x12\x1d.coresdk.streams.CloseRequest\x1a\x1e.coresdk.streams.CloseResponse\x12X\n\x0b\x44\x65leteOwner\x12#.coresdk.streams.DeleteOwnerRequest\x1a$.coresdk.streams.DeleteOwnerResponse\x12\x61\n\x0eRetireProducer\x12&.coresdk.streams.RetireProducerRequest\x1a\'.coresdk.streams.RetireProducerResponseB-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
 )
 
 _STREAMOWNERKIND = DESCRIPTOR.enum_types_by_name["StreamOwnerKind"]
@@ -69,6 +69,8 @@ _CLOSEREQUEST = DESCRIPTOR.message_types_by_name["CloseRequest"]
 _CLOSERESPONSE = DESCRIPTOR.message_types_by_name["CloseResponse"]
 _DELETEOWNERREQUEST = DESCRIPTOR.message_types_by_name["DeleteOwnerRequest"]
 _DELETEOWNERRESPONSE = DESCRIPTOR.message_types_by_name["DeleteOwnerResponse"]
+_RETIREPRODUCERREQUEST = DESCRIPTOR.message_types_by_name["RetireProducerRequest"]
+_RETIREPRODUCERRESPONSE = DESCRIPTOR.message_types_by_name["RetireProducerResponse"]
 _STREAMFAILURE = DESCRIPTOR.message_types_by_name["StreamFailure"]
 _STOREAPPENDREQUEST = DESCRIPTOR.message_types_by_name["StoreAppendRequest"]
 _STOREAPPENDRESPONSE = DESCRIPTOR.message_types_by_name["StoreAppendResponse"]
@@ -297,6 +299,28 @@ DeleteOwnerResponse = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(DeleteOwnerResponse)
 
+RetireProducerRequest = _reflection.GeneratedProtocolMessageType(
+    "RetireProducerRequest",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _RETIREPRODUCERREQUEST,
+        "__module__": "temporal.sdk.core.streams.streams_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.RetireProducerRequest)
+    },
+)
+_sym_db.RegisterMessage(RetireProducerRequest)
+
+RetireProducerResponse = _reflection.GeneratedProtocolMessageType(
+    "RetireProducerResponse",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _RETIREPRODUCERRESPONSE,
+        "__module__": "temporal.sdk.core.streams.streams_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.streams.RetireProducerResponse)
+    },
+)
+_sym_db.RegisterMessage(RetireProducerResponse)
+
 StreamFailure = _reflection.GeneratedProtocolMessageType(
     "StreamFailure",
     (_message.Message,),
@@ -391,10 +415,10 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._serialized_options = (
         b"\352\002*Temporalio::Internal::Bridge::Api::Streams"
     )
-    _STREAMOWNERKIND._serialized_start = 2980
-    _STREAMOWNERKIND._serialized_end = 3064
-    _STREAMFAILUREKIND._serialized_start = 3067
-    _STREAMFAILUREKIND._serialized_end = 3557
+    _STREAMOWNERKIND._serialized_start = 3196
+    _STREAMOWNERKIND._serialized_end = 3280
+    _STREAMFAILUREKIND._serialized_start = 3283
+    _STREAMFAILUREKIND._serialized_end = 3773
     _STREAMSTORECONFIG._serialized_start = 170
     _STREAMSTORECONFIG._serialized_end = 304
     _REDISSTORECONFIG._serialized_start = 307
@@ -435,22 +459,26 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _DELETEOWNERREQUEST._serialized_end = 2183
     _DELETEOWNERRESPONSE._serialized_start = 2185
     _DELETEOWNERRESPONSE._serialized_end = 2223
-    _STREAMFAILURE._serialized_start = 2225
-    _STREAMFAILURE._serialized_end = 2323
-    _STOREAPPENDREQUEST._serialized_start = 2326
-    _STOREAPPENDREQUEST._serialized_end = 2491
-    _STOREAPPENDRESPONSE._serialized_start = 2493
-    _STOREAPPENDRESPONSE._serialized_end = 2561
-    _STOREREADREQUEST._serialized_start = 2564
-    _STOREREADREQUEST._serialized_end = 2724
-    _STOREDRECORD._serialized_start = 2726
-    _STOREDRECORD._serialized_end = 2774
-    _STOREREADRESPONSE._serialized_start = 2776
-    _STOREREADRESPONSE._serialized_end = 2859
-    _STORELATESTREQUEST._serialized_start = 2861
-    _STORELATESTREQUEST._serialized_end = 2937
-    _STORELATESTRESPONSE._serialized_start = 2939
-    _STORELATESTRESPONSE._serialized_end = 2978
-    _STREAMSERVICE._serialized_start = 3560
-    _STREAMSERVICE._serialized_end = 3956
+    _RETIREPRODUCERREQUEST._serialized_start = 2226
+    _RETIREPRODUCERREQUEST._serialized_end = 2413
+    _RETIREPRODUCERRESPONSE._serialized_start = 2415
+    _RETIREPRODUCERRESPONSE._serialized_end = 2439
+    _STREAMFAILURE._serialized_start = 2441
+    _STREAMFAILURE._serialized_end = 2539
+    _STOREAPPENDREQUEST._serialized_start = 2542
+    _STOREAPPENDREQUEST._serialized_end = 2707
+    _STOREAPPENDRESPONSE._serialized_start = 2709
+    _STOREAPPENDRESPONSE._serialized_end = 2777
+    _STOREREADREQUEST._serialized_start = 2780
+    _STOREREADREQUEST._serialized_end = 2940
+    _STOREDRECORD._serialized_start = 2942
+    _STOREDRECORD._serialized_end = 2990
+    _STOREREADRESPONSE._serialized_start = 2992
+    _STOREREADRESPONSE._serialized_end = 3075
+    _STORELATESTREQUEST._serialized_start = 3077
+    _STORELATESTREQUEST._serialized_end = 3153
+    _STORELATESTRESPONSE._serialized_start = 3155
+    _STORELATESTRESPONSE._serialized_end = 3194
+    _STREAMSERVICE._serialized_start = 3776
+    _STREAMSERVICE._serialized_end = 4271
 # @@protoc_insertion_point(module_scope)
