@@ -11,6 +11,7 @@ import logging
 import random
 import sys
 import threading
+import time
 import traceback
 import warnings
 from abc import ABC, abstractmethod
@@ -338,6 +339,15 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         self._read_only = False
         self._in_query_or_validator = False
 
+        # The Workflow Task the activations belong to, known by the History
+        # length its activations carry, with the commands lang sent in it and
+        # when its first activation came. Only a task heartbeat request reads
+        # them, and Core ignores that while replaying.
+        self._task_history_length = -1
+        self._task_started = 0.0
+        self._task_commands = 0
+        self._task_heartbeat_requested = False
+
         # Stream wakes for the run's stream readers, in the order they came.
         # The stream reader takes them from here, so this module knows nothing
         # of what a wake means.
@@ -471,6 +481,10 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             act.deployment_version_for_current_task
         )
         self._current_history_length = act.history_length
+        if act.history_length != self._task_history_length:
+            self._task_history_length = act.history_length
+            self._task_started = time.monotonic()
+            self._task_commands = 0
         self._current_history_size = act.history_size_bytes
         self._continue_as_new_suggested = act.continue_as_new_suggested
         self._target_worker_deployment_version_changed = (
@@ -613,7 +627,32 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         if any(map(is_completion, self._current_completion.successful.commands)):
             self._warn_if_unfinished_handlers()
 
+        if self._current_completion.HasField("successful"):
+            self._task_commands += len(self._current_completion.successful.commands)
+            if self._task_heartbeat_requested:
+                self._current_completion.successful.heartbeat_task = True
+        self._task_heartbeat_requested = False
+
         return self._current_completion
+
+    def _task_progress(self) -> tuple[int, float]:
+        """The commands sent in the current Workflow Task, and its seconds so far.
+
+        The commands of the running activation count too.
+        """
+        commands = self._task_commands
+        if self._current_completion.HasField("successful"):
+            commands += len(self._current_completion.successful.commands)
+        return commands, time.monotonic() - self._task_started
+
+    def _request_task_heartbeat(self) -> None:
+        """Ask Core to complete the Workflow Task with this activation.
+
+        Local Activities still running then go on in the next task, as at a
+        Local Activity heartbeat. User code never waits on this, so a choice
+        made from the clock changes no command.
+        """
+        self._task_heartbeat_requested = True
 
     def _apply(
         self, job: temporalio.bridge.proto.workflow_activation.WorkflowActivationJob

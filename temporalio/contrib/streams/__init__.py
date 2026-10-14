@@ -99,6 +99,7 @@ from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
 from temporalio.contrib.streams._workflow import (
     StreamBatch,
     StreamPosition,
+    TaskCutoff,
     WorkflowStreamReader,
     workflow_reader,
 )
@@ -136,6 +137,7 @@ __all__ = [
     "StreamUnsupportedError",
     "Supersession",
     "SupersessionTracker",
+    "TaskCutoff",
     "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",

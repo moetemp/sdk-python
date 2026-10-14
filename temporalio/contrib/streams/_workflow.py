@@ -57,6 +57,7 @@ __all__ = [
     "READ_ACTIVITY",
     "StreamBatch",
     "StreamPosition",
+    "TaskCutoff",
     "WorkflowStreamReader",
     "read_activity",
     "workflow_reader",
@@ -100,6 +101,28 @@ class StreamPosition:
     cursor: str
     state: str = ""
     """Core's read state, in base64."""
+
+
+@dataclass(frozen=True)
+class TaskCutoff:
+    """When a Workflow reader ends the Workflow Task it reads in.
+
+    A reader that finds records on every read never blocks on anything but
+    its own Local Activities, so its Workflow Task would complete only at
+    the Local Activity heartbeat, and the Activities and timers that user
+    code started would wait until then. Before each read, the reader checks
+    the commands the task sent so far and the time since the task started.
+    Past either bound, it asks Core to complete the task with the read's
+    command, and the read runs on into the next task.
+
+    User code never waits on the cutoff, so a cutoff taken from the clock
+    changes no command, and replay is safe.
+    """
+
+    commands: int = 100
+    """The commands one Workflow Task may send before the reader cuts it."""
+    time: timedelta = timedelta(seconds=2)
+    """How long one Workflow Task may run before the reader cuts it."""
 
 
 @dataclass(frozen=True)
@@ -174,8 +197,10 @@ class WorkflowStreamReader(Generic[T]):
         idle_wait: timedelta,
         max_records: int,
         start_to_close_timeout: timedelta,
+        cutoff: TaskCutoff | None,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
+        self._cutoff = cutoff
         self._ref = ref
         self._topic = topic
         self._result_type = result_type
@@ -252,6 +277,7 @@ class WorkflowStreamReader(Generic[T]):
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
+            self._cut_task()
             response = await self._read()
             records = [
                 to_record(workflow.payload_converter(), r, self._result_type)
@@ -265,6 +291,17 @@ class WorkflowStreamReader(Generic[T]):
                 state.armed_at = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
+
+    def _cut_task(self) -> None:
+        if self._cutoff is None:
+            return
+        runtime: Any = workflow._Runtime.current()
+        commands, seconds = runtime._task_progress()
+        if (
+            commands >= self._cutoff.commands
+            or seconds >= self._cutoff.time.total_seconds()
+        ):
+            runtime._request_task_heartbeat()
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
@@ -358,6 +395,7 @@ def workflow_reader(
     idle_wait: timedelta = ...,
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
+    cutoff: TaskCutoff | None = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -371,6 +409,7 @@ def workflow_reader(
     idle_wait: timedelta = ...,
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
+    cutoff: TaskCutoff | None = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -384,6 +423,7 @@ def workflow_reader(
     idle_wait: timedelta = ...,
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
+    cutoff: TaskCutoff | None = ...,
 ) -> WorkflowStreamReader[Any]: ...
 
 
@@ -396,6 +436,7 @@ def workflow_reader(
     idle_wait: timedelta = timedelta(seconds=2),
     max_records: int = 100,
     start_to_close_timeout: timedelta | None = None,
+    cutoff: TaskCutoff | None = TaskCutoff(),
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
 
@@ -427,6 +468,10 @@ def workflow_reader(
             Local Activity's result, so this bounds the marker's size.
         start_to_close_timeout: How long one read may run. ``idle_wait``
             plus 10 seconds by default.
+        cutoff: When the reader ends the Workflow Task it reads in, so that
+            a busy reader doesn't hold back the rest of the Workflow. 100
+            commands or 2 seconds by default. ``None`` leaves the task to
+            the Local Activity heartbeat.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -448,6 +493,8 @@ def workflow_reader(
         raise ValueError("idle_wait must be positive")
     if max_records < 1:
         raise ValueError(f"max_records must be at least 1, got {max_records}")
+    if cutoff is not None and (cutoff.commands < 1 or cutoff.time <= timedelta(0)):
+        raise ValueError("a task cutoff needs a positive command count and time")
     name, result_type = resolve_topic(
         topic if topic is not None else ref.topic, result_type
     )
@@ -459,6 +506,7 @@ def workflow_reader(
         idle_wait,
         max_records,
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
+        cutoff,
     )
 
 
