@@ -22,7 +22,8 @@ The contract:
    :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
    producer wrote in its earlier attempts, not the whole stream and not the
    records of other producers. No store holds that record, so every store
-   reports a retry the same way.
+   reports a retry the same way. :class:`SupersessionTracker` names the
+   records each one withdraws.
 3. **A cursor belongs to one stream.** Hand it back to resume strictly after
    the record it names. A cursor from another store or another stream is
    refused with :class:`StreamCursorError`, and one whose record
@@ -90,6 +91,10 @@ from temporalio.contrib.streams._record import (
     Supersession,
 )
 from temporalio.contrib.streams._ref import StreamOwnerKind, StreamRef
+from temporalio.contrib.streams._supersession import (
+    SupersessionTracker,
+    track_supersession,
+)
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
 from temporalio.contrib.streams._workflow import workflow_reader
 from temporalio.contrib.streams._workflow_activity import (
@@ -127,11 +132,13 @@ __all__ = [
     "StreamTopic",
     "StreamUnsupportedError",
     "Supersession",
+    "SupersessionTracker",
     "WorkflowActivityStreamWriter",
     "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
+    "track_supersession",
     "workflow_activity_writer",
     "workflow_reader",
     "workflow_writer",

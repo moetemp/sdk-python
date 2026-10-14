@@ -65,6 +65,26 @@ one producer, so clearing everything is right. With several producers on a
 topic, keep the text per `record.producer_id` and clear only that
 producer's.
 
+`SupersessionTracker` does that bookkeeping. It holds the records of a read
+under their producer and returns the ones each `SUPERSEDED` withdraws, in
+stream order. `track_supersession` wraps a read with it:
+
+```python
+async for record, withdrawn in track_supersession(handle.read(topic=TOKENS)):
+    for old in withdrawn:
+        undo(old)
+    if record.kind is RecordKind.DATA and not record.stale:
+        show(record)
+```
+
+A record marked `stale` comes back withdrawn as it arrives, since an older
+attempt wrote it after the read delivered a newer one. The tracker keeps
+every record it may still withdraw in memory, so call `forget(producer_id)`
+once a producer can't retry.
+
+A future Workflow reader can't drop superseded records silently, because
+replay must see the same records, so it will deliver `SUPERSEDED` too.
+
 Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't pin one run. An Activity's
 `record.producer_id` names the run that scheduled it.
