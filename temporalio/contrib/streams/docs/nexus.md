@@ -417,8 +417,9 @@ page and calls `on_records` once per page. Each read waits up to 1 second
 for a record and asks to arm the stream. The call stops at the first answer
 that armed the stream, so the next append wakes the follower. A busy stream
 never arms, so the call also stops when half the request timeout passed.
-Then it answers `behind`, and the server sends the same progress again at
-once, so a long backlog is read in pages. `OnComplete` reads the rest of the stream,
+Then it answers `behind`, and the server sends the same progress again after
+`callback.nexusHandler.progressBehindInterval` (1 second by default), so a
+long backlog is read in pages without a busy loop. `OnComplete` reads the rest of the stream,
 then calls `on_close`.
 
 **Delivery is at least once.** A batch repeats after a lost answer or a
