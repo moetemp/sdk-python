@@ -134,8 +134,13 @@ class Connector:
 
 The store is the record of a stream, so History does not keep a second copy
 of what a Workflow reader read. By default, `replay_from_store=True`, each
-read's marker holds the read's range and Core's digest of its records, a
-few hundred bytes per read whatever the batch holds.
+read's marker holds the read's range, Core's digest of its records, and
+Core's read state twice: the state the read started from and the state it
+ended with. The state holds the newest attempt of each producer the read
+saw, up to 16 KiB. So a marker is a few hundred bytes for a stream with a
+few producers, whatever the batch holds, and up to about 33 KiB for a
+stream with many, such as one a `workflow_writer` publishes to, which has a
+producer per flush. At that size, 1,000 reads add about 33 MiB to History.
 
 - On replay, the Worker reads the same range from the store again, before
   Workflow code sees the batch. Workflow code gets the same records in both
