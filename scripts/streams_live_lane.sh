@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
-# Runs the stream notifier live tests against a server built with the stream notifier and the
-# Workflow wake target.
+# Runs the stream notifier and streams-over-Nexus live tests against a server built with the
+# stream notifier, the Workflow wake target and Nexus progress.
 #
-# The stock dev server has no stream notifier, so the live tests skip there. This lane builds a
-# server that has it, starts it with the settings the guide lists and short recheck and poll
-# limits, and fails unless every gated test below passes. Run it from a built sdk-python checkout.
+# The stock dev server has no stream notifier and no Nexus progress, so the live tests skip there.
+# This lane builds a server that has both, starts it with the settings the guides list and short
+# recheck and poll limits, and fails unless every gated test below passes. Run it from a built
+# sdk-python checkout.
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: the wake target commit the release names)
+#   SERVER_REF         commit to build (default: the Bridge server commit the release names)
 #   SERVER_BIN         use this server binary instead of building one
-#   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7941)
-#   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6441.
+#   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
+#   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
+#   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-3d0297b377c0520c098391450046c8fb11bd163e}
-PORT_BASE=${PORT_BASE:-7941}
+SERVER_REF=${SERVER_REF:-af03cc33024701b096392d58cd859e5cfff01626}
+PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 GRPC_PORT=$PORT_BASE
 HTTP_PORT=$((PORT_BASE + 1))
-REDIS_PORT=6441
+REDIS_PORT=6428
 pids=()
 
 cleanup() {
@@ -51,6 +53,27 @@ history.enableChasm:
   - value: true
 history.enableCHASMCallbacks:
   - value: true
+history.enableCHASMSignalBacklinks:
+  - value: true
+history.enableSignalWithStartFromWorkflow:
+  - value: true
+nexusoperation.enableChasmWorkflowOperations:
+  - value: true
+nexusoperation.chasmWorkflowOperationsRolloutPercent:
+  - value: 100
+nexusoperation.enableProgress:
+  - value: true
+nexusoperation.callback.endpoint.template:
+  - value: "http://localhost:$HTTP_PORT/namespaces/{{.NamespaceName}}/nexus/callback"
+callback.allowedAddresses:
+  - value:
+      - Pattern: "localhost:$HTTP_PORT"
+        AllowInsecure: true
+      - Pattern: "127.0.0.1:$HTTP_PORT"
+        AllowInsecure: true
+      # Core's live notifier test takes the notifier's callbacks on this address.
+      - Pattern: "127.0.0.1:7899"
+        AllowInsecure: true
 streamnotifier.enabled:
   - value: true
 # The owner check closes a stopped owner's stream by its close status, so the
@@ -157,7 +180,8 @@ fi
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-# The server takes a few seconds to join its own ring, and the tests need the default namespace.
+# The server takes a few seconds to join its own ring. The tests need the default namespace, and
+# the cross-namespace demo needs streams-b.
 uv run --no-sync python - "$GRPC_PORT" <<'EOF'
 import asyncio
 import sys
@@ -175,18 +199,19 @@ async def main() -> None:
     for _ in range(120):
         try:
             client = await Client.connect(target)
-            try:
-                await client.workflow_service.register_namespace(
-                    RegisterNamespaceRequest(
-                        namespace="default",
-                        workflow_execution_retention_period=Duration(
-                            seconds=int(timedelta(days=1).total_seconds())
-                        ),
+            for namespace in ["default", "streams-b"]:
+                try:
+                    await client.workflow_service.register_namespace(
+                        RegisterNamespaceRequest(
+                            namespace=namespace,
+                            workflow_execution_retention_period=Duration(
+                                seconds=int(timedelta(days=1).total_seconds())
+                            ),
+                        )
                     )
-                )
-            except RPCError as err:
-                if err.status != RPCStatusCode.ALREADY_EXISTS:
-                    raise
+                except RPCError as err:
+                    if err.status != RPCStatusCode.ALREADY_EXISTS:
+                        raise
             return
         except (RPCError, RuntimeError):
             pass
@@ -200,13 +225,16 @@ EOF
 sleep 12
 
 status=0
-uv run --no-sync pytest tests/contrib/streams \
+uv run --no-sync pytest \
+  tests/contrib/streams \
+  tests/nexus/test_workflow_operation_progress*.py \
+  tests/nexus/test_temporal_system_nexus.py \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
-# A live test that skips here proves nothing, so a skip for a missing notifier or missing Redis
-# fails the lane.
-gated='no stream notifier|STREAMS_REDIS_URL'
+# A live test that skips here proves nothing, so a skip for a missing notifier, missing Nexus
+# progress or missing Redis fails the lane.
+gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -245,6 +273,34 @@ gate tests/contrib/streams/test_sleeping_reader_demos.py \
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed
+gate tests/contrib/streams/test_nexus_samples.py \
+  test_the_slack_router_files_each_message_under_its_channel
+gate tests/contrib/streams/test_nexus_stream_operation.py \
+  test_a_caller_sees_appends_as_progress_and_the_close_as_the_result \
+  test_a_close_right_after_the_last_publishes_comes_after_them \
+  test_a_workflow_closes_its_own_stream \
+  test_a_workflows_own_publishes_reach_the_caller_as_progress \
+  test_a_worker_without_notifications_still_delivers_the_close_result \
+  test_live_a_failed_owner_fails_the_operation \
+  test_live_a_close_with_an_error_fails_the_operation \
+  test_live_an_outside_close_with_an_error_fails_the_operation \
+  test_live_a_terminated_owner_fails_the_operation
+gate tests/contrib/streams/test_nexus_reader.py \
+  test_bodies_reach_the_workflow_decoded_by_the_callers_codec \
+  test_live_a_close_with_the_last_publishes_loses_none_of_them \
+  test_live_a_new_reader_resumes_after_a_cursor \
+  test_live_a_start_on_a_closed_stream_still_names_it \
+  test_live_a_workflow_reads_every_record_then_none \
+  test_live_a_reader_after_continue_as_new_sees_a_later_attempt \
+  test_live_each_read_carries_the_state_its_last_answer_gave \
+  test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
+  test_live_a_reader_gets_every_record_of_a_burst \
+  test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new \
+  test_live_a_failed_owner_raises_after_every_record_is_read \
+  test_live_a_completed_owner_ends_the_reader \
+  test_live_a_canceled_owner_raises_a_canceled_operation
+gate tests/nexus/test_workflow_operation_progress.py \
+  test_live_progress_is_ordered_folded_ended_and_replayed
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -270,5 +326,19 @@ for test_id in gated:
         failed = True
 sys.exit(1 if failed else 0)
 PY
+
+# Core sends the notifications and the closes, so its own live test runs against the server too.
+# It returns early without a server, so the lane checks that it ran.
+core_test=streams::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
+STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" \
+  CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK_DIR/cargo-target}" \
+  cargo test --manifest-path temporalio/bridge/sdk-core/Cargo.toml -p temporalio-sdk-core \
+  --features streams --lib -- "$core_test" --exact --nocapture 2>&1 |
+  tee "$WORK_DIR/core-live.log" || status=$?
+if grep -q "set STREAMS_NOTIFIER_SERVER" "$WORK_DIR/core-live.log" ||
+  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/core-live.log"; then
+  echo "live lane: Core's live notifier test did not run and pass" >&2
+  status=1
+fi
 
 exit "$status"
