@@ -285,6 +285,18 @@ A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See
 [Readers that sleep](docs/notifications.md).
 
+## Streams in another namespace
+
+A caller Workflow in another namespace reads a stream through a Nexus
+endpoint with `temporalio.contrib.streams.nexus.StreamReader`. By default
+History keeps each read's answer, records included, so a replay needs
+nothing else. `StreamReader(..., replay_from_store=True)` keeps only each
+read's range and digest, as `workflow_reader` does, and a replay reads the
+range again through the endpoint. That needs `StreamDirectReads` on the
+caller Worker's client with a transport for the endpoint. `HttpTransport`
+works on a self-hosted server only and takes a write credential on the
+handler's namespace. See [Direct reads](docs/nexus.md#direct-reads).
+
 ## What to know
 
 - **Retries deduplicate.** An append that fails with

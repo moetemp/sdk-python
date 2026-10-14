@@ -14,12 +14,14 @@ import os
 import re
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import pytest
 
+from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
@@ -27,6 +29,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
+from temporalio.converter import PayloadCodec
 from temporalio.service import RPCError, RPCStatusCode
 from tests.contrib.streams.samples.scenarios import (
     _nexus,
@@ -41,6 +44,7 @@ from tests.contrib.streams.samples.scenarios import (
     n7a_failed_delivery,
     n7b_reader_marks,
     n8_replay_after_trim,
+    n9_direct_reads,
     u1a_worker_push,
     u4_sano_connector,
     u5c_sano_dashboard,
@@ -288,6 +292,106 @@ async def test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone(
     assert outcome.books.close_result == "3 entries"
     assert outcome.keys_deleted > 0
     assert outcome.runs_replayed == 2
+
+
+class XorCodec(PayloadCodec):
+    """Stands in for an encryption codec that both namespaces share."""
+
+    encoding = b"binary/n9-xor"
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={"encoding": self.encoding},
+                data=bytes(b ^ 0x5A for b in p.SerializeToString()),
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload.FromString(bytes(b ^ 0x5A for b in p.data))
+            if p.metadata.get("encoding") == self.encoding
+            else p
+            for p in payloads
+        ]
+
+
+async def test_n9_a_direct_reader_records_ranges_and_replays_from_the_endpoint(
+    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("n9")
+    outcome = await n9_direct_reads.main(
+        two_namespaces, task_queue, workflow_id=workflow_id, new_store=new_store
+    )
+    assert outcome.entries == ["a", "b", "later 1"]
+    assert outcome.replay_failure is None
+    # Every read is a Local Activity marker that holds no record. Its size is
+    # the range and two copies of Core's read state, the read's and the
+    # answer's, which grows with the producers the reader saw.
+    assert outcome.recorded_reads == 0
+    assert outcome.marker_bytes
+    assert max(outcome.marker_bytes) < 2048, outcome.marker_bytes
+
+
+async def test_n9_a_shared_encryption_codec_crosses_both_ways(
+    two_namespaces: Client, new_store: Callable[[], StreamStorePlugin]
+):
+    task_queue, workflow_id = ids("n9-codec")
+    outcome = await n9_direct_reads.main(
+        two_namespaces,
+        task_queue,
+        workflow_id=workflow_id,
+        new_store=new_store,
+        codec=XorCodec(),
+    )
+    assert outcome.entries == ["a", "b", "later 1"]
+    assert max(outcome.marker_bytes) < 2048, outcome.marker_bytes
+
+
+def trimming_store(floor_lease: timedelta) -> Callable[[], StreamStorePlugin]:
+    """A Redis store that trims records after 3 seconds, unless a floor holds them."""
+    url = os.environ.get("STREAMS_REDIS_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to run the trim cases on Redis")
+    return lambda: RedisStreams(
+        url,
+        key_prefix=f"scenario-{uuid.uuid4().hex}",
+        retention=timedelta(seconds=3),
+        floor_lease=floor_lease,
+    )
+
+
+async def test_n9_a_trim_below_the_floor_keeps_the_range(two_namespaces: Client):
+    task_queue, workflow_id = ids("n9-trim")
+    outcome = await n9_direct_reads.main(
+        two_namespaces,
+        task_queue,
+        workflow_id=workflow_id,
+        new_store=trimming_store(timedelta(minutes=10)),
+        gap=timedelta(seconds=5),
+    )
+    # The store trimmed past retention while nobody read, but the reader's
+    # floor kept a and b, so the new Worker's replay read them again.
+    assert outcome.replay_failure is None
+    assert outcome.entries is not None
+    assert outcome.entries[:2] == ["a", "b"]
+
+
+async def test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task(
+    two_namespaces: Client,
+):
+    task_queue, workflow_id = ids("n9-lost")
+    outcome = await n9_direct_reads.main(
+        two_namespaces,
+        task_queue,
+        workflow_id=workflow_id,
+        new_store=trimming_store(timedelta(seconds=1)),
+        gap=timedelta(seconds=5),
+    )
+    assert outcome.entries is None
+    assert outcome.replay_failure is not None
+    assert "StreamReplayRangeLostError" in outcome.replay_failure
 
 
 # The U5 demos follow with a standalone operation, so they also need a server
