@@ -13,6 +13,7 @@ _PRIVATE = {
     "encode_bodies",
     "error_from_failure",
     "publish_activity",
+    "read_activity",
     "resolve_topic",
 }
 

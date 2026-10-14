@@ -35,6 +35,7 @@ from temporalio.contrib.streams import (
     topic,
     workflow_writer,
 )
+from temporalio.contrib.streams._workflow import read_activity
 from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
     _RunWriters,
@@ -431,11 +432,14 @@ async def test_an_unknown_outcome_is_repeated_and_written_once(
     assert [r.value for r in records] == ["one", "two"]
 
 
-async def test_a_worker_registers_the_publish_activity_once(client: Client):
+async def test_a_worker_registers_the_builtin_activities_once(client: Client):
     store = MemoryStreams()
     streams = await connect_with(client, store)
     worker = Worker(streams, task_queue=str(uuid.uuid4()), workflows=[FlushesOnce])
-    assert worker.config(active_config=True).get("activities") == [publish_activity]
+    assert worker.config(active_config=True).get("activities") == [
+        publish_activity,
+        read_activity,
+    ]
     with pytest.warns(UserWarning, match="same plugin type"):
         worker = Worker(
             streams,
@@ -443,7 +447,10 @@ async def test_a_worker_registers_the_publish_activity_once(client: Client):
             workflows=[FlushesOnce],
             plugins=[store],
         )
-    assert worker.config(active_config=True).get("activities") == [publish_activity]
+    assert worker.config(active_config=True).get("activities") == [
+        publish_activity,
+        read_activity,
+    ]
     assert PUBLISH_ACTIVITY == "__temporal_streams_publish"
 
 

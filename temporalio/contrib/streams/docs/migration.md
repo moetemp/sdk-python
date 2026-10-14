@@ -41,9 +41,10 @@ Differences to plan for:
 
 ## What does not map
 
-- **Reading inside the Workflow.** A Workflow cannot read a stream in this
-  release (`workflow_reader` raises `StreamUnsupportedError`). If a
-  Workflow reads its own Workflow Stream today, keep that part on Workflow
+- **Reading inside the Workflow.** A Workflow reads a stream with
+  `workflow_reader`, one Local Activity per batch, and sleeps on the
+  stream's notifier while the stream is idle. That needs a server with the
+  stream notifier. On a server without it, keep that part on Workflow
   Streams, or send the Workflow what it needs, for example as a Signal.
 - **Activity-owned and standalone streams.** Only a Workflow owns a stream
   in this release.
