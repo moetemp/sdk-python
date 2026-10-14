@@ -177,14 +177,7 @@ async def test_a_range_the_store_lost_fails_for_a_retry(streams: Client):
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
-async def test_the_codec_passes_other_payloads_through(client: Client):
-    streams = await connect_with(client, MemoryStreams())
-    [payload] = DataConverter.default.payload_converter.to_payloads(["plain"])
-    assert await codec_of(streams).decode([payload]) == [payload]
-    assert await codec_of(streams).encode([payload]) == [payload]
-
-
-async def test_a_release_ends_the_hold(streams: Client):
+async def test_the_batch_names_the_run_that_read(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
@@ -196,26 +189,17 @@ async def test_a_release_ends_the_hold(streams: Client):
         range = ReadRangeRequest.FromString(
             Payloads.FromString(payload.data).payloads[0].data
         )
-        env = ActivityEnvironment(client=streams)
-        env.info = dataclasses.replace(
-            env.info, workflow_run_id=range.floor_holder.split("/")[0]
+        [batch] = await codec_of(streams).decode([payload])
+        # A reset run compares this with its own run id.
+        reader_run = range.floor_holder.split("/")[0]
+        assert (
+            batch.metadata["temporal.io/stream-read-by-run-id"] == reader_run.encode()
         )
-        raw = await env.run(
-            read_activity,
-            _ReadInput(
-                workflow_id=owner,
-                chain_run_id="",
-                topic=TOKENS.name,
-                after="",
-                state="",
-                arm=False,
-                wait_ms=0,
-                max_records=1,
-                reader_id="1",
-                release=True,
-                chain_first_run_id=range.chain_first_run_id,
-            ),
-        )
-        # A release reads nothing.
-        assert not ReadResponse.FromString(raw.payload.data).records
         await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_the_codec_passes_other_payloads_through(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    [payload] = DataConverter.default.payload_converter.to_payloads(["plain"])
+    assert await codec_of(streams).decode([payload]) == [payload]
+    assert await codec_of(streams).encode([payload]) == [payload]
