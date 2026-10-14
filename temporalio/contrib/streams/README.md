@@ -129,8 +129,12 @@ Known limits:
 - **One describe call.** Each Local Activity attempt makes one
   `DescribeWorkflowExecution` call before its first append, so its first
   record waits one round trip to the server. Later appends make no call.
+  Core's owner check also describes the Workflow, but it caches the answer
+  per owner run for a minute, so the run's Local Activities share it.
 - **Describe permission.** The Worker's identity needs permission to
-  describe the Workflow.
+  describe the Workflow (`DescribeWorkflowExecution` on its namespace),
+  both for the attempt and for Core's owner check. Without it, the first
+  append fails.
 - **A later Core change removes the call.** Workflow code doesn't see the
   Workflow Task attempt, so the server is asked for it. A later Core change
   can supply the Workflow Task attempt, which removes the call.
@@ -241,9 +245,13 @@ Known limits:
   if workflow.info().is_continue_as_new_suggested():
       workflow.continue_as_new(args=[prompt])
   ```
-- **Readers track 1,000 producers.** Each flush is a producer. A read keeps
-  the newest attempt of its last 1,000 producers, so it misses
-  `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
+- **Readers track a bounded set of producers.** Each flush is a producer. A
+  read keeps the newest attempt of the producers it saw most recently, at
+  most 1,000, in a read state of at most 16 KiB. A flush's producer id,
+  `__temporal_local_<n>@<run id>`, is about 57 bytes, so the state holds
+  about 200 flushes. A read misses `SUPERSEDED` only for a flush that reruns
+  after that many newer flushes, which at ten flushes a second is about 20
+  seconds of publishing.
 
 ## What to know
 
