@@ -123,5 +123,5 @@ async def test_s8_a_publisher_replays_with_no_store(streams: Client):
         streams, task_queue, workflow_id=workflow_id
     )
     assert outcome.stages == ["placed", "packed", "shipped"]
-    # One marker for each flush, and at least two flushes.
-    assert outcome.markers >= 2
+    # Publishing adds no event to History.
+    assert outcome.markers == 0
