@@ -135,17 +135,24 @@ class Connector:
 The store is the record of a stream, so History does not keep a second copy
 of what a Workflow reader read. By default, `replay_from_store=True`, each
 read's marker holds the read's range, Core's digest of its records, and
-Core's read state twice: the state the read started from and the state it
-ended with. The state holds the newest attempt of each producer the read
-saw, up to 16 KiB. So a marker is a few hundred bytes for a stream with a
-few producers, whatever the batch holds, and up to about 33 KiB for a
-stream with many, such as one a `workflow_writer` publishes to, which has a
-producer per flush. At that size, 1,000 reads add about 33 MiB to History.
+Core's read state after the read. The state holds the newest attempt of
+each producer the read saw, up to 16 KiB. A read starts from the state the
+reader's previous read ended with, so its marker leaves that out, and
+replay takes it from the previous marker. Only a reader's first read also
+keeps the state it started from, the one `after=` gave. So a marker is a
+few hundred bytes for a stream with a few producers, whatever the batch
+holds, and up to about 17 KiB for a stream with many, such as one a
+`workflow_writer` publishes to, which has a producer per flush. At that
+size, 1,000 reads add about 17 MiB to History.
 
 - On replay, the Worker reads the same range from the store again, before
   Workflow code sees the batch. Workflow code gets the same records in both
   modes, and no I/O runs in it. The live task takes the batch the Local
   Activity read, from memory.
+- Replay decodes a reader's markers in order. A process that sees a later
+  read before the one ahead of it, which a Worker that replays the full
+  History never does, fails the Workflow Task, and the retry replays from
+  the start.
 - Other records in the range fail the Workflow Task as nondeterministic. A
   range the store lost, to retention or a delete, fails the task for a
   retry, so an operator can restore the store, reset the Workflow, or go
