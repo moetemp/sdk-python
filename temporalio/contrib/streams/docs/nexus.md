@@ -322,6 +322,101 @@ Two cases stop a reader that would otherwise read for ever.
   append of such a record, so this only happens for a record written to the
   store directly.
 
+## Following a stream from a Worker
+
+A Worker can follow a stream with no caller Workflow. `follow_stream` starts
+the stream-returning operation as a standalone Nexus operation, with a
+callback to the Worker's task queue. The server then calls the Worker each
+time the stream moves (`OnProgress`) and once when the operation completes
+(`OnComplete`). `StreamFollowerService` takes both calls on the Worker. It
+reads the new records and hands them to your `StreamFollower` in batches,
+then hands over the close.
+
+```python
+from temporalio.contrib.streams.nexus import (
+    FollowBatch,
+    FollowOutcome,
+    StreamFollowerService,
+    follow_stream,
+)
+
+
+class OrderFollower:
+    async def on_records(self, batch: FollowBatch[OrderStage]) -> None:
+        for record in batch.records:
+            await show(record.cursor, record.value)
+
+    async def on_close(self, outcome: FollowOutcome) -> None:
+        await finish(outcome.result if outcome.succeeded else outcome.error)
+
+
+worker = Worker(
+    client,
+    task_queue="app",
+    nexus_service_handlers=[
+        StreamFollowerService({"orders": OrderFollower()}, client=client)
+    ],
+)
+
+handle = await follow_stream(
+    client,
+    endpoint="orders",
+    service=OrderService,
+    operation=OrderService.order_stream,
+    arg=order_id,
+    follower="orders",
+    task_queue="app",
+)
+```
+
+The type argument of the `FollowBatch` annotation on `on_records` is what
+each record body decodes into. One `StreamFollowerService` per Worker routes
+calls by the follower key, since a Worker registers a service name once.
+
+**How it reads.** With `client=` a client that carries a stream store, the
+service reads through Core's stream service on that store, as an outside
+reader does (`StoreTransport`). For a stream in another namespace or another
+store, pass `transport=TemporalStreamsHttpClient(url)`, which reads through
+the stream service on a Nexus endpoint's HTTP ingress. With neither, the
+service raises at construction. The stream service and the follower must use
+the same payload codec.
+
+**Where the position lives.** Each answer to `OnProgress` carries the read
+position, and the server keeps it on the callback and sends it back with the
+next call and with `OnComplete`. So the Worker keeps nothing between calls,
+and any Worker on the task queue can take the next one. A call reads page by
+page and calls `on_records` once per page. It stops when it reaches the
+progress position or half the request timeout passed. When it stopped early,
+it answers `behind`, and the server sends the same progress again at once,
+so a long backlog is read in pages. `OnComplete` reads the rest of the stream,
+then calls `on_close`.
+
+**Delivery is at least once.** A batch repeats after a lost answer or a
+timeout, and a completion can overtake a progress call in flight, so a batch
+can come after `on_close`. Each record carries its cursor: drop the ones you
+already handled. Supersessions, stale records and records that could not be
+read come in the batch, as the Workflow reader reports them.
+
+**Server setup.** On top of the settings above, the server must take
+NexusHandler callbacks on a standalone operation:
+
+| Setting | Why |
+|---|---|
+| `nexusoperation.enableStandalone` | Standalone Nexus operations. |
+| `nexusoperation.enabledCallbackKinds: [nexus, nexusHandler]` | A standalone start may carry a callback to a Worker's task queue (`nexusHandler`), and other callers' Nexus callbacks (`nexus`). |
+
+The store must have `notify_on_append()` on, so the stream's moves reach the
+follower as progress. A callback attached later with
+`attach_completion_callbacks` gets the completion only.
+
+`NexusClient.start_operation(..., completion_callbacks=[NexusHandlerCallback(...)])`
+is the general form `follow_stream` uses. A Worker takes those calls with a
+handler of `temporalio.nexus.system.notification_service.NotificationService`,
+for any standalone operation, stream or not. The service and its models are
+generated from api's `nexus/notification-service.wit`. The Worker decodes the
+callback's `source_context` and the operation's result with its data
+converter, so a handler gets the values, not payloads.
+
 ## Limits and timeouts
 
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata
@@ -457,8 +552,9 @@ settings above and skips on a server without the stream notifier.
 
 ## Live tests
 
-The stock dev server has no stream notifier, so the sample test and the
-reader, progress and stream operation lifecycle tests skip there.
+The stock dev server has no stream notifier and takes no NexusHandler
+callbacks on a standalone operation, so the sample test and the reader,
+progress, stream operation and follower lifecycle tests skip there.
 `scripts/streams_live_lane.sh` builds a server that has the notifier, starts
 it with the settings above and a scratch Redis, and runs those tests against
 it, along with Core's live notifier test. It fails unless each test on its

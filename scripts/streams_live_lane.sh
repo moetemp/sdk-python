@@ -94,6 +94,13 @@ streamnotifier.recheckMax:
   - value: 30s
 system.forceSearchAttributesCacheRefreshOnRead:
   - value: true
+# A follower is a standalone operation with a callback to a Worker's task queue.
+nexusoperation.enableStandalone:
+  - value: true
+nexusoperation.enabledCallbackKinds:
+  - value:
+      - nexus
+      - nexusHandler
 EOF
 
 sqlite_store() {
@@ -229,12 +236,14 @@ uv run --no-sync pytest \
   tests/contrib/streams \
   tests/nexus/test_workflow_operation_progress*.py \
   tests/nexus/test_temporal_system_nexus.py \
+  tests/nexus/test_notification_service.py \
+  tests/nexus/test_standalone_callbacks.py \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
 # A live test that skips here proves nothing, so a skip for a missing notifier, missing Nexus
 # progress or missing Redis fails the lane.
-gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL'
+gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|no NexusHandler callbacks'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -299,6 +308,13 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_failed_owner_raises_after_every_record_is_read \
   test_live_a_completed_owner_ends_the_reader \
   test_live_a_canceled_owner_raises_a_canceled_operation
+gate tests/nexus/test_standalone_callbacks.py \
+  test_live_a_worker_gets_the_completion_of_a_standalone_operation
+gate tests/contrib/streams/test_nexus_follower.py \
+  test_live_a_follower_gets_each_batch_then_the_close \
+  test_live_a_follower_resumes_on_another_worker \
+  test_live_a_late_follower_reads_the_backlog_in_pages \
+  test_live_a_failed_owner_reaches_on_close_as_a_failure
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_nexus_scenario_demos.py \
