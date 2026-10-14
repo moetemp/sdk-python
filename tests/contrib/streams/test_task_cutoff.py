@@ -87,7 +87,9 @@ class ReadsWithACutoff:
     async def run(self, commands: int) -> int:
         cutoff = TaskCutoff(commands=commands) if commands else None
         batches = 0
-        async for _ in workflow_reader("owner", topic=TOKENS, cutoff=cutoff):
+        async for _ in workflow_reader(
+            "owner", topic=TOKENS, cutoff=cutoff, replay_from_store=False
+        ):
             batches += 1
         return batches
 
