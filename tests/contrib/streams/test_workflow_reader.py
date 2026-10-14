@@ -9,6 +9,7 @@ Jetty lane.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -536,6 +537,7 @@ async def test_the_read_activity_reads_and_decodes_through_core(client: Client):
         stream = get_stream_handle(streams_client, owner, topic=TOKENS)
         await stream.producer(producer_id="w", attempt=1).append("one", "two")
         env = ActivityEnvironment(client=streams_client)
+        env.info = dataclasses.replace(env.info, is_local=True)
         raw = await env.run(
             read_activity,
             _ReadInput(

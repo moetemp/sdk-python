@@ -85,7 +85,9 @@ async def read_positions(
 ) -> Payload:
     """Run the read Activity in positions-only mode, as a Workflow reader's Local Activity does."""
     env = ActivityEnvironment(client=client)
-    env.info = dataclasses.replace(env.info, workflow_run_id=f"reader-{uuid.uuid4()}")
+    env.info = dataclasses.replace(
+        env.info, workflow_run_id=f"reader-{uuid.uuid4()}", is_local=True
+    )
     raw = await env.run(
         read_activity,
         _ReadInput(
