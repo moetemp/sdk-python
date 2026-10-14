@@ -9,6 +9,7 @@ lane.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import uuid
 
@@ -19,6 +20,7 @@ from temporalio.bridge.proto.streams import ReadRangeRequest, ReadResponse
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     END,
+    StreamError,
     StreamReplayRangeLostError,
     StreamStorePlugin,
     get_stream_handle,
@@ -26,6 +28,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._replay_reads import (
     POSITIONS_TYPE,
+    ReadStates,
     ReplayReadCodec,
     is_positions,
 )
@@ -72,7 +75,12 @@ def codec_of(client: Client) -> ReplayReadCodec:
 
 
 async def read_positions(
-    client: Client, owner: str, after: str = "", wait_ms: int = 100
+    client: Client,
+    owner: str,
+    after: str = "",
+    wait_ms: int = 100,
+    state: bytes = b"",
+    read_seq: int = 0,
 ) -> Payload:
     """Run the read Activity in positions-only mode, as a Workflow reader's Local Activity does."""
     env = ActivityEnvironment(client=client)
@@ -84,12 +92,13 @@ async def read_positions(
             chain_run_id="",
             topic=TOKENS.name,
             after=after,
-            state="",
+            state=base64.b64encode(state).decode(),
             arm=False,
             wait_ms=wait_ms,
             max_records=10,
             positions_only=True,
             reader_id="1",
+            read_seq=read_seq,
         ),
     )
     return raw.payload
@@ -223,6 +232,42 @@ async def test_a_read_from_the_end_replays_as_it_read(streams: Client):
         assert ReadResponse.FromString(replayed.data) == ReadResponse.FromString(
             live.data
         )
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_later_read_replays_from_the_previous_reads_state(
+    streams: Client,
+):
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        await handle.producer(producer_id="p", attempt=1).append("a")
+        first = await read_positions(streams, owner, read_seq=1)
+        [first_live] = await codec_of(streams).decode([first])
+        answer = ReadResponse.FromString(first_live.data)
+        await handle.producer(producer_id="p", attempt=2).append("b")
+        second = await read_positions(
+            streams, owner, after=answer.cursor, state=answer.state, read_seq=2
+        )
+        # The second marker leaves out its input state, which the first holds.
+        range = ReadRangeRequest.FromString(
+            Payloads.FromString(second.data).payloads[0].data
+        )
+        assert not range.state
+        [second_live] = await codec_of(streams).decode([second])
+        live = ReadResponse.FromString(second_live.data)
+        assert live.records[0].HasField("superseded")
+        # A replay in another process decodes the markers in order.
+        plugin = plugin_of(streams)
+        plugin._batches.clear()
+        plugin._read_states = ReadStates()
+        replayed = await codec_of(streams).decode([first, second])
+        assert ReadResponse.FromString(replayed[1].data) == live
+        # Without the first read, the second can't replay in this process.
+        plugin._batches.clear()
+        plugin._read_states = ReadStates()
+        with pytest.raises(StreamError, match="previous read"):
+            await codec_of(streams).decode([second])
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
