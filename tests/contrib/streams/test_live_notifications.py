@@ -43,7 +43,7 @@ from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
+from tests.contrib.streams._support import connect_with, new_workflow_id
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
@@ -242,9 +242,10 @@ async def test_live_a_close_with_an_outcome_reaches_the_notifier(notifying: Clie
         first = asyncio.ensure_future(records.__anext__())
         await asyncio.sleep(3)
         await handle.close(error=ApplicationError("gave up", type="GaveUp"))
-        # The close wakes the sleeping reader, and its read ends.
-        with pytest.raises(StopAsyncIteration):
+        # The close wakes the sleeping reader, and its read ends with the error.
+        with pytest.raises(ApplicationError) as raised:
             await asyncio.wait_for(first, 10)
+        assert raised.value.type == "GaveUp"
         notifier = await describe_notifier(notifying, owner)
         assert notifier is not None and notifier.closed
         assert notifier.close_failure.application_failure_info.type == "GaveUp"
@@ -404,15 +405,20 @@ async def test_live_a_workflow_close_ends_both_readers_with_its_outcome(
         )
         await _sleeping(notifying, reader_id, owner_id)
         client_read = asyncio.ensure_future(
-            read_all(get_stream_handle(notifying, owner_id, topic=TOKENS).read(), 30)
+            _read_to_the_end(get_stream_handle(notifying, owner_id, topic=TOKENS))
         )
         await owner.signal(PublishesAndCloses.end, how)
-        records = await client_read
+        records, ended_with = await asyncio.wait_for(client_read, 30)
         assert [r.kind for r in records] == [
             RecordKind.DATA,
             RecordKind.DATA,
             RecordKind.FINISH,
         ]
+        if how == "error":
+            assert isinstance(ended_with, ApplicationError)
+            assert ended_with.type == "GaveUp"
+        else:
+            assert ended_with is None
         if how == "error":
             with pytest.raises(WorkflowFailureError) as raised:
                 await asyncio.wait_for(reader.result(), 30)
@@ -422,6 +428,17 @@ async def test_live_a_workflow_close_ends_both_readers_with_its_outcome(
             assert await asyncio.wait_for(reader.result(), 30) == ["a", "b", "FINISH"]
         await owner.signal(PublishesAndCloses.end, "end")
         await owner.result()
+
+
+async def _read_to_the_end(handle: Any) -> tuple[list[Any], BaseException | None]:
+    """The records of a client read, and the error it ended with, if any."""
+    records: list[Any] = []
+    try:
+        async for record in handle.read():
+            records.append(record)
+    except ApplicationError as error:
+        return records, error
+    return records, None
 
 
 @workflow.defn

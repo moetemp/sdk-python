@@ -74,9 +74,17 @@ async def test_a_workflow_close_ends_reads_while_the_workflow_runs(
         handle = await streams.start_workflow(
             PublishesThenCloses.run, how, id=workflow_id, task_queue=worker.task_queue
         )
-        records = await read_all(
-            get_stream_handle(streams, workflow_id).read(topic=STEPS), timeout=20
-        )
+        records: list = []
+        try:
+            async for record in get_stream_handle(streams, workflow_id).read(
+                topic=STEPS
+            ):
+                records.append(record)
+        except ApplicationError as error:
+            # A close with an error ends the read with it, after the last record.
+            assert how == "error" and error.type == "GaveUp"
+        else:
+            assert how != "error"
         values = [(r.kind, r.value) for r in records]
         if how == "no-writer":
             assert values == [(RecordKind.FINISH, None)]
@@ -192,3 +200,39 @@ async def test_a_rerun_after_the_close_finds_its_flushes_landed(
         (RecordKind.DATA, "two"),
         (RecordKind.FINISH, None),
     ]
+
+
+@workflow.defn
+class PublishesAfterAnOutsideClose:
+    def __init__(self) -> None:
+        self.go = False
+
+    @workflow.run
+    async def run(self) -> str:
+        await workflow.wait_condition(lambda: self.go)
+        writer = workflow_writer(STEPS)
+        writer.publish("late")
+        try:
+            await writer.flush()
+        except BaseException as error:
+            cause = getattr(error, "cause", None) or error
+            return getattr(cause, "type", type(cause).__name__)
+        return "landed"
+
+    @workflow.signal
+    def publish(self) -> None:
+        self.go = True
+
+
+async def test_a_flush_after_a_close_by_someone_else_fails(streams: Client):
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, PublishesAfterAnOutsideClose) as worker:
+        handle = await streams.start_workflow(
+            PublishesAfterAnOutsideClose.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        await get_stream_handle(streams, workflow_id).close(topic=STEPS)
+        await handle.signal(PublishesAfterAnOutsideClose.publish)
+        said = await asyncio.wait_for(handle.result(), 30)
+    assert said == "StreamClosedError"

@@ -90,6 +90,17 @@ class StreamClosedError(StreamRefusedError):
     retains stay readable.
     """
 
+    def __init__(self, message: str, *, closed_by: str = "") -> None:
+        """Name who closed the stream, when the close said."""
+        super().__init__(message)
+        self.closed_by = closed_by
+        """The ``closed_by`` of the stream's first close.
+
+        Empty when the owner's run chain ended without a close, or the close
+        named no one. :func:`temporalio.contrib.streams.close_workflow_stream`
+        names the closing run as ``@<run id>``.
+        """
+
 
 class StreamProducerError(StreamRefusedError):
     """The store refused the append because of the producer's identity.
@@ -164,6 +175,8 @@ def error_from_failure(failure: StreamFailure) -> StreamError | ValueError:
         return ValueError(failure.message)
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_RECORD:
         return StreamRecordError(failure.message, Cursor(failure.cursor))
+    if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_CLOSED:
+        return StreamClosedError(failure.message, closed_by=failure.closed_by)
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT:
         return StreamProducerError(failure.message, divergent=True)
     return _BY_KIND.get(failure.kind, StreamStorageError)(failure.message)
