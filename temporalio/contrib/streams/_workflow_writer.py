@@ -83,6 +83,7 @@ CLOSE_ACTIVITY = "__temporal_streams_close"
 
 _DEFAULT_START_TO_CLOSE = timedelta(seconds=10)
 _DEFAULT_MIN_FLUSH_INTERVAL = timedelta(milliseconds=100)
+_DEFAULT_MAX_BUFFERED = 10_000
 # How many runs' topics a Worker process remembers the last flush start of.
 _GATE_CAPACITY = 10_000
 # The same per-record limit the stream service keeps, checked in the Workflow
@@ -118,12 +119,14 @@ class _Topic:
         schedule_to_close_timeout: timedelta | None,
         retry_policy: RetryPolicy | None,
         min_flush_interval_ms: int,
+        max_buffered: int | None = None,
     ) -> None:
         self.name = name
         self.start_to_close_timeout = start_to_close_timeout
         self.schedule_to_close_timeout = schedule_to_close_timeout
         self.retry_policy = retry_policy
         self.min_flush_interval_ms = min_flush_interval_ms
+        self.max_buffered = max_buffered
         self.buffer: list[Payload] = []
         # Resolved when everything buffered now has landed. Made when a caller
         # first waits on the buffer, then handed to the flush that empties it.
@@ -305,7 +308,8 @@ class WorkflowStreamWriter(Generic[T]):
         Raises:
             ValueError: The topic was already finished in this run.
             temporalio.contrib.streams.StreamError: The value's payload is
-                over 1.5 MiB.
+                over 1.5 MiB, or the topic already buffers ``max_buffered``
+                values. Await :meth:`flush` to make room.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator.
             BaseException: The error that failed an earlier flush on this
@@ -321,6 +325,13 @@ class WorkflowStreamWriter(Generic[T]):
             raise StreamError(
                 f"a record of {payload.ByteSize()} bytes on {topic.name!r} is over "
                 f"the per-record limit of {_MAX_RECORD_BYTES} bytes"
+            )
+        if topic.max_buffered is not None and len(topic.buffer) >= topic.max_buffered:
+            # A flush that keeps failing retries until the store answers, and
+            # what the run buffers meanwhile stays in Workflow memory.
+            raise StreamError(
+                f"topic {topic.name!r} already buffers {len(topic.buffer)} values, "
+                f"its max_buffered; await flush() to make room"
             )
         topic.buffer.append(payload)
         topic.start()
@@ -384,6 +395,7 @@ def workflow_writer(
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
+    max_buffered: int | None = _DEFAULT_MAX_BUFFERED,
 ) -> WorkflowStreamWriter[T]: ...
 
 
@@ -395,6 +407,7 @@ def workflow_writer(
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
+    max_buffered: int | None = _DEFAULT_MAX_BUFFERED,
 ) -> WorkflowStreamWriter[Any]: ...
 
 
@@ -405,6 +418,7 @@ def workflow_writer(
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
     min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
+    max_buffered: int | None = _DEFAULT_MAX_BUFFERED,
 ) -> WorkflowStreamWriter[Any]:
     """A writer on ``topic`` of the running Workflow's own stream.
 
@@ -415,7 +429,10 @@ def workflow_writer(
     Each flush is one Local Activity and adds one marker event to History
     when its Workflow Task completes. Its records are visible as soon as
     its append is accepted, before that task completes. The values ride in
-    the Local Activity's input, not in History.
+    the Local Activity's input, not in History. A topic that publishes all
+    the time adds up to about ten markers a second, so a long-running
+    publisher should Continue-as-New when
+    :meth:`temporalio.workflow.Info.is_continue_as_new_suggested` is true.
 
     Args:
         topic: A :func:`temporalio.contrib.streams.topic` definition, whose
@@ -434,11 +451,18 @@ def workflow_writer(
             published meanwhile goes in the next flush. The wait is kept in
             the Worker process, not in History, so it holds only while the
             run stays on one Worker. ``None`` turns it off.
+        max_buffered: The most values the topic holds in the Workflow while
+            they wait for a flush, 10,000 by default. Past it,
+            :meth:`WorkflowStreamWriter.publish` raises, so a store that
+            stays down doesn't grow Workflow memory without a bound. The
+            values of the flush that runs don't count. ``None`` turns it
+            off.
 
     Raises:
-        ValueError: ``topic`` is empty, or ``min_flush_interval`` is negative
-            or not shorter than ``start_to_close_timeout``, or
-            :func:`close_workflow_stream` closed the topic in this run.
+        ValueError: ``topic`` is empty, ``min_flush_interval`` is negative
+            or not shorter than ``start_to_close_timeout``, ``max_buffered``
+            is below 1, or :func:`close_workflow_stream` closed the topic in
+            this run.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
@@ -461,12 +485,15 @@ def workflow_writer(
                 "min_flush_interval must be shorter than start_to_close_timeout, "
                 "since a flush waits it out inside its attempt"
             )
+        if max_buffered is not None and max_buffered < 1:
+            raise ValueError(f"max_buffered must be at least 1, got {max_buffered}")
         state = writers.topics[name] = _Topic(
             name,
             start_to_close_timeout,
             schedule_to_close_timeout,
             retry_policy,
             int(interval / timedelta(milliseconds=1)),
+            max_buffered,
         )
     return WorkflowStreamWriter(state)
 

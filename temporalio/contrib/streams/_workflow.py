@@ -71,6 +71,7 @@ READ_ACTIVITY = "__temporal_streams_read"
 """The name the built-in read Activity is registered under."""
 
 _READ_RUN_ID_KEY = "temporal.io/stream-read-run-id"
+_READ_BY_RUN_ID_KEY = "temporal.io/stream-read-by-run-id"
 _RESPONSE_ENCODING = b"binary/protobuf"
 _RESPONSE_TYPE = ReadResponse.DESCRIPTOR.full_name.encode()
 # Errors that the same read raises again on every attempt. The Activity
@@ -166,6 +167,7 @@ class _ReaderState:
     read_run_id: str | None = None
     armed_at: int | None = None
     attach: bool = True
+    attached_run_id: str = ""
     done: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
@@ -277,6 +279,14 @@ class WorkflowStreamReader(Generic[T]):
         while True:
             if state.done:
                 raise self._end()
+            if (
+                state.armed_at is not None
+                and state.attached_run_id != workflow.info().run_id
+            ):
+                # A reset run replays the attach of the run it was reset from,
+                # and the notifier wakes only that run. So it attaches itself.
+                state.armed_at = None
+                state.attach = True
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
@@ -370,12 +380,13 @@ class WorkflowStreamReader(Generic[T]):
         # A closed stream needs no wake, so the read neither attaches nor arms.
         arm = wake is None or not wake.closed
         input = self._input(arm=arm)
-        response, state.read_run_id = await self._run(input)
+        response, state.read_run_id, read_by = await self._run(input)
         if input.subscription_id:
             state.attach = False
+            state.attached_run_id = read_by
         return response
 
-    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str]:
+    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str]:
         what = "unsubscribe" if input.unsubscribe else "read"
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
@@ -386,7 +397,13 @@ class WorkflowStreamReader(Generic[T]):
         )
         payload: Payload = raw.payload
         response = ReadResponse.FromString(payload.data)
-        return response, payload.metadata.get(_READ_RUN_ID_KEY, b"").decode()
+        # A marker from before the reader named its run counts as this run's.
+        read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
+        return (
+            response,
+            payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
+            read_by.decode() if read_by is not None else workflow.info().run_id,
+        )
 
 
 def _next_reader() -> int:
@@ -462,7 +479,9 @@ def workflow_reader(
 
     The reader follows the owner's run chain across Continue-as-New, as
     every read does. To go on in the next run of the reading Workflow, pass
-    :attr:`WorkflowStreamReader.position` as ``after``.
+    :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
+    the run that attached, so after a reset, the new run reads once more
+    to attach itself before it sleeps.
 
     Args:
         ref: The stream's owner, as a
@@ -604,6 +623,10 @@ def _result(response: ReadResponse, read_run_id: str) -> RawValue:
                 "encoding": _RESPONSE_ENCODING,
                 "messageType": _RESPONSE_TYPE,
                 _READ_RUN_ID_KEY: read_run_id.encode(),
+                # The run that read, which a reset run tells from its own.
+                _READ_BY_RUN_ID_KEY: (
+                    temporalio.activity.info().workflow_run_id or ""
+                ).encode(),
             },
             data=response.SerializeToString(),
         )
