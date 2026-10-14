@@ -699,6 +699,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_update_random_seed(job.update_random_seed)
         elif job.HasField("resolve_stream_wake"):
             self._stream_wakes.append(job.resolve_stream_wake)
+            # A wake resolves no future, and wait conditions are checked only
+            # after a ready callback ran, so give the loop one.
+            self.call_soon(lambda: None)
         else:
             raise RuntimeError(f"Unrecognized job: {job.WhichOneof('variant')}")
 
