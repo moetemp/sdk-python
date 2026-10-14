@@ -30,7 +30,6 @@ from temporalio.bridge.proto.streams import (
     ReadRangeRequest,
     ReadRequest,
     ReadResponse,
-    ReleaseFloorRequest,
     SubscribeRequest,
     UnsubscribeRequest,
 )
@@ -78,6 +77,7 @@ READ_ACTIVITY = "__temporal_streams_read"
 """The name the built-in read Activity is registered under."""
 
 _READ_RUN_ID_KEY = "temporal.io/stream-read-run-id"
+_READ_BY_RUN_ID_KEY = "temporal.io/stream-read-by-run-id"
 _RESPONSE_ENCODING = b"binary/protobuf"
 _RESPONSE_TYPE = ReadResponse.DESCRIPTOR.full_name.encode()
 # Errors that the same read raises again on every attempt. The Activity
@@ -166,10 +166,6 @@ class _ReadInput:
     """Return the read's range and digest in place of its records."""
     reader_id: str = ""
     """The reader's id in its run, which names its hold on the records."""
-    release: bool = False
-    """End the reader's hold on the records, and read nothing."""
-    chain_first_run_id: str = ""
-    """The chain the reader read, for ``release``."""
 
 
 @dataclass
@@ -181,11 +177,10 @@ class _ReaderState:
     read_run_id: str | None = None
     armed_at: int | None = None
     attach: bool = True
+    attached_run_id: str = ""
     done: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
-    chain_first_run_id: str = ""
-    released: bool = False
 
 
 class WorkflowStreamReader(Generic[T]):
@@ -269,35 +264,15 @@ class WorkflowStreamReader(Generic[T]):
 
         Idempotent. Does nothing once the stream ended or before the first
         read attached. Iterating after a close attaches again. A reader with
-        ``replay_from_store`` also ends its hold on the records it read, in
-        the same Local Activity.
+        ``replay_from_store`` keeps its hold on the records it read, since
+        the run may replay its reads until it ends.
         """
         state = self._state
         if state.done or state.attach:
             return
-        input = self._input(arm=False, unsubscribe=True)
-        input.release = self._holds_records()
-        await self._run(input)
-        state.released = state.released or input.release
+        await self._run(self._input(arm=False, unsubscribe=True))
         state.attach = True
         state.armed_at = None
-
-    def _holds_records(self) -> bool:
-        state = self._state
-        return (
-            self._replay_from_store
-            and not state.released
-            and bool(state.chain_first_run_id)
-        )
-
-    async def _release(self) -> None:
-        """End the reader's hold on the records once it read the stream to its end."""
-        if not self._holds_records():
-            return
-        input = self._input(arm=False)
-        input.release = True
-        await self._run(input)
-        self._state.released = True
 
     async def __anext__(self) -> StreamBatch[T]:
         """Read until records arrive, sleeping on the notifier while the stream is idle.
@@ -317,8 +292,15 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
-                await self._release()
                 raise self._end()
+            if (
+                state.armed_at is not None
+                and state.attached_run_id != workflow.info().run_id
+            ):
+                # A reset run replays the attach of the run it was reset from,
+                # and the notifier wakes only that run. So it attaches itself.
+                state.armed_at = None
+                state.attach = True
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
@@ -406,7 +388,6 @@ class WorkflowStreamReader(Generic[T]):
             unsubscribe=unsubscribe,
             positions_only=self._replay_from_store,
             reader_id=self.subscription_id,
-            chain_first_run_id=state.chain_first_run_id,
         )
 
     async def _read(self) -> ReadResponse:
@@ -415,21 +396,14 @@ class WorkflowStreamReader(Generic[T]):
         # A closed stream needs no wake, so the read neither attaches nor arms.
         arm = wake is None or not wake.closed
         input = self._input(arm=arm)
-        response, state.read_run_id = await self._run(input)
+        response, state.read_run_id, read_by = await self._run(input)
         if input.subscription_id:
             state.attach = False
-        if response.chain_first_run_id:
-            state.chain_first_run_id = response.chain_first_run_id
+            state.attached_run_id = read_by
         return response
 
-    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str]:
-        what = (
-            "unsubscribe"
-            if input.unsubscribe
-            else "release"
-            if input.release
-            else "read"
-        )
+    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str]:
+        what = "unsubscribe" if input.unsubscribe else "read"
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
             input,
@@ -446,7 +420,13 @@ class WorkflowStreamReader(Generic[T]):
                 "replay_from_store=False to record each batch in History"
             )
         response = ReadResponse.FromString(payload.data)
-        return response, payload.metadata.get(_READ_RUN_ID_KEY, b"").decode()
+        # A marker from before the reader named its run counts as this run's.
+        read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
+        return (
+            response,
+            payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
+            read_by.decode() if read_by is not None else workflow.info().run_id,
+        )
 
 
 def _next_reader() -> int:
@@ -526,7 +506,9 @@ def workflow_reader(
 
     The reader follows the owner's run chain across Continue-as-New, as
     every read does. To go on in the next run of the reading Workflow, pass
-    :attr:`WorkflowStreamReader.position` as ``after``.
+    :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
+    the run that attached, so after a reset, the new run reads once more
+    to attach itself before it sleeps.
 
     Args:
         ref: The stream's owner, as a
@@ -551,11 +533,15 @@ def workflow_reader(
             Replay reads the range from the store again, before Workflow
             code sees it, and a store that holds other records fails the
             Workflow Task as nondeterministic. The store holds the records
-            the reader read against retention, until the reader ends and a
-            grace passes. Replay then needs the store, so a ``Replayer``
-            needs the store plugin and a client in its process that
-            connected the same store. ``False`` records each batch in
-            History, for a History that replays with no store.
+            the reader read against retention for ``floor_lease`` after the
+            reader's last read or replay, and the reader never ends the hold
+            itself. A run that goes longer than that with no read and no
+            replay can't replay its reads, and its Workflow Task fails on
+            each retry, so such a run should Continue-as-New first. Replay
+            needs the store, so a ``Replayer`` needs the store plugin and a
+            client in its process that connected the same store. ``False``
+            records each batch in History, for a History that replays with
+            no store.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -626,18 +612,6 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         read_run_id = await handle._read_run_id()
     address = handle._address(input.topic, run_id=read_run_id)
     floor_holder = f"{info.workflow_run_id}/{input.reader_id}"
-    if input.release:
-        await call(
-            service.release_floor(
-                ReleaseFloorRequest(
-                    stream=address,
-                    chain_first_run_id=input.chain_first_run_id,
-                    floor_holder=floor_holder,
-                )
-            )
-        )
-    if input.release and not input.unsubscribe:
-        return _result(ReadResponse(cursor=input.after), read_run_id)
     if input.subscription_id:
         assert info.workflow_id and info.workflow_run_id
         if input.unsubscribe:
@@ -706,10 +680,17 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
     store._batches.put(range, response)
-    return RawValue(positions_payload(range, response, read_run_id))
+    return RawValue(
+        positions_payload(range, response, read_run_id, info.workflow_run_id or "")
+    )
 
 
 def _result(response: ReadResponse, read_run_id: str) -> RawValue:
     # Encoded here rather than by the converter, so a converter without
-    # protobuf support still carries the batch.
-    return RawValue(batch_payload(response, read_run_id))
+    # protobuf support still carries the batch. The run that read goes with
+    # it, so a reset run tells that run from its own.
+    return RawValue(
+        batch_payload(
+            response, read_run_id, temporalio.activity.info().workflow_run_id or ""
+        )
+    )
