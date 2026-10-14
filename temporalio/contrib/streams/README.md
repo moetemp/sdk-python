@@ -143,6 +143,15 @@ class Agent:
   flush runs go in the next one. A Local Activity costs one Action for the
   Workflow Task that carries its marker, however many it carries, so a
   Workflow Task's publishes cost about one Action.
+- **Rate.** Two flushes of a topic start at least `min_flush_interval`
+  apart, 100 ms by default. The flush's Local Activity waits out the rest
+  before it appends, and what is published meanwhile goes in the next
+  flush. So a busy run writes at most about ten flushes, and ten markers, a
+  second per topic, and a record waits at most about one interval more.
+  The wait lives in the Worker process, not in History, so it adds no
+  events and holds only while the run stays on one Worker. While a flush
+  waits, its Workflow Task stays open. `min_flush_interval=None` turns it
+  off.
 - **Order.** Flushes on a topic run one at a time, so records land in the
   order they were published, across all writers on the topic in the run.
 - **Visibility.** A record is visible once its flush's append is accepted.
@@ -178,6 +187,13 @@ Known limits:
   Worker needs the store. A retry that backs off longer than
   `local_retry_threshold` waits on a Workflow timer. By default a flush
   retries until the store answers, and the run can't end until it lands.
+- **Store state per flush.** Each flush leaves one dedupe field, about
+  235 bytes, in its topic's Redis meta hash. The store drops a field only
+  `retention` after its last write, so a topic holds one per flush of the
+  last `retention`. At the default interval, a run that flushes all the time
+  holds at most about 6 million fields a week, and a run that flushes every
+  5 seconds about 120,000 (about 28 MB). Size Redis for it, or shorten
+  `retention`.
 - **Readers track 1,000 producers.** Each flush is a producer. A read keeps
   the newest attempt of its last 1,000 producers, so it misses
   `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
