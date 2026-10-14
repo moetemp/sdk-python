@@ -1,8 +1,10 @@
 # Scenario demos for streams
 
 Each module here runs one scenario of the "Nexus streaming scenarios" page, in the version this
-release can run. A demo starts its own Worker, runs its Workflows on a dev server, and prints what
-its backend sees.
+release can run. A demo starts its own Workers, runs its Workflows, and prints what its backend
+sees. The `n` modules need Bridge, which serves streams over Nexus. The `u` modules need
+worker-hosted followers too, which push a stream's progress to a Worker through a standalone Nexus
+operation.
 
 ## Run them
 
@@ -102,10 +104,29 @@ Task, which this release does not have.
 Bridge adds demos of 1b, 1c, 3d, 3e, 4 and 5c, which need Nexus, and Nexus versions of 2, 5b, 6,
 7a, 7b and 8.
 
+## Worker-hosted follower demos
+
+They need the Bridge server with `nexusoperation.enableStandalone` and
+`nexusoperation.enabledCallbackKinds: [nexus, nexusHandler]`, as the live lane sets.
+
+- **1a, `u1a_worker_push`.** `OrderWorkflow` publishes stages behind a stream operation. The app
+  follows with `follow_stream`, and its Worker prints each batch as the server pushes it, then the
+  close. The app code has no read loop. Left out: data in the callback. One callback per record. An
+  endpoint is needed even in one namespace.
+- **4, `u4_sano_connector`.** n4's agent in `streams-b`, with the connector in `default` as a
+  standalone operation and a Worker that posts each message from `on_records`. The Worker holds no
+  store of `streams-b`, so it reads over the Nexus HTTP ingress, at the gRPC port plus one or at
+  `TEMPORAL_HTTP_ADDRESS`. Posts are at least once, so it drops repeats by cursor. Left out: a topic
+  filter.
+- **5c, `u5c_sano_dashboard`.** A dashboard follows after 50 records. It reads the backlog in pages
+  of 10 and is slow, so a call answers `behind` and the server sends the progress again until it
+  caught up. It then follows live. A second dashboard follows after the close and gets the backlog
+  and the close at once. Left out: the backlog as data in the callbacks.
+
 ## What no demo shows
 
-- A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
-- A standalone Nexus operation as a caller (4, 5c). Only a Workflow's operation takes progress.
+- A Worker Callback per record (1a, 4, 5c). With worker-hosted followers a Worker gets a push per
+  progress and reads the records.
 - Nexus direct calls, so an outside backend can read across namespaces (3d, 3e, 6). Not built.
 - Records in progress callbacks (1b, 1c). Progress is a notification, and the records come from
   reads that the caller's History records.
