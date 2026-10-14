@@ -28,13 +28,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import OrderedDict
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, overload
 
 import temporalio.activity
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload, Payloads
-from temporalio.bridge.proto.streams import CloseRequest
+from temporalio.bridge.proto.streams import (
+    CloseRequest,
+    NamedProducer,
+    RetireProducerRequest,
+)
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib.streams._body import encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
@@ -76,6 +82,9 @@ CLOSE_ACTIVITY = "__temporal_streams_close"
 """The name the built-in close Activity is registered under."""
 
 _DEFAULT_START_TO_CLOSE = timedelta(seconds=10)
+_DEFAULT_MIN_FLUSH_INTERVAL = timedelta(milliseconds=100)
+# How many runs' topics a Worker process remembers the last flush start of.
+_GATE_CAPACITY = 10_000
 # The same per-record limit the stream service keeps, checked in the Workflow
 # so an oversized value fails at the call and schedules nothing.
 _MAX_RECORD_BYTES = 3 << 19
@@ -108,11 +117,13 @@ class _Topic:
         start_to_close_timeout: timedelta | None,
         schedule_to_close_timeout: timedelta | None,
         retry_policy: RetryPolicy | None,
+        min_flush_interval_ms: int,
     ) -> None:
         self.name = name
         self.start_to_close_timeout = start_to_close_timeout
         self.schedule_to_close_timeout = schedule_to_close_timeout
         self.retry_policy = retry_policy
+        self.min_flush_interval_ms = min_flush_interval_ms
         self.buffer: list[Payload] = []
         # Resolved when everything buffered now has landed. Made when a caller
         # first waits on the buffer, then handed to the flush that empties it.
@@ -157,7 +168,13 @@ class _Topic:
             try:
                 token = await workflow.execute_local_activity(
                     PUBLISH_ACTIVITY,
-                    args=[self.name, finish, _raw_payloads(batch)],
+                    args=[
+                        self.name,
+                        finish,
+                        _raw_payloads(batch),
+                        # The last flush of a topic does not wait.
+                        0 if finish else self.min_flush_interval_ms,
+                    ],
                     result_type=str,
                     start_to_close_timeout=self.start_to_close_timeout,
                     schedule_to_close_timeout=self.schedule_to_close_timeout,
@@ -363,6 +380,7 @@ def workflow_writer(
     start_to_close_timeout: timedelta | None = _DEFAULT_START_TO_CLOSE,
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
+    min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
 ) -> WorkflowStreamWriter[T]: ...
 
 
@@ -373,6 +391,7 @@ def workflow_writer(
     start_to_close_timeout: timedelta | None = _DEFAULT_START_TO_CLOSE,
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
+    min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
 ) -> WorkflowStreamWriter[Any]: ...
 
 
@@ -382,6 +401,7 @@ def workflow_writer(
     start_to_close_timeout: timedelta | None = _DEFAULT_START_TO_CLOSE,
     schedule_to_close_timeout: timedelta | None = None,
     retry_policy: RetryPolicy | None = None,
+    min_flush_interval: timedelta | None = _DEFAULT_MIN_FLUSH_INTERVAL,
 ) -> WorkflowStreamWriter[Any]:
     """A writer on ``topic`` of the running Workflow's own stream.
 
@@ -405,9 +425,16 @@ def workflow_writer(
             included. Without one, a flush retries until it succeeds.
         retry_policy: How a flush retries. Without one, it is Temporal's
             default for Activities.
+        min_flush_interval: The least time between the starts of two
+            flushes of the topic in the run, 100 ms by default. The Local
+            Activity waits out the rest before it appends, and what is
+            published meanwhile goes in the next flush. The wait is kept in
+            the Worker process, not in History, so it holds only while the
+            run stays on one Worker. ``None`` turns it off.
 
     Raises:
-        ValueError: ``topic`` is empty.
+        ValueError: ``topic`` is empty, or ``min_flush_interval`` is negative
+            or not shorter than ``start_to_close_timeout``.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
@@ -420,8 +447,20 @@ def workflow_writer(
     assert writers is not None
     state = writers.topics.get(name)
     if state is None:
+        interval = min_flush_interval or timedelta(0)
+        if interval < timedelta(0):
+            raise ValueError("min_flush_interval must not be negative")
+        if start_to_close_timeout is not None and interval >= start_to_close_timeout:
+            raise ValueError(
+                "min_flush_interval must be shorter than start_to_close_timeout, "
+                "since a flush waits it out inside its attempt"
+            )
         state = writers.topics[name] = _Topic(
-            name, start_to_close_timeout, schedule_to_close_timeout, retry_policy
+            name,
+            start_to_close_timeout,
+            schedule_to_close_timeout,
+            retry_policy,
+            int(interval / timedelta(milliseconds=1)),
         )
     return WorkflowStreamWriter(state)
 
@@ -464,6 +503,10 @@ async def run_then_drain(run: Any) -> Any:
     except workflow.ContinueAsNewError:
         await _drain()
         raise
+    except GeneratorExit:
+        # The run's coroutine is being closed outside its event loop, as when
+        # a Worker shuts down without evicting it.
+        raise
     except BaseException as error:
         if _ends_the_workflow(error):
             try:
@@ -499,20 +542,61 @@ def _raw_payloads(payloads: list[Payload]) -> RawValue:
     )
 
 
+class _FlushGate:
+    """When each run's topic last started a flush in this Worker process.
+
+    Kept in memory rather than in History, so a flush interval costs no
+    events. A run that moves to another Worker starts with no wait there.
+    """
+
+    def __init__(self, capacity: int) -> None:
+        self._capacity = capacity
+        self._started: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+
+    async def wait(self, key: tuple[str, str, str], interval_ms: int) -> None:
+        """Wait until ``interval_ms`` passed since the last flush start for ``key``."""
+        last = self._started.get(key)
+        if interval_ms > 0 and last is not None:
+            delay = last + interval_ms / 1000 - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(min(delay, interval_ms / 1000))
+        self._started[key] = time.monotonic()
+        self._started.move_to_end(key)
+        while len(self._started) > self._capacity:
+            self._started.popitem(last=False)
+
+
+_gate = _FlushGate(_GATE_CAPACITY)
+
+
 @temporalio.activity.defn(name=PUBLISH_ACTIVITY)
-async def publish_activity(topic: str, finish: bool, values: RawValue) -> str:
+async def publish_activity(
+    topic: str, finish: bool, values: RawValue, min_interval_ms: int = 0
+) -> str:
     """Append a Workflow's batch to its own stream, as this Activity attempt.
 
     A flush runs it as a Local Activity, so it writes as a Local Activity
     producer. The store plugin registers it on every Worker built from a
     client that carries a store. Returns the cursor token of the last record
     written.
+
+    Before it appends, it waits until ``min_interval_ms`` passed since the
+    previous flush of the same topic and run started in this process. It
+    waits before the append, so a cancel during the wait has written nothing.
+
+    After its last append returned, it retires its own producer attempt, so
+    the store drops that attempt's dedupe state rather than keep it for the
+    stream's retention.
     """
     if values.payload.metadata.get("encoding") != _PAYLOADS_ENCODING:
         raise ApplicationError(
             "the stream publish input is not a Payloads message", non_retryable=True
         )
     batch = [RawValue(p) for p in Payloads.FromString(values.payload.data).payloads]
+    info = temporalio.activity.info()
+    await _gate.wait(
+        (info.workflow_id or "", info.workflow_run_id or "", topic), min_interval_ms
+    )
     producer = activity_handle().producer(topic=topic)
     try:
         cursor = await _append(producer, batch) if batch else BEGINNING
@@ -522,7 +606,34 @@ async def publish_activity(topic: str, finish: bool, values: RawValue) -> str:
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
+    if batch or finish:
+        await _retire(producer)
     return cursor.token
+
+
+async def _retire(producer: StreamProducer[Any]) -> None:
+    # Each flush is a producer that never writes again once its attempt
+    # returned, so its dedupe state is dead weight. A rerun writes a higher
+    # attempt, and readers find it from the records, so losing this call
+    # costs only store memory until retention.
+    request = RetireProducerRequest(stream=producer._handle._address(producer._topic))
+    if producer._activity is not None:
+        request.activity.CopyFrom(producer._activity)
+    else:
+        request.named.CopyFrom(
+            NamedProducer(producer_id=producer.producer_id, attempt=producer.attempt)
+        )
+    try:
+        service = await producer._handle._plugin._service_for(producer._handle._client)
+        await call(service.retire_producer(request))
+    except Exception:
+        temporalio.activity.logger.warning(
+            "Could not retire stream producer %s attempt %s; the store keeps its "
+            "dedupe state until retention",
+            producer.producer_id,
+            producer.attempt,
+            exc_info=True,
+        )
 
 
 async def _append(producer: StreamProducer[Any], batch: list[RawValue]) -> Cursor:
