@@ -68,6 +68,16 @@ class StreamService:
             "Read", req, temporalio.bridge.proto.streams.ReadResponse
         )
 
+    async def retire_producer(
+        self, req: temporalio.bridge.proto.streams.RetireProducerRequest
+    ) -> temporalio.bridge.proto.streams.RetireProducerResponse:
+        """Invokes the StreamService.retire_producer call."""
+        return await self._store.call(
+            "RetireProducer",
+            req,
+            temporalio.bridge.proto.streams.RetireProducerResponse,
+        )
+
     async def subscribe(
         self, req: temporalio.bridge.proto.streams.SubscribeRequest
     ) -> temporalio.bridge.proto.streams.SubscribeResponse:
