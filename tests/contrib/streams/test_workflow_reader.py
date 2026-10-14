@@ -1,7 +1,7 @@
 """Reading a stream in Workflow code, one Local Activity per batch.
 
-A fake read Activity scripts Core's answers, and a Signal folds each wake
-the way the ``ResolveStreamWake`` job does. The live cases need a server
+A fake read Activity scripts Core's answers, and a Signal queues each wake
+the way the Workflow instance queues a ``ResolveStreamWake`` job. The live cases need a server
 with the stream notifier and the Workflow wake target, and run in the
 Jetty lane.
 """
@@ -20,6 +20,7 @@ from temporalio.api.stream.v1 import StreamWake
 from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersession
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
+from temporalio.bridge.proto.workflow_activation import ResolveStreamWake
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import RawValue
 from temporalio.contrib.streams import (
@@ -29,7 +30,6 @@ from temporalio.contrib.streams import (
     topic,
     workflow_reader,
 )
-from temporalio.contrib.streams._wakes import fold_wake
 from temporalio.contrib.streams._workflow import (
     READ_ACTIVITY,
     _ReadInput,
@@ -131,7 +131,12 @@ class ReadsBatches:
 
     @workflow.signal
     def wake(self, wake: StreamWake) -> None:
-        fold_wake(workflow._Runtime.current(), wake)
+        # Queued as the instance queues a ResolveStreamWake job, which has the
+        # same fields as the wake on the scheduled event.
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
 
 
 def _failure_type(error: BaseException | None) -> str | None:
@@ -294,7 +299,7 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
         )
         await fake.until(2)
         await handle.signal(
-            ReadsBatches.wake, StreamWake(subscription_id="1.1", counter=2)
+            ReadsBatches.wake, StreamWake(subscription_id="1", counter=2)
         )
 
     batches, fake, _ = await _run_reader(
@@ -307,7 +312,11 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
         drive,
     )
     assert batches == [["data z"]]
-    assert [i.subscription_id for i in fake.inputs] == ["1", "1.1", ""]
+    assert [(i.subscription_id, i.generation) for i in fake.inputs] == [
+        ("1", 0),
+        ("1", 1),
+        ("", 1),
+    ]
 
 
 async def test_a_reader_stopped_early_detaches(client: Client):

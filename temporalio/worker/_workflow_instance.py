@@ -338,6 +338,13 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         self._read_only = False
         self._in_query_or_validator = False
 
+        # Stream wakes for the run's stream readers, in the order they came.
+        # The stream reader takes them from here, so this module knows nothing
+        # of what a wake means.
+        self._stream_wakes: list[
+            temporalio.bridge.proto.workflow_activation.ResolveStreamWake
+        ] = []
+
         # Patches we have been notified of and memoized patch responses
         self._patches_notified: set[str] = set()
         self._patches_memoized: dict[str, bool] = {}
@@ -651,6 +658,8 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_initialize_workflow(job.initialize_workflow)
         elif job.HasField("update_random_seed"):
             self._apply_update_random_seed(job.update_random_seed)
+        elif job.HasField("resolve_stream_wake"):
+            self._stream_wakes.append(job.resolve_stream_wake)
         else:
             raise RuntimeError(f"Unrecognized job: {job.WhichOneof('variant')}")
 

@@ -124,6 +124,8 @@ class _ReadInput:
     max_records: int
     subscription_id: str = ""
     """Set to attach the running Workflow to the notifier before the read."""
+    generation: int = 0
+    """How many times the reader attached again after a ``resubscribe`` wake."""
     read_run_id: str | None = None
     """The run the read names to Core, which the first read finds."""
     unsubscribe: bool = False
@@ -194,10 +196,7 @@ class WorkflowStreamReader(Generic[T]):
     @property
     def subscription_id(self) -> str:
         """The id the reader's wakes name, unique among this run's readers."""
-        state = self._state
-        if state.generation == 0:
-            return str(state.number)
-        return f"{state.number}.{state.generation}"
+        return str(self._state.number)
 
     @property
     def position(self) -> StreamPosition:
@@ -282,8 +281,9 @@ class WorkflowStreamReader(Generic[T]):
         state.armed_at = None
         wake.recheck = False
         if wake.resubscribe and not wake.closed:
-            # The notifier dropped this reader, so it attaches again under a
-            # new request id, whose wakes start from nothing.
+            # The notifier dropped this reader. A new generation makes the
+            # next attach a new one, since the server answers a repeat of the
+            # dropped attach as done.
             wake.resubscribe = False
             state.generation += 1
             state.attach = True
@@ -312,6 +312,7 @@ class WorkflowStreamReader(Generic[T]):
             subscription_id=self.subscription_id
             if (state.attach and arm) or unsubscribe
             else "",
+            generation=state.generation,
             read_run_id=state.read_run_id,
             unsubscribe=unsubscribe,
         )
@@ -500,6 +501,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
                         stream=address,
                         run_id=info.workflow_run_id,
                         subscription_id=input.subscription_id,
+                        generation=input.generation,
                     )
                 )
             )
@@ -511,6 +513,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
                     workflow_id=info.workflow_id,
                     run_id=info.workflow_run_id,
                     subscription_id=input.subscription_id,
+                    generation=input.generation,
                 )
             )
         )

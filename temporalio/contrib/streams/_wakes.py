@@ -2,8 +2,9 @@
 
 The server records the wakes of a Workflow's stream readers on the Workflow
 Task scheduled event, and Core hands each one to lang as a
-``ResolveStreamWake`` job. Replay delivers the same wakes at the same
-points, so a reader that waits on this state waits deterministically.
+``ResolveStreamWake`` job, which the Workflow instance queues in order.
+Replay delivers the same jobs at the same points, so a reader that waits on
+this state waits deterministically.
 
 A wake says that the stream moved, not what it holds. The fold keeps the
 highest counter per reader, and the flags until the reader takes them.
@@ -17,13 +18,12 @@ from typing import Any
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.failure.v1 import Failure
-from temporalio.api.stream.v1 import StreamWake
 
 __all__ = ["WakeState", "fold_wake", "wake_state"]
 
 # Held on the run's runtime, so the state goes with the run at eviction and
 # replay builds it again from the same jobs.
-_WAKES_ATTRIBUTE = "_temporal_stream_wakes"
+_WAKES_ATTRIBUTE = "_temporal_stream_wake_states"
 
 
 @dataclass
@@ -41,13 +41,9 @@ class WakeState:
     close_failure: Failure | None = None
 
 
-def fold_wake(runtime: Any, wake: StreamWake) -> None:
-    """Fold ``wake`` into the state of its reader on ``runtime``."""
-    states: dict[str, WakeState] | None = getattr(runtime, _WAKES_ATTRIBUTE, None)
-    if states is None:
-        states = {}
-        setattr(runtime, _WAKES_ATTRIBUTE, states)
-    state = states.setdefault(wake.subscription_id, WakeState())
+def fold_wake(runtime: Any, wake: Any) -> None:
+    """Fold ``wake``, a ``ResolveStreamWake`` or a ``StreamWake``, into its reader's state."""
+    state = _states(runtime).setdefault(wake.subscription_id, WakeState())
     state.counter = max(state.counter, wake.counter)
     state.recheck = state.recheck or wake.recheck
     state.resubscribe = state.resubscribe or wake.resubscribe
@@ -62,7 +58,17 @@ def fold_wake(runtime: Any, wake: StreamWake) -> None:
 
 def wake_state(subscription_id: str) -> WakeState | None:
     """The folded wakes of ``subscription_id`` in the running Workflow."""
-    states: dict[str, WakeState] = getattr(
-        workflow._Runtime.current(), _WAKES_ATTRIBUTE, {}
-    )
-    return states.get(subscription_id)
+    runtime = workflow._Runtime.current()
+    queued: list[Any] = getattr(runtime, "_stream_wakes", [])
+    for wake in queued:
+        fold_wake(runtime, wake)
+    queued.clear()
+    return _states(runtime).get(subscription_id)
+
+
+def _states(runtime: Any) -> dict[str, WakeState]:
+    states: dict[str, WakeState] | None = getattr(runtime, _WAKES_ATTRIBUTE, None)
+    if states is None:
+        states = {}
+        setattr(runtime, _WAKES_ATTRIBUTE, states)
+    return states
