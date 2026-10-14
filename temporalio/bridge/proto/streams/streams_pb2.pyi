@@ -723,6 +723,9 @@ class ReadResponse(google.protobuf.message.Message):
     DONE_FIELD_NUMBER: builtins.int
     ARMED_FIELD_NUMBER: builtins.int
     WAKE_AFTER_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    CLOSED_BY_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -750,6 +753,16 @@ class ReadResponse(google.protobuf.message.Message):
     stream. A notification with a higher counter names a record after the position, so the
     reader waits for a counter above this one. One that landed before the wait started counts.
     """
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """Set with `done` when the stream's topic was closed with a result. A chain close, when the
+        owner ended with no close, sets none of these three.
+        """
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Set with `done` when the stream's topic was closed with a failure."""
+    closed_by: builtins.str
+    """Set with `done` to the `closed_by` of the topic's first close."""
     def __init__(
         self,
         *,
@@ -759,12 +772,27 @@ class ReadResponse(google.protobuf.message.Message):
         done: builtins.bool = ...,
         armed: builtins.bool = ...,
         wake_after: builtins.int = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        closed_by: builtins.str = ...,
     ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure", b"close_failure", "close_result", b"close_result"
+        ],
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
             "armed",
             b"armed",
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "closed_by",
+            b"closed_by",
             "cursor",
             b"cursor",
             "done",
@@ -823,14 +851,16 @@ class CloseRequest(google.protobuf.message.Message):
     STREAM_FIELD_NUMBER: builtins.int
     RESULT_FIELD_NUMBER: builtins.int
     FAILURE_FIELD_NUMBER: builtins.int
+    CLOSED_BY_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     @property
     def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """What every callback attached to the stream's notifier completes with, after lang's payload
         codec. The stream's notifier on the server closes once the store has. When set, a notifier
-        that doesn't take the close fails the call, and Core keeps trying in the background too. Unset, the callbacks complete with a `binary/null` result, and the notifier
-        close is retried in the background.
+        that doesn't take the close fails the call, and Core keeps trying in the background too.
+        Unset, the callbacks complete with a `binary/null` result, and the notifier close is retried
+        in the background.
         """
     @property
     def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
@@ -838,12 +868,18 @@ class CloseRequest(google.protobuf.message.Message):
         codec. The callbacks complete as failed, or as canceled for a failure with canceled info.
         A close carries a result or a failure, never both.
         """
+    closed_by: builtins.str
+    """Who closed the stream, opaque to Core. At most 256 bytes. The store keeps it with the first
+    close's outcome, and readers and refused appends see it, so a writer can tell a close by its
+    own run.
+    """
     def __init__(
         self,
         *,
         stream: global___StreamAddress | None = ...,
         result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        closed_by: builtins.str = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -854,11 +890,55 @@ class CloseRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "failure", b"failure", "result", b"result", "stream", b"stream"
+            "closed_by",
+            b"closed_by",
+            "failure",
+            b"failure",
+            "result",
+            b"result",
+            "stream",
+            b"stream",
         ],
     ) -> None: ...
 
 global___CloseRequest = CloseRequest
+
+class StoredClose(google.protobuf.message.Message):
+    """The first close of a topic, as a store keeps it. A later close of the topic keeps this one. A
+    chain close, when the owner ended, keeps none. With `result` and `failure`, at most 1.5 MiB.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RESULT_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    CLOSED_BY_FIELD_NUMBER: builtins.int
+    @property
+    def result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    closed_by: builtins.str
+    def __init__(
+        self,
+        *,
+        result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        closed_by: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "closed_by", b"closed_by", "failure", b"failure", "result", b"result"
+        ],
+    ) -> None: ...
+
+global___StoredClose = StoredClose
 
 class CloseResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -1219,21 +1299,34 @@ class StreamFailure(google.protobuf.message.Message):
     KIND_FIELD_NUMBER: builtins.int
     MESSAGE_FIELD_NUMBER: builtins.int
     CURSOR_FIELD_NUMBER: builtins.int
+    CLOSED_BY_FIELD_NUMBER: builtins.int
     kind: global___StreamFailureKind.ValueType
     message: builtins.str
     cursor: builtins.str
     """The cursor of the record that failed, for RECORD."""
+    closed_by: builtins.str
+    """For CLOSED, the `closed_by` of the topic's first close. Empty when the owner's chain closed
+    or the close named no one.
+    """
     def __init__(
         self,
         *,
         kind: global___StreamFailureKind.ValueType = ...,
         message: builtins.str = ...,
         cursor: builtins.str = ...,
+        closed_by: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "cursor", b"cursor", "kind", b"kind", "message", b"message"
+            "closed_by",
+            b"closed_by",
+            "cursor",
+            b"cursor",
+            "kind",
+            b"kind",
+            "message",
+            b"message",
         ],
     ) -> None: ...
 
@@ -1428,6 +1521,7 @@ class StoreReadResponse(google.protobuf.message.Message):
     RECORDS_FIELD_NUMBER: builtins.int
     CLOSED_FIELD_NUMBER: builtins.int
     ARMED_FIELD_NUMBER: builtins.int
+    CLOSE_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -1440,17 +1534,31 @@ class StoreReadResponse(google.protobuf.message.Message):
     """The read asked to arm, found no record and armed the topic. Never set with records or with
     `closed`.
     """
+    @property
+    def close(self) -> global___StoredClose:
+        """The topic's first close, when it was closed as a topic. Unset for a chain close."""
     def __init__(
         self,
         *,
         records: collections.abc.Iterable[global___StoredRecord] | None = ...,
         closed: builtins.bool = ...,
         armed: builtins.bool = ...,
+        close: global___StoredClose | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["close", b"close"]
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "armed", b"armed", "closed", b"closed", "records", b"records"
+            "armed",
+            b"armed",
+            "close",
+            b"close",
+            "closed",
+            b"closed",
+            "records",
+            b"records",
         ],
     ) -> None: ...
 
