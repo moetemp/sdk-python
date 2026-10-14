@@ -578,6 +578,26 @@ async def test_a_reader_replays_from_the_store_by_default(
     assert _fake.inputs[0].positions_only is not record_batches
 
 
+async def test_a_reader_at_the_end_keeps_its_hold_on_the_records(client: Client):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")],
+                cursor="c1",
+                done=True,
+                chain_first_run_id="chain",
+            )
+        ]
+    )
+    async with new_worker(client, ReadsOnce, activities=[fake_read]) as worker:
+        await client.execute_workflow(
+            ReadsOnce.run, False, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+    # The run can still replay the read, so no Local Activity ends the hold.
+    assert len(_fake.inputs) == 1
+
+
 @activity.defn(name=READ_ACTIVITY)
 async def positions_read(_input: _ReadInput) -> RawValue:
     # What the real read Activity answers in the default mode.

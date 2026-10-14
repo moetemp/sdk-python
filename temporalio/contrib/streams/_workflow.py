@@ -30,7 +30,6 @@ from temporalio.bridge.proto.streams import (
     ReadRangeRequest,
     ReadRequest,
     ReadResponse,
-    ReleaseFloorRequest,
     SubscribeRequest,
     UnsubscribeRequest,
 )
@@ -166,10 +165,6 @@ class _ReadInput:
     """Return the read's range and digest in place of its records."""
     reader_id: str = ""
     """The reader's id in its run, which names its hold on the records."""
-    release: bool = False
-    """End the reader's hold on the records, and read nothing."""
-    chain_first_run_id: str = ""
-    """The chain the reader read, for ``release``."""
 
 
 @dataclass
@@ -184,8 +179,6 @@ class _ReaderState:
     done: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
-    chain_first_run_id: str = ""
-    released: bool = False
 
 
 class WorkflowStreamReader(Generic[T]):
@@ -269,35 +262,15 @@ class WorkflowStreamReader(Generic[T]):
 
         Idempotent. Does nothing once the stream ended or before the first
         read attached. Iterating after a close attaches again. A reader with
-        ``replay_from_store`` also ends its hold on the records it read, in
-        the same Local Activity.
+        ``replay_from_store`` keeps its hold on the records it read, since
+        the run may replay its reads until it ends.
         """
         state = self._state
         if state.done or state.attach:
             return
-        input = self._input(arm=False, unsubscribe=True)
-        input.release = self._holds_records()
-        await self._run(input)
-        state.released = state.released or input.release
+        await self._run(self._input(arm=False, unsubscribe=True))
         state.attach = True
         state.armed_at = None
-
-    def _holds_records(self) -> bool:
-        state = self._state
-        return (
-            self._replay_from_store
-            and not state.released
-            and bool(state.chain_first_run_id)
-        )
-
-    async def _release(self) -> None:
-        """End the reader's hold on the records once it read the stream to its end."""
-        if not self._holds_records():
-            return
-        input = self._input(arm=False)
-        input.release = True
-        await self._run(input)
-        self._state.released = True
 
     async def __anext__(self) -> StreamBatch[T]:
         """Read until records arrive, sleeping on the notifier while the stream is idle.
@@ -317,7 +290,6 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
-                await self._release()
                 raise self._end()
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
@@ -406,7 +378,6 @@ class WorkflowStreamReader(Generic[T]):
             unsubscribe=unsubscribe,
             positions_only=self._replay_from_store,
             reader_id=self.subscription_id,
-            chain_first_run_id=state.chain_first_run_id,
         )
 
     async def _read(self) -> ReadResponse:
@@ -418,18 +389,10 @@ class WorkflowStreamReader(Generic[T]):
         response, state.read_run_id = await self._run(input)
         if input.subscription_id:
             state.attach = False
-        if response.chain_first_run_id:
-            state.chain_first_run_id = response.chain_first_run_id
         return response
 
     async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str]:
-        what = (
-            "unsubscribe"
-            if input.unsubscribe
-            else "release"
-            if input.release
-            else "read"
-        )
+        what = "unsubscribe" if input.unsubscribe else "read"
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
             input,
@@ -551,11 +514,15 @@ def workflow_reader(
             Replay reads the range from the store again, before Workflow
             code sees it, and a store that holds other records fails the
             Workflow Task as nondeterministic. The store holds the records
-            the reader read against retention, until the reader ends and a
-            grace passes. Replay then needs the store, so a ``Replayer``
-            needs the store plugin and a client in its process that
-            connected the same store. ``False`` records each batch in
-            History, for a History that replays with no store.
+            the reader read against retention for ``floor_lease`` after the
+            reader's last read or replay, and the reader never ends the hold
+            itself. A run that goes longer than that with no read and no
+            replay can't replay its reads, and its Workflow Task fails on
+            each retry, so such a run should Continue-as-New first. Replay
+            needs the store, so a ``Replayer`` needs the store plugin and a
+            client in its process that connected the same store. ``False``
+            records each batch in History, for a History that replays with
+            no store.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -626,18 +593,6 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         read_run_id = await handle._read_run_id()
     address = handle._address(input.topic, run_id=read_run_id)
     floor_holder = f"{info.workflow_run_id}/{input.reader_id}"
-    if input.release:
-        await call(
-            service.release_floor(
-                ReleaseFloorRequest(
-                    stream=address,
-                    chain_first_run_id=input.chain_first_run_id,
-                    floor_holder=floor_holder,
-                )
-            )
-        )
-    if input.release and not input.unsubscribe:
-        return _result(ReadResponse(cursor=input.after), read_run_id)
     if input.subscription_id:
         assert info.workflow_id and info.workflow_run_id
         if input.unsubscribe:
