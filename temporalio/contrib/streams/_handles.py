@@ -32,6 +32,7 @@ from temporalio.bridge.proto.streams import (
     ActivityProducer,
     AppendRecord,
     AppendRequest,
+    CloseRequest,
     LatestRequest,
     NamedProducer,
     ReadRequest,
@@ -348,6 +349,48 @@ class StreamHandle:
         response = await call(service.latest(LatestRequest(stream=self._address(name))))
         return Cursor(response.cursor)
 
+    async def close(
+        self,
+        result: Any = None,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """Close ``topic`` with ``result``, or with ``error`` as a failure.
+
+        The store refuses appends from then on, and every read ends after
+        the last record. Core then closes the stream's notifier on the
+        server, so each reader that sleeps on it wakes and sees the outcome.
+        ``result`` goes through the client's data converter and codec, and
+        ``error`` through its failure converter. A close with neither ends
+        the stream with a null result.
+
+        A close of a stream that is already closed is accepted, and the
+        first close's outcome stays, so a retried close is safe. On a server
+        without the stream notifier, the close ends the stream in the store
+        only.
+
+        Raises:
+            ValueError: Both ``result`` and ``error`` are set.
+            StreamError: The store or the notifier refused the close.
+
+        .. warning::
+            This API is experimental.
+        """
+        if result is not None and error is not None:
+            raise ValueError("a stream closes with a result or an error, not both")
+        name, _ = self._resolve(topic, None)
+        request = CloseRequest(stream=self._address(name))
+        if error is not None:
+            await self._converter.encode_failure(error, request.failure)
+        elif result is not None:
+            [payload] = await encode_bodies(
+                self._converter, self._converter.payload_converter.to_payloads([result])
+            )
+            request.result.CopyFrom(payload)
+        service = await self._plugin._service_for(self._client)
+        await call(service.close(request))
+
     @overload
     def producer(
         self, *, topic: StreamTopic[T], producer_id: str, attempt: int
@@ -502,6 +545,16 @@ class ActivityStreamHandle:
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """See :meth:`temporalio.contrib.streams.StreamHandle.latest`."""
         return await self._inner.latest(topic=topic)
+
+    async def close(
+        self,
+        result: Any = None,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """See :meth:`temporalio.contrib.streams.StreamHandle.close`."""
+        await self._inner.close(result, topic=topic, error=error)
 
     @overload
     def producer(self, *, topic: StreamTopic[T]) -> StreamProducer[T]: ...
