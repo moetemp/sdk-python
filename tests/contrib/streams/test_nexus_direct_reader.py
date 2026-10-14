@@ -26,6 +26,7 @@ from temporalio.contrib.streams import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._record import RecordKind
+from temporalio.contrib.streams._replay_reads import ReadChain
 from temporalio.contrib.streams.nexus import (
     ReadInput,
     ReadOutput,
@@ -150,13 +151,14 @@ class DirectHistory(History):
                 records_digest=digest,
             ),
         )
+        # Past the reader's first read, the marker leaves the input state out.
         range = ReadRangeInput(
             stream=STREAM,
             chain_first_run_id="run-id",
             after_token=after,
             to_token=output.next_token,
             stored_records=stored,
-            state=self._state or None,
+            state=(self._state or None) if self._seq == 1 else None,
             records_digest=digest,
             floor_holder=HOLDER,
         )
@@ -185,7 +187,14 @@ class DirectHistory(History):
                         ]
                     ),
                     "result": Payloads(
-                        payloads=[positions_payload(ENDPOINT, range, output)]
+                        payloads=[
+                            positions_payload(
+                                ENDPOINT,
+                                range,
+                                output,
+                                ReadChain("chat-reader/1", self._seq),
+                            )
+                        ]
                     ),
                 },
                 workflow_task_completed_event_id=self._completed,
