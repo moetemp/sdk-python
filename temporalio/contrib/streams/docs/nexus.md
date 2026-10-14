@@ -135,8 +135,10 @@ knows only the cursor record's producer.
 `notify_on_append()` turns on progress. Without it, the caller sees no
 progress, but the close still completes every operation with its result.
 Core closes a stream's notifier after every store close, whether or not
-progress is on. [Readers that sleep](notifications.md) says when Core
-notifies and how a process flushes its notifications before it exits.
+progress is on. Core notifies only while a reader sleeps on the stream, so a
+busy stream costs no notification. [Readers that sleep](notifications.md)
+says when Core notifies and how a process flushes its notifications before
+it exits.
 
 Closing the stream completes every operation that handed it out:
 
@@ -179,11 +181,32 @@ What happens underneath:
 1. The handler's start attaches the caller's callback to the stream's
    notifier on the server, and returns the stream reference in the
    operation token.
-2. Core notifies the notifier after each append, a Workflow's flushes
-   included. Notifications are folded: at most one call is in flight, and the
-   newest one wins.
+2. Core notifies the notifier after an append, a Workflow's flushes
+   included, when a reader armed the stream. Notifications are folded: at
+   most one call is in flight, and the newest one wins.
 3. The notifier delivers the latest notification to the caller as progress.
 4. The close completes the caller's operation with the close result.
+
+### When Core notifies
+
+[Readers that sleep](notifications.md) lists the steps: a read that waits
+and finds nothing arms the stream, and the next append notifies once. For
+streams over Nexus:
+
+- A Workflow `StreamReader` waits `idle_wait` (2 seconds by default) before
+  a read arms the stream. A Worker follower waits 1 second.
+- The notifier sends the progress to every attached caller, so one append
+  wakes all sleeping readers.
+- A gap shorter than the idle wait costs only the read that returns the next
+  record. A longer gap costs one read that arms, one notification and one
+  progress task per caller.
+- The attach arms an empty stream, so the first append reaches a caller that
+  has no record to read yet. On a stream with records, the attach announces
+  the newest one. Closes do not depend on an arm, so a close always reaches
+  every caller.
+- A reader from this release on a stream service from an earlier release
+  fails its read with `BAD_REQUEST`, since the earlier service refuses the
+  `arm` member.
 
 ## The caller side
 
@@ -214,8 +237,11 @@ What `next()` does:
 - It reads the records after its cursor through the stream service on
   `endpoint`, and returns their bodies decoded to `item_type`. The first
   call reads at once. Later calls read on while answers carry records, and
-  wait for newer progress only after an answer with no record. It never
-  returns an empty list.
+  wait for newer progress only after an answer with no record. Each read
+  before the completion waits up to `idle_wait` (a `StreamReader` keyword,
+  2 seconds by default) and arms the stream when it finds nothing. Zero arms
+  on the first empty read. Keep it well below the 10 second timeout of a
+  Nexus request. It never returns an empty list.
 - It returns `None` only when the stream service says the stream is done,
   and the last records are handed over. After the operation completes, the
   reader keeps reading until then, waiting up to 2 seconds per read. Every
@@ -281,7 +307,9 @@ values at the same points.
 Reading a stream adds to the caller's History in two ways.
 
 - Each read is a synchronous Nexus operation, about three events, and its
-  answer holds up to 1 MiB of records.
+  answer holds up to 1 MiB of records. A gap in the stream shorter than
+  `idle_wait` costs one read. A longer gap costs one empty read that arms
+  the stream, then one progress task.
 - Each progress delivery costs at most one Workflow Task, three events,
   and up to about 3 KiB on its scheduled event. The server schedules a task
   for progress no sooner than `nexusoperation.progressMinInterval` (1 second
@@ -385,10 +413,12 @@ the same payload codec.
 position, and the server keeps it on the callback and sends it back with the
 next call and with `OnComplete`. So the Worker keeps nothing between calls,
 and any Worker on the task queue can take the next one. A call reads page by
-page and calls `on_records` once per page. It stops when it reaches the
-progress position or half the request timeout passed. When it stopped early,
-it answers `behind`, and the server sends the same progress again at once,
-so a long backlog is read in pages. `OnComplete` reads the rest of the stream,
+page and calls `on_records` once per page. Each read waits up to 1 second
+for a record and asks to arm the stream. The call stops at the first answer
+that armed the stream, so the next append wakes the follower. A busy stream
+never arms, so the call also stops when half the request timeout passed.
+Then it answers `behind`, and the server sends the same progress again at
+once, so a long backlog is read in pages. `OnComplete` reads the rest of the stream,
 then calls `on_close`.
 
 **Delivery is at least once.** A batch repeats after a lost answer or a
@@ -422,15 +452,18 @@ converter, so a handler gets the values, not payloads.
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata
   at most 2 KiB. The server refuses larger ones.
 - A stream's notifier holds at most `streamnotifier.maxCallbacks` callers
-  (2,000 by default), and at most `streamnotifier.maxCallbackBytes` of
-  callback data (4 MiB by default). An attach beyond that is refused.
+  (2,000 by default), and callbacks of at most
+  `streamnotifier.maxCallbackBytes` in total (4 MiB by default). A full
+  notifier first drops its oldest callbacks that already completed. If that
+  does not make room, it refuses the attach.
 - A read answer holds about 1 MiB of records past the first record
   (`TemporalStreamsHandler(..., max_answer_bytes=...)`). The first record can
   be up to 1.5 MiB. The reader goes on with the next read.
 - If a stream gets no attach and no notification for
   `streamnotifier.idleTimeout` (7 days by default), the notifier fails the
   callers waiting on it. The stream stays open, and later attaches and
-  notifications work as before.
+  notifications work as before. Core sends a busy stream's last counter
+  again once a day, so a stream that gets appends keeps its notifier.
 - While callers are attached, the notifier checks the owner Workflow every
   `streamnotifier.ownerCheckInterval` (30 seconds by default). If the owner's
   run chain closed without closing the stream, the notifier closes it by the

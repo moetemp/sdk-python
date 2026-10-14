@@ -70,8 +70,8 @@ class StreamOperationHandler(
     stream and returns its reference. The start then attaches the caller's
     callback to that stream's notifier and answers asynchronously, with the
     reference in the operation token. From then on the server tells the
-    caller each time the stream moves, when the store has
-    :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
+    caller when the stream moves while a reader sleeps on it, when the store
+    has :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
     and completes the operation with the close result when the stream closes.
     A cancel detaches the caller.
 
