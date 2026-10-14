@@ -8,6 +8,7 @@ lane.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 
@@ -17,6 +18,7 @@ from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.bridge.proto.streams import ReadRangeRequest, ReadResponse
 from temporalio.client import Client
 from temporalio.contrib.streams import (
+    END,
     StreamReplayRangeLostError,
     StreamStorePlugin,
     get_stream_handle,
@@ -69,7 +71,9 @@ def codec_of(client: Client) -> ReplayReadCodec:
     return codec
 
 
-async def read_positions(client: Client, owner: str, after: str = "") -> Payload:
+async def read_positions(
+    client: Client, owner: str, after: str = "", wait_ms: int = 100
+) -> Payload:
     """Run the read Activity in positions-only mode, as a Workflow reader's Local Activity does."""
     env = ActivityEnvironment(client=client)
     env.info = dataclasses.replace(env.info, workflow_run_id=f"reader-{uuid.uuid4()}")
@@ -82,7 +86,7 @@ async def read_positions(client: Client, owner: str, after: str = "") -> Payload
             after=after,
             state="",
             arm=False,
-            wait_ms=100,
+            wait_ms=wait_ms,
             max_records=10,
             positions_only=True,
             reader_id="1",
@@ -194,6 +198,30 @@ async def test_the_batch_names_the_run_that_read(streams: Client):
         reader_run = range.floor_holder.split("/")[0]
         assert (
             batch.metadata["temporal.io/stream-read-by-run-id"] == reader_run.encode()
+        )
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_read_from_the_end_replays_as_it_read(streams: Client):
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        await handle.producer(producer_id="p", attempt=1).append("first")
+        read = asyncio.create_task(
+            read_positions(streams, owner, after=END.token, wait_ms=5000)
+        )
+        await asyncio.sleep(0.5)
+        # A rerun of the producer appends while the read waits at the end.
+        await handle.producer(producer_id="p", attempt=2).append("rerun")
+        payload = await read
+        [live] = await codec_of(streams).decode([payload])
+        assert values(live) == ["rerun"]
+        # The replay starts where the read resolved the end, so it observes
+        # nothing more than the live read did.
+        plugin_of(streams)._batches.clear()
+        [replayed] = await codec_of(streams).decode([payload])
+        assert ReadResponse.FromString(replayed.data) == ReadResponse.FromString(
+            live.data
         )
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
