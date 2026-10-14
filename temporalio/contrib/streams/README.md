@@ -126,9 +126,9 @@ Known limits:
   record waits one round trip to the server. Later appends make no call.
 - **Describe permission.** The Worker's identity needs permission to
   describe the Workflow.
-- **Ford removes the call.** Workflow code doesn't see the Workflow Task
-  attempt, so the server is asked for it. Ford's Core can supply the task
-  attempt to the Local Activity, which removes the call.
+- **A later Core change removes the call.** Workflow code doesn't see the
+  Workflow Task attempt, so the server is asked for it. A later Core change
+  can supply the Workflow Task attempt, which removes the call.
 - **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
