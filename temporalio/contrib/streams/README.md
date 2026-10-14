@@ -3,18 +3,17 @@
 > This package is experimental and may change in future versions.
 
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
-it through Local Activities, and its Activities and any client append to
-it. Outside readers follow it from a cursor. Records live in the
-application's Redis and never pass through Temporal or its History. Core
-runs the store for every SDK, so Python reads what any other SDK writes.
-Appends add nothing to History. A Workflow's flush adds one Local Activity
-marker.
+it from Workflow code, and its Activities and any client append to it.
+Outside readers follow it from a cursor. Records live in the application's
+Redis and never pass through Temporal or its History. Core runs the store
+for every SDK, so Python reads what any other SDK writes. Publishes and
+appends add nothing to History.
 
 ## Register
 
 Register the store once, on the client, with `Client.connect`. Connecting
-the client connects the store, and the Activities of every Worker built
-from that client append through it. There's nothing extra to install.
+the client connects the store, and every Worker built from that client
+publishes and appends through it. There's nothing extra to install.
 
 ```python
 from temporalio.client import Client
@@ -84,10 +83,12 @@ most recently. It keeps at most `max_producers` of them (1,000 by default),
 and no more than fit in 16 KiB at each id's length plus 20 bytes. Past that
 it drops the producer it saw least recently. The read's state in Core
 forgets producers by the same rule, so a dropped producer gets no
-`SUPERSEDED` either. A Workflow writer makes a producer per flush, about 57
-bytes of id each, so on its streams the tracker holds about 200 flushes and
-its memory stays steady. Call `forget(producer_id)` once a producer can't
-retry, to drop it sooner.
+`SUPERSEDED` either. Each Local Activity call is a producer, about 57 bytes
+of id each, so on a stream that many calls write the tracker holds about 200
+of them and its memory stays steady. For a Workflow's producer, `@<run id>`,
+it holds only the records of the newest Workflow Task, since a rerun
+withdraws only the records of its own task. Call `forget(producer_id)` once
+a producer can't retry, to drop it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
@@ -146,10 +147,9 @@ Known limits:
 
 ## A Workflow publishes to its own stream
 
-Workflow code can't do I/O, so `workflow_writer` buffers each value in the
-Workflow and sends the buffer through a built-in Local Activity. The store
-plugin registers that Activity on every Worker built from the client, so
-there's nothing to register.
+Workflow code can't do I/O, so `workflow_writer` hands its records to Core
+with the activation that published them. Core appends them to the store when
+the activation completes, before it reports the Workflow Task to the server.
 
 ```python
 STEPS = topic("steps", str)
@@ -168,92 +168,57 @@ class Agent:
 ```
 
 - **Publish.** `publish(value)` is a plain call. It converts the value with
-  the Workflow's payload converter, buffers it and returns.
-- **Batching.** One background coroutine per topic sends what is buffered
-  through one Local Activity, one flush at a time. Values published while a
-  flush runs go in the next one. A Local Activity costs one Action for the
-  Workflow Task that carries its marker, however many it carries, so a
-  Workflow Task's publishes cost about one Action.
-- **Rate.** Two flushes of a topic start at least `min_flush_interval`
-  apart, 100 ms by default. The flush's Local Activity waits out the rest
-  before it appends, and what is published meanwhile goes in the next
-  flush. So a busy run writes at most about ten flushes, and ten markers, a
-  second per topic, and a record waits at most about one interval more.
-  The wait lives in the Worker process, not in History, so it adds no
-  events and holds only while the run stays on one Worker. While a flush
-  waits, its Workflow Task stays open. `min_flush_interval=None` turns it
-  off.
-- **Order.** Flushes on a topic run one at a time, so records land in the
-  order they were published, across all writers on the topic in the run.
-- **Visibility.** A record is visible once its flush's append is accepted.
-  That is while the Workflow Task is still running, for example while a
-  model call runs as another Local Activity. `await steps.flush()` waits
-  for everything published so far, and returns the cursor of the last
-  record.
-- **Run end.** The store plugin's Workflow interceptor flushes every buffer
-  before the run returns, fails, is cancelled or continues as new, so what
-  was published lands first. If that flush fails for good, the Workflow
-  fails with its error in place of a return. `finish()` flushes and writes
-  `FINISH`.
-- **Identity.** Each flush is a Local Activity producer of its own (see
-  above). After a failed Workflow Task, the flush runs again in a higher
-  attempt, so readers see `SUPERSEDED` for that flush, then its records
-  again.
-- **Replay.** Each flush's result comes from its marker, so a replay does
-  no store I/O. A `Replayer` needs the store plugin in `plugins=`, which
-  adds the interceptor and connects nothing.
+  the Workflow's payload converter and adds the record to the activation.
+- **Visibility.** A record is visible when the activation that published it
+  completes. That is before the Workflow Task completes, and before the
+  server accepts it. In the example, readers see `planning` while the model
+  call runs as a Local Activity in the same Workflow Task.
+- **Order.** Records land in the order the run published them, across all
+  writers and topics of the run.
+- **No History.** Publishing adds no event and no marker to History, and
+  costs no Action.
+- **Identity.** The run writes as the producer `@<run id>`. Each Workflow
+  Task has its own producer attempt, and the sequence restarts at 1 for
+  each attempt.
+- **Failed tasks.** If a Workflow Task fails or times out after some of its
+  activations completed, their records stay in the store. The task's rerun
+  publishes again under a higher attempt, and readers see `SUPERSEDED` for
+  the failed task's records, then the rerun's. Records of tasks that
+  completed are never withdrawn. `SupersessionTracker` applies this rule for
+  a reader.
+- **Store outage.** If the store refuses the append, the Workflow Task fails
+  with `StreamOutputNotAppended` and retries, as for any task failure. The
+  run makes no progress until the store takes the records.
+- **Run end.** The records of the activation that completes, fails, cancels
+  or continues the run as new land with that completion. `finish()` writes
+  `FINISH` with the activation. `flush()` returns at once, since nothing
+  waits in the Workflow.
+- **Replay.** Replay sends no records, since the store has them. A
+  `Replayer` needs the store plugin in `plugins=`, which adds the
+  interceptor and connects nothing.
 - **Queries and validators.** Opening a writer or publishing there raises
   `ReadOnlyContextError`.
-- **Codec.** The values are converted once, in the Workflow, and passed raw.
-  The payload codec runs once on each record body, when the Local Activity
-  stores it. The values ride in the Local Activity's input, not in History.
-- **Size.** A record holds at most 1.5 MiB. A flush carries at most 1,000
-  records or 2 MiB, and a larger buffer splits into several flushes.
-- **Buffer bound.** A topic holds at most `max_buffered` values (10,000 by
-  default) while they wait for a flush. Past it, `publish` raises
-  `StreamError`, and `await steps.flush()` makes room. A flush retries
-  until the store answers, so without the bound a store outage grows
-  Workflow memory, and a replay after eviction builds it all again.
-  `max_buffered=None` turns it off.
+- **Codec.** The values are converted in the Workflow. The payload codec
+  runs on each record body when the Worker encodes the completion.
+- **Size.** A record holds at most 1.5 MiB, and one activation's records at
+  most 16 MiB. The publish that crosses either raises `StreamError` and
+  publishes nothing.
 
 Known limits:
 
-- **One describe call per flush.** As for any Local Activity producer, each
-  flush makes one `DescribeWorkflowExecution` call before its append.
-- **Local Activity rules.** The flush runs on the Workflow's Worker, so that
-  Worker needs the store. A retry that backs off longer than
-  `local_retry_threshold` waits on a Workflow timer. By default a flush
-  retries until the store answers, and the run can't end until it lands.
-- **Store state per flush.** A flush keeps one dedupe field, about 235
-  bytes, in its topic's Redis meta hash while it runs. Once its last append
-  returned, it retires its producer attempt, which deletes that field, so a
-  topic holds about one field per flush in flight. The retire is best
-  effort: if it fails, or a Worker dies before it, the field stays until
-  `retention` after its last write. The flush interval bounds how many such
-  leftovers a run can make.
-- **History events.** Each flush adds one marker event. While flushes run
-  back to back, the Workflow Task stays open, and Core heartbeats it about
-  every 8 seconds (80% of the default 10 second task timeout), which adds
-  three Workflow Task events. So a topic that publishes all the time adds
-  about ten events a second, and reaches the default limit of 51,200
-  History events in under 90 minutes. Two busy topics take half that. A
-  long-running publisher should Continue-as-New when
-  `workflow.info().is_continue_as_new_suggested()` is true. The interceptor
-  flushes every buffer before the run continues as new, and the next run
-  publishes to the same stream:
-
-  ```python
-  steps.publish(step)
-  if workflow.info().is_continue_as_new_suggested():
-      workflow.continue_as_new(args=[prompt])
-  ```
-- **Readers track a bounded set of producers.** Each flush is a producer. A
-  read keeps the newest attempt of the producers it saw most recently, at
-  most 1,000, in a read state of at most 16 KiB. A flush's producer id,
-  `__temporal_local_<n>@<run id>`, is about 57 bytes, so the state holds
-  about 200 flushes. A read misses `SUPERSEDED` only for a flush that reruns
-  after that many newer flushes, which at ten flushes a second is about 20
-  seconds of publishing.
+- **One output stream per agent.** A Workflow publishes only to its own
+  stream. Use one topic per kind of output, for example `steps` and
+  `tokens`, and write to another Workflow's stream from an Activity.
+- **The Worker needs the store.** Core on the Workflow's Worker does the
+  append, so every Worker that runs the Workflow needs the store plugin on
+  its client.
+- **No check on replay.** Replay doesn't compare the records the run
+  publishes with the store, so a Workflow change that publishes other
+  records replays without an error.
+- **Histories of the Local Activity writer.** An earlier version of
+  `workflow_writer` sent records through Local Activities. Its Histories
+  have a marker per flush, and they fail replay on this version with a
+  nondeterminism error.
 
 ## What to know
 
@@ -265,6 +230,13 @@ Known limits:
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window.
+- **Readers before the owner.** A read of a Workflow that Temporal doesn't
+  know yet waits for `owner_start_grace` (60 seconds by default, set on
+  `RedisStreams` or `MemoryStreams`), counted from the read's first owner
+  check. So a reader can start before the Workflow does. After the grace,
+  the read raises `StreamNotFoundError`, so a wrong Workflow id fails after
+  the grace, not at once. Appends and `latest()` don't wait. Zero turns the
+  grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
 - **Not in this release.** Reading a stream inside a Workflow, and streams
