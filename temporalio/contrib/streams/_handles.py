@@ -263,7 +263,9 @@ class StreamHandle:
         it back sees every stored record once. A resumed read knows the
         attempt of the record at its cursor, so a new attempt of that
         producer still arrives as ``SUPERSEDED``. Earlier attempts of other
-        producers are not known to it. The read ends when the owner's run
+        producers are not known to it. A ``SUPERSEDED`` record withdraws only
+        what its producer wrote in earlier attempts. The other producers'
+        records on the topic stay valid. The read ends when the owner's run
         chain is closed and every retained record has been delivered. The
         result is a generator, so a caller that stops early calls
         ``aclose()`` on it.
@@ -345,8 +347,9 @@ class StreamHandle:
         """A producer on ``topic`` that writes as ``producer_id`` in ``attempt``.
 
         A process that restarts its work raises ``attempt``, which starts a
-        new sequence and tells readers that what the earlier attempt wrote is
-        superseded. Keep one producer object per ``(topic, producer_id,
+        new sequence and tells readers that what the earlier attempt of this
+        ``producer_id`` wrote is superseded. Records of other producers are
+        not. Keep one producer object per ``(topic, producer_id,
         attempt)``. Each object numbers its own records from one. A second
         object for the same session is refused as stale once the first moved
         past its first batch. Before that, a second object's first batch with
@@ -455,8 +458,10 @@ class ActivityStreamHandle:
 
         The producer id is ``<Activity id>@<scheduling run id>`` and the
         attempt is the Activity's Temporal attempt, so the first record of a
-        retry makes readers see ``SUPERSEDED``. A retry starts a new sequence,
-        and the store deduplicates a repeated append within one attempt.
+        retry makes readers see ``SUPERSEDED``, which withdraws what this
+        Activity's earlier attempts wrote and nothing else. A retry starts a
+        new sequence, and the store deduplicates a repeated append within one
+        attempt.
 
         Every call in one attempt returns the same producer for a topic, so
         two parts of the Activity that each ask for it number their records
