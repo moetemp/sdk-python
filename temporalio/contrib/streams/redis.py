@@ -55,8 +55,10 @@ class RedisStreams(StreamStorePlugin):
             floor_lease: How long a Workflow reader that replays from the
                 store, as ``workflow_reader`` does by default, holds the records it read against
                 retention after its last read. ``retention`` when unset.
-            floor_release_grace: How long such a hold lasts after the reader
-                ended and released it. One day when unset.
+            floor_release_grace: How long such a hold lasts after a reader
+                releases it. One day when unset. A Python Workflow reader
+                never releases, since its run may replay its reads until it
+                ends, so its hold lasts ``floor_lease``.
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty, or
