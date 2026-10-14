@@ -453,6 +453,10 @@ async def run_then_drain(run: Any) -> Any:
     except workflow.ContinueAsNewError:
         await _drain()
         raise
+    except GeneratorExit:
+        # The run's coroutine is being closed outside its event loop, as when
+        # a Worker shuts down without evicting it.
+        raise
     except BaseException as error:
         if _ends_the_workflow(error):
             try:
