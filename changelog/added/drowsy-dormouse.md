@@ -1,0 +1,1 @@
+Experimental `temporalio.contrib.streams`: a Worker built from a client that carries a stream store waits, when it stops, for up to 10 seconds for the stream notifications Core still has out. `StreamStorePlugin.flush_notifications()` does the same for a process that holds only a client.
