@@ -5,9 +5,6 @@ A configuration class is registered once, on the client:
 Core for the store it names. Core serves that one store to the client's
 handles and to the Activities of every Worker built from the client, so an
 Activity's append and an outside read meet in the same place.
-
-On a Worker the plugin registers the built-in Activity that
-:func:`temporalio.contrib.streams.workflow_activity_writer` schedules.
 """
 
 from __future__ import annotations
@@ -91,7 +88,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Check that the Worker's client carries this store, and add the publish Activity.
+        """Check that the Worker's client carries this store.
 
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
@@ -110,14 +107,6 @@ class StreamStorePlugin(SimplePlugin):
                 f"stream store {self.name()!r} must be registered on the Worker's "
                 "client, as Client.connect(..., plugins=[store])"
             )
-        # Imported here, since the Activity reaches the store through this module.
-        from temporalio.contrib.streams._workflow_activity import publish_activity
-
-        activities = list(config.get("activities") or [])
-        # The same plugin on the client and the Worker configures the Worker twice.
-        if publish_activity not in activities:
-            activities.append(publish_activity)
-        config["activities"] = activities
         return config
 
     async def delete_workflow_streams(self, namespace: str, workflow_id: str) -> int:
