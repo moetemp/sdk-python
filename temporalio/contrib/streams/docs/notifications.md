@@ -146,10 +146,18 @@ few hundred bytes per read whatever the batch holds.
   retry, so an operator can restore the store, reset the Workflow, or go
   back to recorded batches.
 - The store holds the records the reader read against retention, per
-  reader run. Each read renews the hold for `floor_lease` (the retention by
-  default). The reader releases it when it reads the stream to its end or
-  closes, and the hold lasts `floor_release_grace` (1 day) more, for a
-  query or a reset. `RedisStreams` takes both settings.
+  reader run. Each read, and each replay of a read, renews the hold for
+  `floor_lease` (the retention by default, set on `RedisStreams`). The
+  reader never ends the hold itself, not at the stream's end and not at
+  `close()`, since the run may replay its reads until it ends.
+- So a run can replay a read only while the hold lasts. A run that goes
+  longer than `floor_lease` with no read and no replay, for example an
+  entity Workflow that read a stream and then waits on Signals for longer,
+  loses the range. Its next replay, after a Worker restart, an eviction or
+  a query, raises `StreamReplayRangeLostError`, and the Workflow Task fails
+  on each retry until an operator resets the run. A long-running reader
+  should Continue-as-New well before `floor_lease` passes, or pass
+  `replay_from_store=False`.
 - Replay needs the store. A `Replayer` needs the store plugin and a client
   in its process that connected the same store. Without them, the read
   raises `StreamUnsupportedError`, which names the opt-out.

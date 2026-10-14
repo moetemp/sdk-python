@@ -427,6 +427,13 @@ can come after `on_close`. Each record carries its cursor: drop the ones you
 already handled. Supersessions, stale records and records that could not be
 read come in the batch, as the Workflow reader reports them.
 
+**A lost notification waits.** A producer that dies between its append and
+its notify sends no progress, and the server sends a follower no recheck.
+So the follower gets that record with the next append's progress, with the
+close, or when the owner check closes the stream. A Workflow `StreamReader`
+has a recheck timer, and a follower doesn't. If a record must not wait,
+append again after a crash, or close the stream when the work ends.
+
 **Server setup.** On top of the settings above, the server must take
 NexusHandler callbacks on a standalone operation:
 
@@ -478,6 +485,12 @@ converter, so a handler gets the values, not payloads.
   completing it with that stream's close result. The server attaches only
   to the chain that holds the id now. A reference that names no run
   attaches to the new chain.
+- A producer that dies between its append and its notify sends no
+  progress. A Workflow `StreamReader` that waits for progress reads again
+  once a minute passes with none, then after 2, 4 and so on up to 1 hour
+  while the stream stays quiet, on Workflow timers. So such a record
+  reaches the reader at the latest one recheck later. Each recheck adds a
+  timer and a read to the caller's History.
 - If a caller answers a progress delivery with 404, its operation is
   already closed, and the notifier drops that caller. Any other refusal
   turns progress off for that caller, and it still gets the completion.
