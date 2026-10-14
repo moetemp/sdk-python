@@ -894,6 +894,7 @@ class SubscribeRequest(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    GENERATION_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress:
         """The stream to read. The reader's Workflow is in the stream's namespace."""
@@ -904,6 +905,11 @@ class SubscribeRequest(google.protobuf.message.Message):
     """Names the reader in its run. Lang derives it from the reader's call number, so replay gives
     the same one. At most 256 bytes.
     """
+    generation: builtins.int
+    """Counts the times the reader subscribed again after a wake with `resubscribe`. Each value is a
+    new attach, since the server answers a repeat of a dropped attach as done. Lang counts it from
+    the wakes, so replay gives the same one.
+    """
     def __init__(
         self,
         *,
@@ -911,6 +917,7 @@ class SubscribeRequest(google.protobuf.message.Message):
         workflow_id: builtins.str = ...,
         run_id: builtins.str = ...,
         subscription_id: builtins.str = ...,
+        generation: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["stream", b"stream"]
@@ -918,6 +925,8 @@ class SubscribeRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "generation",
+            b"generation",
             "run_id",
             b"run_id",
             "stream",
@@ -961,17 +970,22 @@ class UnsubscribeRequest(google.protobuf.message.Message):
     STREAM_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    GENERATION_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress:
-        """The stream, the reader's run and the subscription, as the Subscribe named them."""
+        """The stream, the reader's run, the subscription and its generation, as the last Subscribe
+        named them.
+        """
     run_id: builtins.str
     subscription_id: builtins.str
+    generation: builtins.int
     def __init__(
         self,
         *,
         stream: global___StreamAddress | None = ...,
         run_id: builtins.str = ...,
         subscription_id: builtins.str = ...,
+        generation: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["stream", b"stream"]
@@ -979,6 +993,8 @@ class UnsubscribeRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "generation",
+            b"generation",
             "run_id",
             b"run_id",
             "stream",
