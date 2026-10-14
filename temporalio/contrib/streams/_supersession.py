@@ -27,6 +27,11 @@ T = TypeVar("T")
 _MAX_PRODUCERS = 1_000
 _MAX_STATE_BYTES = 16 << 10
 _PRODUCER_OVERHEAD = 20
+# How a Workflow producer id starts, ``@<run id>``.
+WORKFLOW_PRODUCER_PREFIX = "@"
+# The low bits of a Workflow producer's attempt that count the retries of one
+# Workflow Task. The bits above hold the task's prefix.
+_RETRY_BITS = 16
 
 
 class SupersessionTracker(Generic[T]):
@@ -39,10 +44,12 @@ class SupersessionTracker(Generic[T]):
     and no more than fit in 16 KiB at their id's length plus 20 bytes each,
     and drops the producer it saw least recently past that. The read's own
     state in Core forgets producers by the same rule, so a producer the
-    tracker dropped gets no ``SUPERSEDED`` either. For the producer ids of
-    a Workflow writer's flushes, that is about 200 producers. Such a stream
-    has a producer per flush, so this bound is what keeps a read's memory
-    from growing with the stream.
+    tracker dropped gets no ``SUPERSEDED`` either. For producer ids of
+    Local Activities, that is about 200 producers. A stream that many Local
+    Activities write to has a producer per call, so this bound is what keeps
+    a read's memory from growing with the stream. For a Workflow's producer,
+    it holds only the records of the newest Workflow Task prefix, since a
+    rerun can't withdraw what a completed task wrote.
 
     A record with an empty ``producer_id`` or no attempt can't be
     withdrawn, so it is not held.
@@ -66,7 +73,8 @@ class SupersessionTracker(Generic[T]):
 
         For a :attr:`RecordKind.SUPERSEDED` record, these are the held
         records of its producer with an attempt below the new one, in stream
-        order. For a record marked ``stale``, it is the record itself, since
+        order. For a Workflow's producer, ``@<run id>``, it is only those of
+        the same Workflow Task prefix, since the earlier tasks completed. For a record marked ``stale``, it is the record itself, since
         an older attempt wrote it after the read delivered a newer one. For
         any other record, nothing.
         """
@@ -75,8 +83,18 @@ class SupersessionTracker(Generic[T]):
             if supersession is None:
                 return []
             held = self._held.get(supersession.producer_id, [])
-            withdrawn = [r for _, r in held if r.attempt < supersession.attempt]
-            kept = [(i, r) for i, r in held if r.attempt >= supersession.attempt]
+            withdrawn = [
+                r
+                for _, r in held
+                if _withdraws(supersession.producer_id, r.attempt, supersession.attempt)
+            ]
+            kept = [
+                (i, r)
+                for i, r in held
+                if not _withdraws(
+                    supersession.producer_id, r.attempt, supersession.attempt
+                )
+            ]
             if kept:
                 self._held[supersession.producer_id] = kept
             else:
@@ -92,6 +110,13 @@ class SupersessionTracker(Generic[T]):
             if record.producer_id not in self._held:
                 self._held[record.producer_id] = []
                 self._bytes += _size(record.producer_id)
+            elif record.producer_id.startswith(WORKFLOW_PRODUCER_PREFIX):
+                task = record.attempt >> _RETRY_BITS
+                self._held[record.producer_id] = [
+                    (i, r)
+                    for i, r in self._held[record.producer_id]
+                    if r.attempt >> _RETRY_BITS >= task
+                ]
             self._held[record.producer_id].append((self._count, record))
             self._held.move_to_end(record.producer_id)
             while len(self._held) > 1 and (
@@ -114,6 +139,15 @@ class SupersessionTracker(Generic[T]):
         """
         if self._held.pop(producer_id, None) is not None:
             self._bytes -= _size(producer_id)
+
+
+def _withdraws(producer_id: str, held: int, new: int) -> bool:
+    if producer_id.startswith(WORKFLOW_PRODUCER_PREFIX):
+        # A Workflow's attempt is its Workflow Task prefix, then the retry of
+        # that task. A rerun withdraws only the records of its own prefix,
+        # since the tasks before it completed.
+        return held >> _RETRY_BITS == new >> _RETRY_BITS and held < new
+    return held < new
 
 
 def _size(producer_id: str) -> int:
