@@ -35,7 +35,7 @@ deployments:
 | `streamnotifier.recheckInitial` | 1 min | When the notifier first asks an idle Workflow reader to read again |
 | `streamnotifier.recheckMax` | 1 h | The longest gap between two such asks. The gap doubles up to it |
 | `streamwake.minInterval` | 1 s | The shortest time between two Workflow Tasks that only carry wakes |
-| `history.maximumStreamWakeSources` | 32 | How many readers one Workflow execution can have |
+| `history.maximumStreamWakeSources` | 32 | How many readers one Workflow execution can have at once. A reader frees its place when it detaches, when its attach fails, or when its run takes its close or resubscribe wake |
 | `streamnotifier.maxCallbacks` | 2,000 | How many Workflow readers one stream can have |
 | `streamnotifier.ownerCheckInterval` | 30 s | How often the notifier checks a stream's owner |
 | `streamnotifier.idleTimeoutNoCallbacks` | 1 h | How long a notifier with no reader stays |
