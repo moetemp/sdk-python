@@ -17,7 +17,6 @@ wake on the next Workflow Task scheduled event, so a wake adds no event.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import timedelta
@@ -26,6 +25,7 @@ from typing import Any, Generic, TypeVar, overload
 import temporalio.activity
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.api.failure.v1 import Failure
 from temporalio.bridge.proto.streams import (
     ReadRequest,
     ReadResponse,
@@ -52,6 +52,7 @@ from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wakes import wake_state
 from temporalio.contrib.streams._wire import to_record
+from temporalio.converter._payload_codec import _apply_to_failure_payloads
 from temporalio.exceptions import ApplicationError
 
 __all__ = [
@@ -166,7 +167,7 @@ class _ReaderState:
     armed_at: int | None = None
     attach: bool = True
     done: bool = False
-    close_waited: bool = False
+    close_failure: Failure | None = None
     failure_raised: bool = False
 
 
@@ -186,8 +187,8 @@ class WorkflowStreamReader(Generic[T]):
     replay must give user code the same records.
     :class:`temporalio.contrib.streams.SupersessionTracker` names the records
     each ``SUPERSEDED`` withdraws. Iteration ends when the stream is closed
-    and every record was delivered. When the reader learned that the stream
-    closed with a failure, the iteration raises it after the last batch.
+    and every record was delivered. When the stream was closed with a
+    failure, the iteration raises it after the last batch.
     """
 
     def __init__(
@@ -200,11 +201,9 @@ class WorkflowStreamReader(Generic[T]):
         max_records: int,
         start_to_close_timeout: timedelta,
         cutoff: TaskCutoff | None,
-        close_wait: timedelta = timedelta(seconds=10),
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
         self._cutoff = cutoff
-        self._close_wait = close_wait
         self._ref = ref
         self._topic = topic
         self._result_type = result_type
@@ -277,7 +276,6 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
-                await self._wait_for_close()
                 raise self._end()
             if state.armed_at is not None:
                 await workflow.wait_condition(self._woke)
@@ -292,6 +290,8 @@ class WorkflowStreamReader(Generic[T]):
             state.state = response.state
             if response.done:
                 state.done = True
+                if response.HasField("close_failure"):
+                    state.close_failure = response.close_failure
             elif response.armed:
                 state.armed_at = response.wake_after
             if records:
@@ -307,31 +307,6 @@ class WorkflowStreamReader(Generic[T]):
             or seconds >= self._cutoff.time.total_seconds()
         ):
             runtime._request_task_heartbeat()
-
-    async def _wait_for_close(self) -> None:
-        """Give the close's wake a moment to arrive after the store ended the read.
-
-        The store closes before the notifier, so a busy reader can reach the
-        end before the wake that carries the outcome. An owner that ended
-        with no close sends no such wake soon, so the wait is bounded.
-        """
-        state = self._state
-        if state.close_waited or state.attach:
-            return
-        state.close_waited = True
-
-        def closed() -> bool:
-            wake = wake_state(self.subscription_id)
-            return wake is not None and wake.closed
-
-        if closed():
-            return
-        try:
-            await workflow.wait_condition(
-                closed, timeout=self._close_wait.total_seconds()
-            )
-        except asyncio.TimeoutError:
-            pass
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
@@ -356,14 +331,19 @@ class WorkflowStreamReader(Generic[T]):
             state.attach = True
 
     def _end(self) -> BaseException:
-        wake = wake_state(self.subscription_id)
         state = self._state
-        if wake is None or wake.close_failure is None or state.failure_raised:
+        failure = state.close_failure
+        if failure is None:
+            # The store keeps no outcome for a chain close. The notifier's
+            # owner check may still have sent the owner's failure in a wake.
+            wake = wake_state(self.subscription_id)
+            failure = wake.close_failure if wake is not None else None
+        if failure is None or state.failure_raised:
             return StopAsyncIteration()
         state.failure_raised = True
         runtime: Any = workflow._Runtime.current()
         converter = runtime._workflow_context_failure_converter
-        return converter.from_failure(wake.close_failure, workflow.payload_converter())
+        return converter.from_failure(failure, workflow.payload_converter())
 
     def _input(self, *, arm: bool, unsubscribe: bool = False) -> _ReadInput:
         state = self._state
@@ -426,7 +406,6 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
-    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -441,7 +420,6 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
-    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -456,7 +434,6 @@ def workflow_reader(
     max_records: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
-    close_wait: timedelta = ...,
 ) -> WorkflowStreamReader[Any]: ...
 
 
@@ -470,7 +447,6 @@ def workflow_reader(
     max_records: int = 100,
     start_to_close_timeout: timedelta | None = None,
     cutoff: TaskCutoff | None = TaskCutoff(),
-    close_wait: timedelta = timedelta(seconds=10),
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
 
@@ -506,10 +482,6 @@ def workflow_reader(
             a busy reader doesn't hold back the rest of the Workflow. 100
             commands or 2 seconds by default. ``None`` leaves the task to
             the Local Activity heartbeat.
-        close_wait: How long a reader that reached the end waits for the
-            close's outcome, which the notifier sends after the store
-            closed. 10 seconds by default. A wait that runs out costs a
-            timer, and the reader then ends with no outcome.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -545,7 +517,6 @@ def workflow_reader(
         max_records,
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
         cutoff,
-        close_wait,
     )
 
 
@@ -617,6 +588,10 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         if record.HasField("stored") and record.stored.HasField("body"):
             body = await decode_body(handle._converter, record.stored.body)
             record.stored.body.CopyFrom(body)
+    if response.HasField("close_failure"):
+        await _apply_to_failure_payloads(
+            response.close_failure, handle._converter._transform_inbound_payloads
+        )
     return _result(response, read_run_id)
 
 

@@ -115,10 +115,9 @@ async def _read_with(client: Client, commands: int) -> int:
 async def test_a_busy_reader_cuts_its_task_at_the_command_bound(client: Client):
     uncut = await _read_with(client, 0)
     cut = await _read_with(client, 1)
-    # Uncut, every read lands in the first task, and the wait for the close's
-    # wake at the end adds one more. Cut, each read past the first command
-    # asks for its own task.
-    assert uncut == 2
+    # Uncut, every read lands in the first task. Cut, each read past the
+    # first command asks for its own task.
+    assert uncut == 1
     assert cut > uncut
 
 
