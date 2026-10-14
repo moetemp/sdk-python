@@ -42,6 +42,16 @@ class StreamService:
             "DeleteOwner", req, temporalio.bridge.proto.streams.DeleteOwnerResponse
         )
 
+    async def flush_notifications(
+        self, req: temporalio.bridge.proto.streams.FlushNotificationsRequest
+    ) -> temporalio.bridge.proto.streams.FlushNotificationsResponse:
+        """Invokes the StreamService.flush_notifications call."""
+        return await self._store.call(
+            "FlushNotifications",
+            req,
+            temporalio.bridge.proto.streams.FlushNotificationsResponse,
+        )
+
     async def latest(
         self, req: temporalio.bridge.proto.streams.LatestRequest
     ) -> temporalio.bridge.proto.streams.LatestResponse:
@@ -56,4 +66,30 @@ class StreamService:
         """Invokes the StreamService.read call."""
         return await self._store.call(
             "Read", req, temporalio.bridge.proto.streams.ReadResponse
+        )
+
+    async def subscribe(
+        self, req: temporalio.bridge.proto.streams.SubscribeRequest
+    ) -> temporalio.bridge.proto.streams.SubscribeResponse:
+        """Invokes the StreamService.subscribe call."""
+        return await self._store.call(
+            "Subscribe", req, temporalio.bridge.proto.streams.SubscribeResponse
+        )
+
+    async def unsubscribe(
+        self, req: temporalio.bridge.proto.streams.UnsubscribeRequest
+    ) -> temporalio.bridge.proto.streams.UnsubscribeResponse:
+        """Invokes the StreamService.unsubscribe call."""
+        return await self._store.call(
+            "Unsubscribe", req, temporalio.bridge.proto.streams.UnsubscribeResponse
+        )
+
+    async def wait_for_notification(
+        self, req: temporalio.bridge.proto.streams.WaitForNotificationRequest
+    ) -> temporalio.bridge.proto.streams.WaitForNotificationResponse:
+        """Invokes the StreamService.wait_for_notification call."""
+        return await self._store.call(
+            "WaitForNotification",
+            req,
+            temporalio.bridge.proto.streams.WaitForNotificationResponse,
         )

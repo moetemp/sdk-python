@@ -20,6 +20,15 @@ impl ClientRef {
         let mut connection = self.connection.clone();
         self.runtime.future_into_py(py, async move {
             let bytes = match call.rpc.as_str() {
+                "attach_stream_callback" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        attach_stream_callback
+                    )
+                }
                 "count_activity_executions" => {
                     rpc_call!(
                         connection,
@@ -227,6 +236,15 @@ impl ClientRef {
                         describe_schedule
                     )
                 }
+                "describe_stream_notifier" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        describe_stream_notifier
+                    )
+                }
                 "describe_task_queue" => {
                     rpc_call!(
                         connection,
@@ -279,6 +297,15 @@ impl ClientRef {
                         WorkflowService,
                         workflow_service,
                         describe_workflow_rule
+                    )
+                }
+                "detach_stream_callback" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        detach_stream_callback
                     )
                 }
                 "execute_multi_operation" => {
@@ -524,6 +551,15 @@ impl ClientRef {
                         list_workflow_rules
                     )
                 }
+                "notify_stream" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        notify_stream
+                    )
+                }
                 "patch_schedule" => {
                     rpc_call!(
                         connection,
@@ -594,6 +630,15 @@ impl ClientRef {
                         WorkflowService,
                         workflow_service,
                         poll_nexus_task_queue
+                    )
+                }
+                "poll_stream_notifier" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        poll_stream_notifier
                     )
                 }
                 "poll_workflow_execution_time_skipping" => {

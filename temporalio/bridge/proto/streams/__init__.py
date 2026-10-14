@@ -8,6 +8,8 @@ from .streams_pb2 import (
     CloseResponse,
     DeleteOwnerRequest,
     DeleteOwnerResponse,
+    FlushNotificationsRequest,
+    FlushNotificationsResponse,
     LatestRequest,
     LatestResponse,
     MemoryStoreConfig,
@@ -28,7 +30,13 @@ from .streams_pb2 import (
     StreamFailureKind,
     StreamOwnerKind,
     StreamStoreConfig,
+    SubscribeRequest,
+    SubscribeResponse,
     Supersession,
+    UnsubscribeRequest,
+    UnsubscribeResponse,
+    WaitForNotificationRequest,
+    WaitForNotificationResponse,
 )
 
 __all__ = [
@@ -41,6 +49,8 @@ __all__ = [
     "CloseResponse",
     "DeleteOwnerRequest",
     "DeleteOwnerResponse",
+    "FlushNotificationsRequest",
+    "FlushNotificationsResponse",
     "LatestRequest",
     "LatestResponse",
     "MemoryStoreConfig",
@@ -61,5 +71,11 @@ __all__ = [
     "StreamFailureKind",
     "StreamOwnerKind",
     "StreamStoreConfig",
+    "SubscribeRequest",
+    "SubscribeResponse",
     "Supersession",
+    "UnsubscribeRequest",
+    "UnsubscribeResponse",
+    "WaitForNotificationRequest",
+    "WaitForNotificationResponse",
 ]

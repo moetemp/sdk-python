@@ -15,6 +15,7 @@ import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
 
 import temporalio.api.common.v1.message_pb2
+import temporalio.api.failure.v1.message_pb2
 import temporalio.bridge.proto.streams.v1.message_pb2
 
 if sys.version_info >= (3, 10):
@@ -131,15 +132,36 @@ class StreamStoreConfig(google.protobuf.message.Message):
 
     REDIS_FIELD_NUMBER: builtins.int
     MEMORY_FIELD_NUMBER: builtins.int
+    NOTIFY_ON_APPEND_FIELD_NUMBER: builtins.int
+    MAX_NOTIFIERS_FIELD_NUMBER: builtins.int
+    NOTIFY_EVERY_APPEND_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
     def memory(self) -> global___MemoryStoreConfig: ...
+    notify_on_append: builtins.bool
+    """Tells each stream's notifier on the server when the stream moves while a reader sleeps on
+    it: after an append, when a reader armed the stream with an empty read. That's what wakes a
+    reader that waits on the notifier. A busy stream, whose readers find records on each read,
+    costs no notification. Off by default, since most streams have no such reader. It turns on
+    progress only. Closes reach the notifier either way. A server without the stream notifier
+    costs one call, and then the process stops notifying.
+    """
+    max_notifiers: builtins.int
+    """How many streams to keep a notifier for, dropping the least recently used. Zero uses 1000."""
+    notify_every_append: builtins.bool
+    """With `notify_on_append`, notifies after every append, whether or not a reader armed the
+    stream. For a deployment whose readers can't arm,
+    such as a hand-written reader over HTTP. Off by default.
+    """
     def __init__(
         self,
         *,
         redis: global___RedisStoreConfig | None = ...,
         memory: global___MemoryStoreConfig | None = ...,
+        notify_on_append: builtins.bool = ...,
+        max_notifiers: builtins.int = ...,
+        notify_every_append: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -150,7 +172,18 @@ class StreamStoreConfig(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "memory", b"memory", "redis", b"redis", "store", b"store"
+            "max_notifiers",
+            b"max_notifiers",
+            "memory",
+            b"memory",
+            "notify_every_append",
+            b"notify_every_append",
+            "notify_on_append",
+            b"notify_on_append",
+            "redis",
+            b"redis",
+            "store",
+            b"store",
         ],
     ) -> None: ...
     def WhichOneof(
@@ -533,6 +566,7 @@ class ReadRequest(google.protobuf.message.Message):
     WAIT_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     after: builtins.str
@@ -550,6 +584,11 @@ class ReadRequest(google.protobuf.message.Message):
     """
     state: builtins.bytes
     """The `state` of the previous answer of the same read. Empty on its first call."""
+    arm: builtins.bool
+    """For a reader that sleeps on the stream's notifier. When the read waits its whole `wait` and
+    finds nothing, the store arms the stream in the same step, so the next append notifies the
+    notifier. A reader that doesn't wait on the notifier leaves it unset.
+    """
     def __init__(
         self,
         *,
@@ -558,6 +597,7 @@ class ReadRequest(google.protobuf.message.Message):
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         max_records: builtins.int = ...,
         state: builtins.bytes = ...,
+        arm: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -568,6 +608,8 @@ class ReadRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "after",
             b"after",
+            "arm",
+            b"arm",
             "max_records",
             b"max_records",
             "state",
@@ -679,6 +721,8 @@ class ReadResponse(google.protobuf.message.Message):
     CURSOR_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
+    ARMED_FIELD_NUMBER: builtins.int
+    WAKE_AFTER_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -697,6 +741,15 @@ class ReadResponse(google.protobuf.message.Message):
     """The owner's chain ended and the read delivered every record the stream retains. No later
     call returns a record.
     """
+    armed: builtins.bool
+    """The read asked to arm, found nothing and armed the stream, so the next append notifies the
+    stream's notifier. Never set with records or with `done`.
+    """
+    wake_after: builtins.int
+    """Set with `armed`: the notification counter of the read's position, zero for an empty
+    stream. A notification with a higher counter names a record after the position, so the
+    reader waits for a counter above this one. One that landed before the wait started counts.
+    """
     def __init__(
         self,
         *,
@@ -704,10 +757,14 @@ class ReadResponse(google.protobuf.message.Message):
         cursor: builtins.str = ...,
         state: builtins.bytes = ...,
         done: builtins.bool = ...,
+        armed: builtins.bool = ...,
+        wake_after: builtins.int = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "armed",
+            b"armed",
             "cursor",
             b"cursor",
             "done",
@@ -716,6 +773,8 @@ class ReadResponse(google.protobuf.message.Message):
             b"records",
             "state",
             b"state",
+            "wake_after",
+            b"wake_after",
         ],
     ) -> None: ...
 
@@ -762,18 +821,41 @@ class CloseRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     STREAM_FIELD_NUMBER: builtins.int
+    RESULT_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
+    @property
+    def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """What every callback attached to the stream's notifier completes with, after lang's payload
+        codec. The stream's notifier on the server closes once the store has. When set, a notifier
+        that doesn't take the close fails the call, and Core keeps trying in the background too. Unset, the callbacks complete with a `binary/null` result, and the notifier
+        close is retried in the background.
+        """
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Closes the stream with a failure instead of `result`, after lang's failure converter and
+        codec. The callbacks complete as failed, or as canceled for a failure with canceled info.
+        A close carries a result or a failure, never both.
+        """
     def __init__(
         self,
         *,
         stream: global___StreamAddress | None = ...,
+        result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["stream", b"stream"]
+        self,
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result", "stream", b"stream"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
-        self, field_name: typing_extensions.Literal["stream", b"stream"]
+        self,
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "result", b"result", "stream", b"stream"
+        ],
     ) -> None: ...
 
 global___CloseRequest = CloseRequest
@@ -786,6 +868,223 @@ class CloseResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___CloseResponse = CloseResponse
+
+class FlushNotificationsRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___FlushNotificationsRequest = FlushNotificationsRequest
+
+class FlushNotificationsResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___FlushNotificationsResponse = FlushNotificationsResponse
+
+class SubscribeRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The stream to read. The reader's Workflow is in the stream's namespace."""
+    workflow_id: builtins.str
+    """The reader's Workflow and run."""
+    run_id: builtins.str
+    subscription_id: builtins.str
+    """Names the reader in its run. Lang derives it from the reader's call number, so replay gives
+    the same one. At most 256 bytes.
+    """
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+        subscription_id: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "run_id",
+            b"run_id",
+            "stream",
+            b"stream",
+            "subscription_id",
+            b"subscription_id",
+            "workflow_id",
+            b"workflow_id",
+        ],
+    ) -> None: ...
+
+global___SubscribeRequest = SubscribeRequest
+
+class SubscribeResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    CHAIN_FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    ATTACHED_FIELD_NUMBER: builtins.int
+    chain_first_run_id: builtins.str
+    """The first run of the stream's run chain, which keys the notifier the reader attached to."""
+    attached: builtins.bool
+    """Whether this call sent the attach. False when this process attached the reader before."""
+    def __init__(
+        self,
+        *,
+        chain_first_run_id: builtins.str = ...,
+        attached: builtins.bool = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "attached", b"attached", "chain_first_run_id", b"chain_first_run_id"
+        ],
+    ) -> None: ...
+
+global___SubscribeResponse = SubscribeResponse
+
+class UnsubscribeRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The stream, the reader's run and the subscription, as the Subscribe named them."""
+    run_id: builtins.str
+    subscription_id: builtins.str
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        run_id: builtins.str = ...,
+        subscription_id: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "run_id",
+            b"run_id",
+            "stream",
+            b"stream",
+            "subscription_id",
+            b"subscription_id",
+        ],
+    ) -> None: ...
+
+global___UnsubscribeRequest = UnsubscribeRequest
+
+class UnsubscribeResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___UnsubscribeResponse = UnsubscribeResponse
+
+class WaitForNotificationRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    AFTER_COUNTER_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The stream the reader reads."""
+    after_counter: builtins.int
+    """The `wake_after` of the read that armed the stream."""
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        after_counter: builtins.int = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "after_counter", b"after_counter", "stream", b"stream"
+        ],
+    ) -> None: ...
+
+global___WaitForNotificationRequest = WaitForNotificationRequest
+
+class WaitForNotificationResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    COUNTER_FIELD_NUMBER: builtins.int
+    POSITION_FIELD_NUMBER: builtins.int
+    TIMED_OUT_FIELD_NUMBER: builtins.int
+    CLOSED_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    counter: builtins.int
+    """The highest counter the notifier has seen."""
+    position: builtins.str
+    """The position that came with `counter`."""
+    timed_out: builtins.bool
+    """The wait reached its limit with no counter above `after_counter` and no close."""
+    closed: builtins.bool
+    """The stream closed. The reader reads to its end."""
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """The result the stream closed with, when it gave one."""
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """The failure the stream closed with, when it closed with one."""
+    def __init__(
+        self,
+        *,
+        counter: builtins.int = ...,
+        position: builtins.str = ...,
+        timed_out: builtins.bool = ...,
+        closed: builtins.bool = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure", b"close_failure", "close_result", b"close_result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "closed",
+            b"closed",
+            "counter",
+            b"counter",
+            "position",
+            b"position",
+            "timed_out",
+            b"timed_out",
+        ],
+    ) -> None: ...
+
+global___WaitForNotificationResponse = WaitForNotificationResponse
 
 class DeleteOwnerRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -932,20 +1231,39 @@ class StoreAppendResponse(google.protobuf.message.Message):
 
     FIRST_POSITION_FIELD_NUMBER: builtins.int
     LAST_POSITION_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     first_position: builtins.str
     last_position: builtins.str
+    arm: builtins.int
+    """The topic's arm generation as the append found it, zero when no reader armed the topic.
+    Unset when the store can't tell, and Core then notifies after the append.
+    """
     def __init__(
         self,
         *,
         first_position: builtins.str = ...,
         last_position: builtins.str = ...,
+        arm: builtins.int | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["_arm", b"_arm", "arm", b"arm"]
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "first_position", b"first_position", "last_position", b"last_position"
+            "_arm",
+            b"_arm",
+            "arm",
+            b"arm",
+            "first_position",
+            b"first_position",
+            "last_position",
+            b"last_position",
         ],
     ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["_arm", b"_arm"]
+    ) -> typing_extensions.Literal["arm"] | None: ...
 
 global___StoreAppendResponse = StoreAppendResponse
 
@@ -957,6 +1275,7 @@ class StoreReadRequest(google.protobuf.message.Message):
     AFTER_POSITION_FIELD_NUMBER: builtins.int
     WAIT_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
+    ARM_FIELD_NUMBER: builtins.int
     @property
     def chain(self) -> global___ChainId: ...
     topic: builtins.str
@@ -965,6 +1284,10 @@ class StoreReadRequest(google.protobuf.message.Message):
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration: ...
     max_records: builtins.int
+    arm: builtins.bool
+    """When the read ends with no record and the topic is open, arm the topic in the same step that
+    finds it empty, so the next append reports the arm. A store that can't arm ignores it.
+    """
     def __init__(
         self,
         *,
@@ -973,6 +1296,7 @@ class StoreReadRequest(google.protobuf.message.Message):
         after_position: builtins.str = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         max_records: builtins.int = ...,
+        arm: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["chain", b"chain", "wait", b"wait"]
@@ -982,6 +1306,8 @@ class StoreReadRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "after_position",
             b"after_position",
+            "arm",
+            b"arm",
             "chain",
             b"chain",
             "max_records",
@@ -1023,6 +1349,7 @@ class StoreReadResponse(google.protobuf.message.Message):
 
     RECORDS_FIELD_NUMBER: builtins.int
     CLOSED_FIELD_NUMBER: builtins.int
+    ARMED_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -1031,16 +1358,21 @@ class StoreReadResponse(google.protobuf.message.Message):
     ]: ...
     closed: builtins.bool
     """The chain or this topic is marked closed."""
+    armed: builtins.bool
+    """The read asked to arm, found no record and armed the topic. Never set with records or with
+    `closed`.
+    """
     def __init__(
         self,
         *,
         records: collections.abc.Iterable[global___StoredRecord] | None = ...,
         closed: builtins.bool = ...,
+        armed: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "closed", b"closed", "records", b"records"
+            "armed", b"armed", "closed", b"closed", "records", b"records"
         ],
     ) -> None: ...
 
