@@ -367,7 +367,10 @@ Then each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and Core's digest of them, not the records. The marker is about
 1 KiB. Most of it is the stream service's read state, which grows with the
-producers the reader saw. All the Local Activities of one Workflow Task count
+producers the reader saw. Past a reader's first read, the marker leaves out
+the read's input state, since the previous marker holds it as its answer
+state. A process that replays a later marker without the ones before it
+fails the Workflow Task, and the retry replays the History from the start. All the Local Activities of one Workflow Task count
 as one Action. The Worker turns the marker back into the batch before
 Workflow code sees it. On the live Workflow Task it takes the batch the
 Local Activity cached. On a replay it reads the range again through the
@@ -423,6 +426,13 @@ A replay that misses the cache needs the endpoint and the records:
 | The records gone, after the floor lease lapsed | The Workflow Task fails with `StreamReplayRangeLostError` and is retried |
 | The store down, the endpoint gone, 401, 403, 429, 5xx or a timeout | The Workflow Task fails and is retried |
 | No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
+
+A live read on a Worker with no transport for the endpoint fails its Local
+Activity. The reader raises that again from `next()` as
+`StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
+is retried once the Worker is fixed. Workflow code that catches every
+`Exception` around `next()` swallows it, so catch narrower errors there, or
+raise `StreamUnsupportedError` again.
 
 So keep the endpoint and its Worker up, and keep the floor lease longer
 than a run can wait before a replay. To stop direct reads, deploy readers
