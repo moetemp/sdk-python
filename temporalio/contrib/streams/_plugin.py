@@ -272,7 +272,7 @@ class StreamStorePlugin(SimplePlugin):
         The Replayer needs no store, since each flush's result comes from its
         marker. Without the interceptor, ``workflow_writer`` raises
         :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
-        A ``workflow_reader(..., replay_from_store=True)`` reads its batches
+        A ``workflow_reader`` with ``replay_from_store=True``, the default, reads its batches
         from the store again, so it needs a client in this process that
         connected this store.
         """

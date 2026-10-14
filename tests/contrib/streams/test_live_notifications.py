@@ -263,9 +263,13 @@ class Reads:
     """Reads an owner's ``tokens`` until it ends, then says what it saw."""
 
     @workflow.run
-    async def run(self, owner: str, stop_after: int) -> list[str]:
+    async def run(
+        self, owner: str, stop_after: int, record_batches: bool = False
+    ) -> list[str]:
         seen: list[str] = []
-        async with workflow_reader(owner, topic=TOKENS) as reader:
+        async with workflow_reader(
+            owner, topic=TOKENS, replay_from_store=not record_batches
+        ) as reader:
             async for batch in reader:
                 for record in batch.records:
                     if record.kind is RecordKind.DATA:
@@ -291,14 +295,18 @@ async def _sleeping(client: Client, reader_id: str, owner: str) -> None:
     await asyncio.sleep(3)
 
 
+@pytest.mark.parametrize("record_batches", [False, True])
 async def test_live_a_workflow_reader_sleeps_and_wakes_on_an_append(
-    notifying: Client,
+    notifying: Client, record_batches: bool
 ):
     async with new_worker(notifying, Waits, Reads) as worker:
         owner = await running_owner(notifying, worker.task_queue)
         reader_id = new_workflow_id()
         reader = await notifying.start_workflow(
-            Reads.run, args=[owner, 2], id=reader_id, task_queue=worker.task_queue
+            Reads.run,
+            args=[owner, 2, record_batches],
+            id=reader_id,
+            task_queue=worker.task_queue,
         )
         producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
@@ -311,7 +319,11 @@ async def test_live_a_workflow_reader_sleeps_and_wakes_on_an_append(
         # The sleep cost no task until the wake.
         assert tasks_before >= 1
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
-    await Replayer(workflows=[Reads], plugins=[MemoryStreams()]).replay_workflow(
+    # A replay from the store needs the store, so the Replayer takes the
+    # client's. A cleared cache makes it read each range again.
+    store = store_for(notifying)
+    store._batches.clear()
+    await Replayer(workflows=[Reads], plugins=[store]).replay_workflow(
         await reader.fetch_history()
     )
 

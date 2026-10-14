@@ -237,8 +237,9 @@ class Follows:
                     ...
 ```
 
-With `replay_from_store=True`, History keeps each read's range and digest
-instead of its records, and replay reads them from the store again.
+By default History keeps each read's range and digest, not its records, and
+replay reads them from the store again. `replay_from_store=False` records
+each batch in History, for a History that replays with no store.
 
 A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See

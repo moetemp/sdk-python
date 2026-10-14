@@ -1,6 +1,6 @@
 """Positions-only Workflow reads: History keeps what a read read, not the records.
 
-A reader with ``replay_from_store=True`` reads through the same Local
+A reader with ``replay_from_store=True``, the default, reads through the same Local
 Activity, but the Activity's result, and so its marker, holds the read's
 range and Core's digest of its records. Before Workflow code sees the
 result, the Worker turns it back into the batch. It takes the batch the
@@ -200,9 +200,10 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
         service = self._plugin._service
         if service is None:
             raise StreamUnsupportedError(
-                "a positions-only stream read replays from the store, and no client "
-                "connected the stream store in this process; connect a client with "
-                "the store, or replay with recorded batches"
+                "a stream read with replay_from_store=True (the default) replays "
+                "from the store, and no client connected the stream store in this "
+                "process; connect a client with the store, or pass "
+                "replay_from_store=False to record each batch in History"
             )
         try:
             response = await call(service.read_range(range))

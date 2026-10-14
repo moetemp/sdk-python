@@ -218,7 +218,7 @@ class WorkflowStreamReader(Generic[T]):
         max_records: int,
         start_to_close_timeout: timedelta,
         cutoff: TaskCutoff | None,
-        replay_from_store: bool = False,
+        replay_from_store: bool = True,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
         self._cutoff = cutoff
@@ -440,8 +440,10 @@ class WorkflowStreamReader(Generic[T]):
         payload: Payload = raw.payload
         if is_positions(payload):
             raise StreamUnsupportedError(
-                "a positions-only stream read needs the stream store plugin on the "
-                "Worker or Replayer, which turns its range back into records"
+                "a stream read with replay_from_store=True (the default) recorded "
+                "only its range, and only the stream store plugin on the Worker or "
+                "Replayer turns it back into records; add the plugin, or pass "
+                "replay_from_store=False to record each batch in History"
             )
         response = ReadResponse.FromString(payload.data)
         return response, payload.metadata.get(_READ_RUN_ID_KEY, b"").decode()
@@ -508,7 +510,7 @@ def workflow_reader(
     max_records: int = 100,
     start_to_close_timeout: timedelta | None = None,
     cutoff: TaskCutoff | None = TaskCutoff(),
-    replay_from_store: bool = False,
+    replay_from_store: bool = True,
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
 
@@ -545,14 +547,15 @@ def workflow_reader(
             commands or 2 seconds by default. ``None`` leaves the task to
             the Local Activity heartbeat.
         replay_from_store: Record each read's range and Core's digest of
-            its records in History, in place of the records. Replay reads
-            the range from the store again, before Workflow code sees it,
-            and a store that holds other records fails the Workflow Task
-            as nondeterministic. The store holds the records the reader
-            read against retention, until the reader ends and a grace
-            passes. Off by default. Replay then needs the store, so a
-            ``Replayer`` needs a client in its process that connected the
-            same store.
+            its records in History, in place of the records. On by default.
+            Replay reads the range from the store again, before Workflow
+            code sees it, and a store that holds other records fails the
+            Workflow Task as nondeterministic. The store holds the records
+            the reader read against retention, until the reader ends and a
+            grace passes. Replay then needs the store, so a ``Replayer``
+            needs the store plugin and a client in its process that
+            connected the same store. ``False`` records each batch in
+            History, for a History that replays with no store.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -670,7 +673,16 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     if input.positions_only:
         request.floor_holder = floor_holder
     request.wait.FromMilliseconds(input.wait_ms)
-    response = await call(service.read(request))
+    try:
+        response = await call(service.read(request))
+    except StreamUnsupportedError as error:
+        if not input.positions_only:
+            raise
+        raise StreamUnsupportedError(
+            f"{error}; a stream read with replay_from_store=True (the default) "
+            "needs a store that holds what a reader read, so pass "
+            "replay_from_store=False to record each batch in History instead"
+        ) from error
     for record in response.records:
         if record.HasField("stored") and record.stored.HasField("body"):
             body = await decode_body(handle._converter, record.stored.body)

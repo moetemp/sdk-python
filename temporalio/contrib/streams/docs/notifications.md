@@ -112,7 +112,8 @@ class Connector:
 ```
 
 - Each read is one Local Activity, which adds one marker event when its
-  Workflow Task completes. Replay takes the batch from the marker.
+  Workflow Task completes. By default the marker holds the read's range, and
+  replay reads the range from the store again (see below).
 - The first read attaches the run to the stream's notifier. While the stream
   is idle, the reader waits with no Local Activity and no timer. The server
   records each wake on the next Workflow Task's scheduled event, so a wake
@@ -129,13 +130,12 @@ class Connector:
 - A read that fails for good, for example on an owner that does not exist,
   fails with an `ApplicationError` whose type names the stream error.
 
-### Positions only
+### Replay from the store
 
-By default each read's batch lands in History, in its Local Activity's
-marker. The store already holds those records. With
-`workflow_reader(..., replay_from_store=True)`, the marker holds the read's
-range and Core's digest of its records instead, a few hundred bytes per
-read whatever the batch holds.
+The store is the record of a stream, so History does not keep a second copy
+of what a Workflow reader read. By default, `replay_from_store=True`, each
+read's marker holds the read's range and Core's digest of its records, a
+few hundred bytes per read whatever the batch holds.
 
 - On replay, the Worker reads the same range from the store again, before
   Workflow code sees the batch. Workflow code gets the same records in both
@@ -151,12 +151,20 @@ read whatever the batch holds.
   closes, and the hold lasts `floor_release_grace` (1 day) more, for a
   query or a reset. `RedisStreams` takes both settings.
 - Replay needs the store. A `Replayer` needs the store plugin and a client
-  in its process that connected the same store.
+  in its process that connected the same store. Without them, the read
+  raises `StreamUnsupportedError`, which names the opt-out.
+- `workflow_reader(..., replay_from_store=False)` records each batch in
+  History instead, for a History that replays with no store, such as one you
+  ship to another team or keep past the store's retention. It costs History
+  size for each record read.
 - The mode is per reader and fixed for a run. Histories written in one mode
-  replay in that mode.
+  replay in that mode, so a change of the default or of the option applies
+  to new runs.
 
 The store plugin does the replay step in the client's payload codec: it
 wraps the codec the client has and passes every other payload through.
+
+## Closing a stream
 
 
 

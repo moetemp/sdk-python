@@ -52,8 +52,8 @@ class RedisStreams(StreamStorePlugin):
                 unset.
             response_timeout: How long a short call waits for its reply.
                 Core's default when unset.
-            floor_lease: How long a Workflow reader with
-                ``replay_from_store=True`` holds the records it read against
+            floor_lease: How long a Workflow reader that replays from the
+                store, as ``workflow_reader`` does by default, holds the records it read against
                 retention after its last read. ``retention`` when unset.
             floor_release_grace: How long such a hold lasts after the reader
                 ended and released it. One day when unset.
