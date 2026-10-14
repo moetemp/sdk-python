@@ -85,6 +85,14 @@ class _StreamFailureKindEnumTypeWrapper(
     the same call fails the same way. A lang built before this kind maps it, as any kind it
     doesn't know, to a storage failure.
     """
+    STREAM_FAILURE_KIND_REPLAY_MISMATCH: _StreamFailureKind.ValueType  # 13
+    """A replay read found other records than the read it repeats: other content, another count
+    or another end. Lang reports it as nondeterminism.
+    """
+    STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: _StreamFailureKind.ValueType  # 14
+    """A replay read found that the store no longer holds the range the read it repeats got
+    (REC-01), such as records that retention trimmed or a deleted log.
+    """
 
 class StreamFailureKind(
     _StreamFailureKind, metaclass=_StreamFailureKindEnumTypeWrapper
@@ -120,6 +128,14 @@ STREAM_FAILURE_KIND_INVALID_ARGUMENT: StreamFailureKind.ValueType  # 12
 """The call's input breaks the contract, such as a missing member or a value out of range, so
 the same call fails the same way. A lang built before this kind maps it, as any kind it
 doesn't know, to a storage failure.
+"""
+STREAM_FAILURE_KIND_REPLAY_MISMATCH: StreamFailureKind.ValueType  # 13
+"""A replay read found other records than the read it repeats: other content, another count
+or another end. Lang reports it as nondeterminism.
+"""
+STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamFailureKind.ValueType  # 14
+"""A replay read found that the store no longer holds the range the read it repeats got
+(REC-01), such as records that retention trimmed or a deleted log.
 """
 global___StreamFailureKind = StreamFailureKind
 
@@ -203,6 +219,8 @@ class RedisStoreConfig(google.protobuf.message.Message):
     RETENTION_FIELD_NUMBER: builtins.int
     BLOCKING_READS_PER_NODE_FIELD_NUMBER: builtins.int
     RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
+    FLOOR_LEASE_FIELD_NUMBER: builtins.int
+    FLOOR_RELEASE_GRACE_FIELD_NUMBER: builtins.int
     @property
     def urls(
         self,
@@ -225,6 +243,14 @@ class RedisStoreConfig(google.protobuf.message.Message):
     @property
     def response_timeout(self) -> google.protobuf.duration_pb2.Duration:
         """How long a short call waits for its reply. Unset uses the default."""
+    @property
+    def floor_lease(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a positions-only reader holds a stream's records after its last read. Unset uses
+        `retention`.
+        """
+    @property
+    def floor_release_grace(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a hold lasts after its reader released it. Unset keeps one day."""
     def __init__(
         self,
         *,
@@ -234,11 +260,20 @@ class RedisStoreConfig(google.protobuf.message.Message):
         retention: google.protobuf.duration_pb2.Duration | None = ...,
         blocking_reads_per_node: builtins.int = ...,
         response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
+        floor_lease: google.protobuf.duration_pb2.Duration | None = ...,
+        floor_release_grace: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "response_timeout", b"response_timeout", "retention", b"retention"
+            "floor_lease",
+            b"floor_lease",
+            "floor_release_grace",
+            b"floor_release_grace",
+            "response_timeout",
+            b"response_timeout",
+            "retention",
+            b"retention",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -248,6 +283,10 @@ class RedisStoreConfig(google.protobuf.message.Message):
             b"blocking_reads_per_node",
             "cluster",
             b"cluster",
+            "floor_lease",
+            b"floor_lease",
+            "floor_release_grace",
+            b"floor_release_grace",
             "key_prefix",
             b"key_prefix",
             "response_timeout",
@@ -567,6 +606,7 @@ class ReadRequest(google.protobuf.message.Message):
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     ARM_FIELD_NUMBER: builtins.int
+    FLOOR_HOLDER_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     after: builtins.str
@@ -589,6 +629,11 @@ class ReadRequest(google.protobuf.message.Message):
     finds nothing, the store arms the stream in the same step, so the next append notifies the
     notifier. A reader that doesn't wait on the notifier leaves it unset.
     """
+    floor_holder: builtins.str
+    """For a positions-only Workflow reader: names the reader, as its run id and its subscription
+    id. The store holds the records after this read's start against retention for that holder,
+    until `ReleaseFloor` and its grace, or until the holder's lease passes with no read.
+    """
     def __init__(
         self,
         *,
@@ -598,6 +643,7 @@ class ReadRequest(google.protobuf.message.Message):
         max_records: builtins.int = ...,
         state: builtins.bytes = ...,
         arm: builtins.bool = ...,
+        floor_holder: builtins.str = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -610,6 +656,8 @@ class ReadRequest(google.protobuf.message.Message):
             b"after",
             "arm",
             b"arm",
+            "floor_holder",
+            b"floor_holder",
             "max_records",
             b"max_records",
             "state",
@@ -726,6 +774,9 @@ class ReadResponse(google.protobuf.message.Message):
     CLOSE_RESULT_FIELD_NUMBER: builtins.int
     CLOSE_FAILURE_FIELD_NUMBER: builtins.int
     CLOSED_BY_FIELD_NUMBER: builtins.int
+    RECORDS_DIGEST_FIELD_NUMBER: builtins.int
+    CHAIN_FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    START_CURSOR_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -763,6 +814,17 @@ class ReadResponse(google.protobuf.message.Message):
         """Set with `done` when the stream's topic was closed with a failure."""
     closed_by: builtins.str
     """Set with `done` to the `closed_by` of the topic's first close."""
+    records_digest: builtins.bytes
+    """SHA-256 over the answer's records, as `ReadRange` checks it: per record its cursor, its stale
+    flag, and for a stored record its kind, producer, attempt, sequence and plaintext content
+    hash, or for a supersession its producer and both attempts. It leaves out the encoded body.
+    """
+    chain_first_run_id: builtins.str
+    """The first run of the chain the read read. `ReadRange` takes it, so replay needs no describe."""
+    start_cursor: builtins.str
+    """The cursor this answer reads strictly after, with `$end` resolved. With `cursor`, it is the
+    range `ReadRange` reads again.
+    """
     def __init__(
         self,
         *,
@@ -775,6 +837,9 @@ class ReadResponse(google.protobuf.message.Message):
         close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
         closed_by: builtins.str = ...,
+        records_digest: builtins.bytes = ...,
+        chain_first_run_id: builtins.str = ...,
+        start_cursor: builtins.str = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -787,6 +852,8 @@ class ReadResponse(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "armed",
             b"armed",
+            "chain_first_run_id",
+            b"chain_first_run_id",
             "close_failure",
             b"close_failure",
             "close_result",
@@ -799,6 +866,10 @@ class ReadResponse(google.protobuf.message.Message):
             b"done",
             "records",
             b"records",
+            "records_digest",
+            b"records_digest",
+            "start_cursor",
+            b"start_cursor",
             "state",
             b"state",
             "wake_after",
@@ -807,6 +878,115 @@ class ReadResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___ReadResponse = ReadResponse
+
+class ReadRangeRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    CHAIN_FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    AFTER_FIELD_NUMBER: builtins.int
+    TO_FIELD_NUMBER: builtins.int
+    STORED_RECORDS_FIELD_NUMBER: builtins.int
+    STATE_FIELD_NUMBER: builtins.int
+    RECORDS_DIGEST_FIELD_NUMBER: builtins.int
+    FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The stream, as the read named it."""
+    chain_first_run_id: builtins.str
+    """The read's `chain_first_run_id`."""
+    after: builtins.str
+    """The read's `start_cursor` and its answer's `cursor`."""
+    to: builtins.str
+    stored_records: builtins.int
+    """How many stored records the answer held, not counting supersessions."""
+    state: builtins.bytes
+    """The read's input `state`."""
+    records_digest: builtins.bytes
+    """The answer's `records_digest`."""
+    floor_holder: builtins.str
+    """As in `ReadRequest`, so a replay holds the records for its own run."""
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        chain_first_run_id: builtins.str = ...,
+        after: builtins.str = ...,
+        to: builtins.str = ...,
+        stored_records: builtins.int = ...,
+        state: builtins.bytes = ...,
+        records_digest: builtins.bytes = ...,
+        floor_holder: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "after",
+            b"after",
+            "chain_first_run_id",
+            b"chain_first_run_id",
+            "floor_holder",
+            b"floor_holder",
+            "records_digest",
+            b"records_digest",
+            "state",
+            b"state",
+            "stored_records",
+            b"stored_records",
+            "stream",
+            b"stream",
+            "to",
+            b"to",
+        ],
+    ) -> None: ...
+
+global___ReadRangeRequest = ReadRangeRequest
+
+class ReleaseFloorRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    CHAIN_FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress: ...
+    chain_first_run_id: builtins.str
+    floor_holder: builtins.str
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        chain_first_run_id: builtins.str = ...,
+        floor_holder: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "chain_first_run_id",
+            b"chain_first_run_id",
+            "floor_holder",
+            b"floor_holder",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___ReleaseFloorRequest = ReleaseFloorRequest
+
+class ReleaseFloorResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___ReleaseFloorResponse = ReleaseFloorResponse
 
 class LatestRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
