@@ -77,6 +77,24 @@ def producer_attempt(history_length: int, task_attempt: int, local_attempt: int)
     )
 
 
+def require_local_activity(name: str) -> None:
+    """Refuse to run a stream Activity that a Workflow scheduled as a normal one.
+
+    The plugin registers the stream Activities on every Worker, so Workflow
+    code can name them in a normal Activity call. That call would write an
+    Activity's events in History in place of the reader's or closer's marker,
+    and its retries would not follow the Local Activity rules.
+
+    Raises:
+        StreamUnsupportedError: The running Activity is not a Local Activity.
+    """
+    if not temporalio.activity.info().is_local:
+        raise StreamUnsupportedError(
+            f"{name} runs only as the Local Activity that the stream API "
+            "schedules, not as a normal Activity"
+        )
+
+
 @dataclass
 class LocalCall:
     """One Local Activity call, as the running attempt sees it."""
