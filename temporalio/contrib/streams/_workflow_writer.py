@@ -211,8 +211,7 @@ class WorkflowStreamWriter(Generic[T]):
                 an update validator.
         """
         _check_writable("publish to")
-        if self._topic in self._writers.closed:
-            raise ValueError(f"topic {self._topic!r} was already closed in this run")
+        # A close finishes the topic first, so this covers a closed topic too.
         if self._topic in self._writers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
         payload = workflow.payload_converter().to_payloads([value])[0]
