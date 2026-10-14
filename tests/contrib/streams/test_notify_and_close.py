@@ -103,9 +103,7 @@ async def test_a_close_with_an_outcome_reaches_the_notifier(client: Client) -> N
             notifier = await _describe_notifier(streams_client, workflow_id)
             assert notifier.closed
             assert notifier.close_failure.message == "the agent gave up"
-            assert (
-                notifier.close_failure.application_failure_info.type == "AgentGaveUp"
-            )
+            assert notifier.close_failure.application_failure_info.type == "AgentGaveUp"
         assert [r.value for r in await read_all(handle.read())] == ["a"]
         await streams_client.get_workflow_handle(workflow_id).signal(Waits.finish)
 
