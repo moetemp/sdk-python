@@ -1,5 +1,5 @@
 # Generated file. DO NOT EDIT
-"""Generated calls for Core's in-process StreamService."""
+"""Generated calls for Core's in-process stream services."""
 
 from __future__ import annotations
 
@@ -102,4 +102,52 @@ class StreamService:
             "WaitForNotification",
             req,
             temporalio.bridge.proto.streams.WaitForNotificationResponse,
+        )
+
+
+class StreamNexusService:
+    """Calls for the StreamNexusService, which Core dispatches in process."""
+
+    def __init__(self, store: StreamStore) -> None:
+        """Initialize service with the provided store."""
+        self._store = store
+
+    async def attach_caller(
+        self, req: temporalio.bridge.proto.streams.AttachCallerRequest
+    ) -> temporalio.bridge.proto.streams.AttachCallerResponse:
+        """Invokes the StreamNexusService.attach_caller call."""
+        return await self._store.call(
+            "AttachCaller", req, temporalio.bridge.proto.streams.AttachCallerResponse
+        )
+
+    async def detach_caller(
+        self, req: temporalio.bridge.proto.streams.DetachCallerRequest
+    ) -> temporalio.bridge.proto.streams.DetachCallerResponse:
+        """Invokes the StreamNexusService.detach_caller call."""
+        return await self._store.call(
+            "DetachCaller", req, temporalio.bridge.proto.streams.DetachCallerResponse
+        )
+
+    async def nexus_append(
+        self, req: temporalio.bridge.proto.streams.NexusCall
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_append call."""
+        return await self._store.call(
+            "NexusAppend", req, temporalio.bridge.proto.streams.NexusStep
+        )
+
+    async def nexus_read(
+        self, req: temporalio.bridge.proto.streams.NexusCall
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_read call."""
+        return await self._store.call(
+            "NexusRead", req, temporalio.bridge.proto.streams.NexusStep
+        )
+
+    async def nexus_resume(
+        self, req: temporalio.bridge.proto.streams.NexusResumeRequest
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_resume call."""
+        return await self._store.call(
+            "NexusResume", req, temporalio.bridge.proto.streams.NexusStep
         )

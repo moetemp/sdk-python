@@ -7,7 +7,6 @@ the contract; these pin what the rest of the SDK relies on from them.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,6 +30,7 @@ from temporalio.contrib.streams.nexus._generated import StreamOperationToken
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
+from tests.contrib.streams._support import vendored_core_nexus
 
 T = TypeVar("T")
 
@@ -60,12 +60,12 @@ def test_the_service_definition_carries_the_contract_operations():
     }
 
 
-def test_the_contract_ships_beside_the_bindings():
-    contract = (
-        Path(temporalio.contrib.streams.__file__).parent
-        / "nexus"
-        / "temporal_streams.nexusrpc.yaml"
-    )
+def test_the_contract_comes_from_the_vendored_core():
+    # Core serves the contract, so the SDK generates from Core's copy and keeps
+    # none of its own.
+    package = Path(temporalio.contrib.streams.__file__).parent
+    assert not (package / "nexus" / "temporal_streams.nexusrpc.yaml").exists()
+    contract = vendored_core_nexus() / "temporal_streams.nexusrpc.yaml"
     assert "x-nexus-stream-ref: { py: temporalio.contrib.streams.StreamRef }" in (
         contract.read_text()
     )
@@ -144,17 +144,17 @@ def test_an_input_with_an_unknown_member_is_refused():
     assert "max_record" in str(refused.value.details)
 
 
-def test_a_reference_this_release_cannot_open_decodes_and_is_refused_at_open():
+def test_a_reference_of_another_kind_decodes_for_the_handler_to_refuse():
     document = _to_json(ReadInput(stream=StreamRef.for_workflow("wf-1")))
     stream = document["stream"]
     assert isinstance(stream, dict)
     stream["kind"] = "activity"
-    # A ref of a later release decodes, so it can pass through unchanged.
     decoded = _from_json(document, ReadInput)
     assert isinstance(decoded, ReadInput)
     assert decoded.stream.kind == "activity"
-    with pytest.raises(StreamUnsupportedError):
-        decoded.stream._require_supported()
+    # Opening a handle on it is what refuses it.
+    with pytest.raises(StreamUnsupportedError, match="'activity'"):
+        decoded.stream._require_supported()  # type: ignore[reportPrivateUsage]
 
 
 def test_a_supersession_decodes_at_its_cursor():
@@ -246,29 +246,10 @@ async def test_the_generated_long_poll_sends_back_each_answers_state(
     assert sent == ["AA==", "AQ==", "Ag=="]
 
 
-# A copy of Core's crates/streams/nexus/operation_token_vectors.json, from
-# moetemp/sdk-rust moe/bridge/v2/cn5-stream-callers at 782a464a. Core's encoder
-# and decoder read the same file.
+# The vectors Core's encoder and decoder read, in the Core this SDK vendors.
 _TOKEN_VECTORS = json.loads(
-    (Path(__file__).parent / "operation_token_vectors.json").read_text()
+    (vendored_core_nexus() / "operation_token_vectors.json").read_text()
 )
-
-# Core's canonical crates/streams/nexus/temporal_streams.nexusrpc.yaml at
-# moetemp/sdk-rust moe/bridge/v2/cn4-nexus-stream-calls 6f588812. This branch's
-# Core pin has no copy to compare with, so the digest pins it, and N0b
-# generates from Core's own copy.
-_CORE_CONTRACT_SHA256 = (
-    "413686183d4769fd9a4c4d2b54900f8786a8d7e1be3419da1566d59d428285e0"
-)
-
-
-def test_the_contract_is_cores_canonical_copy():
-    contract = (
-        Path(temporalio.contrib.streams.__file__).parent
-        / "nexus"
-        / "temporal_streams.nexusrpc.yaml"
-    )
-    assert hashlib.sha256(contract.read_bytes()).hexdigest() == _CORE_CONTRACT_SHA256
 
 
 def _token_of(vector: dict[str, Any]) -> StreamOperationToken:
@@ -301,3 +282,25 @@ def test_the_operation_token_reads_cores_decode_only_vectors(vector: dict[str, A
 def test_the_operation_token_refuses_cores_refused_vectors(token: str):
     with pytest.raises(ValueError):
         StreamOperationToken.from_token(token)
+
+
+def test_a_read_asks_to_arm_and_the_answer_says_it_armed():
+    # A reader that sleeps on progress asks the stream to arm, and only an
+    # armed answer lets it sleep.
+    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), wait_ms=2000, arm=True)
+    document = _to_json(read)
+    assert document["arm"] is True
+    assert _from_json(document, ReadInput) == read
+    armed = _from_json(
+        {"records": [], "next_token": "", "done": False, "armed": True}, ReadOutput
+    )
+    assert armed.armed is True
+    # Core leaves `armed` out when it is false.
+    unarmed = _from_json({"records": [], "next_token": "", "done": False}, ReadOutput)
+    assert not unarmed.armed
+
+
+def test_a_read_without_arm_leaves_it_out():
+    # An outside reader has no callback, and an old handler refuses the member.
+    document = _to_json(ReadInput(stream=StreamRef.for_workflow("chat-1")))
+    assert "arm" not in document
