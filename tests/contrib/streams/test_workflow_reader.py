@@ -19,7 +19,12 @@ from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
 from temporalio.api.stream.v1 import StreamReference, StreamWake
 from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
-from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersession
+from temporalio.bridge.proto.streams import (
+    ReadRangeRequest,
+    ReadRecord,
+    ReadResponse,
+    Supersession,
+)
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.bridge.proto.workflow_activation import ResolveStreamWake
@@ -28,10 +33,12 @@ from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     RecordKind,
     StreamPosition,
+    StreamUnsupportedError,
     get_stream_handle,
     topic,
     workflow_reader,
 )
+from temporalio.contrib.streams._replay_reads import ReplayReadCodec, positions_payload
 from temporalio.contrib.streams._workflow import (
     READ_ACTIVITY,
     _ReadInput,
@@ -123,7 +130,13 @@ class ReadsBatches:
         self, owner: str, stop_after: int, after: StreamPosition | None
     ) -> list[list[str]]:
         batches: list[list[str]] = []
-        reader = workflow_reader(owner, topic=TOKENS, after=after or StreamPosition(""))
+        # The fake read Activity answers with recorded batches.
+        reader = workflow_reader(
+            owner,
+            topic=TOKENS,
+            after=after or StreamPosition(""),
+            replay_from_store=False,
+        )
         async with reader:
             async for batch in reader:
                 batches.append([_describe(r) for r in batch.records])
@@ -530,3 +543,68 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
         )
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
     assert said == "failed: StreamUnsupportedError"
+
+
+@workflow.defn
+class ReadsOnce:
+    @workflow.run
+    async def run(self, record_batches: bool) -> str:
+        reader = (
+            workflow_reader("owner", topic=TOKENS, replay_from_store=False)
+            if record_batches
+            else workflow_reader("owner", topic=TOKENS)
+        )
+        try:
+            async for _ in reader:
+                pass
+        except StreamUnsupportedError as error:
+            return str(error)
+        return "read"
+
+
+@pytest.mark.parametrize("record_batches", [False, True])
+async def test_a_reader_replays_from_the_store_by_default(
+    client: Client, record_batches: bool
+):
+    global _fake
+    _fake = FakeReads([ReadResponse(records=[data("c1", "a")], cursor="c1", done=True)])
+    async with new_worker(client, ReadsOnce, activities=[fake_read]) as worker:
+        await client.execute_workflow(
+            ReadsOnce.run,
+            record_batches,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert _fake.inputs[0].positions_only is not record_batches
+
+
+@activity.defn(name=READ_ACTIVITY)
+async def positions_read(_input: _ReadInput) -> RawValue:
+    # What the real read Activity answers in the default mode.
+    return RawValue(
+        positions_payload(
+            ReadRangeRequest(after="", to="c1", stored_records=1, records_digest=b"d"),
+            ReadResponse(cursor="c1", done=True),
+            "",
+        )
+    )
+
+
+async def test_a_worker_without_the_store_plugin_names_the_opt_out(client: Client):
+    # The client carries no store plugin, so no codec turns the range back.
+    async with new_worker(client, ReadsOnce, activities=[positions_read]) as worker:
+        said = await client.execute_workflow(
+            ReadsOnce.run, False, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+    assert "replay_from_store=False" in said
+
+
+async def test_a_replay_with_no_connected_store_names_the_opt_out():
+    codec = ReplayReadCodec(MemoryStreams(), None, DataConverter.default)
+    payload = positions_payload(
+        ReadRangeRequest(after="", to="c1", stored_records=1, records_digest=b"d"),
+        ReadResponse(cursor="c1"),
+        "",
+    )
+    with pytest.raises(StreamUnsupportedError, match="replay_from_store=False"):
+        await codec.decode([payload])
