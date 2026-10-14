@@ -387,8 +387,9 @@ next call and with `OnComplete`. So the Worker keeps nothing between calls,
 and any Worker on the task queue can take the next one. A call reads page by
 page and calls `on_records` once per page. It stops when it reaches the
 progress position or half the request timeout passed. When it stopped early,
-it answers `behind`, and the server sends the same progress again at once,
-so a long backlog is read in pages. `OnComplete` reads the rest of the stream,
+it answers `behind`, and the server sends the same progress again after
+`callback.nexusHandler.progressBehindInterval` (1 second by default), so a
+long backlog is read in pages without a busy loop. `OnComplete` reads the rest of the stream,
 then calls `on_close`.
 
 **Delivery is at least once.** A batch repeats after a lost answer or a
