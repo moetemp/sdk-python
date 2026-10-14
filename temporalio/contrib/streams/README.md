@@ -79,8 +79,12 @@ async for record, withdrawn in track_supersession(handle.read(topic=TOKENS)):
 
 A record marked `stale` comes back withdrawn as it arrives, since an older
 attempt wrote it after the read delivered a newer one. The tracker keeps
-every record it may still withdraw in memory, so call `forget(producer_id)`
-once a producer can't retry.
+every record it may still withdraw in memory, for at most `max_producers`
+producers (1,000 by default), and drops the producer it saw least recently
+past that. The read forgets producers the same way, so a dropped producer
+gets no `SUPERSEDED` either. A Workflow writer makes a producer per flush,
+so on its streams the bound is what holds memory steady. Call
+`forget(producer_id)` once a producer can't retry, to drop it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
