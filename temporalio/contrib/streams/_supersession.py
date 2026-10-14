@@ -20,9 +20,9 @@ __all__ = ["SupersessionTracker", "track_supersession"]
 
 T = TypeVar("T")
 
-# The same count of producers a read's state remembers the newest attempt of.
-# Past it the read reports no SUPERSEDED for the producers it forgot, so
-# holding their records would only use memory.
+# The most producers a read's state remembers the newest attempt of. Past it
+# the read reports no SUPERSEDED for the producers it forgot, so holding their
+# records would only use memory.
 _MAX_PRODUCERS = 1_000
 
 
@@ -33,9 +33,9 @@ class SupersessionTracker(Generic[T]):
     holds each record that can still be withdrawn, under its producer,
     until it is withdrawn or :meth:`forget` drops its producer. It holds
     the records of at most ``max_producers`` producers, and drops the
-    producer it saw least recently past that. The read's own state
-    forgets producers the same way, so a dropped producer gets no
-    ``SUPERSEDED`` either. A stream that a Workflow writer publishes to has
+    producer it saw least recently past that. The read's own state forgets
+    the producer it saw least recently too, past 1,000 producers or 16 KiB,
+    so a producer the tracker dropped gets no ``SUPERSEDED`` either. A stream that a Workflow writer publishes to has
     a producer per flush, so this bound is what keeps such a read's memory
     from growing with the stream.
 
