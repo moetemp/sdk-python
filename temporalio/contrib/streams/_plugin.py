@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import temporalio.bridge.client
@@ -230,6 +231,21 @@ def _two_stores(held: StreamStorePlugin, new: StreamStorePlugin) -> str:
         f"stream store {held.name()!r} is already registered, so {new.name()!r} "
         "cannot be; register one store per client"
     )
+
+
+def with_owner_start_grace(
+    config: StreamStoreConfig, grace: timedelta | None
+) -> StreamStoreConfig:
+    """Set ``owner_start_grace`` on ``config`` when ``grace`` is given.
+
+    Raises:
+        ValueError: ``grace`` is negative.
+    """
+    if grace is not None:
+        if grace < timedelta(0):
+            raise ValueError(f"owner_start_grace must not be negative, got {grace}")
+        config.owner_start_grace.FromTimedelta(grace)
+    return config
 
 
 def store_for_client(client: Client) -> StreamStorePlugin:
