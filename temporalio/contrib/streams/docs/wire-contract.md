@@ -65,7 +65,9 @@ Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
 
 The entry id that Redis assigns is the record's position. Readers never
 see a `SUPERSEDED` record in the log: a reader synthesizes one when a
-producer's newer attempt first appears.
+producer's newer attempt first appears. It withdraws only the records with
+the same `producer_id` and a lower `attempt`. It names no position, so the
+records of other producers on the topic stay valid, wherever they are.
 
 ## Appending a batch
 
