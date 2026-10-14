@@ -1,0 +1,138 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-10-14T21:44:19.007168Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048605",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "ClosesWithAResult"
+        },
+        "taskQueue": {
+          "name": "7b8fa934-8811-49d5-9f58-d3439eb284b8",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a13c5f-933f-728c-a43d-3b4a078032c4",
+        "identity": "73990@Moes-MacBook-Pro.local",
+        "firstExecutionRunId": "01a13c5f-933f-728c-a43d-3b4a078032c4",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "workflowId": "streams-8173f0f1b478421dbd075acec7f9d3a0",
+        "priority": {}
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-10-14T21:44:19.007207Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048606",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "7b8fa934-8811-49d5-9f58-d3439eb284b8",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-10-14T21:44:19.009578Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048611",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "73990@Moes-MacBook-Pro.local",
+        "requestId": "2fd67083-c967-4075-891e-100472c9dc7e",
+        "historySizeBytes": "326",
+        "workerVersion": {
+          "buildId": "2b192d5f9df9bc4ca7264984db4608ac"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-10-14T21:44:19.049712Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048615",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "73990@Moes-MacBook-Pro.local",
+        "workerVersion": {
+          "buildId": "2b192d5f9df9bc4ca7264984db4608ac"
+        },
+        "sdkMetadata": {
+          "coreUsedFlags": [
+            3,
+            1,
+            2,
+            4
+          ],
+          "sdkName": "temporal-python",
+          "sdkVersion": "1.34.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-10-14T21:44:19.049737Z",
+      "eventType": "EVENT_TYPE_MARKER_RECORDED",
+      "taskId": "1048616",
+      "markerRecordedEventAttributes": {
+        "markerName": "core_local_activity",
+        "details": {
+          "result": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "YmluYXJ5L251bGw="
+                }
+              }
+            ]
+          },
+          "data": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "eyJzZXEiOjEsImF0dGVtcHQiOjEsImFjdGl2aXR5X2lkIjoiMSIsImFjdGl2aXR5X3R5cGUiOiJfX3RlbXBvcmFsX3N0cmVhbXNfY2xvc2UiLCJjb21wbGV0ZV90aW1lIjp7InNlY29uZHMiOjE3OTIwMTQyNTksIm5hbm9zIjoxNDQ4MTI5Mn0sImJhY2tvZmYiOm51bGwsIm9yaWdpbmFsX3NjaGVkdWxlX3RpbWUiOnsic2Vjb25kcyI6MTc5MjAxNDI1OSwibmFub3MiOjQzMjY5MDAwfSwiYWN0aXZhdGlvbl9pbmRleCI6MX0="
+              }
+            ]
+          }
+        },
+        "workflowTaskCompletedEventId": "4"
+      },
+      "userMetadata": {
+        "summary": {
+          "metadata": {
+            "encoding": "anNvbi9wbGFpbg=="
+          },
+          "data": "InN0cmVhbSBjbG9zZSB0b2tlbnMi"
+        }
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-10-14T21:44:19.049742Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "taskId": "1048617",
+      "workflowExecutionCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "YmluYXJ5L251bGw="
+              }
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId": "4"
+      }
+    }
+  ]
+}
