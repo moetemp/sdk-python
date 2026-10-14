@@ -47,6 +47,7 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handles import StreamHandle
+from temporalio.contrib.streams._local_activity import require_local_activity
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._record import Cursor, StreamRecord
 from temporalio.contrib.streams._ref import StreamRef
@@ -409,13 +410,12 @@ class WorkflowStreamReader(Generic[T]):
         return response
 
     async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str]:
-        what = "unsubscribe" if input.unsubscribe else "read"
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
             input,
             result_type=RawValue,
             start_to_close_timeout=self._start_to_close_timeout,
-            summary=f"stream {what} {self._topic}",
+            summary=_read_summary(input),
         )
         payload: Payload = raw.payload
         if is_positions(payload):
@@ -433,6 +433,18 @@ class WorkflowStreamReader(Generic[T]):
             payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
             read_by.decode() if read_by is not None else workflow.info().run_id,
         )
+
+
+def _read_summary(input: _ReadInput) -> str:
+    # The summary names what the marker did, since every stream read marker
+    # has the same Activity type.
+    if input.unsubscribe:
+        return f"stream unsubscribe {input.topic}"
+    after = {BEGINNING: "the start", END: "the end"}.get(
+        Cursor(input.after), input.after
+    )
+    what = "subscribe and read" if input.subscription_id else "read"
+    return f"stream {what} {input.topic} after {after}"
 
 
 def _next_reader() -> int:
@@ -597,6 +609,7 @@ async def read_activity(input: _ReadInput) -> RawValue:
     Workflow converts them with its payload converter.
     """
     try:
+        require_local_activity("the stream read Activity")
         return await _read_batch(input)
     except _FINAL_ERRORS as error:
         raise ApplicationError(
