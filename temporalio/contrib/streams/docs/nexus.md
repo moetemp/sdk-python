@@ -517,7 +517,16 @@ canceled owner alone until `streamnotifier.ownerCloseGrace` (1 minute by
 default) after it closed, so a close that the owner sent on its way out
 comes first. The owner check reads no History, so a failed owner that it
 closes gives an `ApplicationError` of type `StreamOwnerFailed` rather than
-the Workflow's own failure. A stream server from before this release
+the Workflow's own failure. For the callers to see the real failure, close
+the stream with it before the Workflow fails:
+
+```python
+except Exception as err:
+    await close_workflow_stream(MESSAGES, error=err)
+    raise
+```
+
+A stream server from before this release
 ignores a close's failure and completes the operations with an empty
 result.
 
