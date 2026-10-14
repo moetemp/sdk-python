@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 from temporalio.bridge.proto.streams import RedisStoreConfig, StreamStoreConfig
-from temporalio.contrib.streams._plugin import StreamStorePlugin
+from temporalio.contrib.streams._plugin import (
+    StreamStorePlugin,
+    with_owner_start_grace,
+)
 
 __all__ = ["RedisStreams"]
 
@@ -29,6 +32,7 @@ class RedisStreams(StreamStorePlugin):
         retention: timedelta = timedelta(days=7),
         blocking_reads_per_node: int | None = None,
         response_timeout: timedelta | None = None,
+        owner_start_grace: timedelta | None = None,
     ) -> None:
         """Create the store's configuration.
 
@@ -50,10 +54,16 @@ class RedisStreams(StreamStorePlugin):
                 unset.
             response_timeout: How long a short call waits for its reply.
                 Core's default when unset.
+            owner_start_grace: How long a read of a Workflow that Temporal
+                doesn't know yet answers empty before it fails with
+                :class:`temporalio.contrib.streams.StreamNotFoundError`, so
+                a reader can start before its owner. 60 seconds when unset.
+                Zero fails at once.
 
         Raises:
-            ValueError: No URL was given, ``key_prefix`` is empty, or
-                ``retention`` is shorter than a millisecond.
+            ValueError: No URL was given, ``key_prefix`` is empty,
+                ``retention`` is shorter than a millisecond, or
+                ``owner_start_grace`` is negative.
         """
         urls = [url] if isinstance(url, str) else list(url)
         if not urls:
@@ -75,5 +85,5 @@ class RedisStreams(StreamStorePlugin):
             config.response_timeout.FromTimedelta(response_timeout)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
-            StreamStoreConfig(redis=config),
+            with_owner_start_grace(StreamStoreConfig(redis=config), owner_start_grace),
         )

@@ -1,12 +1,12 @@
 """Scenario 8: a publisher Workflow replays with no store I/O.
 
 ``Publisher`` publishes three stages with ``workflow_writer`` and finishes
-its topic. Each flush is one Local Activity, and History keeps its result
-in a marker. The demo then replays the History with a ``Replayer``. The
-Replayer needs the store plugin, which adds the interceptor that
-``workflow_writer`` replays with. The plugin connects nothing, so the
-demo gives the Replayer a Redis store at a port where nothing listens.
-The replay takes each flush's result from its marker and passes.
+its topic. Core appends each activation's records when the activation
+completes, and History holds no marker for them. The demo then replays the
+History with a ``Replayer``. The Replayer needs the store plugin, which
+adds the interceptor that ``workflow_writer`` replays with. The plugin
+connects nothing, so the demo gives the Replayer a Redis store at a port
+where nothing listens. The replay sends nothing to the store and passes.
 
 Left out: a Workflow that reads a stream, which Workflow code can't do in
 this release.
@@ -79,7 +79,7 @@ async def main(
         plugins=[RedisStreams(NO_STORE, key_prefix="replay")],
     )
     await replayer.replay_workflow(history)
-    print(f"[replayer] replayed {markers} flush markers with no store")
+    print(f"[replayer] replayed with no store and {markers} markers in History")
     return Outcome(stages=values(seen), markers=markers)
 
 
