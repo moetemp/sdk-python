@@ -15,6 +15,8 @@
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
 #   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
+#   PYTEST_TARGETS     the tests to run (default: the stream and Nexus tests). A narrower run fails
+#                      the gate, since the gated ids outside it don't run.
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
@@ -225,10 +227,12 @@ EOF
 sleep 12
 
 status=0
-uv run --no-sync pytest \
-  tests/contrib/streams \
-  tests/nexus/test_workflow_operation_progress*.py \
-  tests/nexus/test_temporal_system_nexus.py \
+default_targets=(
+  tests/contrib/streams
+  tests/nexus/test_workflow_operation_progress*.py
+  tests/nexus/test_temporal_system_nexus.py
+)
+uv run --no-sync pytest ${PYTEST_TARGETS:-${default_targets[*]}} \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
@@ -261,7 +265,10 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_two_readers_wake_from_one_notification \
   test_live_a_workflow_close_ends_both_readers_with_its_outcome \
   test_live_a_position_resumes_the_reader_after_continue_as_new \
-  test_live_a_recheck_finds_a_record_whose_notification_was_lost
+  test_live_a_recheck_finds_a_record_whose_notification_was_lost \
+  test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
+  test_live_a_replay_that_finds_other_records_is_nondeterminism \
+  test_live_a_replay_of_a_lost_range_fails_the_task
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
