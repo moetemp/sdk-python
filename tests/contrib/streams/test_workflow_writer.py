@@ -11,30 +11,40 @@ import os
 import uuid
 from collections import defaultdict
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
 from temporalio import activity, workflow
+from temporalio.api.common.v1 import Payload
 from temporalio.client import (
     Client,
     WorkflowFailureError,
     WorkflowQueryFailedError,
     WorkflowUpdateFailedError,
 )
+from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     RecordKind,
     StreamError,
+    StreamOutcomeUnknownError,
+    StreamProducer,
     StreamStorePlugin,
     StreamUnsupportedError,
     get_stream_handle,
     topic,
     workflow_writer,
 )
-from temporalio.contrib.streams._workflow_writer import _RunWriters
+from temporalio.contrib.streams._workflow_writer import (
+    PUBLISH_ACTIVITY,
+    _RunWriters,
+    publish_activity,
+)
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from temporalio.testing import ActivityEnvironment
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
 from tests.helpers import new_worker
 
@@ -348,3 +358,98 @@ async def test_a_worker_without_the_store_cannot_write(client: Client):
             WritesWithoutAStore.run, id=new_workflow_id(), task_queue=worker.task_queue
         )
     assert "Worker interceptor" in said
+
+
+@workflow.defn
+class FlushesOnce:
+    @workflow.run
+    async def run(self) -> None:
+        steps = workflow_writer(STEPS)
+        steps.publish("one")
+        steps.publish("two")
+        await steps.flush()
+
+
+async def test_a_local_retry_of_a_flush_is_superseded(
+    streams: Client, monkeypatch: pytest.MonkeyPatch
+):
+    append = StreamProducer.append
+
+    async def append_then_fail(self: StreamProducer[Any], *values: Any) -> Any:
+        cursor = await append(self, *values)
+        if activity.info().attempt == 1:
+            raise RuntimeError("the Worker lost the answer after the append")
+        return cursor
+
+    monkeypatch.setattr(StreamProducer, "append", append_then_fail)
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, FlushesOnce) as worker:
+        await streams.execute_workflow(
+            FlushesOnce.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.kind for r in records] == [
+        RecordKind.DATA,
+        RecordKind.DATA,
+        RecordKind.SUPERSEDED,
+        RecordKind.DATA,
+        RecordKind.DATA,
+    ]
+    assert [r.value for r in records if r.kind is RecordKind.DATA] == [
+        "one",
+        "two",
+        "one",
+        "two",
+    ]
+
+
+async def test_an_unknown_outcome_is_repeated_and_written_once(
+    streams: Client, monkeypatch: pytest.MonkeyPatch
+):
+    append = StreamProducer.append
+    calls: list[int] = []
+
+    async def append_then_lose(self: StreamProducer[Any], *values: Any) -> Any:
+        sequence = self._sequence
+        cursor = await append(self, *values)
+        calls.append(len(values))
+        if len(calls) == 1:
+            # As when the store's answer is lost: the producer keeps its sequence.
+            self._sequence = sequence
+            raise StreamOutcomeUnknownError("the answer was lost")
+        return cursor
+
+    monkeypatch.setattr(StreamProducer, "append", append_then_lose)
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, FlushesOnce) as worker:
+        await streams.execute_workflow(
+            FlushesOnce.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    # The repeat went to the store, which wrote the batch once.
+    assert calls == [2, 2]
+    assert [r.value for r in records] == ["one", "two"]
+
+
+async def test_a_worker_registers_the_publish_activity_once(client: Client):
+    store = MemoryStreams()
+    streams = await connect_with(client, store)
+    worker = Worker(streams, task_queue=str(uuid.uuid4()), workflows=[FlushesOnce])
+    assert worker.config(active_config=True).get("activities") == [publish_activity]
+    with pytest.warns(UserWarning, match="same plugin type"):
+        worker = Worker(
+            streams,
+            task_queue=str(uuid.uuid4()),
+            workflows=[FlushesOnce],
+            plugins=[store],
+        )
+    assert worker.config(active_config=True).get("activities") == [publish_activity]
+    assert PUBLISH_ACTIVITY == "__temporal_streams_publish"
+
+
+async def test_the_activity_refuses_input_that_is_not_a_payloads_message():
+    with pytest.raises(ApplicationError, match="not a Payloads message") as raised:
+        await ActivityEnvironment().run(
+            publish_activity, "steps", False, RawValue(Payload(data=b"x"))
+        )
+    assert raised.value.non_retryable

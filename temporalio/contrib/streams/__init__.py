@@ -40,8 +40,7 @@ context then reaches a stream the same way:
 
 - Workflow code publishes to its own stream with :func:`workflow_writer`.
   It buffers each value in the Workflow and sends the buffer through one
-  Local Activity at a time per topic. :func:`workflow_activity_writer` runs
-  a built-in Activity for each call instead.
+  Local Activity at a time per topic.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
   scheduling run id, and its Temporal attempt. A Local Activity writes as
@@ -97,10 +96,6 @@ from temporalio.contrib.streams._supersession import (
 )
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
 from temporalio.contrib.streams._workflow import workflow_reader
-from temporalio.contrib.streams._workflow_activity import (
-    WorkflowActivityStreamWriter,
-    workflow_activity_writer,
-)
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     workflow_writer,
@@ -133,13 +128,11 @@ __all__ = [
     "StreamUnsupportedError",
     "Supersession",
     "SupersessionTracker",
-    "WorkflowActivityStreamWriter",
     "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
     "track_supersession",
-    "workflow_activity_writer",
     "workflow_reader",
     "workflow_writer",
 ]
