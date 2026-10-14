@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import logging
 import os
+import shutil
+import subprocess
+import time
+import urllib.parse
 import uuid
 from collections import defaultdict
 from datetime import timedelta
@@ -17,6 +22,7 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.streams_generated import StreamService
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -38,9 +44,11 @@ from temporalio.contrib.streams import (
 from temporalio.contrib.streams._workflow import read_activity
 from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
+    _FlushGate,
     _RunWriters,
     close_activity,
     publish_activity,
+    run_then_drain,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
@@ -463,3 +471,129 @@ async def test_the_activity_refuses_input_that_is_not_a_payloads_message():
             publish_activity, "steps", False, RawValue(Payload(data=b"x"))
         )
     assert raised.value.non_retryable
+
+
+async def test_closing_the_run_outside_its_loop_does_not_drain():
+    async def never() -> None:
+        await asyncio.Event().wait()
+
+    run = run_then_drain(never())
+    run.send(None)
+    # Closing throws GeneratorExit into the run, outside any Workflow loop.
+    run.close()
+
+
+async def test_the_flush_gate_spaces_flush_starts_per_run_and_topic():
+    gate = _FlushGate(capacity=2)
+    key = ("wf", "run", "steps")
+    await gate.wait(key, 200)
+    started = time.monotonic()
+    await gate.wait(key, 200)
+    assert time.monotonic() - started >= 0.18
+    # Another topic of the run, or no interval, does not wait.
+    started = time.monotonic()
+    await gate.wait(("wf", "run", "other"), 200)
+    await gate.wait(key, 0)
+    assert time.monotonic() - started < 0.1
+    # The gate forgets the least recent key past its capacity.
+    await gate.wait(("wf", "run", "third"), 200)
+    assert list(gate._started) == [key, ("wf", "run", "third")]
+
+
+@activity.defn
+async def tick() -> None:
+    pass
+
+
+@workflow.defn
+class PublishesBetweenSteps:
+    @workflow.run
+    async def run(self, steps: int, interval_ms: int) -> None:
+        writer = workflow_writer(
+            STEPS,
+            min_flush_interval=timedelta(milliseconds=interval_ms) or None,
+        )
+        for index in range(steps):
+            writer.publish(str(index))
+            # Each step resolves a Local Activity, so a flush could start often.
+            await workflow.execute_local_activity(
+                tick, start_to_close_timeout=timedelta(seconds=10)
+            )
+        await writer.finish()
+
+
+async def test_the_flush_interval_caps_the_flush_count(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    counts = {}
+    for interval_ms in (0, 300):
+        workflow_id = new_workflow_id()
+        async with new_worker(
+            streams, PublishesBetweenSteps, activities=[tick]
+        ) as worker:
+            started = time.monotonic()
+            await streams.execute_workflow(
+                PublishesBetweenSteps.run,
+                args=[30, interval_ms],
+                id=workflow_id,
+                task_queue=worker.task_queue,
+            )
+            elapsed = time.monotonic() - started
+        records = await read_all(
+            get_stream_handle(streams, workflow_id).read(topic=STEPS)
+        )
+        data = [r for r in records if r.kind is RecordKind.DATA]
+        assert [r.value for r in data] == [str(index) for index in range(30)]
+        counts[interval_ms] = len({r.producer_id for r in records})
+        if interval_ms:
+            # At most one flush start per interval, plus the first and the finish.
+            assert counts[interval_ms] <= elapsed / (interval_ms / 1000) + 2
+    assert counts[300] < counts[0]
+
+
+def redis_cli(*args: str) -> str:
+    url = urllib.parse.urlparse(os.environ.get("STREAMS_REDIS_URL", ""))
+    command = ["redis-cli", "-h", url.hostname or "localhost"]
+    command += ["-p", str(url.port or 6379), *args]
+    return subprocess.run(command, capture_output=True, text=True, check=True).stdout
+
+
+async def test_each_flush_retires_its_dedupe_state(client: Client):
+    if not shutil.which("redis-cli"):
+        pytest.skip("needs redis-cli to look at the store")
+    streams = await connect_with(client, redis_store())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, PublishesBetweenSteps, activities=[tick]) as worker:
+        await streams.execute_workflow(
+            PublishesBetweenSteps.run,
+            args=[10, 0],
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    flushes = {r.producer_id for r in records}
+    assert len(flushes) > 1
+    (meta,) = [
+        key
+        for key in redis_cli("--scan", "--pattern", f"*{workflow_id}*").split()
+        if key.endswith(":t:steps:meta")
+    ]
+    # Every flush's attempt returned, so none left a session field behind.
+    assert "hw:" not in redis_cli("hkeys", meta)
+
+
+async def test_a_failed_retire_does_not_fail_the_flush(
+    streams: Client, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    async def refuse(*_args: object) -> object:
+        raise RuntimeError("the store is gone for a moment")
+
+    monkeypatch.setattr(StreamService, "retire_producer", refuse)
+    workflow_id = new_workflow_id()
+    with caplog.at_level(logging.WARNING):
+        async with new_worker(streams, FlushesOnce) as worker:
+            await streams.execute_workflow(
+                FlushesOnce.run, id=workflow_id, task_queue=worker.task_queue
+            )
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.value for r in records] == ["one", "two"]
+    assert "Could not retire stream producer" in caplog.text
