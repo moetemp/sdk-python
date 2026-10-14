@@ -35,12 +35,30 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_nexus
 
 ## The demos
 
+- **1a, `s1a_order_tracking`.** The `Order` Workflow publishes `placed` with `workflow_writer`. The
+  courier appends two stages through a client producer, and the Workflow publishes `delivered`.
+  The app reads every stage in order. Left out: a push to the app.
 - **2, `s2_dashcam_reference`.** The courier appends a `Segment` with a URL for each segment. The
   backend fetches each one from an object store, which a dict stands in for. Left out: live video
   and storage that Temporal manages.
+- **3a to 3c, `s3_chat_turn`.** `Chat` publishes the turn's start and end on `turns` with
+  `workflow_writer`. Its Activity appends tokens on `tokens`, and attempt 1 fails after two. The
+  UI reads `tokens` through `track_supersession`, takes back the two tokens at `SUPERSEDED`, and
+  shows only attempt 2's answer. Left out: a model, and server fencing and retraction.
+- **5a, `s5a_late_dashboard`.** The courier appends two stages before anyone reads. A late
+  dashboard reads from `BEGINNING` and gets all four stages. A live view reads from `END` and gets
+  only the two that come after it started. Left out: the relay half of 5b.
+- **6, `s6_location_topic`.** The app reads `events`. The `tracking started` record opens a
+  second client read on `location` from `BEGINNING`, which also gets the position from before it.
+- **7a, `s7a_failed_delivery`.** The courier Activity appends two stages and fails. The read ends
+  at the Workflow's end, and the backend gets `CourierLost` from the Workflow's result. Left out: a
+  close that carries the failure.
 - **7b, `s7b_retried_courier`.** Activity attempt 1 appends and stalls past its 2 s timeout. Attempt
   2 appends after `SUPERSEDED`. Attempt 1 then appends late, and the record arrives marked `stale`.
   Left out: fencing and a retraction at the timeout.
+- **8, `s8_publisher_replay`.** `Publisher` publishes with `workflow_writer`, and a `Replayer`
+  replays its History with a store at a port where nothing listens. Each flush's result comes from
+  its marker. Left out: a Workflow that reads a stream, which `j8_replay_opt_out` shows.
 
 ## Readers that sleep
 
@@ -51,15 +69,27 @@ They turn on `notify_on_append()` themselves.
 - **`j1_sleeping_client`.** The owner publishes three bursts with gaps longer than the idle wait,
   then closes its stream. A client reader sleeps on the notifier in each gap and wakes on the next
   burst.
+- **1b, `j1b_parent_relay`.** `Order` starts its `Delivery` child, reads the child's stages with
+  `workflow_reader`, and publishes each one again on its own topic with `workflow_writer`. The app
+  reads only the parent's stream. Left out: a child in another namespace (1c).
 - **`j2_slack_connector`.** A connector Workflow follows a channel's stream in the same namespace
   and posts each message through an Activity. Between messages it sleeps with no task. Left out:
   Slack itself, and a channel in another namespace, which needs Nexus.
 - **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
   closes its stream with its status. A client tail sleeps between lines.
+- **5b, `j5b_dashboard_and_relay`.** `Order` relays its child's stream as in `j1b_parent_relay`.
+  After the first relayed stage, a dashboard opens late on the child's stream and reads it from
+  `BEGINNING`. Both get every stage. Left out: a child in another namespace.
+- **7a, `j7a_close_with_error`.** `Delivery` publishes two stages, then closes its stream with a
+  `CourierLost` error and runs on. A client read and a `Dispatcher` Workflow's `workflow_reader`
+  both get the two stages, then raise `CourierLost`. Left out: an owner that fails with no close.
+- **8, `j8_replay_opt_out`.** Two `Audit` Workflows read one stream, one with the default
+  `replay_from_store=True` and one with `False`. A Worker restart replays both. Then a `Replayer`
+  with no connected store replays only the one that kept its batches in History.
 
-The scenarios 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code. This release
-does that with `workflow_writer`, through Local Activities rather than with the Workflow Task,
-but no demo here shows those scenarios yet.
+This release publishes from Workflow code with `workflow_writer`, through Local Activities rather
+than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. The
+dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
 
 ## Bridge demos
 
@@ -113,6 +143,4 @@ Bridge adds demos of 1b, 1c, 3d, 3e, 4 and 5c, which need Nexus, and Nexus versi
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope. Whether a store claim resolves
   across Nexus is still open.
-- A client reader of a close that carries a failure (7a). A client read raises the failure after the
-  last record, as the live lane checks, but only the Nexus caller has a demo, `n7a_failed_delivery`.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.
