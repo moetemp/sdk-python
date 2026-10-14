@@ -1,0 +1,1 @@
+Added `temporalio.contrib.streams.nexus.StreamOperationHandler`, a Nexus operation whose start hands its caller a stream, and `stream_ref_from_token()`. The caller sees the stream's notifications as progress and its close outcome as the result.
