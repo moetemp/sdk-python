@@ -50,7 +50,12 @@ class RecordKind(enum.IntEnum):
     """
 
     SUPERSEDED = 3
-    """A later attempt of the same producer started writing.
+    """A later attempt of the producer in ``producer_id`` started writing.
+
+    It withdraws only what that producer wrote on this topic in its earlier
+    attempts. Records of other producers stay valid, and so does the rest of
+    the stream. Match the earlier records on ``producer_id`` and an
+    ``attempt`` below :attr:`Supersession.attempt`.
 
     Core's reader synthesizes it from the records it observed. No store
     holds it, so every store reports a retry the same way. Its cursor is the
@@ -81,7 +86,12 @@ class Cursor:
 
 @dataclass(frozen=True)
 class Supersession:
-    """What a :attr:`RecordKind.SUPERSEDED` record reports."""
+    """What a :attr:`RecordKind.SUPERSEDED` record reports.
+
+    ``producer_id`` started ``attempt``, so the records it wrote in
+    ``previous_attempt`` and before are withdrawn. No other producer's
+    records are.
+    """
 
     producer_id: str
     previous_attempt: int

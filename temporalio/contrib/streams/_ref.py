@@ -35,13 +35,10 @@ class StreamRef:
     """One stream, named by its owner and its topic.
 
     ``kind`` says what owns the stream; only ``"workflow"`` exists in this
-    release. A Workflow ref carries ``workflow_id`` and, when pinned to one
-    run, ``run_id``. The stream belongs to the run chain either way, and a
-    read returns the chain's records. ``run_id`` changes two things: which
-    chain the handle looks up, and that a read ends when that run closes,
-    Continue-as-New included. Without it a reader keeps reading across
-    Continue-as-New. ``topic`` is the topic a handle opened from the ref
-    addresses when a call names none.
+    release. A Workflow ref carries ``workflow_id`` and names no run: the
+    stream belongs to the Workflow's run chain, and a read on it follows the
+    chain across Continue-as-New. ``topic`` is the topic a handle opened from
+    the ref addresses when a call names none.
 
     The default data converter carries it as JSON, so it can be a Workflow
     argument or an Activity result.
@@ -49,7 +46,6 @@ class StreamRef:
 
     kind: str
     workflow_id: str
-    run_id: str | None = None
     topic: str = DEFAULT_TOPIC
 
     def __post_init__(self) -> None:
@@ -87,7 +83,6 @@ class StreamRef:
         cls,
         workflow_id: str,
         *,
-        run_id: str | None = None,
         topic: str | StreamTopic[Any] | None = None,
     ) -> StreamRef:
         """A ref to ``topic`` of ``workflow_id``'s stream.
@@ -96,7 +91,7 @@ class StreamRef:
         :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
         """
         name, _ = resolve_topic(topic)
-        return cls("workflow", workflow_id, run_id=run_id, topic=name)
+        return cls("workflow", workflow_id, topic=name)
 
     def with_topic(self, topic: str | StreamTopic[Any] | None) -> StreamRef:
         """The same owner, naming ``topic`` instead.

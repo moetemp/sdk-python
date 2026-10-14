@@ -38,6 +38,7 @@ from temporalio.converter import (
     WithSerializationContext,
 )
 from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
 from tests.helpers import new_worker
 
@@ -78,7 +79,7 @@ async def stream_tokens(tokens: list[str]) -> bool:
         raise ApplicationError("retry me")
     await producer.append(*tokens[attempt:])
     await producer.finish()
-    return stream.ref.run_id == activity.info().workflow_run_id
+    return stream.ref == StreamRef.for_workflow(activity.info().workflow_id or "")
 
 
 @workflow.defn
@@ -102,13 +103,13 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
     async with new_worker(
         streams_client, RunsStreamingActivity, activities=[stream_tokens]
     ) as worker:
-        pinned = await streams_client.execute_workflow(
+        follows_chain = await streams_client.execute_workflow(
             RunsStreamingActivity.run,
             ["a", "b", "c"],
             id=workflow_id,
             task_queue=worker.task_queue,
         )
-    assert pinned
+    assert follows_chain
     records = await read_all(
         get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
@@ -168,15 +169,16 @@ async def test_an_activity_without_a_store_is_told(client: Client):
     assert "no stream store is registered" in said
 
 
-async def test_a_client_handle_follows_the_chain_or_pins_a_run(client: Client):
+async def test_a_client_handle_follows_the_chain(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
     follower = get_stream_handle(streams_client, "wf")
     assert follower.ref == StreamRef.for_workflow("wf")
-    pinned = get_stream_handle(streams_client, "wf", run_id="run", topic=EVENTS)
-    assert pinned.ref == StreamRef.for_workflow("wf", run_id="run", topic=EVENTS)
-    assert get_stream_handle(streams_client, pinned.ref).ref == pinned.ref
-    with pytest.raises(ValueError, match="carries its own"):
-        get_stream_handle(streams_client, pinned.ref, run_id="other")
+    assert follower._address("output").run_id == ""
+    events = get_stream_handle(streams_client, "wf", topic=EVENTS)
+    assert events.ref == StreamRef.for_workflow("wf", topic=EVENTS)
+    assert get_stream_handle(streams_client, events.ref).ref == events.ref
+    with pytest.raises(ValueError, match="carries its own topic"):
+        get_stream_handle(streams_client, events.ref, topic=TOKENS)
     with pytest.raises(ValueError, match="no stream store is registered"):
         get_stream_handle(client, "wf")
 
@@ -277,6 +279,21 @@ async def test_a_retry_through_a_nonce_codec_still_dedupes(client: Client):
         await owner.signal(Waits.finish)
         await owner.result()
     assert [r.value for r in await read_all(stream.read())] == ["a"]
+
+
+async def test_an_activity_reads_the_chain_and_writes_to_its_run(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    env = ActivityEnvironment(client=streams_client)
+
+    async def addresses() -> tuple[str, str]:
+        inner = activity_handle()._inner
+        return (
+            inner._address("output").run_id,
+            inner._address("output", producer=True).run_id,
+        )
+
+    read, write = await env.run(addresses)
+    assert (read, write) == ("", ActivityEnvironment.default_info().workflow_run_id)
 
 
 @activity.defn
