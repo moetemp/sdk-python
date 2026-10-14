@@ -232,6 +232,9 @@ class _RunWriters:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
         self.topics: dict[str, _Topic] = {}
+        # Topics this run closed. A flush that finds the run's own close takes
+        # it as landed, so no writer may buffer on such a topic.
+        self.closed: set[str] = set()
 
 
 # Held on the run's runtime, so the state goes with the run at eviction and is
@@ -434,7 +437,8 @@ def workflow_writer(
 
     Raises:
         ValueError: ``topic`` is empty, or ``min_flush_interval`` is negative
-            or not shorter than ``start_to_close_timeout``.
+            or not shorter than ``start_to_close_timeout``, or
+            :func:`close_workflow_stream` closed the topic in this run.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
@@ -446,6 +450,8 @@ def workflow_writer(
     writers = _run_writers(create=True)
     assert writers is not None
     state = writers.topics.get(name)
+    if state is None and name in writers.closed:
+        raise ValueError(f"topic {name!r} was already closed in this run")
     if state is None:
         interval = min_flush_interval or timedelta(0)
         if interval < timedelta(0):
@@ -723,10 +729,13 @@ async def close_workflow_stream(
         )
     elif result is not None:
         outcome.result.CopyFrom(workflow.payload_converter().to_payloads([result])[0])
-    writers = _run_writers(create=False)
+    # Without the interceptor no writer can open, so none has to be refused.
+    writers = _run_writers(create=_has_streams_interceptor(workflow._Runtime.current()))
     state = writers.topics.get(name) if writers is not None else None
     if state is not None:
         await WorkflowStreamWriter(state).finish()
+    elif writers is not None:
+        writers.closed.add(name)
     await workflow.execute_local_activity(
         CLOSE_ACTIVITY,
         args=[
