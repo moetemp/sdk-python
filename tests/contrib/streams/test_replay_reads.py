@@ -12,6 +12,7 @@ import asyncio
 import base64
 import dataclasses
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -268,6 +269,42 @@ async def test_a_later_read_replays_from_the_previous_reads_state(
         plugin._read_states = ReadStates()
         with pytest.raises(StreamError, match="previous read"):
             await codec_of(streams).decode([second])
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_first_range_trimmed_past_its_hold_is_lost_not_other_records(
+    client: Client,
+):
+    import os
+
+    url = os.environ.get("STREAMS_REDIS_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+    # Retention trims as the next appends land, once the reader's hold lapsed.
+    streams = await connect_with(
+        client,
+        RedisStreams(
+            url,
+            key_prefix=f"replay-reads-{uuid.uuid4().hex}",
+            retention=timedelta(milliseconds=300),
+            floor_lease=timedelta(milliseconds=100),
+        ),
+    )
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await producer.append("a", "b")
+        payload = await read_positions(streams, owner, read_seq=1)
+        await asyncio.sleep(0.6)
+        await producer.append("c")
+        await producer.append("d")
+        plugin_of(streams)._batches.clear()
+        # The read began at the stream's start, so it has no cursor to find
+        # gone. The replay still fails for a retry, not as nondeterminism.
+        with pytest.raises(StreamReplayRangeLostError):
+            await codec_of(streams).decode([payload])
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
