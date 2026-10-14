@@ -34,28 +34,39 @@ workflowservice_request_response_proto = (
     / "v1"
     / "request_response.proto"
 )
-NEX_GEN_VERSION = "0.2.8"
+# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
+# released yet. Once they land upstream, this moves back to a released nexgen version.
+NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
+NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
+nex_gen_root = base_dir / ".nexgen-system" / NEX_GEN_REVISION
 
 
 def nex_gen_command() -> list[str]:
     if bin_path := os.environ.get("NEX_GEN_BIN"):
         return [bin_path]
 
-    if shutil.which("nexgen") is None:
+    binary = nex_gen_root / "bin" / "nexgen"
+    if not binary.exists():
         subprocess.check_call(
             [
                 "cargo",
                 "install",
                 "--locked",
                 "nexgen",
-                "--version",
-                NEX_GEN_VERSION,
+                "--git",
+                NEX_GEN_REPOSITORY,
+                "--rev",
+                NEX_GEN_REVISION,
                 "--features",
                 "advanced",
-                "--force",
-            ]
+                "--root",
+                str(nex_gen_root),
+            ],
+            # The git CLI honours the user's URL rewrites and credentials,
+            # which cargo's built-in client does not.
+            env={**os.environ, "CARGO_NET_GIT_FETCH_WITH_CLI": "true"},
         )
-    return ["nexgen"]
+    return [str(binary)]
 
 
 def build_descriptor_set(descriptor_path: Path) -> None:
