@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import contextvars
 import inspect
 import json
@@ -13,6 +14,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 import warnings
 from abc import ABC, abstractmethod
 from collections import deque
@@ -683,6 +685,10 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_resolve_nexus_operation_start(job.resolve_nexus_operation_start)
         elif job.HasField("resolve_nexus_operation"):
             self._apply_resolve_nexus_operation(job.resolve_nexus_operation)
+        elif job.HasField("resolve_nexus_operation_progress"):
+            self._apply_resolve_nexus_operation_progress(
+                job.resolve_nexus_operation_progress
+            )
         elif job.HasField("resolve_request_cancel_external_workflow"):
             self._apply_resolve_request_cancel_external_workflow(
                 job.resolve_request_cancel_external_workflow
@@ -695,10 +701,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_signal_workflow(job.signal_workflow)
         elif job.HasField("initialize_workflow"):
             self._apply_initialize_workflow(job.initialize_workflow)
-        elif job.HasField("resolve_nexus_operation_progress"):
-            # Progress is a hint this Worker doesn't act on. Failing the task
-            # would let any server that sends progress break the Workflow.
-            pass
         elif job.HasField("update_random_seed"):
             self._apply_update_random_seed(job.update_random_seed)
         elif job.HasField("resolve_stream_wake"):
@@ -1152,6 +1154,26 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             )
         else:
             raise RuntimeError("Nexus operation did not have a result")
+
+    def _apply_resolve_nexus_operation_progress(
+        self,
+        job: temporalio.bridge.proto.workflow_activation.ResolveNexusOperationProgress,
+    ) -> None:
+        handle = self._pending_nexus_operations.get(job.seq)
+        if not handle:
+            # Progress is a hint, and Core only sends it for an operation it
+            # still sees as started, so a handle that is already gone, for
+            # example after a cancel, has no use for it.
+            return
+        handle._resolve_progress(
+            temporalio.workflow.NexusOperationProgress(
+                position=job.position,
+                counter=job.counter,
+                # Read-only, so Workflow code can't change what the next reader
+                # of latest_progress sees.
+                metadata=types.MappingProxyType(dict(job.metadata)),
+            )
+        )
 
     def _apply_resolve_request_cancel_external_workflow(
         self,
@@ -3842,6 +3864,13 @@ class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
         self._payload_converter = payload_converter
         self._failure_converter = failure_converter
         self._event_group_markers = _capture_event_group_markers(input.event_groups)
+        self._latest_progress: temporalio.workflow.NexusOperationProgress | None = None
+        self._progress_waiters: list[
+            tuple[
+                int, asyncio.Future[temporalio.workflow.NexusOperationProgress | None]
+            ]
+        ] = []
+        self._result_fut.add_done_callback(lambda _: self._end_progress_waits())
 
     @property
     def operation_token(self) -> str | None:
@@ -3849,6 +3878,56 @@ class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
             return self._start_fut.result()
         except BaseException:
             return None
+
+    @property
+    def latest_progress(self) -> temporalio.workflow.NexusOperationProgress | None:
+        return self._latest_progress
+
+    async def progress(
+        self, *, after_counter: int = 0
+    ) -> temporalio.workflow.NexusOperationProgress | None:
+        latest = self._latest_progress
+        if latest is not None and latest.counter > after_counter:
+            return latest
+        if self._result_fut.done():
+            return None
+        waiter: asyncio.Future[temporalio.workflow.NexusOperationProgress | None] = (
+            self._instance.create_future()
+        )
+        entry = (after_counter, waiter)
+        self._progress_waiters.append(entry)
+        try:
+            return await waiter
+        finally:
+            # A wait given up on, such as one under a timeout in a loop, would
+            # otherwise stay in the list until the next progress arrives.
+            with contextlib.suppress(ValueError):
+                self._progress_waiters.remove(entry)
+
+    def _resolve_progress(
+        self, progress: temporalio.workflow.NexusOperationProgress
+    ) -> None:
+        if (
+            self._latest_progress is not None
+            and progress.counter <= self._latest_progress.counter
+        ):
+            return
+        self._latest_progress = progress
+        still_waiting = []
+        for after_counter, waiter in self._progress_waiters:
+            if waiter.done():
+                continue
+            if progress.counter > after_counter:
+                waiter.set_result(progress)
+            else:
+                still_waiting.append((after_counter, waiter))
+        self._progress_waiters = still_waiting
+
+    def _end_progress_waits(self) -> None:
+        for _, waiter in self._progress_waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        self._progress_waiters = []
 
     def __await__(self) -> Generator[Any, Any, OutputT]:
         return self._task.__await__()
