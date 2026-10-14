@@ -37,7 +37,7 @@ deployments:
 | `streamwake.minInterval` | 1 s | The shortest time between two Workflow Tasks that only carry wakes |
 | `history.maximumStreamWakeSources` | 32 | How many readers one Workflow execution can have |
 | `streamnotifier.maxCallbacks` | 2,000 | How many Workflow readers one stream can have |
-| `streamnotifier.ownerCheckInterval` | 5 min | How often the notifier checks a stream's owner |
+| `streamnotifier.ownerCheckInterval` | 30 s | How often the notifier checks a stream's owner |
 | `streamnotifier.idleTimeoutNoCallbacks` | 1 h | How long a notifier with no reader stays |
 
 ## Turn notifications on
@@ -140,10 +140,11 @@ class Connector:
 
 `close_workflow_stream` lands what the topic's writer buffered and writes
 `FINISH` first. Then one Local Activity closes the store and the notifier.
-Every read ends after the last record. A sleeping reader wakes and sees the
-outcome. A Workflow reader raises the close's error after its last batch.
-The store closes before the notifier, so a Workflow reader that reaches the
-end first waits up to `close_wait` (10 seconds) for the close's wake.
+Every read ends after the last record. A sleeping reader wakes. The store
+keeps the first close's outcome and hands it to every reader that reaches
+the end, so a client read raises the close's error after its last record,
+and a Workflow reader raises it after its last batch. A close with a result
+ends the read with no error.
 
 Close explicitly. Without a close, the notifier's owner check closes the
 stream up to `ownerCheckInterval` plus `ownerCloseGrace` after the owner
