@@ -86,7 +86,9 @@ A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
 
 Every read follows the Workflow's run chain across Continue-as-New and ends
-when the chain closes. A reader can't pin one run. An Activity's
+when the chain closes. A reader can't stop at one run. A Workflow id can
+start a new chain after the old one closed, and a handle opens the newest
+chain unless `chain_run_id=` names a run of another one. An Activity's
 `record.producer_id` names the run that scheduled it.
 To resume later, keep the last `record.cursor` and pass it back as
 `read(after=cursor)`.

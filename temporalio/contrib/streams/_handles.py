@@ -41,7 +41,11 @@ from temporalio.bridge.proto.streams import (
 from temporalio.client import Client
 from temporalio.contrib.streams._body import batch_digest, content_hash, encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
-from temporalio.contrib.streams._errors import StreamUnsupportedError
+from temporalio.contrib.streams._errors import (
+    StreamError,
+    StreamNotFoundError,
+    StreamUnsupportedError,
+)
 from temporalio.contrib.streams._local_activity import LocalCall, current_local_call
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
@@ -53,6 +57,7 @@ from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wire import WireRecord, from_read, to_wire
 from temporalio.converter import DataConverter, WorkflowSerializationContext
+from temporalio.service import RPCError, RPCStatusCode
 
 __all__ = [
     "ActivityStreamHandle",
@@ -172,7 +177,7 @@ class StreamProducer(Generic[T]):
             for index, value in enumerate(values)
         ]
         request = AppendRequest(
-            stream=self._handle._address(self._topic, producer=True),
+            stream=self._handle._address(self._topic),
             sequence=self._sequence,
             records=await _append_records(converter, wires),
             digest=batch_digest(wires),
@@ -221,16 +226,11 @@ class StreamHandle:
         plugin: StreamStorePlugin,
         client: Client,
         ref: StreamRef,
-        *,
-        _producer_run_id: str = "",
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.get_stream_handle`."""
         self._plugin = plugin
         self._client = client
         self._ref = ref
-        # An Activity writes to the chain of the run that scheduled it, even
-        # once a new chain took the Workflow id. Reads follow the chain.
-        self._producer_run_id = _producer_run_id
         # The stream is the Workflow's, and the Workflow encodes its records with
         # its own context, so every reader and producer on it uses that context.
         self._converter: DataConverter = client.data_converter.with_context(
@@ -324,7 +324,8 @@ class StreamHandle:
         self, topic: str, after: Cursor, result_type: type | None
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         service = await self._plugin._service_for(self._client)
-        request = ReadRequest(stream=self._address(topic), after=after.token)
+        address = self._address(topic, run_id=await self._read_run_id())
+        request = ReadRequest(stream=address, after=after.token)
         request.wait.FromTimedelta(_READ_WAIT)
         while True:
             response = await call(service.read(request))
@@ -391,14 +392,49 @@ class StreamHandle:
     ) -> tuple[str, type | None]:
         return resolve_topic(self._ref.topic if topic is None else topic, result_type)
 
-    def _address(self, topic: str, *, producer: bool = False) -> StreamAddress:
+    def _address(self, topic: str, *, run_id: str | None = None) -> StreamAddress:
         return StreamAddress(
             namespace=self._client.namespace,
             owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
             workflow_id=self._ref.workflow_id,
-            run_id=self._producer_run_id if producer else "",
+            run_id=(self._ref.chain_run_id or "") if run_id is None else run_id,
             topic=topic,
         )
+
+    async def _read_run_id(self) -> str:
+        """The run a read names to Core, which ends a read when that run closes.
+
+        A read must end only with its chain. While the chain that holds
+        ``chain_run_id`` is the Workflow id's newest, the read names no run
+        and follows that chain to its end. Once a newer chain took the id,
+        the old chain has ended, and a read on any of its runs delivers what
+        is left and ends.
+
+        Raises:
+            StreamNotFoundError: Temporal holds no run ``chain_run_id``.
+            StreamError: Describing the Workflow failed.
+        """
+        run_id = self._ref.chain_run_id
+        if not run_id:
+            return ""
+        workflow_id = self._ref.workflow_id
+        try:
+            named = await self._client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            ).describe()
+            newest = await self._client.get_workflow_handle(workflow_id).describe()
+        except RPCError as error:
+            if error.status == RPCStatusCode.NOT_FOUND:
+                raise StreamNotFoundError(
+                    f"Workflow {workflow_id!r} has no run {run_id!r}"
+                ) from error
+            raise StreamError(
+                f"could not describe Workflow {workflow_id!r}: {error}"
+            ) from error
+        first = named.raw_description.workflow_execution_info.first_run_id
+        if first == newest.raw_description.workflow_execution_info.first_run_id:
+            return ""
+        return run_id
 
 
 class ActivityStreamHandle:
@@ -525,8 +561,10 @@ class ActivityStreamHandle:
 def activity_handle() -> ActivityStreamHandle:
     """The stream of the Workflow that scheduled the running Activity.
 
-    A read on it follows the Workflow's run chain, as every read does. Its
-    producers write to the chain of the scheduling run. To write to another
+    Its ref names the chain of the scheduling run with ``chain_run_id``, so
+    its producers write to that chain even once a new chain took the
+    Workflow id. A read on it follows that chain across Continue-as-New and
+    ends when the chain ends. To write to another
     Workflow's stream, use
     :func:`get_stream_handle` with ``temporalio.activity.client()`` and a
     producer id of your own.
@@ -562,16 +600,14 @@ def activity_handle() -> ActivityStreamHandle:
                 "a rerun; build the Worker from a client that carries the store"
             )
     client = temporalio.activity.client()
-    ref = StreamRef.for_workflow(info.workflow_id)
+    ref = StreamRef.for_workflow(info.workflow_id, chain_run_id=info.workflow_run_id)
     identity = ActivityProducer(
         workflow_id=info.workflow_id,
         run_id=info.workflow_run_id,
         activity_id=info.activity_id,
         attempt=info.attempt,
     )
-    inner = StreamHandle(
-        store_for_client(client), client, ref, _producer_run_id=info.workflow_run_id
-    )
+    inner = StreamHandle(store_for_client(client), client, ref)
     return ActivityStreamHandle(inner, identity, _attempt_producers(), local_call)
 
 
@@ -596,6 +632,7 @@ def get_stream_handle(
     workflow_id: str | StreamRef,
     *,
     topic: str | StreamTopic[Any] | None = None,
+    chain_run_id: str | None = None,
 ) -> StreamHandle:
     """A handle on a Workflow's stream, through the client's store.
 
@@ -609,16 +646,21 @@ def get_stream_handle(
             :class:`temporalio.contrib.streams.StreamRef` that names it.
         topic: The handle's default topic. Without one it is
             :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        chain_run_id: Any run of the chain to open. Without one the handle
+            opens the Workflow id's newest chain. It does not end a read
+            when that run closes.
 
     Raises:
-        ValueError: ``topic`` was given with a ref, or no stream store is
-            registered on ``client``.
+        ValueError: ``topic`` or ``chain_run_id`` was given with a ref, or no
+            stream store is registered on ``client``.
     """
     if isinstance(workflow_id, StreamRef):
-        if topic is not None:
-            raise ValueError("a StreamRef carries its own topic")
+        if topic is not None or chain_run_id is not None:
+            raise ValueError("a StreamRef carries its own topic and chain_run_id")
         ref = workflow_id
     else:
-        ref = StreamRef.for_workflow(workflow_id, topic=topic)
+        ref = StreamRef.for_workflow(
+            workflow_id, topic=topic, chain_run_id=chain_run_id
+        )
     ref._require_supported()
     return StreamHandle(store_for_client(client), client, ref)
