@@ -465,6 +465,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion()
         )
         self._current_completion.successful.SetInParent()
+        self._stream_commit: (
+            temporalio.bridge.proto.workflow_commands.WorkflowOutputStreamCommit | None
+        ) = None
 
         self._current_activation_error: Exception | None = None
         self._deployment_version_for_current_task = (
@@ -1383,6 +1386,16 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
 
     def workflow_is_read_only(self) -> bool:
         return self._read_only
+
+    def workflow_stream_commit(
+        self,
+    ) -> temporalio.bridge.proto.workflow_commands.WorkflowOutputStreamCommit:
+        # Core takes one commit per completion, wherever it sits among the commands.
+        if self._stream_commit is None:
+            command = self._add_command()
+            command.workflow_output_stream_commit.SetInParent()
+            self._stream_commit = command.workflow_output_stream_commit
+        return self._stream_commit
 
     def workflow_memo(self) -> Mapping[str, Any]:
         if self._untyped_converted_memo is None:
