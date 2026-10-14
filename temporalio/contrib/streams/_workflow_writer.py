@@ -53,7 +53,10 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handles import StreamProducer, activity_handle
-from temporalio.contrib.streams._local_activity import _WorkflowInbound
+from temporalio.contrib.streams._local_activity import (
+    _WorkflowInbound,
+    require_local_activity,
+)
 from temporalio.contrib.streams._plugin import call
 from temporalio.contrib.streams._record import Cursor
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
@@ -780,7 +783,14 @@ async def close_workflow_stream(
         ],
         start_to_close_timeout=start_to_close_timeout,
         retry_policy=retry_policy,
-        summary=f"stream close {name}",
+        summary=f"stream close {name}"
+        + (
+            " with a failure"
+            if error is not None
+            else " with a result"
+            if result is not None
+            else ""
+        ),
     )
 
 
@@ -792,6 +802,12 @@ async def close_activity(topic: str, finish: bool, outcome: RawValue) -> None:
     producer. Then it sends Core's close with the outcome through the
     codec, which closes the store and then the stream's notifier.
     """
+    try:
+        require_local_activity("the stream close Activity")
+    except StreamUnsupportedError as error:
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
     if outcome.payload.metadata.get("messageType") != _CLOSE_TYPE:
         raise ApplicationError(
             "the stream close input is not a CloseRequest", non_retryable=True
