@@ -45,10 +45,22 @@ def test_a_ref_names_a_workflow_stream():
 
 
 def test_a_ref_round_trips_through_the_default_converter():
-    ref = StreamRef.for_workflow("wf", run_id="run", topic=OUT)
+    ref = StreamRef.for_workflow("wf", topic=OUT)
     converter = DataConverter.default.payload_converter
     payload = converter.to_payloads([ref])[0]
     assert converter.from_payloads([payload], [StreamRef])[0] == ref
+
+
+def test_a_ref_that_names_a_run_decodes_as_the_chain():
+    # A reader follows the run chain, so a run id from another process is
+    # dropped rather than refused.
+    converter = DataConverter.default.payload_converter
+    payload = Payload(
+        metadata={"encoding": b"json/plain"},
+        data=b'{"kind": "workflow", "workflow_id": "wf", "run_id": "r", "topic": "out"}',
+    )
+    ref = converter.from_payloads([payload], [StreamRef])[0]
+    assert ref == StreamRef.for_workflow("wf", topic=OUT)
 
 
 def test_a_ref_refuses_what_it_cannot_name():
