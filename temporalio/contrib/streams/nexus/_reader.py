@@ -8,8 +8,11 @@ stream service on a Nexus endpoint, and waits for progress once a read finds
 nothing new. A read that waits its idle wait and finds nothing arms the stream,
 so the next append notifies the operation's callers.
 
-Every read is a Nexus operation of the Workflow, so History records what each
-read answered, and a replay hands over the same batches at the same points.
+By default every read is a Nexus operation of the Workflow, so History
+records what each read answered, and a replay hands over the same batches at
+the same points. With ``replay_from_store=True`` each read runs in a Local
+Activity, History keeps only the range that crossed and its digest, and a
+replay reads that range again from the owner's store.
 """
 
 from __future__ import annotations
@@ -22,7 +25,12 @@ from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast
 
 from temporalio import workflow
-from temporalio.contrib.streams._errors import StreamError, StreamRecordError
+from temporalio.common import RawValue
+from temporalio.contrib.streams._errors import (
+    StreamError,
+    StreamRecordError,
+    StreamUnsupportedError,
+)
 from temporalio.contrib.streams._record import Cursor, RecordKind, Supersession
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._wire import WireRecord
@@ -33,6 +41,7 @@ from temporalio.contrib.streams.nexus._generated import (
     TemporalStreams,
 )
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
+from temporalio.exceptions import ActivityError, ApplicationError
 
 __all__ = [
     "ReadPosition",
@@ -53,6 +62,10 @@ _DRAIN_WAIT_MS = 2000
 # only a read finds that record. The wait doubles while nothing arrives.
 _FIRST_RECHECK = timedelta(minutes=1)
 _MAX_RECHECK = timedelta(hours=1)
+# A direct read's Local Activity waits at most its read's wait, and this
+# leaves room for the call around it.
+_DIRECT_READ_SLACK = timedelta(seconds=10)
+_READERS_ATTRIBUTE = "_temporal_stream_nexus_readers"
 
 
 class _RecheckDue(Exception):
@@ -205,9 +218,10 @@ class StreamReader(Generic[T]):
     progress, so this read is what finds its record. Each such read costs a
     timer and a read in History.
 
-    Every read is a Nexus operation result in the caller's History, about
-    three events and up to one read answer (1 MiB of records) each. To read a
-    long stream, Continue-as-New before History grows too large: pass
+    By default every read is a Nexus operation result in the caller's
+    History, about three events and up to one read answer (1 MiB of records)
+    each. With ``replay_from_store=True`` a read is one Local Activity marker
+    of a few hundred bytes, as below. To read a long stream, Continue-as-New before History grows too large: pass
     :attr:`position` to the new run, start the operation again there, and
     build the reader with ``after=position``. The position is at most about
     22 KiB. After a successful completion, the
@@ -233,6 +247,24 @@ class StreamReader(Generic[T]):
     result travels back as one Nexus operation result, which this Worker's
     codec decodes. So the Workers on both sides need the same payload codec,
     as Workers in one namespace normally have.
+
+    With ``replay_from_store=True`` each read runs in a Local Activity, which
+    reaches the endpoint's stream service through the transport that
+    :class:`StreamDirectReads` on the Worker's client maps the endpoint to.
+    The read names a floor holder, ``<caller namespace>/<run id>/<reader
+    number>``, so the owner's store keeps the records it read. The marker
+    holds the range that crossed and Core's digest of its records, not the
+    records. The Worker turns it back into the batch before Workflow code
+    sees it, from a cache on the live Workflow Task, or else with a
+    ``read_range`` through the same transport, which checks the digest. A
+    replay that finds other records fails the Workflow Task as
+    nondeterminism. One that finds the range gone, or can't reach the
+    endpoint, fails the Workflow Task, which is retried. So the endpoint
+    must stay reachable, and its store must keep the records, while the run
+    can replay. The reader never releases its hold while its run is open.
+    Each read and replay renews it, and it lapses the store's floor lease
+    after the last one. A read failure reaches :meth:`next` as an
+    ``ActivityError`` in place of a ``NexusOperationError``.
     """
 
     def __init__(
@@ -244,6 +276,7 @@ class StreamReader(Generic[T]):
         after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
         idle_wait: timedelta = timedelta(seconds=2),
+        replay_from_store: bool = False,
     ) -> None:
         """Read the stream ``handle``'s operation returns.
 
@@ -266,6 +299,12 @@ class StreamReader(Generic[T]):
                 stream and the reader waits for progress. Zero arms on the
                 first empty read. Keep it well below the 10 second timeout of
                 a Nexus request.
+            replay_from_store: Read in a Local Activity and record only the
+                range of each read and its digest, so the records stay out
+                of History. It needs :class:`StreamDirectReads` on the
+                Worker's client with a transport for ``endpoint``, and on
+                any Replayer. ``False`` records each read's answer, records
+                included.
 
         Raises:
             ValueError: ``drain_limit`` is not positive, or ``idle_wait`` is
@@ -307,6 +346,8 @@ class StreamReader(Generic[T]):
         self._stale_records: list[ReadStaleRecord] = []
         self._undecodable: StreamRecordError | None = None
         self._recheck = _FIRST_RECHECK
+        self._replay_from_store = replay_from_store
+        self._reader_id = str(_next_reader()) if replay_from_store else ""
 
     @property
     def cursor(self) -> Cursor:
@@ -507,23 +548,49 @@ class StreamReader(Generic[T]):
         latest = self._handle.latest_progress
         if latest is not None:
             self._counter = max(self._counter, latest.counter)
-        client = workflow.create_nexus_client(
-            service=TemporalStreams, endpoint=self._endpoint
-        )
         # After the completion no progress follows, so a drain read never arms.
         arm = not self._operation_resolved
-        self._answer = await client.execute_operation(
-            TemporalStreams.read,
-            ReadInput(
-                stream=self._stream,
-                after_token=self._cursor or None,
-                max_records=_BATCH,
-                wait_ms=self._idle_wait_ms if arm else _DRAIN_WAIT_MS,
-                state=self._state,
-                arm=True if arm else None,
-            ),
+        input = ReadInput(
+            stream=self._stream,
+            after_token=self._cursor or None,
+            max_records=_BATCH,
+            wait_ms=self._idle_wait_ms if arm else _DRAIN_WAIT_MS,
+            state=self._state,
+            arm=True if arm else None,
         )
+        if self._replay_from_store:
+            self._answer = await self._direct_read(input)
+        else:
+            client = workflow.create_nexus_client(
+                service=TemporalStreams, endpoint=self._endpoint
+            )
+            self._answer = await client.execute_operation(TemporalStreams.read, input)
         self._pending = list(self._answer.records)
+
+    async def _direct_read(self, input: ReadInput) -> ReadOutput:
+        # Imported here, since that module imports the follower, which imports this one.
+        from temporalio.contrib.streams.nexus._direct import (
+            DIRECT_READ_ACTIVITY,
+            answer_of,
+        )
+
+        wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
+        try:
+            raw = await workflow.execute_local_activity(
+                DIRECT_READ_ACTIVITY,
+                args=[self._endpoint, self._reader_id, input],
+                result_type=RawValue,
+                start_to_close_timeout=wait + _DIRECT_READ_SLACK,
+                summary=f"stream read {input.stream.topic}",
+            )
+        except (ActivityError, ApplicationError) as error:
+            unsupported = _unsupported(error)
+            if unsupported is None:
+                raise
+            # A Worker without the transport is a deployment fault, so the
+            # Workflow Task fails and is retried rather than the Workflow.
+            raise StreamUnsupportedError(unsupported) from error
+        return answer_of(raw.payload)
 
     def _stale(
         self, stored: RecordWire, cursor: Cursor, batched: int
@@ -562,3 +629,23 @@ class StreamReader(Generic[T]):
                 [wire.body], [self._item_type]
             )[0]
         return wire.producer_id, wire.attempt, value
+
+
+def _next_reader() -> int:
+    runtime = workflow._Runtime.current()
+    number = getattr(runtime, _READERS_ATTRIBUTE, 0) + 1
+    setattr(runtime, _READERS_ATTRIBUTE, number)
+    return number
+
+
+def _unsupported(error: BaseException) -> str | None:
+    """The message of a ``StreamUnsupportedError`` the read Activity raised, if it did."""
+    found: BaseException | None = error
+    while found is not None:
+        if (
+            isinstance(found, ApplicationError)
+            and found.type == StreamUnsupportedError.__name__
+        ):
+            return found.message
+        found = found.cause if isinstance(found, ActivityError) else None
+    return None
