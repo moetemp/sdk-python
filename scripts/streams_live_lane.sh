@@ -240,6 +240,7 @@ gate tests/contrib/streams/test_store_plugin.py \
   test_a_worker_flushes_notifications_after_it_stops
 gate tests/contrib/streams/test_sleeping_reader_demos.py \
   test_j1_a_client_wakes_on_each_burst_and_ends_at_the_close \
+  test_j1b_a_parent_relays_every_stage_of_its_child \
   test_j2_a_connector_posts_every_message_once_in_order \
   test_j3_a_tail_reads_every_line_of_a_sparse_log
 gate tests/contrib/streams/test_workflow_close.py \

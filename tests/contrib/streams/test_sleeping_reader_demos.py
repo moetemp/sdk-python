@@ -19,6 +19,7 @@ from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples.scenarios import (
     j1_sleeping_client,
+    j1b_parent_relay,
     j2_slack_connector,
     j3_ci_tail,
 )
@@ -50,6 +51,16 @@ async def test_j1_a_client_wakes_on_each_burst_and_ends_at_the_close(
     task_queue, workflow_id = ids("j1")
     read = await j1_sleeping_client.main(streams, task_queue, workflow_id=workflow_id)
     assert read == [f"burst {b} update {n}" for b in range(3) for n in range(2)]
+
+
+async def test_j1b_a_parent_relays_every_stage_of_its_child(streams: Client):
+    task_queue, workflow_id = ids("j1b")
+    read = await j1b_parent_relay.main(streams, task_queue, workflow_id=workflow_id)
+    assert read == [
+        "delivery picked up",
+        "delivery at the hub",
+        "delivery delivered",
+    ]
 
 
 async def test_j2_a_connector_posts_every_message_once_in_order(streams: Client):

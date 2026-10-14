@@ -59,6 +59,9 @@ They turn on `notify_on_append()` themselves.
 - **`j1_sleeping_client`.** The owner publishes three bursts with gaps longer than the idle wait,
   then closes its stream. A client reader sleeps on the notifier in each gap and wakes on the next
   burst.
+- **1b, `j1b_parent_relay`.** `Order` starts its `Delivery` child, reads the child's stages with
+  `workflow_reader`, and publishes each one again on its own topic with `workflow_writer`. The app
+  reads only the parent's stream. Left out: a child in another namespace (1c).
 - **`j2_slack_connector`.** A connector Workflow follows a channel's stream in the same namespace
   and posts each message through an Activity. Between messages it sleeps with no task. Left out:
   Slack itself, and a channel in another namespace, which needs Nexus.
@@ -72,7 +75,7 @@ has no demo of its own yet. Its dashboard half is 5a.
 ## Scenarios with no demo in this release
 
 This release has no Nexus. A Workflow reader in the same namespace covers part of 1b and 4, as
-`j2_slack_connector` shows, but not across namespaces.
+`j1b_parent_relay` and `j2_slack_connector` show, but not across namespaces.
 
 | Scenario | Why |
 |---|---|
