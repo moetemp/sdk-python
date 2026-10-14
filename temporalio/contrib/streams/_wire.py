@@ -23,7 +23,7 @@ from temporalio.contrib.streams._record import (
     Supersession,
 )
 
-__all__ = ["RUN_ID_KEY", "WireRecord", "from_read", "to_wire"]
+__all__ = ["RUN_ID_KEY", "WireRecord", "from_read", "to_record", "to_wire"]
 
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
@@ -79,6 +79,34 @@ async def from_read(
         StreamRecordError: The body did not decode or convert, or the record
             holds a kind this SDK does not know.
     """
+    if read.HasField("stored") and read.stored.HasField("body"):
+        try:
+            body = await decode_body(converter, read.stored.body)
+        except Exception as error:
+            raise StreamRecordError(
+                f"stream record at {read.cursor} could not be decoded: {error}",
+                Cursor(read.cursor),
+            ) from error
+        decoded = ReadRecord()
+        decoded.CopyFrom(read)
+        decoded.stored.body.CopyFrom(body)
+        read = decoded
+    return to_record(converter.payload_converter, read, result_type)
+
+
+def to_record(
+    payload_converter: temporalio.converter.PayloadConverter,
+    read: ReadRecord,
+    result_type: type | None,
+) -> StreamRecord[Any]:
+    """The record a reader yields for a record whose body the codec already decoded.
+
+    Workflow code reads with it, since a Local Activity ran the codec.
+
+    Raises:
+        StreamRecordError: The body did not convert, or the record holds a
+            kind this SDK does not know.
+    """
     cursor = Cursor(read.cursor)
     if read.HasField("superseded"):
         superseded = read.superseded
@@ -99,9 +127,8 @@ async def from_read(
             raise ValueError("a SUPERSEDED record is synthesized, never stored")
         value: Any = None
         if kind in (RecordKind.DATA, RecordKind.UNSPECIFIED) and wire.HasField("body"):
-            body = await decode_body(converter, wire.body)
             hints = [result_type] if result_type is not None else None
-            value = converter.payload_converter.from_payloads([body], hints)[0]
+            value = payload_converter.from_payloads([wire.body], hints)[0]
     except Exception as error:
         raise StreamRecordError(
             f"stream record at {cursor} could not be decoded: {error}", cursor
