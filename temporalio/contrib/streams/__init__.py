@@ -39,11 +39,13 @@ context then reaches a stream the same way:
 
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt. The handle is pinned to that
-  run, so a read on it ends when the run closes, Continue-as-New included.
+  scheduling run id, and its Temporal attempt.
 - Any process holding a client reaches a Workflow's stream with
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.
+
+Every read follows the Workflow's run chain across Continue-as-New and ends
+when the chain closes. A reader can't pin one run.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``

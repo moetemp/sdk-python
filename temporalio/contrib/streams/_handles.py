@@ -160,7 +160,7 @@ class StreamProducer(Generic[T]):
             for index, value in enumerate(values)
         ]
         request = AppendRequest(
-            stream=self._handle._address(self._topic),
+            stream=self._handle._address(self._topic, producer=True),
             sequence=self._sequence,
             records=await _append_records(converter, wires),
             digest=batch_digest(wires),
@@ -197,20 +197,28 @@ async def _append_records(
 class StreamHandle:
     """One stream, addressed by topic, from outside Workflow code.
 
-    A handle on a Workflow's stream follows the run chain unless its
-    :attr:`ref` is pinned to a run. A topic is a
+    A handle on a Workflow's stream follows the run chain, so a read goes on
+    across Continue-as-New and ends when the chain closes. A topic is a
     :class:`temporalio.contrib.streams.StreamTopic`, which carries the record
     type, or a plain string with ``result_type=`` for a name decided at
     runtime. A call that names no topic addresses the topic of :attr:`ref`.
     """
 
     def __init__(
-        self, plugin: StreamStorePlugin, client: Client, ref: StreamRef
+        self,
+        plugin: StreamStorePlugin,
+        client: Client,
+        ref: StreamRef,
+        *,
+        _producer_run_id: str = "",
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.get_stream_handle`."""
         self._plugin = plugin
         self._client = client
         self._ref = ref
+        # An Activity writes to the chain of the run that scheduled it, even
+        # once a new chain took the Workflow id. Reads follow the chain.
+        self._producer_run_id = _producer_run_id
         # The stream is the Workflow's, and the Workflow encodes its records with
         # its own context, so every reader and producer on it uses that context.
         self._converter: DataConverter = client.data_converter.with_context(
@@ -371,12 +379,12 @@ class StreamHandle:
     ) -> tuple[str, type | None]:
         return resolve_topic(self._ref.topic if topic is None else topic, result_type)
 
-    def _address(self, topic: str) -> StreamAddress:
+    def _address(self, topic: str, *, producer: bool = False) -> StreamAddress:
         return StreamAddress(
             namespace=self._client.namespace,
             owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
             workflow_id=self._ref.workflow_id,
-            run_id=self._ref.run_id or "",
+            run_id=self._producer_run_id if producer else "",
             topic=topic,
         )
 
@@ -403,7 +411,7 @@ class ActivityStreamHandle:
 
     @property
     def ref(self) -> StreamRef:
-        """The stream this handle is on, pinned to the scheduling run."""
+        """The stream this handle is on, as data another process can open."""
         return self._inner.ref
 
     @overload
@@ -484,8 +492,9 @@ class ActivityStreamHandle:
 def activity_handle() -> ActivityStreamHandle:
     """The stream of the Workflow that scheduled the running Activity.
 
-    The handle is pinned to the scheduling run, so a read on it ends when
-    that run closes. To write to another Workflow's stream, use
+    A read on it follows the Workflow's run chain, as every read does. Its
+    producers write to the chain of the scheduling run. To write to another
+    Workflow's stream, use
     :func:`get_stream_handle` with ``temporalio.activity.client()`` and a
     producer id of your own.
 
@@ -512,14 +521,16 @@ def activity_handle() -> ActivityStreamHandle:
             "stream"
         )
     client = temporalio.activity.client()
-    ref = StreamRef.for_workflow(info.workflow_id, run_id=info.workflow_run_id)
+    ref = StreamRef.for_workflow(info.workflow_id)
     identity = ActivityProducer(
         workflow_id=info.workflow_id,
         run_id=info.workflow_run_id,
         activity_id=info.activity_id,
         attempt=info.attempt,
     )
-    inner = StreamHandle(store_for_client(client), client, ref)
+    inner = StreamHandle(
+        store_for_client(client), client, ref, _producer_run_id=info.workflow_run_id
+    )
     return ActivityStreamHandle(inner, identity, _attempt_producers())
 
 
@@ -543,32 +554,29 @@ def get_stream_handle(
     client: Client,
     workflow_id: str | StreamRef,
     *,
-    run_id: str | None = None,
     topic: str | StreamTopic[Any] | None = None,
 ) -> StreamHandle:
     """A handle on a Workflow's stream, through the client's store.
 
-    Without ``run_id`` the handle follows the Workflow's run chain, so a
-    read continues across Continue-as-New and ends when the chain closes.
-    With one it is pinned to that run. ``topic`` is the topic a call that
-    names none addresses.
+    The handle follows the Workflow's run chain, so a read continues across
+    Continue-as-New and ends when the chain closes. ``topic`` is the topic a
+    call that names none addresses.
 
     Args:
         client: A client that carries a stream store plugin.
         workflow_id: The Workflow that owns the stream, or a
             :class:`temporalio.contrib.streams.StreamRef` that names it.
-        run_id: Pin the handle to one run.
         topic: The handle's default topic. Without one it is
             :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
 
     Raises:
-        ValueError: ``run_id`` or ``topic`` was given with a ref, or no
-            stream store is registered on ``client``.
+        ValueError: ``topic`` was given with a ref, or no stream store is
+            registered on ``client``.
     """
     if isinstance(workflow_id, StreamRef):
-        if run_id is not None or topic is not None:
-            raise ValueError("a StreamRef carries its own run_id and topic")
+        if topic is not None:
+            raise ValueError("a StreamRef carries its own topic")
         ref = workflow_id
     else:
-        ref = StreamRef.for_workflow(workflow_id, run_id=run_id, topic=topic)
+        ref = StreamRef.for_workflow(workflow_id, topic=topic)
     return StreamHandle(store_for_client(client), client, ref)
