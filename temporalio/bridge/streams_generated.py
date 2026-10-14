@@ -160,6 +160,14 @@ class StreamNexusService:
             "NexusRead", req, temporalio.bridge.proto.streams.NexusStep
         )
 
+    async def nexus_read_range(
+        self, req: temporalio.bridge.proto.streams.NexusCall
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_read_range call."""
+        return await self._store.call(
+            "NexusReadRange", req, temporalio.bridge.proto.streams.NexusStep
+        )
+
     async def nexus_resume(
         self, req: temporalio.bridge.proto.streams.NexusResumeRequest
     ) -> temporalio.bridge.proto.streams.NexusStep:

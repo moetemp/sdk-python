@@ -27,7 +27,12 @@ _APPEND_OUTPUT_DECLARED: frozenset[str] = frozenset({"cursor"})
 
 
 _READ_OUTPUT_DECLARED: frozenset[str] = frozenset(
-    {"records", "next_token", "done", "state", "armed"}
+    {"records", "next_token", "done", "state", "armed", "replay"}
+)
+
+
+_READ_OUTPUT_REPLAY_DECLARED: frozenset[str] = frozenset(
+    {"chain_first_run_id", "after_token", "stored_records", "records_digest"}
 )
 
 
@@ -38,6 +43,11 @@ _RECORD_WIRE_DECLARED: frozenset[str] = frozenset(
 
 _RECORD_WIRE_SUPERSEDED_DECLARED: frozenset[str] = frozenset(
     {"producer_id", "previous_attempt", "attempt"}
+)
+
+
+_REPLAY_RANGE_DECLARED: frozenset[str] = frozenset(
+    {"chain_first_run_id", "after_token", "stored_records", "records_digest"}
 )
 
 
@@ -586,6 +596,21 @@ class _ReadInputTransferTypeConverter(
                 else:
                     arm_value = arm_value_raw
 
+        floor_holder_value: str | None = None
+        if "floor_holder" in raw:
+            floor_holder_value_raw = raw["floor_holder"]
+            if floor_holder_value_raw is None:
+                violations.append(
+                    Violation(path="floor_holder", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(floor_holder_value_raw, str):
+                    violations.append(
+                        Violation(path="floor_holder", reason="expected string")
+                    )
+                else:
+                    floor_holder_value = floor_holder_value_raw
+
         for key in raw:
             if (
                 key != "stream"
@@ -595,6 +620,7 @@ class _ReadInputTransferTypeConverter(
                 and key != "latest_only"
                 and key != "state"
                 and key != "arm"
+                and key != "floor_holder"
             ):
                 violations.append(
                     Violation(path=_member_path(key), reason="unknown field")
@@ -609,6 +635,7 @@ class _ReadInputTransferTypeConverter(
             latest_only=latest_only_value,
             state=state_value,
             arm=arm_value,
+            floor_holder=floor_holder_value,
         )
 
     @typing_extensions.override
@@ -726,6 +753,13 @@ class _ReadInputTransferTypeConverter(
             if not (isinstance(arm_value, bool)):
                 violations.append(Violation(path="arm", reason="expected boolean"))
             out["arm"] = arm_value
+        floor_holder_value: typing.Any = runtime_value.floor_holder
+        if floor_holder_value is not None:
+            if not (isinstance(floor_holder_value, str)):
+                violations.append(
+                    Violation(path="floor_holder", reason="expected string")
+                )
+            out["floor_holder"] = floor_holder_value
         if violations:
             raise temporalio.converter.create_payload_validation_error(violations)
         return out
@@ -772,6 +806,15 @@ class ReadInput:
     """For a reader that sleeps until its caller hears of progress. When the call waits its
     whole wait_ms and collects nothing, the endpoint arms the stream, so the next append
     notifies the stream's callers. A reader with no callback leaves it out.
+    """
+
+    floor_holder: str | None = None
+    """Names a reader that keeps the range of each answer in place of its records and reads
+    the range again through read_range on replay. With it the endpoint holds the records
+    after the read's start against retention for this holder, and the answer carries
+    replay. Each read and read_range of the holder renews the hold, which lapses the
+    store's floor lease after the last one. At most 512 bytes. Refused beside
+    latest_only, which answers no records.
     """
 
 
@@ -870,6 +913,23 @@ class _ReadOutputTransferTypeConverter(
                 else:
                     armed_value = armed_value_raw
 
+        replay_value: ReadOutputReplay | None = None
+        if "replay" in raw:
+            replay_value_raw = raw["replay"]
+            if replay_value_raw is None:
+                violations.append(
+                    Violation(path="replay", reason="explicit null not allowed")
+                )
+            else:
+                try:
+                    replay_value = (
+                        _ReadOutputReplayTransferTypeConverter().from_transfer_type(
+                            replay_value_raw, ReadOutputReplay
+                        )
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "replay", error)
+
         additional_properties: dict[str, typing.Any] = {}
         for key in raw:
             if key not in _READ_OUTPUT_DECLARED:
@@ -882,6 +942,7 @@ class _ReadOutputTransferTypeConverter(
             done=done_value,
             state=state_value,
             armed=armed_value,
+            replay=replay_value,
             additional_properties=additional_properties,
         )
 
@@ -942,6 +1003,18 @@ class _ReadOutputTransferTypeConverter(
             if not (isinstance(armed_value, bool)):
                 violations.append(Violation(path="armed", reason="expected boolean"))
             out["armed"] = armed_value
+        replay_value: typing.Any = runtime_value.replay
+        if replay_value is not None:
+            replay_violation_count = len(violations)
+            if len(violations) == replay_violation_count:
+                try:
+                    out["replay"] = (
+                        _ReadOutputReplayTransferTypeConverter().to_transfer_type(
+                            replay_value
+                        )
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "replay", error)
         additional_properties_value: typing.Any = runtime_value.additional_properties
         if not isinstance(additional_properties_value, dict):
             raise temporalio.converter.create_payload_validation_error(
@@ -997,9 +1070,536 @@ class ReadOutput:
     back to waiting for progress too.
     """
 
+    replay: ReadOutputReplay | None = None
+
     additional_properties: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict
     )
+
+
+class _ReadOutputReplayTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ReadOutputReplay", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["ReadOutputReplay"]
+    ) -> "ReadOutputReplay":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        chain_first_run_id_value: str = typing.cast("typing.Any", None)
+        if "chain_first_run_id" not in raw or raw["chain_first_run_id"] is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            chain_first_run_id_value_raw = raw["chain_first_run_id"]
+            if not isinstance(chain_first_run_id_value_raw, str):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            else:
+                chain_first_run_id_value = chain_first_run_id_value_raw
+
+        after_token_value: str = typing.cast("typing.Any", None)
+        if "after_token" not in raw or raw["after_token"] is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            after_token_value_raw = raw["after_token"]
+            if not isinstance(after_token_value_raw, str):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            else:
+                after_token_value = after_token_value_raw
+
+        stored_records_value: int = typing.cast("typing.Any", None)
+        if "stored_records" not in raw or raw["stored_records"] is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            stored_records_value_raw = raw["stored_records"]
+            stored_records_value_parsed = _parse_spec_integer(
+                stored_records_value_raw, "stored_records", violations
+            )
+            if stored_records_value_parsed is not None:
+                stored_records_value = stored_records_value_parsed
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+
+        records_digest_value: bytes = typing.cast("typing.Any", None)
+        if "records_digest" not in raw or raw["records_digest"] is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_value_raw = raw["records_digest"]
+            if not isinstance(records_digest_value_raw, str):
+                violations.append(
+                    Violation(path="records_digest", reason="expected string")
+                )
+            else:
+                records_digest_value_parsed = _parse_base64(
+                    records_digest_value_raw, "records_digest", violations
+                )
+                if records_digest_value_parsed is not None:
+                    records_digest_value = records_digest_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _READ_OUTPUT_REPLAY_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return ReadOutputReplay(
+            chain_first_run_id=chain_first_run_id_value,
+            after_token=after_token_value,
+            stored_records=stored_records_value,
+            records_digest=records_digest_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "ReadOutputReplay") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, ReadOutputReplay):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        chain_first_run_id_value: typing.Any = runtime_value.chain_first_run_id
+        if chain_first_run_id_value is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            if not (isinstance(chain_first_run_id_value, str)):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            out["chain_first_run_id"] = chain_first_run_id_value
+        after_token_value: typing.Any = runtime_value.after_token
+        if after_token_value is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            if not (isinstance(after_token_value, str)):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            out["after_token"] = after_token_value
+        stored_records_value: typing.Any = runtime_value.stored_records
+        if stored_records_value is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            if not (
+                not isinstance(stored_records_value, bool)
+                and (
+                    isinstance(stored_records_value, int)
+                    or (
+                        isinstance(stored_records_value, float)
+                        and stored_records_value.is_integer()
+                    )
+                )
+            ):
+                violations.append(
+                    Violation(path="stored_records", reason="expected integer")
+                )
+            else:
+                if abs(stored_records_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason="exceeds ±(2^53-1) integer cap",
+                        )
+                    )
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+            out["stored_records"] = stored_records_value
+        records_digest_value: typing.Any = runtime_value.records_digest
+        if records_digest_value is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_violation_count = len(violations)
+            if not (isinstance(records_digest_value, bytes)):
+                violations.append(
+                    Violation(path="records_digest", reason="expected bytes")
+                )
+            if len(violations) == records_digest_violation_count:
+                out["records_digest"] = _format_base64(records_digest_value)
+        additional_properties_value: typing.Any = runtime_value.additional_properties
+        if not isinstance(additional_properties_value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        checked_additional_properties = typing.cast(
+            "dict[str, typing.Any]", additional_properties_value
+        )
+        for key, entry in checked_additional_properties.items():
+            path = _member_path(key)
+            if key in _READ_OUTPUT_REPLAY_DECLARED:
+                violations.append(
+                    Violation(
+                        path=path,
+                        reason="additional property collides with declared property",
+                    )
+                )
+            else:
+                out[key] = entry
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_ReadOutputReplayTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ReadOutputReplay:
+    """Set when the call named a floor_holder. What a replay passes to read_range to get
+    these records again.
+    """
+
+    chain_first_run_id: str
+    """The first run of the run chain the read read."""
+
+    after_token: str
+    """The cursor the answer reads strictly after, with the read's start resolved. Empty
+    when the answer starts at the oldest record. An answer whose only record is an error
+    the store's reader raised has an empty range at that record's cursor.
+    """
+
+    stored_records: int
+    """How many stored records the answer holds, the ones that crossed as an error included
+    and supersessions not counted.
+    """
+
+    records_digest: bytes
+    """SHA-256 over the answer's records. Per record it covers the cursor, the stale mark,
+    and the kind, producer, attempt, sequence and content hash of a stored record or the
+    producer and both attempts of a supersession. It leaves out the bodies, so a codec
+    change keeps it.
+    """
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict
+    )
+
+
+class _ReadRangeInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ReadRangeInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["ReadRangeInput"]
+    ) -> "ReadRangeInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        stream_value: StreamRef = typing.cast("typing.Any", None)
+        if "stream" not in raw or raw["stream"] is None:
+            violations.append(Violation(path="stream", reason="required"))
+        else:
+            stream_value_raw = raw["stream"]
+            try:
+                stream_value = _StreamRefTransferTypeConverter().from_transfer_type(
+                    stream_value_raw, StreamRef
+                )
+            except temporalio.exceptions.ApplicationError as error:
+                _collect(violations, "stream", error)
+
+        chain_first_run_id_value: str = typing.cast("typing.Any", None)
+        if "chain_first_run_id" not in raw or raw["chain_first_run_id"] is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            chain_first_run_id_value_raw = raw["chain_first_run_id"]
+            if not isinstance(chain_first_run_id_value_raw, str):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            else:
+                chain_first_run_id_value = chain_first_run_id_value_raw
+
+        after_token_value: str = typing.cast("typing.Any", None)
+        if "after_token" not in raw or raw["after_token"] is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            after_token_value_raw = raw["after_token"]
+            if not isinstance(after_token_value_raw, str):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            else:
+                after_token_value = after_token_value_raw
+
+        to_token_value: str = typing.cast("typing.Any", None)
+        if "to_token" not in raw or raw["to_token"] is None:
+            violations.append(Violation(path="to_token", reason="required"))
+        else:
+            to_token_value_raw = raw["to_token"]
+            if not isinstance(to_token_value_raw, str):
+                violations.append(Violation(path="to_token", reason="expected string"))
+            else:
+                to_token_value = to_token_value_raw
+
+        stored_records_value: int = typing.cast("typing.Any", None)
+        if "stored_records" not in raw or raw["stored_records"] is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            stored_records_value_raw = raw["stored_records"]
+            stored_records_value_parsed = _parse_spec_integer(
+                stored_records_value_raw, "stored_records", violations
+            )
+            if stored_records_value_parsed is not None:
+                stored_records_value = stored_records_value_parsed
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+                if stored_records_value > 1000:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be <= 1000, got {stored_records_value}",
+                        )
+                    )
+
+        state_value: bytes | None = None
+        if "state" in raw:
+            state_value_raw = raw["state"]
+            if state_value_raw is None:
+                violations.append(
+                    Violation(path="state", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(state_value_raw, str):
+                    violations.append(Violation(path="state", reason="expected string"))
+                else:
+                    state_value_parsed = _parse_base64(
+                        state_value_raw, "state", violations
+                    )
+                    if state_value_parsed is not None:
+                        state_value = state_value_parsed
+
+        records_digest_value: bytes = typing.cast("typing.Any", None)
+        if "records_digest" not in raw or raw["records_digest"] is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_value_raw = raw["records_digest"]
+            if not isinstance(records_digest_value_raw, str):
+                violations.append(
+                    Violation(path="records_digest", reason="expected string")
+                )
+            else:
+                records_digest_value_parsed = _parse_base64(
+                    records_digest_value_raw, "records_digest", violations
+                )
+                if records_digest_value_parsed is not None:
+                    records_digest_value = records_digest_value_parsed
+
+        floor_holder_value: str | None = None
+        if "floor_holder" in raw:
+            floor_holder_value_raw = raw["floor_holder"]
+            if floor_holder_value_raw is None:
+                violations.append(
+                    Violation(path="floor_holder", reason="explicit null not allowed")
+                )
+            else:
+                if not isinstance(floor_holder_value_raw, str):
+                    violations.append(
+                        Violation(path="floor_holder", reason="expected string")
+                    )
+                else:
+                    floor_holder_value = floor_holder_value_raw
+
+        for key in raw:
+            if (
+                key != "stream"
+                and key != "chain_first_run_id"
+                and key != "after_token"
+                and key != "to_token"
+                and key != "stored_records"
+                and key != "state"
+                and key != "records_digest"
+                and key != "floor_holder"
+            ):
+                violations.append(
+                    Violation(path=_member_path(key), reason="unknown field")
+                )
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return ReadRangeInput(
+            stream=stream_value,
+            chain_first_run_id=chain_first_run_id_value,
+            after_token=after_token_value,
+            to_token=to_token_value,
+            stored_records=stored_records_value,
+            state=state_value,
+            records_digest=records_digest_value,
+            floor_holder=floor_holder_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "ReadRangeInput") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, ReadRangeInput):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        stream_value: typing.Any = runtime_value.stream
+        if stream_value is None:
+            violations.append(Violation(path="stream", reason="required"))
+        else:
+            stream_violation_count = len(violations)
+            if len(violations) == stream_violation_count:
+                try:
+                    out["stream"] = _StreamRefTransferTypeConverter().to_transfer_type(
+                        stream_value
+                    )
+                except temporalio.exceptions.ApplicationError as error:
+                    _collect(violations, "stream", error)
+        chain_first_run_id_value: typing.Any = runtime_value.chain_first_run_id
+        if chain_first_run_id_value is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            if not (isinstance(chain_first_run_id_value, str)):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            out["chain_first_run_id"] = chain_first_run_id_value
+        after_token_value: typing.Any = runtime_value.after_token
+        if after_token_value is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            if not (isinstance(after_token_value, str)):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            out["after_token"] = after_token_value
+        to_token_value: typing.Any = runtime_value.to_token
+        if to_token_value is None:
+            violations.append(Violation(path="to_token", reason="required"))
+        else:
+            if not (isinstance(to_token_value, str)):
+                violations.append(Violation(path="to_token", reason="expected string"))
+            out["to_token"] = to_token_value
+        stored_records_value: typing.Any = runtime_value.stored_records
+        if stored_records_value is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            if not (
+                not isinstance(stored_records_value, bool)
+                and (
+                    isinstance(stored_records_value, int)
+                    or (
+                        isinstance(stored_records_value, float)
+                        and stored_records_value.is_integer()
+                    )
+                )
+            ):
+                violations.append(
+                    Violation(path="stored_records", reason="expected integer")
+                )
+            else:
+                if abs(stored_records_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason="exceeds ±(2^53-1) integer cap",
+                        )
+                    )
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+                if stored_records_value > 1000:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be <= 1000, got {stored_records_value}",
+                        )
+                    )
+            out["stored_records"] = stored_records_value
+        state_value: typing.Any = runtime_value.state
+        if state_value is not None:
+            state_violation_count = len(violations)
+            if not (isinstance(state_value, bytes)):
+                violations.append(Violation(path="state", reason="expected bytes"))
+            if len(violations) == state_violation_count:
+                out["state"] = _format_base64(state_value)
+        records_digest_value: typing.Any = runtime_value.records_digest
+        if records_digest_value is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_violation_count = len(violations)
+            if not (isinstance(records_digest_value, bytes)):
+                violations.append(
+                    Violation(path="records_digest", reason="expected bytes")
+                )
+            if len(violations) == records_digest_violation_count:
+                out["records_digest"] = _format_base64(records_digest_value)
+        floor_holder_value: typing.Any = runtime_value.floor_holder
+        if floor_holder_value is not None:
+            if not (isinstance(floor_holder_value, str)):
+                violations.append(
+                    Violation(path="floor_holder", reason="expected string")
+                )
+            out["floor_holder"] = floor_holder_value
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_ReadRangeInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ReadRangeInput:
+    """One replay of an earlier read that named a floor_holder. Every member but stream and
+    floor_holder comes from that read's input and answer.
+    """
+
+    stream: StreamRef
+
+    chain_first_run_id: str
+    """The replay's chain_first_run_id."""
+
+    after_token: str
+    """The replay's after_token."""
+
+    to_token: str
+    """The read answer's next_token."""
+
+    stored_records: int
+    """The replay's stored_records."""
+
+    state: bytes | None = None
+    """The state the read sent, so the replay's superseded and stale marks are the read's.
+    Absent when the read sent none.
+    """
+
+    records_digest: bytes
+    """The replay's records_digest."""
+
+    floor_holder: str | None = None
+    """As on read, so a replay renews the hold, also after a reset that replays a run whose
+    reads stopped long ago.
+    """
 
 
 class _RecordWireTransferTypeConverter(
@@ -1371,6 +1971,220 @@ class RecordWireSuperseded:
 
     attempt: int
     """The attempt that started writing."""
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(
+        default_factory=dict
+    )
+
+
+class _ReplayRangeTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ReplayRange", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["ReplayRange"]
+    ) -> "ReplayRange":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        chain_first_run_id_value: str = typing.cast("typing.Any", None)
+        if "chain_first_run_id" not in raw or raw["chain_first_run_id"] is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            chain_first_run_id_value_raw = raw["chain_first_run_id"]
+            if not isinstance(chain_first_run_id_value_raw, str):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            else:
+                chain_first_run_id_value = chain_first_run_id_value_raw
+
+        after_token_value: str = typing.cast("typing.Any", None)
+        if "after_token" not in raw or raw["after_token"] is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            after_token_value_raw = raw["after_token"]
+            if not isinstance(after_token_value_raw, str):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            else:
+                after_token_value = after_token_value_raw
+
+        stored_records_value: int = typing.cast("typing.Any", None)
+        if "stored_records" not in raw or raw["stored_records"] is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            stored_records_value_raw = raw["stored_records"]
+            stored_records_value_parsed = _parse_spec_integer(
+                stored_records_value_raw, "stored_records", violations
+            )
+            if stored_records_value_parsed is not None:
+                stored_records_value = stored_records_value_parsed
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+
+        records_digest_value: bytes = typing.cast("typing.Any", None)
+        if "records_digest" not in raw or raw["records_digest"] is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_value_raw = raw["records_digest"]
+            if not isinstance(records_digest_value_raw, str):
+                violations.append(
+                    Violation(path="records_digest", reason="expected string")
+                )
+            else:
+                records_digest_value_parsed = _parse_base64(
+                    records_digest_value_raw, "records_digest", violations
+                )
+                if records_digest_value_parsed is not None:
+                    records_digest_value = records_digest_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _REPLAY_RANGE_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return ReplayRange(
+            chain_first_run_id=chain_first_run_id_value,
+            after_token=after_token_value,
+            stored_records=stored_records_value,
+            records_digest=records_digest_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "ReplayRange") -> typing.Any:
+        runtime_value: typing.Any = value
+        if not isinstance(runtime_value, ReplayRange):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        chain_first_run_id_value: typing.Any = runtime_value.chain_first_run_id
+        if chain_first_run_id_value is None:
+            violations.append(Violation(path="chain_first_run_id", reason="required"))
+        else:
+            if not (isinstance(chain_first_run_id_value, str)):
+                violations.append(
+                    Violation(path="chain_first_run_id", reason="expected string")
+                )
+            out["chain_first_run_id"] = chain_first_run_id_value
+        after_token_value: typing.Any = runtime_value.after_token
+        if after_token_value is None:
+            violations.append(Violation(path="after_token", reason="required"))
+        else:
+            if not (isinstance(after_token_value, str)):
+                violations.append(
+                    Violation(path="after_token", reason="expected string")
+                )
+            out["after_token"] = after_token_value
+        stored_records_value: typing.Any = runtime_value.stored_records
+        if stored_records_value is None:
+            violations.append(Violation(path="stored_records", reason="required"))
+        else:
+            if not (
+                not isinstance(stored_records_value, bool)
+                and (
+                    isinstance(stored_records_value, int)
+                    or (
+                        isinstance(stored_records_value, float)
+                        and stored_records_value.is_integer()
+                    )
+                )
+            ):
+                violations.append(
+                    Violation(path="stored_records", reason="expected integer")
+                )
+            else:
+                if abs(stored_records_value) > 9007199254740991:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason="exceeds ±(2^53-1) integer cap",
+                        )
+                    )
+                if stored_records_value < 0:
+                    violations.append(
+                        Violation(
+                            path="stored_records",
+                            reason=f"must be >= 0, got {stored_records_value}",
+                        )
+                    )
+            out["stored_records"] = stored_records_value
+        records_digest_value: typing.Any = runtime_value.records_digest
+        if records_digest_value is None:
+            violations.append(Violation(path="records_digest", reason="required"))
+        else:
+            records_digest_violation_count = len(violations)
+            if not (isinstance(records_digest_value, bytes)):
+                violations.append(
+                    Violation(path="records_digest", reason="expected bytes")
+                )
+            if len(violations) == records_digest_violation_count:
+                out["records_digest"] = _format_base64(records_digest_value)
+        additional_properties_value: typing.Any = runtime_value.additional_properties
+        if not isinstance(additional_properties_value, dict):
+            raise temporalio.converter.create_payload_validation_error(
+                [Violation(path="", reason="expected object")]
+            )
+        checked_additional_properties = typing.cast(
+            "dict[str, typing.Any]", additional_properties_value
+        )
+        for key, entry in checked_additional_properties.items():
+            path = _member_path(key)
+            if key in _REPLAY_RANGE_DECLARED:
+                violations.append(
+                    Violation(
+                        path=path,
+                        reason="additional property collides with declared property",
+                    )
+                )
+            else:
+                out[key] = entry
+        if violations:
+            raise temporalio.converter.create_payload_validation_error(violations)
+        return out
+
+
+@_transfer_type_convertible(_ReplayRangeTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ReplayRange:
+    """The range one read answered, after its byte budget cut it. A Workflow keeps it with
+    the answer's next_token and state in place of the records.
+    """
+
+    chain_first_run_id: str
+    """The first run of the run chain the read read."""
+
+    after_token: str
+    """The cursor the answer reads strictly after, with the read's start resolved. Empty
+    when the answer starts at the oldest record. An answer whose only record is an error
+    the store's reader raised has an empty range at that record's cursor.
+    """
+
+    stored_records: int
+    """How many stored records the answer holds, the ones that crossed as an error included
+    and supersessions not counted.
+    """
+
+    records_digest: bytes
+    """SHA-256 over the answer's records. Per record it covers the cursor, the stale mark,
+    and the kind, producer, attempt, sequence and content hash of a stored record or the
+    producer and both attempts of a supersession. It leaves out the bodies, so a codec
+    change keeps it.
+    """
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(
         default_factory=dict

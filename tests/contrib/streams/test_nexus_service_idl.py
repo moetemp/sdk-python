@@ -26,7 +26,10 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreams,
     TemporalStreamsHttpClient,
 )
-from temporalio.contrib.streams.nexus._generated import StreamOperationToken
+from temporalio.contrib.streams.nexus._generated import (
+    ReadRangeInput,
+    StreamOperationToken,
+)
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
@@ -57,6 +60,7 @@ def test_the_service_definition_carries_the_contract_operations():
     assert operations == {
         "append": (AppendInput, AppendOutput),
         "read": (ReadInput, ReadOutput),
+        "read_range": (ReadRangeInput, ReadOutput),
     }
 
 
@@ -232,9 +236,11 @@ async def test_the_generated_long_poll_sends_back_each_answers_state(
     ]
     sent: list[Any] = []
 
-    def post(_url: str, body: bytes, _headers: Any, _timeout: float) -> bytes:
+    def post(
+        _url: str, body: bytes, _headers: Any, _timeout: float, **_: Any
+    ) -> tuple[bytes, str]:
         sent.append(json.loads(body).get("state"))
-        return json.dumps(answers.pop(0)).encode()
+        return json.dumps(answers.pop(0)).encode(), "application/json"
 
     monkeypatch.setattr(generated_client, "_post", post)
     caller = TemporalStreamsHttpClient("http://stub")

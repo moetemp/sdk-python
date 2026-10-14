@@ -9,6 +9,7 @@ from .models import (
     AppendOutput,
     ReadInput,
     ReadOutput,
+    ReadRangeInput,
 )
 
 
@@ -44,4 +45,18 @@ class TemporalStreams:
     max_records records or wait_ms passes, whichever comes first, and answers with what
     it collected. It says when the stream has ended for the reader, so the caller can
     stop.
+    """
+
+    read_range: Operation[
+        ReadRangeInput,
+        ReadOutput,
+    ] = Operation(name="read_range")
+    """Answer again the records of an earlier read that named a floor_holder, for a
+    Workflow that replays that read. The call reads the range its replay names with the
+    read's input state, so the superseded and stale marks come out the same, and checks
+    the records against the read's digest. It waits for nothing, asks nothing of the
+    owner and has no byte budget, since it must answer exactly what the read answered.
+    Records with other content are refused as StreamReplayMismatchError, and records the
+    store no longer holds as StreamReplayRangeLostError. The answer holds the records
+    and next_token only, since the caller keeps the read's state, done and replay.
     """

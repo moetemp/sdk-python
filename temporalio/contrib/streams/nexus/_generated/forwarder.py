@@ -13,10 +13,12 @@ from .models import (
     AppendOutput,
     ReadInput,
     ReadOutput,
+    ReadRangeInput,
     _AppendInputTransferTypeConverter,
     _AppendOutputTransferTypeConverter,
     _ReadInputTransferTypeConverter,
     _ReadOutputTransferTypeConverter,
+    _ReadRangeInputTransferTypeConverter,
 )
 
 
@@ -85,4 +87,26 @@ class TemporalStreamsForwarder(abc.ABC):
         """
         transfer: typing.Any = _ReadInputTransferTypeConverter().to_transfer_type(input)
         answer: typing.Any = await self.forward("read", ctx, transfer)
+        return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
+
+    @nexusrpc.handler.sync_operation
+    async def read_range(
+        self,
+        ctx: nexusrpc.handler.StartOperationContext,
+        input: ReadRangeInput,
+    ) -> ReadOutput:
+        """Answer again the records of an earlier read that named a floor_holder, for
+        a Workflow that replays that read. The call reads the range its replay
+        names with the read's input state, so the superseded and stale marks come
+        out the same, and checks the records against the read's digest. It waits
+        for nothing, asks nothing of the owner and has no byte budget, since it
+        must answer exactly what the read answered. Records with other content are
+        refused as StreamReplayMismatchError, and records the store no longer
+        holds as StreamReplayRangeLostError. The answer holds the records and
+        next_token only, since the caller keeps the read's state, done and replay.
+        """
+        transfer: typing.Any = _ReadRangeInputTransferTypeConverter().to_transfer_type(
+            input
+        )
+        answer: typing.Any = await self.forward("read_range", ctx, transfer)
         return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
