@@ -12,8 +12,10 @@ The contract:
 
 1. **A new attempt supersedes the old one.** When a reader sees the first
    record of a producer's newer attempt, it yields a
-   :attr:`RecordKind.SUPERSEDED` record first. No store holds that record,
-   so every store reports a retry the same way.
+   :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
+   producer wrote in its earlier attempts, not the whole stream and not the
+   records of other producers. No store holds that record, so every store
+   reports a retry the same way.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
