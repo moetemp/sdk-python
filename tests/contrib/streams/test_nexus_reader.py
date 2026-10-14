@@ -255,31 +255,33 @@ class History:
             ),
         )
 
-    def timer_started(self, seconds: int) -> int:
+    def timer_started(self, seconds: int, timer_id: str = "1") -> int:
         """The timer the reader starts in the task just completed."""
         return self.add(
             EventType.EVENT_TYPE_TIMER_STARTED,
             timer_started_event_attributes=TimerStartedEventAttributes(
-                timer_id="1",
+                timer_id=timer_id,
                 start_to_fire_timeout=Duration(seconds=seconds),
                 workflow_task_completed_event_id=self._completed,
             ),
         )
 
-    def timer_fired(self, started_event_id: int, seconds: int) -> None:
+    def timer_fired(
+        self, started_event_id: int, seconds: int, timer_id: str = "1"
+    ) -> None:
         self._time += timedelta(seconds=seconds)
         self.add(
             EventType.EVENT_TYPE_TIMER_FIRED,
             timer_fired_event_attributes=TimerFiredEventAttributes(
-                timer_id="1", started_event_id=started_event_id
+                timer_id=timer_id, started_event_id=started_event_id
             ),
         )
 
-    def timer_canceled(self, started_event_id: int) -> None:
+    def timer_canceled(self, started_event_id: int, timer_id: str = "1") -> None:
         self.add(
             EventType.EVENT_TYPE_TIMER_CANCELED,
             timer_canceled_event_attributes=TimerCanceledEventAttributes(
-                timer_id="1",
+                timer_id=timer_id,
                 started_event_id=started_event_id,
                 workflow_task_completed_event_id=self._completed,
             ),
@@ -542,6 +544,40 @@ async def test_a_completion_after_the_stream_is_done_ends_the_reader() -> None:
     await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
     assert seen[0].batches == [[Token("a")]]
     assert seen[0].after_end is None
+    assert seen[0].error is None
+
+
+async def test_a_reader_with_no_progress_reads_again_after_a_recheck() -> None:
+    """A producer that dies between its append and its notify sends no
+    progress. The reader's recheck timer reads again and finds the record."""
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(chat, 1))
+    h.read(answer(record(1, text="a")))
+    h.task()
+    h.read(answer(cursor="cursor-1"))
+    h.task()
+    # No progress comes, so the recheck fires after a minute.
+    recheck = h.timer_started(60)
+    h.timer_fired(recheck, 60)
+    h.task()
+    h.read(answer(record(2, text="b")))
+    h.task()
+    h.read(answer(cursor="cursor-2"))
+    h.task()
+    # The next recheck waits twice as long. The completion comes first.
+    second = h.timer_started(120, timer_id="2")
+    h.completed(chat, "summary")
+    h.task()
+    h.timer_canceled(second, timer_id="2")
+    h.read(answer(cursor="cursor-2", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a")], [Token("b")]]
     assert seen[0].error is None
 
 
