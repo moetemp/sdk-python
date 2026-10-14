@@ -104,8 +104,12 @@ Known limits:
 - **One describe call.** Each Local Activity attempt makes one
   `DescribeWorkflowExecution` call before its first append, so its first
   record waits one round trip to the server. Later appends make no call.
+  Core's owner check also describes the Workflow, but it caches the answer
+  per owner run for a minute, so the run's Local Activities share it.
 - **Describe permission.** The Worker's identity needs permission to
-  describe the Workflow.
+  describe the Workflow (`DescribeWorkflowExecution` on its namespace),
+  both for the attempt and for Core's owner check. Without it, the first
+  append fails.
 - **A later Core change removes the call.** Workflow code doesn't see the
   Workflow Task attempt, so the server is asked for it. A later Core change
   can supply the Workflow Task attempt, which removes the call.
