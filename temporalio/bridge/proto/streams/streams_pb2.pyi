@@ -836,6 +836,68 @@ class DeleteOwnerResponse(google.protobuf.message.Message):
 
 global___DeleteOwnerResponse = DeleteOwnerResponse
 
+class RetireProducerRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    NAMED_FIELD_NUMBER: builtins.int
+    ACTIVITY_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress: ...
+    @property
+    def named(self) -> global___NamedProducer: ...
+    @property
+    def activity(self) -> global___ActivityProducer: ...
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        named: global___NamedProducer | None = ...,
+        activity: global___ActivityProducer | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "activity",
+            b"activity",
+            "named",
+            b"named",
+            "producer",
+            b"producer",
+            "stream",
+            b"stream",
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "activity",
+            b"activity",
+            "named",
+            b"named",
+            "producer",
+            b"producer",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["producer", b"producer"]
+    ) -> typing_extensions.Literal["named", "activity"] | None: ...
+
+global___RetireProducerRequest = RetireProducerRequest
+
+class RetireProducerResponse(google.protobuf.message.Message):
+    """A producer attempt with no dedupe state left, or a stream that holds nothing, answers the same."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___RetireProducerResponse = RetireProducerResponse
+
 class StreamFailure(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
