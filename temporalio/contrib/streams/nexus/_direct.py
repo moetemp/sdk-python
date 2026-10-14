@@ -43,7 +43,11 @@ from temporalio.contrib.streams._errors import (
     StreamStorageError,
     StreamUnsupportedError,
 )
-from temporalio.contrib.streams._replay_reads import ReplayReadCodec
+from temporalio.contrib.streams._replay_reads import (
+    ReadChain,
+    ReadStates,
+    ReplayReadCodec,
+)
 from temporalio.contrib.streams.nexus._follower import StreamReadTransport
 from temporalio.contrib.streams.nexus._generated import (
     ReadInput,
@@ -217,6 +221,7 @@ class StreamDirectReads(SimplePlugin):
         )
         self._transports = dict(transports)
         self._batches = _BatchCache()
+        self._read_states = ReadStates()
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
         """Add the Local Activity a direct reader reads in.
@@ -266,16 +271,18 @@ class StreamDirectReads(SimplePlugin):
 
 @temporalio.activity.defn(name=DIRECT_READ_ACTIVITY)
 async def direct_read_activity(
-    endpoint: str, reader_id: str, input: ReadInput
+    endpoint: str, reader_id: str, input: ReadInput, read_seq: int = 0
 ) -> RawValue:
     """Read one batch for a direct reader, holding its records for the run's replay.
 
     A :class:`StreamReader` with ``replay_from_store=True`` runs it as a Local
     Activity. :class:`StreamDirectReads` registers it on every Worker built
-    from its client.
+    from its client. ``read_seq`` counts the reader's reads, this one
+    included. Past the first, the marker leaves out the read's input state,
+    which the previous marker holds as its answer state.
     """
     try:
-        return await _read(endpoint, reader_id, input)
+        return await _read(endpoint, reader_id, input, read_seq)
     except _FINAL_ERRORS as error:
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
@@ -290,7 +297,9 @@ async def direct_read_activity(
         ) from error
 
 
-async def _read(endpoint: str, reader_id: str, input: ReadInput) -> RawValue:
+async def _read(
+    endpoint: str, reader_id: str, input: ReadInput, read_seq: int
+) -> RawValue:
     info = temporalio.activity.info()
     plugin = _plugin_of(temporalio.activity.client())
     holder = f"{info.workflow_namespace}/{info.workflow_run_id}/{reader_id}"
@@ -315,11 +324,19 @@ async def _read(endpoint: str, reader_id: str, input: ReadInput) -> RawValue:
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
     plugin._batches.put(range, answer)
-    return RawValue(positions_payload(endpoint, range, answer))
+    chain = None
+    if read_seq > 0:
+        chain = ReadChain(f"{info.workflow_id}/{reader_id}", read_seq)
+        if read_seq > 1:
+            range = dataclasses.replace(range, state=None)
+    return RawValue(positions_payload(endpoint, range, answer, chain))
 
 
 def positions_payload(
-    endpoint: str, range: ReadRangeInput, answer: ReadOutput
+    endpoint: str,
+    range: ReadRangeInput,
+    answer: ReadOutput,
+    chain: ReadChain | None = None,
 ) -> Payload:
     """The result a direct read records: its range, the rest of its answer, its errors.
 
@@ -327,9 +344,13 @@ def positions_payload(
     answer's state, ``done`` and ``armed`` go beside it. The cursor and text
     of each record that crossed as an error ride along, since a codec
     failure can be transient and a replay must not hand over a record that
-    live code never saw.
+    live code never saw. ``chain`` places the read among its reader's reads,
+    so a replay can take a left-out input state from the read before.
     """
     document: dict[str, Any] = {"range": _transfer(range), "done": answer.done}
+    if chain is not None:
+        document["reader"] = chain.reader
+        document["seq"] = chain.seq
     if answer.state:
         document["state"] = base64.b64encode(answer.state).decode()
     if answer.armed is not None:
@@ -475,6 +496,18 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
         range = _from_transfer(document["range"], ReadRangeInput)
         answer = _answer_of(range, document)
         errors: dict[str, str] = document.get("errors") or {}
+        chain = (
+            ReadChain(document["reader"], document["seq"])
+            if "reader" in document
+            else None
+        )
+        previous = (
+            self._plugin._read_states.before(chain) if chain is not None else None
+        )
+        if chain is not None:
+            # Kept for the next read's replay, whose marker leaves its input
+            # state out.
+            self._plugin._read_states.put(chain, answer.state or b"")
         if range.stored_records == 0:
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
@@ -482,6 +515,15 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
         cached = self._plugin._batches.take(range)
         if cached is not None:
             return batch_payload(cached)
+        if chain is not None and chain.seq > 1:
+            if previous is None:
+                raise StreamError(
+                    "a direct stream read replays from the answer state of the "
+                    "reader's previous read, which this process has not decoded "
+                    "yet; the Workflow Task fails and its retry replays the History "
+                    "from the start"
+                )
+            range = dataclasses.replace(range, state=previous or None)
         endpoint = payload.metadata.get(_ENDPOINT_KEY, b"").decode()
         try:
             again = await self._plugin.transport(endpoint).read_range(range)

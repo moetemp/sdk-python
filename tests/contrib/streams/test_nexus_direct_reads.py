@@ -13,12 +13,14 @@ import pytest
 from temporalio.api.common.v1 import Payload
 from temporalio.client import ClientConfig
 from temporalio.contrib.streams import (
+    StreamError,
     StreamRef,
     StreamReplayMismatchError,
     StreamReplayRangeLostError,
     StreamStorageError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._replay_reads import ReadChain
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     HttpTransport,
@@ -257,6 +259,66 @@ async def test_an_error_on_replay_where_the_read_had_a_record_fails_the_task():
     plugin = StreamDirectReads({"e": FakeTransport(again)})
     with pytest.raises(StreamStorageError):
         await turned_back(codec_of(plugin), positions_payload("e", range, answer))
+
+
+def chained() -> tuple[list[Payload], list[ReadRangeInput]]:
+    """Two reads of one reader, as the read Activity records them.
+
+    Returns the markers and the ranges a replay must ask for.
+    """
+    first_range, first = live(record("c1", "a"))
+    second = ReadOutput(
+        records=[record("c2", "b")],
+        next_token="c2",
+        done=False,
+        state=b"\x03",
+        replay=ReadOutputReplay(
+            chain_first_run_id="run-1",
+            after_token="c1",
+            stored_records=1,
+            records_digest=b"digest-2",
+        ),
+    )
+    second_range = ReadRangeInput(
+        stream=_STREAM,
+        chain_first_run_id="run-1",
+        after_token="c1",
+        to_token="c2",
+        stored_records=1,
+        state=first.state,
+        records_digest=b"digest-2",
+        floor_holder="ns/run/1",
+    )
+    markers = [
+        positions_payload("e", first_range, first, ReadChain("wf/1", 1)),
+        positions_payload(
+            "e",
+            dataclasses.replace(second_range, state=None),
+            second,
+            ReadChain("wf/1", 2),
+        ),
+    ]
+    return markers, [first_range, second_range]
+
+
+async def test_a_later_read_replays_with_the_previous_answers_state():
+    markers, ranges = chained()
+    # The second marker leaves its input state out, which the first holds.
+    assert "state" not in json.loads(markers[1].data)["range"]
+    answers = [ReadOutput(records=[record("c1", "a")], next_token="c1", done=False)]
+    answers.append(ReadOutput(records=[record("c2", "b")], next_token="c2", done=False))
+    transport = FakeTransport(*answers)
+    codec = codec_of(StreamDirectReads({"e": transport}))
+    for marker in markers:
+        await turned_back(codec, marker)
+    assert transport.asked == ranges
+
+
+async def test_a_later_read_without_the_previous_one_in_this_process_fails_the_task():
+    markers, _ = chained()
+    codec = codec_of(StreamDirectReads({"e": FakeTransport()}))
+    with pytest.raises(StreamError, match="previous read"):
+        await turned_back(codec, markers[1])
 
 
 def test_the_marker_holds_no_record():
