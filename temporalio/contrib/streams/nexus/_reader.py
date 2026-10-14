@@ -210,7 +210,7 @@ class StreamReader(Generic[T]):
     long stream, Continue-as-New before History grows too large: pass
     :attr:`position` to the new run, start the operation again there, and
     build the reader with ``after=position``. The position is at most about
-    87 KiB. After a successful completion, the
+    22 KiB. After a successful completion, the
     reader reads until the stream service says the stream is done, and raises
     :class:`StreamIncompleteError` once its reads have found nothing for
     ``drain_limit``. A stream that ended waits at most ``drain_limit`` for its
