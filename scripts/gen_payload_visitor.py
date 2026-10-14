@@ -12,6 +12,10 @@ base_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(base_dir))
 
 from temporalio.api.common.v1.message_pb2 import Payload, Payloads, SearchAttributes
+from temporalio.api.notificationservice.v1.request_response_pb2 import (
+    OnCompleteRequest,
+    OnProgressRequest,
+)
 from temporalio.bridge.proto.nexus import NexusTaskCompletion
 from temporalio.bridge.proto.workflow_activation.workflow_activation_pb2 import (
     WorkflowActivation,
@@ -445,6 +449,10 @@ def write_bridge_visitors() -> None:
         WorkflowActivation.DESCRIPTOR,
         WorkflowActivationCompletion.DESCRIPTOR,
         NexusTaskCompletion.DESCRIPTOR,
+        # The server hands a NexusHandler callback's completion and progress to a
+        # Worker as system payloads, which carry the client's encoded payloads.
+        OnCompleteRequest.DESCRIPTOR,
+        OnProgressRequest.DESCRIPTOR,
     ] + discover_system_nexus_roots()
 
     code = VisitorGenerator().generate(roots)
