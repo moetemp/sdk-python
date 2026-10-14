@@ -427,11 +427,14 @@ async def run_then_drain(run: Any) -> Any:
         if _ends_the_workflow(error):
             try:
                 await _drain()
-            except BaseException:
+            except Exception:
                 logger.warning(
                     "Stream records buffered before the Workflow failed did not land",
                     exc_info=True,
                 )
+            except BaseException:
+                # The run is being evicted. The original error still ends it.
+                pass
         raise
     await _drain()
     return result
