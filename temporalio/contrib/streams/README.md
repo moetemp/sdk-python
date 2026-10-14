@@ -178,6 +178,12 @@ class Agent:
   stores it. The values ride in the Local Activity's input, not in History.
 - **Size.** A record holds at most 1.5 MiB. A flush carries at most 1,000
   records or 2 MiB, and a larger buffer splits into several flushes.
+- **Buffer bound.** A topic holds at most `max_buffered` values (10,000 by
+  default) while they wait for a flush. Past it, `publish` raises
+  `StreamError`, and `await steps.flush()` makes room. A flush retries
+  until the store answers, so without the bound a store outage grows
+  Workflow memory, and a replay after eviction builds it all again.
+  `max_buffered=None` turns it off.
 
 Known limits:
 
