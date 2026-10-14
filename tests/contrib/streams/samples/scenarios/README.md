@@ -70,6 +70,9 @@ They turn on `notify_on_append()` themselves.
 - **5b, `j5b_dashboard_and_relay`.** `Order` relays its child's stream as in `j1b_parent_relay`.
   After the first relayed stage, a dashboard opens late on the child's stream and reads it from
   `BEGINNING`. Both get every stage. Left out: a child in another namespace.
+- **7a, `j7a_close_with_error`.** `Delivery` publishes two stages, then closes its stream with a
+  `CourierLost` error and runs on. A client read and a `Dispatcher` Workflow's `workflow_reader`
+  both get the two stages, then raise `CourierLost`. Left out: an owner that fails with no close.
 
 This release publishes from Workflow code with `workflow_writer`, through Local Activities rather
 than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. The
@@ -94,6 +97,4 @@ This release has no Nexus. A Workflow reader in the same namespace covers part o
 - A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope.
-- A close that carries a failure (7a). A client read and a Workflow reader both raise the failure
-  after the last record, as the live lane checks, but no demo shows it.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.

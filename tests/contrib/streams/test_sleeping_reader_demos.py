@@ -23,6 +23,7 @@ from tests.contrib.streams.samples.scenarios import (
     j2_slack_connector,
     j3_ci_tail,
     j5b_dashboard_and_relay,
+    j7a_close_with_error,
 )
 from tests.contrib.streams.test_live_notifications import skip_without_notifier
 
@@ -89,3 +90,16 @@ async def test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage(
         "delivery at the hub",
         "delivery delivered",
     ]
+
+
+async def test_j7a_both_readers_raise_the_close_error_after_the_last_record(
+    streams: Client,
+):
+    task_queue, workflow_id = ids("j7a")
+    outcome = await j7a_close_with_error.main(
+        streams, task_queue, workflow_id=workflow_id
+    )
+    for seen in (outcome.backend, outcome.dispatcher):
+        assert seen.stages == ["picked up", "at the hub"]
+        assert seen.failure_type == "CourierLost"
+    assert outcome.owner_ran_on

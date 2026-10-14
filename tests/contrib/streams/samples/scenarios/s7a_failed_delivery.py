@@ -6,8 +6,8 @@ the Workflow ends, the same as for a success, since the stream does not
 carry the outcome. So the backend then asks the Workflow for its result,
 which raises the failure.
 
-Left out: a close that carries the failure, which this release does not
-have.
+Left out: a close that carries the failure. ``j7a_close_with_error`` shows
+it.
 
 Run with ``python -m tests.contrib.streams.samples.scenarios.s7a_failed_delivery``.
 """
