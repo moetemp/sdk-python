@@ -1217,6 +1217,22 @@ class WorkflowServiceStub:
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
+    ExecuteSyncNexusOperation: grpc.UnaryUnaryMultiCallable[
+        temporalio.api.workflowservice.v1.request_response_pb2.ExecuteSyncNexusOperationRequest,
+        temporalio.api.workflowservice.v1.request_response_pb2.ExecuteSyncNexusOperationResponse,
+    ]
+    """ExecuteSyncNexusOperation runs one synchronous Nexus operation on an endpoint for a caller in
+    `namespace`, and returns its result or its failure. The server persists nothing and does not
+    retry. Authorization runs against the caller namespace, and the endpoint must be reachable
+    from it. An operation that answers asynchronously is refused with `FailedPrecondition`. Use
+    `StartNexusOperationExecution` for those.
+
+    The server sets the Nexus header `temporal-caller-namespace` to the caller namespace, so the
+    handler can trust it. A request that sets this header is refused.
+
+    (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs call it through gRPC. --)
+    """
 
 class WorkflowServiceServicer(metaclass=abc.ABCMeta):
     """WorkflowService API defines how Temporal SDKs and other clients interact with the Temporal server
@@ -2692,6 +2708,24 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
 
         (-- api-linter: core::0127::http-annotation=disabled
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
+        """
+    @abc.abstractmethod
+    def ExecuteSyncNexusOperation(
+        self,
+        request: temporalio.api.workflowservice.v1.request_response_pb2.ExecuteSyncNexusOperationRequest,
+        context: grpc.ServicerContext,
+    ) -> temporalio.api.workflowservice.v1.request_response_pb2.ExecuteSyncNexusOperationResponse:
+        """ExecuteSyncNexusOperation runs one synchronous Nexus operation on an endpoint for a caller in
+        `namespace`, and returns its result or its failure. The server persists nothing and does not
+        retry. Authorization runs against the caller namespace, and the endpoint must be reachable
+        from it. An operation that answers asynchronously is refused with `FailedPrecondition`. Use
+        `StartNexusOperationExecution` for those.
+
+        The server sets the Nexus header `temporal-caller-namespace` to the caller namespace, so the
+        handler can trust it. A request that sets this header is refused.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+            aip.dev/not-precedent: SDKs call it through gRPC. --)
         """
 
 def add_WorkflowServiceServicer_to_server(

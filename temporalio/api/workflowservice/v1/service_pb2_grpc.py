@@ -668,6 +668,11 @@ class WorkflowServiceStub(object):
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
         )
+        self.ExecuteSyncNexusOperation = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/ExecuteSyncNexusOperation",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.FromString,
+        )
 
 
 class WorkflowServiceServicer(object):
@@ -2006,6 +2011,23 @@ class WorkflowServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def ExecuteSyncNexusOperation(self, request, context):
+        """ExecuteSyncNexusOperation runs one synchronous Nexus operation on an endpoint for a caller in
+        `namespace`, and returns its result or its failure. The server persists nothing and does not
+        retry. Authorization runs against the caller namespace, and the endpoint must be reachable
+        from it. An operation that answers asynchronously is refused with `FailedPrecondition`. Use
+        `StartNexusOperationExecution` for those.
+
+        The server sets the Nexus header `temporal-caller-namespace` to the caller namespace, so the
+        handler can trust it. A request that sets this header is refused.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs call it through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_WorkflowServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -2648,6 +2670,11 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             servicer.PollStreamNotifier,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.SerializeToString,
+        ),
+        "ExecuteSyncNexusOperation": grpc.unary_unary_rpc_method_handler(
+            servicer.ExecuteSyncNexusOperation,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -6373,6 +6400,35 @@ class WorkflowService(object):
             "/temporal.api.workflowservice.v1.WorkflowService/PollStreamNotifier",
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def ExecuteSyncNexusOperation(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/ExecuteSyncNexusOperation",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.FromString,
             options,
             channel_credentials,
             insecure,

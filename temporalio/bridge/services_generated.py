@@ -621,6 +621,24 @@ class WorkflowService:
             timeout=timeout,
         )
 
+    async def execute_sync_nexus_operation(
+        self,
+        req: temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationRequest,
+        retry: bool = False,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationResponse:
+        """Invokes the WorkflowService.execute_sync_nexus_operation rpc method."""
+        return await self._client._rpc_call(
+            rpc="execute_sync_nexus_operation",
+            req=req,
+            service=self._service,
+            resp_type=temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationResponse,
+            retry=retry,
+            metadata=metadata,
+            timeout=timeout,
+        )
+
     async def fetch_worker_config(
         self,
         req: temporalio.api.workflowservice.v1.FetchWorkerConfigRequest,
