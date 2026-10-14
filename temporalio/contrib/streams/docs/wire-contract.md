@@ -52,7 +52,7 @@ use it:
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
-| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, and a Local Activity as `__temporal_local_<call number>@<scheduling run id>` |
+| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, and a Local Activity as `__temporal_local_<call number>@<scheduling run id>`. A flush of the Python `workflow_writer` is a Local Activity, so it writes the same way |
 | `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
 

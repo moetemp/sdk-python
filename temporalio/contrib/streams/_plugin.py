@@ -7,8 +7,11 @@ handles and to the Activities of every Worker built from the client, so an
 Activity's append and an outside read meet in the same place.
 
 On a Worker the plugin registers the built-in Activity that
-:func:`temporalio.contrib.streams.workflow_activity_writer` schedules, and
-the interceptor that gives a Local Activity a producer identity.
+:func:`temporalio.contrib.streams.workflow_writer` runs as a Local Activity
+and :func:`temporalio.contrib.streams.workflow_activity_writer` schedules,
+and the interceptor that gives a Local Activity a producer identity and
+drains the Workflow writers when a run ends. On a Replayer it adds the
+interceptor only, so a replay schedules the same drain.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from temporalio.plugin import SimplePlugin
 if TYPE_CHECKING:
     from temporalio.client import Client, ClientConfig
     from temporalio.service import ConnectConfig, ServiceClient
-    from temporalio.worker import WorkerConfig
+    from temporalio.worker import ReplayerConfig, WorkerConfig
 
 __all__ = ["StreamStorePlugin"]
 
@@ -125,6 +128,22 @@ class StreamStorePlugin(SimplePlugin):
         config["activities"] = activities
         interceptors = list(config.get("interceptors") or [])
         # Two would number each Local Activity call twice.
+        if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
+            interceptors.append(StreamsInterceptor())
+        config["interceptors"] = interceptors
+        return config
+
+    def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
+        """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.
+
+        The Replayer needs no store, since each flush's result comes from its
+        marker. Without the interceptor, ``workflow_writer`` raises
+        :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
+        """
+        config = super().configure_replayer(config)
+        from temporalio.contrib.streams._local_activity import StreamsInterceptor
+
+        interceptors = list(config.get("interceptors") or [])
         if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
             interceptors.append(StreamsInterceptor())
         config["interceptors"] = interceptors

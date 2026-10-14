@@ -3,12 +3,12 @@
 > This package is experimental and may change in future versions.
 
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
-it through a built-in Activity, and its Activities and any client append to
+it through Local Activities, and its Activities and any client append to
 it. Outside readers follow it from a cursor. Records live in the
 application's Redis and never pass through Temporal or its History. Core
 runs the store for every SDK, so Python reads what any other SDK writes.
-Appends add nothing to History. A Workflow's publish adds the events of one
-Activity.
+Appends add nothing to History. A Workflow's flush adds one Local Activity
+marker.
 
 ## Register
 
@@ -111,11 +111,80 @@ Known limits:
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
 
+## A Workflow publishes to its own stream
+
+Workflow code can't do I/O, so `workflow_writer` buffers each value in the
+Workflow and sends the buffer through a built-in Local Activity. The store
+plugin registers that Activity on every Worker built from the client, so
+there's nothing to register.
+
+```python
+STEPS = topic("steps", str)
+
+@workflow.defn
+class Agent:
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        steps = workflow_writer(STEPS)
+        steps.publish("planning")
+        answer = await workflow.execute_local_activity(
+            call_model, prompt, start_to_close_timeout=timedelta(minutes=5)
+        )
+        steps.publish("answered")
+        return answer
+```
+
+- **Publish.** `publish(value)` is a plain call. It converts the value with
+  the Workflow's payload converter, buffers it and returns.
+- **Batching.** One background coroutine per topic sends what is buffered
+  through one Local Activity, one flush at a time. Values published while a
+  flush runs go in the next one. A Local Activity costs one Action for the
+  Workflow Task that carries its marker, however many it carries, so a
+  Workflow Task's publishes cost about one Action.
+- **Order.** Flushes on a topic run one at a time, so records land in the
+  order they were published, across all writers on the topic in the run.
+- **Visibility.** A record is visible once its flush's append is accepted.
+  That is while the Workflow Task is still running, for example while a
+  model call runs as another Local Activity. `await steps.flush()` waits
+  for everything published so far, and returns the cursor of the last
+  record.
+- **Run end.** The store plugin's Workflow interceptor flushes every buffer
+  before the run returns, fails, is cancelled or continues as new, so what
+  was published lands first. If that flush fails for good, the Workflow
+  fails with its error in place of a return. `finish()` flushes and writes
+  `FINISH`.
+- **Identity.** Each flush is a Local Activity producer of its own (see
+  above). After a failed Workflow Task, the flush runs again in a higher
+  attempt, so readers see `SUPERSEDED` for that flush, then its records
+  again.
+- **Replay.** Each flush's result comes from its marker, so a replay does
+  no store I/O. A `Replayer` needs the store plugin in `plugins=`, which
+  adds the interceptor and connects nothing.
+- **Queries and validators.** Opening a writer or publishing there raises
+  `ReadOnlyContextError`.
+- **Codec.** The values are converted once, in the Workflow, and passed raw.
+  The payload codec runs once on each record body, when the Local Activity
+  stores it. The values ride in the Local Activity's input, not in History.
+- **Size.** A record holds at most 1.5 MiB. A flush carries at most 1,000
+  records or 2 MiB, and a larger buffer splits into several flushes.
+
+Known limits:
+
+- **One describe call per flush.** As for any Local Activity producer, each
+  flush makes one `DescribeWorkflowExecution` call before its append.
+- **Local Activity rules.** The flush runs on the Workflow's Worker, so that
+  Worker needs the store. A retry that backs off longer than
+  `local_retry_threshold` waits on a Workflow timer. By default a flush
+  retries until the store answers, and the run can't end until it lands.
+- **Readers track 1,000 producers.** Each flush is a producer. A read keeps
+  the newest attempt of its last 1,000 producers, so it misses
+  `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
+
 ## A Workflow publishes through an Activity
 
-Workflow code can't do I/O, so `workflow_activity_writer` runs a built-in
-Activity for each call. The store plugin registers that Activity on every
-Worker built from the client, so there's nothing to register.
+`workflow_activity_writer` runs a regular Activity for each call instead.
+It adds the Activity's events to History and can't batch across calls, but
+the Activity can run on another task queue, on Workers that hold the store.
 
 ```python
 PROGRESS = topic("progress", dict)

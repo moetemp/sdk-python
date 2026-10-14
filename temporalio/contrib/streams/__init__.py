@@ -37,9 +37,10 @@ A store is configured as a plugin:
 client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
-- Workflow code publishes to its own stream with
-  :func:`workflow_activity_writer`, which runs a built-in Activity for each
-  call.
+- Workflow code publishes to its own stream with :func:`workflow_writer`.
+  It buffers each value in the Workflow and sends the buffer through one
+  Local Activity at a time per topic. :func:`workflow_activity_writer` runs
+  a built-in Activity for each call instead.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
   scheduling run id, and its Temporal attempt. A Local Activity writes as
@@ -95,6 +96,10 @@ from temporalio.contrib.streams._workflow_activity import (
     WorkflowActivityStreamWriter,
     workflow_activity_writer,
 )
+from temporalio.contrib.streams._workflow_writer import (
+    WorkflowStreamWriter,
+    workflow_writer,
+)
 
 __all__ = [
     "ActivityStreamHandle",
@@ -123,9 +128,11 @@ __all__ = [
     "StreamUnsupportedError",
     "Supersession",
     "WorkflowActivityStreamWriter",
+    "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
     "workflow_activity_writer",
     "workflow_reader",
+    "workflow_writer",
 ]

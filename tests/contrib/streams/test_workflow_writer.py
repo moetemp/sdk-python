@@ -1,0 +1,350 @@
+"""A Workflow publishes to its own stream through buffered Local Activities.
+
+The live tests run on memory, and on Redis when ``STREAMS_REDIS_URL`` is set.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import gc
+import os
+import uuid
+from collections import defaultdict
+from datetime import timedelta
+
+import pytest
+
+from temporalio import activity, workflow
+from temporalio.client import (
+    Client,
+    WorkflowFailureError,
+    WorkflowQueryFailedError,
+    WorkflowUpdateFailedError,
+)
+from temporalio.contrib.streams import (
+    RecordKind,
+    StreamError,
+    StreamStorePlugin,
+    StreamUnsupportedError,
+    get_stream_handle,
+    topic,
+    workflow_writer,
+)
+from temporalio.contrib.streams._workflow_writer import _RunWriters
+from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.contrib.streams.redis import RedisStreams
+from temporalio.exceptions import ApplicationError
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
+from tests.helpers import new_worker
+
+STEPS = topic("steps", str)
+# The Workflows that count their runs in this process run unsandboxed.
+UNSANDBOXED = UnsandboxedWorkflowRunner()
+
+
+def redis_store() -> StreamStorePlugin:
+    url = os.environ.get("STREAMS_REDIS_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+    return RedisStreams(url, key_prefix=f"workflow-writer-{uuid.uuid4().hex}")
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def streams(request: pytest.FixtureRequest, client: Client) -> Client:
+    store = MemoryStreams() if request.param == "memory" else redis_store()
+    return await connect_with(client, store)
+
+
+def markers(history: object) -> int:
+    return sum(
+        1
+        for e in getattr(history, "events")
+        if e.HasField("marker_recorded_event_attributes")
+    )
+
+
+# What the tests let a running Local Activity go on with, by Workflow id.
+released: dict[str, asyncio.Event] = defaultdict(asyncio.Event)
+
+
+@activity.defn
+async def wait_until_released() -> None:
+    await released[activity.info().workflow_id or ""].wait()
+
+
+@workflow.defn
+class PublishesThenWaits:
+    @workflow.run
+    async def run(self) -> None:
+        steps = workflow_writer(STEPS)
+        for step in ("plan", "call model", "call tool"):
+            steps.publish(step)
+        # A long Local Activity, such as a model call, keeps the task open.
+        await workflow.execute_local_activity(
+            wait_until_released, start_to_close_timeout=timedelta(seconds=30)
+        )
+
+
+async def test_records_show_while_the_task_runs_and_batch_in_one_flush(
+    streams: Client,
+):
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams, PublishesThenWaits, activities=[wait_until_released]
+    ) as worker:
+        handle = await streams.start_workflow(
+            PublishesThenWaits.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        stream = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+        early = [await anext(stream) for _ in range(3)]
+        await stream.aclose()
+        # No Workflow Task has completed, so no marker is recorded yet.
+        events = (await handle.fetch_history()).events
+        assert not any(
+            e.HasField("workflow_task_completed_event_attributes") for e in events
+        )
+        released[workflow_id].set()
+        await handle.result()
+    assert [r.value for r in early] == ["plan", "call model", "call tool"]
+    # Three publishes in one Workflow Task are one flush, so one producer.
+    run_id = handle.result_run_id
+    assert len({r.producer_id for r in early}) == 1
+    assert early[0].producer_id.startswith("__temporal_local_")
+    assert early[0].producer_id.endswith(f"@{run_id}")
+    assert [r.sequence for r in early] == [1, 2, 3]
+    # One marker for the flush and one for the waiting Local Activity.
+    assert markers(await handle.fetch_history()) == 2
+
+
+@workflow.defn
+class PublishesDuringAFlush:
+    @workflow.run
+    async def run(self) -> list[str]:
+        steps = workflow_writer(STEPS)
+        for index in range(6):
+            steps.publish(str(index))
+            # Lets the first flush start, so the rest buffer behind it.
+            await asyncio.sleep(0)
+        out = [(await steps.finish()).token, (await steps.finish()).token]
+        try:
+            steps.publish("late")
+        except ValueError as error:
+            out.append(str(error))
+        try:
+            workflow_writer("other").publish("x" * (2 << 20))
+        except StreamError as error:
+            out.append(str(error))
+        return out
+
+
+async def test_publishes_during_a_flush_land_next_and_in_order(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, PublishesDuringAFlush) as worker:
+        finish, again, late, oversized = await streams.execute_workflow(
+            PublishesDuringAFlush.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.kind for r in records] == [RecordKind.DATA] * 6 + [RecordKind.FINISH]
+    assert [r.value for r in records[:6]] == [str(index) for index in range(6)]
+    # The first flush carries the first value. The rest wait for it and go
+    # in the second flush, with the FINISH.
+    producers = [r.producer_id for r in records]
+    assert producers[0] != producers[1]
+    assert set(producers[1:]) == {producers[1]}
+    assert finish == again == records[-1].cursor.token
+    assert "already finished" in late
+    assert "per-record limit" in oversized
+
+
+async def test_the_run_state_goes_with_the_run(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams, PublishesDuringAFlush, max_cached_workflows=0
+    ) as worker:
+        handle = await streams.start_workflow(
+            PublishesDuringAFlush.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        await handle.result()
+    gc.collect()
+    run_id = handle.result_run_id
+    assert not [
+        o for o in gc.get_objects() if type(o) is _RunWriters and o.run_id == run_id
+    ]
+
+
+@workflow.defn
+class PublishesThenEnds:
+    @workflow.run
+    async def run(self, how: str, runs_left: int) -> str:
+        steps = workflow_writer(STEPS)
+        if how == "cancel":
+            try:
+                await workflow.wait_condition(lambda: False)
+            except asyncio.CancelledError:
+                steps.publish(f"{how} {runs_left} a")
+                steps.publish(f"{how} {runs_left} b")
+                raise
+        steps.publish(f"{how} {runs_left} a")
+        steps.publish(f"{how} {runs_left} b")
+        # Nothing waits for the flush: the plugin drains the buffer.
+        if how == "continue" and runs_left:
+            workflow.continue_as_new(args=[how, runs_left - 1])
+        if how == "fail":
+            raise ApplicationError("failed on purpose", non_retryable=True)
+        return "done"
+
+
+@pytest.mark.parametrize("how", ["return", "continue", "fail", "cancel"])
+async def test_the_buffer_drains_before_the_run_ends(client: Client, how: str):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, PublishesThenEnds) as worker:
+        handle = await streams.start_workflow(
+            PublishesThenEnds.run,
+            args=[how, 1],
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        if how == "cancel":
+            await handle.cancel()
+        if how in ("fail", "cancel"):
+            with pytest.raises(WorkflowFailureError):
+                await handle.result()
+        else:
+            await handle.result()
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    runs = [1, 0] if how == "continue" else [1]
+    assert [r.value for r in records] == [
+        f"{how} {run} {part}" for run in runs for part in "ab"
+    ]
+
+
+# How many Workflow Tasks each Workflow failed on purpose, by Workflow id.
+failed_tasks: dict[str, int] = defaultdict(int)
+
+
+@workflow.defn
+class FailsAfterAFlush:
+    @workflow.run
+    async def run(self) -> None:
+        steps = workflow_writer(STEPS)
+        steps.publish("a")
+        steps.publish("b")
+        await steps.flush()
+        workflow_id = workflow.info().workflow_id
+        if not failed_tasks[workflow_id]:
+            failed_tasks[workflow_id] += 1
+            # Fails the task before the flush's marker is recorded, so the
+            # next task runs the flush again.
+            raise RuntimeError("fail this Workflow Task")
+
+
+async def test_a_failed_task_reruns_its_flush_as_superseded(streams: Client):
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams, FailsAfterAFlush, workflow_runner=UNSANDBOXED
+    ) as worker:
+        handle = await streams.start_workflow(
+            FailsAfterAFlush.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        await handle.result()
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.kind for r in records] == [
+        RecordKind.DATA,
+        RecordKind.DATA,
+        RecordKind.SUPERSEDED,
+        RecordKind.DATA,
+        RecordKind.DATA,
+    ]
+    assert [r.value for r in records if r.kind is RecordKind.DATA] == list("abab")
+    # The rerun is the same flush, so the same producer in a later attempt.
+    first, rerun = records[0], records[3]
+    assert first.producer_id == rerun.producer_id
+    assert records[2].supersession is not None
+    assert records[2].supersession.producer_id == first.producer_id
+    assert (
+        records[2].supersession.previous_attempt,
+        records[2].supersession.attempt,
+    ) == (
+        first.attempt,
+        rerun.attempt,
+    )
+    # The replay takes the flush's result from its marker, with no store.
+    history = await handle.fetch_history()
+    assert markers(history) == 1
+    await Replayer(
+        workflows=[FailsAfterAFlush],
+        workflow_runner=UNSANDBOXED,
+        plugins=[MemoryStreams()],
+    ).replay_workflow(history)
+    # Without the plugin's interceptor the writer can't drain, so it refuses.
+    with pytest.raises(Exception):
+        await Replayer(
+            workflows=[FailsAfterAFlush], workflow_runner=UNSANDBOXED
+        ).replay_workflow(history)
+
+
+@workflow.defn
+class PublishesFromReadOnlyHandlers:
+    def __init__(self) -> None:
+        self.done = False
+
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: self.done)
+
+    @workflow.query
+    def publish_in_query(self) -> None:
+        workflow_writer(STEPS).publish("from a query")
+
+    @workflow.update
+    def finish(self) -> None:
+        self.done = True
+
+    @finish.validator
+    def publish_in_validator(self) -> None:
+        try:
+            workflow_writer(STEPS).publish("from a validator")
+        except workflow.ReadOnlyContextError as error:
+            # Rejects the Update. Left to propagate, it fails the Workflow Task.
+            raise ValueError(str(error)) from error
+
+
+async def test_a_query_or_validator_cannot_publish(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(streams, PublishesFromReadOnlyHandlers) as worker:
+        handle = await streams.start_workflow(
+            PublishesFromReadOnlyHandlers.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowQueryFailedError, match="query or an update"):
+            await handle.query(PublishesFromReadOnlyHandlers.publish_in_query)
+        with pytest.raises(WorkflowUpdateFailedError) as failed:
+            await handle.execute_update(PublishesFromReadOnlyHandlers.finish)
+        assert "query or an update" in str(failed.value.cause)
+        await handle.terminate()
+    # Nothing was published.
+    assert markers(await handle.fetch_history()) == 0
+
+
+@workflow.defn
+class WritesWithoutAStore:
+    @workflow.run
+    async def run(self) -> str:
+        try:
+            workflow_writer(STEPS)
+        except StreamUnsupportedError as error:
+            return str(error)
+        return "opened"
+
+
+async def test_a_worker_without_the_store_cannot_write(client: Client):
+    async with new_worker(client, WritesWithoutAStore) as worker:
+        said = await client.execute_workflow(
+            WritesWithoutAStore.run, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+    assert "Worker interceptor" in said
