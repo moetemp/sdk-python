@@ -19,8 +19,10 @@ The contract:
    a codec with a fresh nonce per call still deduplicates a retry.
 2. **A new attempt supersedes the old one.** When a reader sees the first
    record of a producer's newer attempt, it yields a
-   :attr:`RecordKind.SUPERSEDED` record first. No store holds that record,
-   so every store reports a retry the same way.
+   :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
+   producer wrote in its earlier attempts, not the whole stream and not the
+   records of other producers. No store holds that record, so every store
+   reports a retry the same way.
 3. **A cursor belongs to one stream.** Hand it back to resume strictly after
    the record it names. A cursor from another store or another stream is
    refused with :class:`StreamCursorError`, and one whose record
@@ -37,11 +39,13 @@ context then reaches a stream the same way:
 
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt. The handle is pinned to that
-  run, so a read on it ends when the run closes, Continue-as-New included.
+  scheduling run id, and its Temporal attempt.
 - Any process holding a client reaches a Workflow's stream with
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.
+
+Every read follows the Workflow's run chain across Continue-as-New and ends
+when the chain closes. A reader can't pin one run.
 
 In this release only a Workflow owns a stream, and only Activities and
 clients read one. Reading inside a Workflow (:func:`workflow_reader`) and
