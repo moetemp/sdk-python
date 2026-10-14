@@ -237,6 +237,9 @@ class Follows:
                     ...
 ```
 
+With `replay_from_store=True`, History keeps each read's range and digest
+instead of its records, and replay reads them from the store again.
+
 A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See
 [Readers that sleep](docs/notifications.md).

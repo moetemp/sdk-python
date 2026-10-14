@@ -129,7 +129,36 @@ class Connector:
 - A read that fails for good, for example on an owner that does not exist,
   fails with an `ApplicationError` whose type names the stream error.
 
-## Closing a stream
+### Positions only
+
+By default each read's batch lands in History, in its Local Activity's
+marker. The store already holds those records. With
+`workflow_reader(..., replay_from_store=True)`, the marker holds the read's
+range and Core's digest of its records instead, a few hundred bytes per
+read whatever the batch holds.
+
+- On replay, the Worker reads the same range from the store again, before
+  Workflow code sees the batch. Workflow code gets the same records in both
+  modes, and no I/O runs in it. The live task takes the batch the Local
+  Activity read, from memory.
+- Other records in the range fail the Workflow Task as nondeterministic. A
+  range the store lost, to retention or a delete, fails the task for a
+  retry, so an operator can restore the store, reset the Workflow, or go
+  back to recorded batches.
+- The store holds the records the reader read against retention, per
+  reader run. Each read renews the hold for `floor_lease` (the retention by
+  default). The reader releases it when it reads the stream to its end or
+  closes, and the hold lasts `floor_release_grace` (1 day) more, for a
+  query or a reset. `RedisStreams` takes both settings.
+- Replay needs the store. A `Replayer` needs the store plugin and a client
+  in its process that connected the same store.
+- The mode is per reader and fixed for a run. Histories written in one mode
+  replay in that mode.
+
+The store plugin does the replay step in the client's payload codec: it
+wraps the codec the client has and passes every other payload through.
+
+
 
 | Who closes | How |
 |------------|-----|

@@ -21,12 +21,14 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType, StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,
 )
+from temporalio.bridge.proto.streams import ReadRangeRequest
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import (
     RecordKind,
@@ -38,6 +40,7 @@ from temporalio.contrib.streams import (
     workflow_reader,
     workflow_writer,
 )
+from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
@@ -498,3 +501,111 @@ async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
         )
         assert await asyncio.wait_for(reader.result(), 30) == ["found"]
         await reading.get_workflow_handle(owner).signal(Waits.finish)
+
+
+# Positions-only Workflow readers.
+
+
+@workflow.defn
+class ReadsFromTheStore:
+    """Reads with replay_from_store until the stream ends, then says what it saw."""
+
+    @workflow.run
+    async def run(self, owner: str) -> list[str]:
+        seen: list[str] = []
+        async with workflow_reader(
+            owner, topic=TOKENS, replay_from_store=True
+        ) as reader:
+            async for batch in reader:
+                seen.extend(
+                    str(r.value) if r.kind is RecordKind.DATA else r.kind.name
+                    for r in batch.records
+                )
+        return seen
+
+
+def _positions_payloads(history: Any) -> list[Any]:
+    out = []
+    for event in history.events:
+        if not event.HasField("marker_recorded_event_attributes"):
+            continue
+        for payloads in event.marker_recorded_event_attributes.details.values():
+            for payload in payloads.payloads:
+                if payload.metadata.get("messageType") == POSITIONS_TYPE:
+                    out.append(payload)
+    return out
+
+
+async def _read_from_the_store(client: Client) -> tuple[Any, str, Any]:
+    """Run a positions-only reader over an owner that publishes and closes."""
+    async with new_worker(
+        client, PublishesAndCloses, ReadsFromTheStore, max_cached_workflows=0
+    ) as worker:
+        owner_id = new_workflow_id()
+        owner = await client.start_workflow(
+            PublishesAndCloses.run, id=owner_id, task_queue=worker.task_queue
+        )
+        reader = await client.start_workflow(
+            ReadsFromTheStore.run,
+            owner_id,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(3)
+        await owner.signal(PublishesAndCloses.end, "result")
+        # With no cache, every task replays the reads before it, through Core.
+        assert await asyncio.wait_for(reader.result(), 30) == ["a", "b", "FINISH"]
+        await owner.signal(PublishesAndCloses.end, "end")
+        await owner.result()
+    return await reader.fetch_history(), owner_id, reader
+
+
+async def test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store(
+    notifying: Client,
+):
+    history, _, _ = await _read_from_the_store(notifying)
+    positions = _positions_payloads(history)
+    assert positions and all(p.ByteSize() < 2000 for p in positions)
+    store = store_for(notifying)
+    store._batches.clear()
+    await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+        history
+    )
+
+
+async def test_live_a_replay_that_finds_other_records_is_nondeterminism(
+    notifying: Client,
+):
+    history, _, _ = await _read_from_the_store(notifying)
+    store = store_for(notifying)
+    store._batches.clear()
+    for payload in _positions_payloads(history):
+        parts = Payloads.FromString(payload.data)
+        range = ReadRangeRequest.FromString(parts.payloads[0].data)
+        if range.stored_records:
+            range.records_digest = bytes(32)
+            parts.payloads[0].data = range.SerializeToString()
+            payload.data = parts.SerializeToString()
+    # The task fails with the nondeterminism cause. The Replayer reports a
+    # failure that lang found as a failed activation, not as Core's
+    # NondeterminismError.
+    with pytest.raises(Exception) as raised:
+        await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+            history
+        )
+    assert "replayed other records" in str(raised.value)
+    assert "NonDeterministicError" in str(raised.value)
+
+
+async def test_live_a_replay_of_a_lost_range_fails_the_task(notifying: Client):
+    history, owner_id, _ = await _read_from_the_store(notifying)
+    store = store_for(notifying)
+    store._batches.clear()
+    await store.delete_workflow_streams(notifying.namespace, owner_id)
+    with pytest.raises(Exception) as raised:
+        await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+            history
+        )
+    # A lost range fails the task for a retry, not as nondeterminism.
+    assert "StreamReplayRangeLostError" in str(raised.value)
+    assert "NonDeterministicError" not in str(raised.value)
