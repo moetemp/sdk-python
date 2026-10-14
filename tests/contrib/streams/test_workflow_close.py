@@ -154,6 +154,29 @@ async def test_a_writer_refuses_a_publish_after_the_close(
     assert "already finished" in said
 
 
+@workflow.defn
+class OpensAWriterAfterClose:
+    @workflow.run
+    async def run(self) -> str:
+        await close_workflow_stream(STEPS)
+        try:
+            workflow_writer(STEPS)
+        except ValueError as error:
+            return str(error)
+        return "opened"
+
+
+async def test_a_writer_cannot_open_on_a_topic_the_run_closed(streams: Client):
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, OpensAWriterAfterClose) as worker:
+        said = await streams.execute_workflow(
+            OpensAWriterAfterClose.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    assert "already closed" in said
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.kind for r in records] == [RecordKind.FINISH]
+
+
 # Workflow ids whose task already failed once, in this process.
 _failed_once: set[str] = set()
 
