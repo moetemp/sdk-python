@@ -13,6 +13,9 @@ import asyncio
 from datetime import timedelta
 from typing import Any
 
+import pytest
+
+from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
 from temporalio.bridge.proto.streams import (
     ReadRecord,
     ReadRequest,
@@ -30,6 +33,7 @@ from temporalio.contrib.streams import StreamRef, StreamStorePlugin, get_stream_
 from temporalio.contrib.streams._handles import StreamHandle
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ApplicationError
 from tests.contrib.streams._support import connect_with, read_all
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
@@ -204,3 +208,38 @@ async def test_an_idle_read_on_a_server_without_a_notifier_still_gets_records(
         assert (await asyncio.wait_for(first, 10)).value == "woke"
         await records.aclose()
         await streams_client.get_workflow_handle(workflow_id).signal(Waits.finish)
+
+
+async def test_a_read_raises_the_close_failure_after_the_last_record(client: Client):
+    failure = Failure(
+        message="gave up",
+        application_failure_info=ApplicationFailureInfo(type="GaveUp"),
+    )
+    service = FakeService(
+        reads=[
+            ReadResponse(
+                records=[record("c1", "last")],
+                cursor="c1",
+                done=True,
+                close_failure=failure,
+                closed_by="@run",
+            )
+        ],
+        waits=[],
+    )
+    handle = fake_handle(client, MemoryStreams(), service)
+    seen = []
+    with pytest.raises(ApplicationError) as raised:
+        async for r in handle.read():
+            seen.append(r.value)
+    assert seen == ["last"]
+    assert raised.value.type == "GaveUp"
+
+
+async def test_a_close_with_a_result_ends_the_read_quietly(client: Client):
+    [result] = DataConverter.default.payload_converter.to_payloads(["done"])
+    service = FakeService(
+        reads=[ReadResponse(cursor="c0", done=True, close_result=result)], waits=[]
+    )
+    handle = fake_handle(client, MemoryStreams(), service)
+    assert await read_all(handle.read()) == []
