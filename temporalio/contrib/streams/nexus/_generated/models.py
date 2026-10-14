@@ -940,7 +940,7 @@ class ReadOutput:
 
     state: bytes | None = None
     """Pass as state on the next call of this read. It matches next_token, also when the
-    answer was cut short by its byte budget. It holds at most 64 KiB, which is about 87
+    answer was cut short by its byte budget. It holds at most 16 KiB, which is about 22
     KiB as base64, so it can ride in a Workflow's History. A longer state is refused.
     """
 
