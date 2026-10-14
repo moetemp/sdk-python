@@ -21,7 +21,7 @@ from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersessi
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.bridge.proto.workflow_activation import ResolveStreamWake
-from temporalio.client import Client, WorkflowFailureError
+from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
 from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     RecordKind,
@@ -373,9 +373,42 @@ async def test_a_reader_replays_from_its_markers_and_wakes(client: Client):
         drive,
     )
     # No Activity runs on replay, so the batches and the wake order come from History.
+    history = await handle.fetch_history()
+    await Replayer(workflows=[ReadsBatches]).replay_workflow(history)
+    # The same run, with the wake on a Workflow Task scheduled event as the
+    # server records it. Core then hands it over as a ResolveStreamWake job,
+    # which wakes the reader with no Signal to run.
     await Replayer(workflows=[ReadsBatches]).replay_workflow(
-        await handle.fetch_history()
+        _signal_as_stream_wake(history)
     )
+
+
+def _signal_as_stream_wake(history: WorkflowHistory) -> WorkflowHistory:
+    events = list(history.events)
+    index = next(
+        i
+        for i, e in enumerate(events)
+        if e.HasField("workflow_execution_signaled_event_attributes")
+    )
+    signaled = events.pop(index)
+    [wake] = DataConverter.default.payload_converter.from_payloads(
+        signaled.workflow_execution_signaled_event_attributes.input.payloads,
+        [StreamWake],
+    )
+    removed = signaled.event_id
+    for event in events[index:]:
+        event.event_id -= 1
+        attributes = getattr(event, event.WhichOneof("attributes") or "")
+        for descriptor, value in attributes.ListFields():
+            if descriptor.name.endswith("_event_id") and value > removed:
+                setattr(attributes, descriptor.name, value - 1)
+    scheduled = next(
+        e
+        for e in events[index:]
+        if e.HasField("workflow_task_scheduled_event_attributes")
+    )
+    scheduled.workflow_task_scheduled_event_attributes.stream_wakes.append(wake)
+    return WorkflowHistory(history.workflow_id, events)
 
 
 @workflow.defn
