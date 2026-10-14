@@ -22,6 +22,7 @@ from tests.contrib.streams.samples.scenarios import (
     j1b_parent_relay,
     j2_slack_connector,
     j3_ci_tail,
+    j5b_dashboard_and_relay,
 )
 from tests.contrib.streams.test_live_notifications import skip_without_notifier
 
@@ -73,3 +74,18 @@ async def test_j3_a_tail_reads_every_line_of_a_sparse_log(streams: Client):
     task_queue, workflow_id = ids("j3")
     lines = await j3_ci_tail.main(streams, task_queue, workflow_id=workflow_id)
     assert lines == ["checkout: ok", "compile: ok", "test: ok"]
+
+
+async def test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage(
+    streams: Client,
+):
+    task_queue, workflow_id = ids("j5b")
+    outcome = await j5b_dashboard_and_relay.main(
+        streams, task_queue, workflow_id=workflow_id
+    )
+    assert outcome.dashboard == ["picked up", "at the hub", "delivered"]
+    assert outcome.relayed == [
+        "delivery picked up",
+        "delivery at the hub",
+        "delivery delivered",
+    ]

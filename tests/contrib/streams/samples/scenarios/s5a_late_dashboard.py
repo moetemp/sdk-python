@@ -6,7 +6,7 @@ topic still keeps. A live view opens at the same time and reads from
 ``END``, so it gets only the stages appended after it started.
 
 Left out: the relay half of 5b, where a parent Workflow reads the same
-stream. Workflow code can't read a stream in this release.
+stream. ``j5b_dashboard_and_relay`` runs both halves.
 
 Run with ``python -m tests.contrib.streams.samples.scenarios.s5a_late_dashboard``.
 """

@@ -67,10 +67,13 @@ They turn on `notify_on_append()` themselves.
   Slack itself, and a channel in another namespace, which needs Nexus.
 - **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
   closes its stream with its status. A client tail sleeps between lines.
+- **5b, `j5b_dashboard_and_relay`.** `Order` relays its child's stream as in `j1b_parent_relay`.
+  After the first relayed stage, a dashboard opens late on the child's stream and reads it from
+  `BEGINNING`. Both get every stage. Left out: a child in another namespace.
 
 This release publishes from Workflow code with `workflow_writer`, through Local Activities rather
-than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. 5b
-has no demo of its own yet. Its dashboard half is 5a.
+than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. The
+dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
 
 ## Scenarios with no demo in this release
 
