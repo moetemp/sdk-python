@@ -238,6 +238,9 @@ gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
   test_a_worker_flushes_notifications_after_it_stops
+gate tests/contrib/streams/test_workflow_close.py \
+  test_a_workflow_close_ends_reads_while_the_workflow_runs \
+  test_a_rerun_after_the_close_finds_its_flushes_landed
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree
