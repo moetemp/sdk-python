@@ -6,6 +6,7 @@ The live tests run on memory, and on Redis when ``STREAMS_REDIS_URL`` is set.
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import uuid
 from datetime import timedelta
@@ -29,6 +30,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._workflow_activity import (
     PUBLISH_ACTIVITY,
+    _RunTopics,
     publish_activity,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -133,6 +135,22 @@ async def test_concurrent_calls_on_a_topic_keep_their_order(client: Client):
         )
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=EVENTS))
     assert [r.value for r in records] == [{"i": index} for index in range(6)]
+
+
+async def test_the_run_state_goes_with_the_run(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(
+        streams, PublishesConcurrently, max_cached_workflows=0
+    ) as worker:
+        await streams.execute_workflow(
+            PublishesConcurrently.run,
+            6,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    gc.collect()
+    # The concurrent calls wait on the topic lock, which binds the run's loop.
+    assert not [o for o in gc.get_objects() if type(o) is _RunTopics]
 
 
 @workflow.defn

@@ -14,7 +14,6 @@ runs once on each record body, when the Activity stores it.
 from __future__ import annotations
 
 import asyncio
-import weakref
 from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, overload
@@ -83,16 +82,18 @@ class _RunTopics:
         return lock
 
 
-# Keyed by the run's runtime, so the state goes with the run at eviction and
-# is rebuilt in order on replay.
-_runs: weakref.WeakKeyDictionary[Any, _RunTopics] = weakref.WeakKeyDictionary()
+# Held on the run's runtime, so the state goes with the run at eviction and is
+# rebuilt in order on replay. A weak map keyed by the runtime would never drop
+# it, since a lock that was waited on refers to the runtime's event loop.
+_STATE_ATTRIBUTE = "_temporal_stream_activity_writers"
 
 
 def _run_topics() -> _RunTopics:
     runtime = workflow._Runtime.current()
-    topics = _runs.get(runtime)
+    topics: _RunTopics | None = getattr(runtime, _STATE_ATTRIBUTE, None)
     if topics is None:
-        topics = _runs[runtime] = _RunTopics()
+        topics = _RunTopics()
+        setattr(runtime, _STATE_ATTRIBUTE, topics)
     return topics
 
 
