@@ -39,10 +39,12 @@ from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.bridge.proto.streams import (
     CloseRequest,
     NamedProducer,
+    ReadRequest,
     RetireProducerRequest,
 )
+from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.common import RawValue, RetryPolicy
-from temporalio.contrib.streams._body import encode_bodies
+from temporalio.contrib.streams._body import content_hash, encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -91,6 +93,7 @@ _MAX_RECORD_BYTES = 3 << 19
 _PAYLOADS_ENCODING = b"binary/protobuf"
 _PAYLOADS_TYPE = Payloads.DESCRIPTOR.full_name.encode()
 _CLOSE_TYPE = CloseRequest.DESCRIPTOR.full_name.encode()
+_CONTENT_HASH_KEY = "temporal.io/content-hash"
 # Repeats of one batch on the same producer that the store answers with the
 # original position, before the Activity gives up and its retry runs.
 _OUTCOME_UNKNOWN_REPEATS = 3
@@ -599,9 +602,15 @@ async def publish_activity(
     )
     producer = activity_handle().producer(topic=topic)
     try:
-        cursor = await _append(producer, batch) if batch else BEGINNING
-        if finish:
-            cursor = await producer.finish()
+        try:
+            cursor = await _append(producer, batch) if batch else BEGINNING
+            if finish:
+                cursor = await producer.finish()
+        except StreamClosedError:
+            landed = await _landed_before_close(producer, batch, finish)
+            if landed is None:
+                raise
+            return landed.token
     except _FINAL_ERRORS as error:
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
@@ -609,6 +618,59 @@ async def publish_activity(
     if batch or finish:
         await _retire(producer)
     return cursor.token
+
+
+async def _landed_before_close(
+    producer: StreamProducer[Any], batch: list[RawValue], finish: bool
+) -> Cursor | None:
+    """The cursor of this flush's batch when an earlier run of it landed before the close.
+
+    A Workflow Task that fails after ``close_workflow_stream`` ran runs its
+    flushes again, as new attempts of the same producers, and the store
+    refuses them as closed. The flushes before a close all land before it,
+    so such a flush finds its batch in the stream under its producer id.
+    Then the flush is done. Else ``None``, and the refusal stands.
+
+    It reads the whole topic, which happens only on this rare path.
+    """
+    handle = producer._handle
+    service = await handle._plugin._service_for(handle._client)
+    request = ReadRequest(
+        stream=handle._address(producer._topic), max_records=_MAX_BATCH_RECORDS
+    )
+    request.wait.FromMilliseconds(100)
+    # The records of the producer's newest attempt, as (kind, content hash, cursor).
+    newest: list[tuple[int, str, str]] = []
+    newest_attempt = -1
+    while True:
+        response = await call(service.read(request))
+        for record in response.records:
+            stored = record.stored
+            if (
+                not record.HasField("stored")
+                or stored.producer_id != producer.producer_id
+            ):
+                continue
+            if stored.attempt != newest_attempt:
+                newest, newest_attempt = [], stored.attempt
+            digest = stored.metadata.get(_CONTENT_HASH_KEY)
+            newest.append(
+                (stored.kind, digest.data.decode() if digest else "", record.cursor)
+            )
+        if response.done or not response.records:
+            break
+        request.after = response.cursor
+        request.state = response.state
+    wanted = [content_hash(v.payload).hex() for v in batch]
+    data = [
+        h for kind, h, _ in newest if kind == StreamRecordKind.STREAM_RECORD_KIND_DATA
+    ]
+    finished = any(
+        kind == StreamRecordKind.STREAM_RECORD_KIND_FINISH for kind, _, _ in newest
+    )
+    if not newest or data != wanted or (finish and not finished):
+        return None
+    return Cursor(newest[-1][2])
 
 
 async def _retire(producer: StreamProducer[Any]) -> None:
@@ -671,9 +733,10 @@ async def close_workflow_stream(
     chain ends: the server's notifier checks the owner and completes its
     readers, and a client reader ends at its next read.
 
-    A Local Activity that runs again, after a failed Workflow Task, finds
-    the stream closed and takes that as done. The first close's outcome
-    stays.
+    After a failed Workflow Task, the Local Activities of the task run
+    again. A flush finds its batch already in the stream and takes the
+    refusal as done, and a close takes the stream's close as done. The
+    first close's outcome stays.
 
     Args:
         topic: The topic to close. Without one,
