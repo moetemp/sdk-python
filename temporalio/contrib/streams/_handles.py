@@ -292,9 +292,11 @@ class StreamHandle:
         producers are not known to it. A ``SUPERSEDED`` record withdraws only
         what its producer wrote in earlier attempts. The other producers'
         records on the topic stay valid. The read ends when the owner's run
-        chain is closed and every retained record has been delivered. The
-        result is a generator, so a caller that stops early calls
-        ``aclose()`` on it.
+        chain is closed and every retained record has been delivered, or
+        when the topic was closed and read to its end. A topic closed with
+        an ``error=`` raises that error, through the client's failure
+        converter, after its last record. The result is a generator, so a
+        caller that stops early calls ``aclose()`` on it.
 
         With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
         on, an idle read sleeps on the stream's notifier on the server. A read
@@ -328,6 +330,8 @@ class StreamHandle:
             StreamNotFoundError: The owner doesn't exist.
             StreamStorageError: The store failed or couldn't be reached, as
                 a Redis blip during a long read does.
+            BaseException: The error the topic was closed with, after its
+                last record.
 
         Any of these ends the generator. Start a new read after the last
         cursor you handled. It reads on from there, though it no longer knows
@@ -348,6 +352,8 @@ class StreamHandle:
             for record in response.records:
                 yield await from_read(self._converter, record, result_type)
             if response.done:
+                if response.HasField("close_failure"):
+                    raise await self._converter.decode_failure(response.close_failure)
                 return
             request.after = response.cursor
             request.state = response.state

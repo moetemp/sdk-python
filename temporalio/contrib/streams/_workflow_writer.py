@@ -39,12 +39,10 @@ from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.bridge.proto.streams import (
     CloseRequest,
     NamedProducer,
-    ReadRequest,
     RetireProducerRequest,
 )
-from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.common import RawValue, RetryPolicy
-from temporalio.contrib.streams._body import content_hash, encode_bodies
+from temporalio.contrib.streams._body import encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -93,7 +91,6 @@ _MAX_RECORD_BYTES = 3 << 19
 _PAYLOADS_ENCODING = b"binary/protobuf"
 _PAYLOADS_TYPE = Payloads.DESCRIPTOR.full_name.encode()
 _CLOSE_TYPE = CloseRequest.DESCRIPTOR.full_name.encode()
-_CONTENT_HASH_KEY = "temporal.io/content-hash"
 # Repeats of one batch on the same producer that the store answers with the
 # original position, before the Activity gives up and its retry runs.
 _OUTCOME_UNKNOWN_REPEATS = 3
@@ -606,11 +603,13 @@ async def publish_activity(
             cursor = await _append(producer, batch) if batch else BEGINNING
             if finish:
                 cursor = await producer.finish()
-        except StreamClosedError:
-            landed = await _landed_before_close(producer, batch, finish)
-            if landed is None:
+        except StreamClosedError as closed:
+            if closed.closed_by != _closer(info.workflow_run_id):
                 raise
-            return landed.token
+            # A Workflow Task that failed after this run's close runs its
+            # flushes again. Every flush before a close lands before it, so
+            # this batch is already in the stream.
+            return (await producer._handle.latest(topic=topic)).token
     except _FINAL_ERRORS as error:
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
@@ -620,57 +619,9 @@ async def publish_activity(
     return cursor.token
 
 
-async def _landed_before_close(
-    producer: StreamProducer[Any], batch: list[RawValue], finish: bool
-) -> Cursor | None:
-    """The cursor of this flush's batch when an earlier run of it landed before the close.
-
-    A Workflow Task that fails after ``close_workflow_stream`` ran runs its
-    flushes again, as new attempts of the same producers, and the store
-    refuses them as closed. The flushes before a close all land before it,
-    so such a flush finds its batch in the stream under its producer id.
-    Then the flush is done. Else ``None``, and the refusal stands.
-
-    It reads the whole topic, which happens only on this rare path.
-    """
-    handle = producer._handle
-    service = await handle._plugin._service_for(handle._client)
-    request = ReadRequest(
-        stream=handle._address(producer._topic), max_records=_MAX_BATCH_RECORDS
-    )
-    request.wait.FromMilliseconds(100)
-    # The records of the producer's newest attempt, as (kind, content hash, cursor).
-    newest: list[tuple[int, str, str]] = []
-    newest_attempt = -1
-    while True:
-        response = await call(service.read(request))
-        for record in response.records:
-            stored = record.stored
-            if (
-                not record.HasField("stored")
-                or stored.producer_id != producer.producer_id
-            ):
-                continue
-            if stored.attempt != newest_attempt:
-                newest, newest_attempt = [], stored.attempt
-            digest = stored.metadata.get(_CONTENT_HASH_KEY)
-            newest.append(
-                (stored.kind, digest.data.decode() if digest else "", record.cursor)
-            )
-        if response.done or not response.records:
-            break
-        request.after = response.cursor
-        request.state = response.state
-    wanted = [content_hash(v.payload).hex() for v in batch]
-    data = [
-        h for kind, h, _ in newest if kind == StreamRecordKind.STREAM_RECORD_KIND_DATA
-    ]
-    finished = any(
-        kind == StreamRecordKind.STREAM_RECORD_KIND_FINISH for kind, _, _ in newest
-    )
-    if not newest or data != wanted or (finish and not finished):
-        return None
-    return Cursor(newest[-1][2])
+def _closer(run_id: str | None) -> str:
+    """The ``closed_by`` a Workflow run's close names it with."""
+    return f"@{run_id or ''}"
 
 
 async def _retire(producer: StreamProducer[Any]) -> None:
@@ -733,10 +684,12 @@ async def close_workflow_stream(
     chain ends: the server's notifier checks the owner and completes its
     readers, and a client reader ends at its next read.
 
-    After a failed Workflow Task, the Local Activities of the task run
-    again. A flush finds its batch already in the stream and takes the
-    refusal as done, and a close takes the stream's close as done. The
-    first close's outcome stays.
+    The close names the run as its ``closed_by``, ``@<run id>``. After a
+    failed Workflow Task, the Local Activities of the task run again, and
+    the store refuses their appends as closed by this run. Every flush
+    before the close landed before it, so a flush takes that refusal as
+    done, and so does the close. A close by anyone else still fails a
+    flush. The first close's outcome stays.
 
     Args:
         topic: The topic to close. Without one,
@@ -814,9 +767,12 @@ async def close_activity(topic: str, finish: bool, outcome: RawValue) -> None:
         if finish:
             try:
                 await stream.producer(topic=topic).finish()
-            except StreamClosedError:
+            except StreamClosedError as closed:
                 # A rerun after a failed Workflow Task finds its own close.
-                pass
+                if closed.closed_by != _closer(
+                    temporalio.activity.info().workflow_run_id
+                ):
+                    raise
         converter = handle._converter
         if request.HasField("result"):
             [payload] = await encode_bodies(converter, [request.result])
@@ -826,6 +782,7 @@ async def close_activity(topic: str, finish: bool, outcome: RawValue) -> None:
                 request.failure, converter._transform_outbound_payloads
             )
         request.stream.CopyFrom(handle._address(topic))
+        request.closed_by = _closer(temporalio.activity.info().workflow_run_id)
         service = await handle._plugin._service_for(handle._client)
         await call(service.close(request))
     except _FINAL_ERRORS as error:

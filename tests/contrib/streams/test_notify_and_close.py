@@ -104,7 +104,12 @@ async def test_a_close_with_an_outcome_reaches_the_notifier(client: Client) -> N
             assert notifier.closed
             assert notifier.close_failure.message == "the agent gave up"
             assert notifier.close_failure.application_failure_info.type == "AgentGaveUp"
-        assert [r.value for r in await read_all(handle.read())] == ["a"]
+        # The read raises the close's error after the last record.
+        records = handle.read()
+        assert (await records.__anext__()).value == "a"
+        with pytest.raises(ApplicationError) as raised:
+            await records.__anext__()
+        assert raised.value.type == "AgentGaveUp"
         await streams_client.get_workflow_handle(workflow_id).signal(Waits.finish)
 
 
