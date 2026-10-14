@@ -35,10 +35,15 @@ class StreamRef:
     """One stream, named by its owner and its topic.
 
     ``kind`` says what owns the stream; only ``"workflow"`` exists in this
-    release. A Workflow ref carries ``workflow_id`` and names no run: the
-    stream belongs to the Workflow's run chain, and a read on it follows the
-    chain across Continue-as-New. ``topic`` is the topic a handle opened from
-    the ref addresses when a call names none.
+    release. A Workflow ref carries ``workflow_id``. The stream belongs to
+    the Workflow's run chain, and a read on it follows the chain across
+    Continue-as-New and ends only when the chain ends. ``topic`` is the topic
+    a handle opened from the ref addresses when a call names none.
+
+    ``chain_run_id`` picks which chain: the one that holds that run. A
+    Workflow id can start a new chain once the old one closed, and without
+    ``chain_run_id`` a ref names the newest chain. It never stops a read at
+    that run's end.
 
     The default data converter carries it as JSON, so it can be a Workflow
     argument or an Activity result.
@@ -47,6 +52,7 @@ class StreamRef:
     kind: str
     workflow_id: str
     topic: str = DEFAULT_TOPIC
+    chain_run_id: str | None = None
 
     def __post_init__(self) -> None:
         """Refuse a ref this release cannot open.
@@ -68,14 +74,17 @@ class StreamRef:
         workflow_id: str,
         *,
         topic: str | StreamTopic[Any] | None = None,
+        chain_run_id: str | None = None,
     ) -> StreamRef:
         """A ref to ``topic`` of ``workflow_id``'s stream.
 
         Without ``topic`` it names
-        :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        :data:`temporalio.contrib.streams.DEFAULT_TOPIC`. Without
+        ``chain_run_id`` it names the Workflow id's newest chain, and with
+        one the chain that holds that run.
         """
         name, _ = resolve_topic(topic)
-        return cls("workflow", workflow_id, topic=name)
+        return cls("workflow", workflow_id, topic=name, chain_run_id=chain_run_id)
 
     def with_topic(self, topic: str | StreamTopic[Any] | None) -> StreamRef:
         """The same owner, naming ``topic`` instead.

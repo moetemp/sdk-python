@@ -44,15 +44,15 @@ def test_a_ref_names_a_workflow_stream():
 
 
 def test_a_ref_round_trips_through_the_default_converter():
-    ref = StreamRef.for_workflow("wf", topic=OUT)
+    ref = StreamRef.for_workflow("wf", topic=OUT, chain_run_id="run")
     converter = DataConverter.default.payload_converter
     payload = converter.to_payloads([ref])[0]
     assert converter.from_payloads([payload], [StreamRef])[0] == ref
 
 
-def test_a_ref_that_names_a_run_decodes_as_the_chain():
-    # A reader follows the run chain, so a run id from another process is
-    # dropped rather than refused.
+def test_a_ref_with_the_old_run_id_decodes_as_the_newest_chain():
+    # The old field also ended a read at that run, which no read does now,
+    # so it is dropped rather than read as chain_run_id.
     converter = DataConverter.default.payload_converter
     payload = Payload(
         metadata={"encoding": b"json/plain"},
