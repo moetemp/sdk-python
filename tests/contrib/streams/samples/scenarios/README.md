@@ -32,8 +32,9 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
   2 appends after `SUPERSEDED`. Attempt 1 then appends late, and the record arrives marked `stale`.
   Left out: fencing and a retraction at the timeout.
 
-The demos of 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code with its Workflow
-Task, which this release does not have.
+The scenarios 1a, 3a, 3b, 3c, 5a, 5b, 6, 7a and 8 publish from Workflow code. This release
+does that with `workflow_writer`, through Local Activities rather than with the Workflow Task,
+but no demo here shows those scenarios yet.
 
 ## Scenarios with no demo in this release
 
