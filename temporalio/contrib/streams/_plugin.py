@@ -10,7 +10,8 @@ On a Worker the plugin registers the built-in Activity that
 :func:`temporalio.contrib.streams.workflow_writer` runs as a Local Activity,
 and the interceptor that gives a Local Activity a producer identity and
 drains the Workflow writers when a run ends. On a Replayer it adds the
-interceptor only, so a replay schedules the same drain.
+interceptor only, so a replay schedules the same drain. When a Worker stops,
+the plugin waits for the notifications Core still has out.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import temporalio.bridge.client
 from temporalio.bridge.proto.streams import (
     DeleteOwnerRequest,
+    FlushNotificationsRequest,
     StreamOwnerKind,
     StreamStoreConfig,
 )
@@ -33,7 +35,7 @@ from temporalio.plugin import SimplePlugin
 if TYPE_CHECKING:
     from temporalio.client import Client, ClientConfig
     from temporalio.service import ConnectConfig, ServiceClient
-    from temporalio.worker import ReplayerConfig, WorkerConfig
+    from temporalio.worker import ReplayerConfig, Worker, WorkerConfig
 
 __all__ = ["StreamStorePlugin"]
 
@@ -131,6 +133,38 @@ class StreamStorePlugin(SimplePlugin):
             interceptors.append(StreamsInterceptor())
         config["interceptors"] = interceptors
         return config
+
+    async def run_worker(
+        self,
+        worker: Worker,
+        next: Callable[[Worker], Awaitable[None]],
+    ) -> None:
+        """Run the Worker, then wait for the notifications Core still has out.
+
+        The Worker's Activities append and close through this store, and Core
+        tells each stream's notifier in the background. A Worker that stops
+        right after its last Activity would otherwise drop a notification a
+        sleeping reader waits for.
+        """
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            await self.flush_notifications()
+
+    async def flush_notifications(self) -> None:
+        """Wait for the notifications Core still has out, for up to 10 seconds.
+
+        Core tells a stream's notifier on the server in the background, after
+        an append that a sleeping reader waits for and after a close. A
+        Worker built from the client does this when it stops. A process that
+        holds only a client calls it before it exits. Before a client
+        connected the store, it returns at once.
+
+        .. warning::
+            This API is experimental.
+        """
+        if self._service is not None:
+            await call(self._service.flush_notifications(FlushNotificationsRequest()))
 
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
         """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.

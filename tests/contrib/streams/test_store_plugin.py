@@ -196,3 +196,38 @@ def address(client: Client, workflow_id: str) -> StreamAddress:
         workflow_id=workflow_id,
         topic="out",
     )
+
+
+class _CountsFlushes(MemoryStreams):
+    def __init__(self) -> None:
+        super().__init__()
+        self.worker: Worker | None = None
+        self.flushed_after_shutdown: list[bool] = []
+
+    async def flush_notifications(self) -> None:
+        assert self.worker is not None
+        self.flushed_after_shutdown.append(self.worker.is_shutdown)
+        await super().flush_notifications()
+
+
+async def test_a_worker_flushes_notifications_after_it_stops(client: Client):
+    store = _CountsFlushes()
+    streams_client = await connect_with(client, store)
+    store.worker = Worker(
+        streams_client, task_queue=str(uuid.uuid4()), activities=[_noop]
+    )
+    async with store.worker:
+        assert store.flushed_after_shutdown == []
+    # The block waits for the flush, which runs once the Worker stopped.
+    assert store.flushed_after_shutdown == [True]
+
+
+async def test_a_flush_before_any_connect_returns_at_once():
+    await MemoryStreams().flush_notifications()
+
+
+async def test_a_flush_reaches_core(client: Client):
+    store = MemoryStreams()
+    await connect_with(client, store)
+    # Nothing is out, so Core answers at once.
+    await store.flush_notifications()
