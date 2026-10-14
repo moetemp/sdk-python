@@ -369,6 +369,43 @@ async def test_a_worker_without_the_store_cannot_write(client: Client):
 
 
 @workflow.defn
+class FillsItsBuffer:
+    @workflow.run
+    async def run(self) -> list[str]:
+        steps = workflow_writer(STEPS, max_buffered=3)
+        # No flush runs before the run yields, so the buffer fills here.
+        for step in ("one", "two", "three"):
+            steps.publish(step)
+        try:
+            steps.publish("four")
+        except StreamError as error:
+            said = str(error)
+        else:
+            said = "buffered"
+        await steps.flush()
+        steps.publish("four")
+        await steps.flush()
+        return [said]
+
+
+async def test_a_full_buffer_refuses_a_publish_until_a_flush(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(streams, FillsItsBuffer) as worker:
+        workflow_id = new_workflow_id()
+        [said] = await streams.execute_workflow(
+            FillsItsBuffer.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    assert "max_buffered" in said
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.value for r in records if r.kind is RecordKind.DATA] == [
+        "one",
+        "two",
+        "three",
+        "four",
+    ]
+
+
+@workflow.defn
 class FlushesOnce:
     @workflow.run
     async def run(self) -> None:

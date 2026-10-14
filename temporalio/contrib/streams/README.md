@@ -79,8 +79,12 @@ async for record, withdrawn in track_supersession(handle.read(topic=TOKENS)):
 
 A record marked `stale` comes back withdrawn as it arrives, since an older
 attempt wrote it after the read delivered a newer one. The tracker keeps
-every record it may still withdraw in memory, so call `forget(producer_id)`
-once a producer can't retry.
+every record it may still withdraw in memory, for at most `max_producers`
+producers (1,000 by default), and drops the producer it saw least recently
+past that. The read forgets producers the same way, so a dropped producer
+gets no `SUPERSEDED` either. A Workflow writer makes a producer per flush,
+so on its streams the bound is what holds memory steady. Call
+`forget(producer_id)` once a producer can't retry, to drop it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
@@ -198,6 +202,12 @@ class Agent:
   stores it. The values ride in the Local Activity's input, not in History.
 - **Size.** A record holds at most 1.5 MiB. A flush carries at most 1,000
   records or 2 MiB, and a larger buffer splits into several flushes.
+- **Buffer bound.** A topic holds at most `max_buffered` values (10,000 by
+  default) while they wait for a flush. Past it, `publish` raises
+  `StreamError`, and `await steps.flush()` makes room. A flush retries
+  until the store answers, so without the bound a store outage grows
+  Workflow memory, and a replay after eviction builds it all again.
+  `max_buffered=None` turns it off.
 
 Known limits:
 
@@ -214,6 +224,22 @@ Known limits:
   effort: if it fails, or a Worker dies before it, the field stays until
   `retention` after its last write. The flush interval bounds how many such
   leftovers a run can make.
+- **History events.** Each flush adds one marker event. While flushes run
+  back to back, the Workflow Task stays open, and Core heartbeats it about
+  every 8 seconds (80% of the default 10 second task timeout), which adds
+  three Workflow Task events. So a topic that publishes all the time adds
+  about ten events a second, and reaches the default limit of 51,200
+  History events in under 90 minutes. Two busy topics take half that. A
+  long-running publisher should Continue-as-New when
+  `workflow.info().is_continue_as_new_suggested()` is true. The interceptor
+  flushes every buffer before the run continues as new, and the next run
+  publishes to the same stream:
+
+  ```python
+  steps.publish(step)
+  if workflow.info().is_continue_as_new_suggested():
+      workflow.continue_as_new(args=[prompt])
+  ```
 - **Readers track 1,000 producers.** Each flush is a producer. A read keeps
   the newest attempt of its last 1,000 producers, so it misses
   `SUPERSEDED` only for a flush that reruns after 1,000 newer flushes.
