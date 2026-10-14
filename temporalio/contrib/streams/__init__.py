@@ -105,6 +105,7 @@ from temporalio.contrib.streams._workflow import (
 )
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
+    close_workflow_stream,
     workflow_writer,
 )
 
@@ -141,6 +142,7 @@ __all__ = [
     "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
+    "close_workflow_stream",
     "get_stream_handle",
     "topic",
     "track_supersession",
