@@ -51,6 +51,7 @@ from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams._record import Cursor, StreamRecord
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._replay_reads import (
+    ReadChain,
     batch_payload,
     is_positions,
     positions_payload,
@@ -166,6 +167,8 @@ class _ReadInput:
     """Return the read's range and digest in place of its records."""
     reader_id: str = ""
     """The reader's id in its run, which names its hold on the records."""
+    read_seq: int = 0
+    """How many reads the reader made, this one included."""
 
 
 @dataclass
@@ -181,6 +184,7 @@ class _ReaderState:
     done: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
+    reads: int = 0
 
 
 class WorkflowStreamReader(Generic[T]):
@@ -396,6 +400,8 @@ class WorkflowStreamReader(Generic[T]):
         # A closed stream needs no wake, so the read neither attaches nor arms.
         arm = wake is None or not wake.closed
         input = self._input(arm=arm)
+        state.reads += 1
+        input.read_seq = state.reads
         response, state.read_run_id, read_by = await self._run(input)
         if input.subscription_id:
             state.attach = False
@@ -681,8 +687,15 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
     store._batches.put(range, response)
+    chain = ReadChain(f"{info.workflow_id}/{input.reader_id}", input.read_seq)
+    if input.read_seq > 1:
+        # The input is the previous read's answer state, which that read's
+        # marker holds, so replay takes it from there.
+        range.ClearField("state")
     return RawValue(
-        positions_payload(range, response, read_run_id, info.workflow_run_id or "")
+        positions_payload(
+            range, response, read_run_id, info.workflow_run_id or "", chain
+        )
     )
 
 
