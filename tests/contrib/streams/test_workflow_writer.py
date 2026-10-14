@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import os
+import time
 import uuid
 from collections import defaultdict
 from datetime import timedelta
@@ -37,6 +38,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
+    _FlushGate,
     _RunWriters,
     publish_activity,
     run_then_drain,
@@ -464,3 +466,70 @@ async def test_closing_the_run_outside_its_loop_does_not_drain():
     run.send(None)
     # Closing throws GeneratorExit into the run, outside any Workflow loop.
     run.close()
+
+
+async def test_the_flush_gate_spaces_flush_starts_per_run_and_topic():
+    gate = _FlushGate(capacity=2)
+    key = ("wf", "run", "steps")
+    await gate.wait(key, 200)
+    started = time.monotonic()
+    await gate.wait(key, 200)
+    assert time.monotonic() - started >= 0.18
+    # Another topic of the run, or no interval, does not wait.
+    started = time.monotonic()
+    await gate.wait(("wf", "run", "other"), 200)
+    await gate.wait(key, 0)
+    assert time.monotonic() - started < 0.1
+    # The gate forgets the least recent key past its capacity.
+    await gate.wait(("wf", "run", "third"), 200)
+    assert list(gate._started) == [key, ("wf", "run", "third")]
+
+
+@activity.defn
+async def tick() -> None:
+    pass
+
+
+@workflow.defn
+class PublishesBetweenSteps:
+    @workflow.run
+    async def run(self, steps: int, interval_ms: int) -> None:
+        writer = workflow_writer(
+            STEPS,
+            min_flush_interval=timedelta(milliseconds=interval_ms) or None,
+        )
+        for index in range(steps):
+            writer.publish(str(index))
+            # Each step resolves a Local Activity, so a flush could start often.
+            await workflow.execute_local_activity(
+                tick, start_to_close_timeout=timedelta(seconds=10)
+            )
+        await writer.finish()
+
+
+async def test_the_flush_interval_caps_the_flush_count(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    counts = {}
+    for interval_ms in (0, 300):
+        workflow_id = new_workflow_id()
+        async with new_worker(
+            streams, PublishesBetweenSteps, activities=[tick]
+        ) as worker:
+            started = time.monotonic()
+            await streams.execute_workflow(
+                PublishesBetweenSteps.run,
+                args=[30, interval_ms],
+                id=workflow_id,
+                task_queue=worker.task_queue,
+            )
+            elapsed = time.monotonic() - started
+        records = await read_all(
+            get_stream_handle(streams, workflow_id).read(topic=STEPS)
+        )
+        data = [r for r in records if r.kind is RecordKind.DATA]
+        assert [r.value for r in data] == [str(index) for index in range(30)]
+        counts[interval_ms] = len({r.producer_id for r in records})
+        if interval_ms:
+            # At most one flush start per interval, plus the first and the finish.
+            assert counts[interval_ms] <= elapsed / (interval_ms / 1000) + 2
+    assert counts[300] < counts[0]
