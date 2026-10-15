@@ -46,8 +46,6 @@ Differences to plan for:
   stream's notifier while the stream is idle. That needs a server with the
   stream notifier. On a server without it, keep that part on Workflow
   Streams, or send the Workflow what it needs, for example as a Signal.
-- **Streams owned by a Workflow Activity.** Only a Workflow or a standalone
-  Activity owns a stream in this release.
 - **A server-sent events bridge.** Streams ships none. Serve readers from
   your own endpoint with `get_stream_handle(...).read(...)`.
 - **Records already published.** They stay where they are, in the

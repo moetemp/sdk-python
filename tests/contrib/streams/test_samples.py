@@ -12,7 +12,9 @@ from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples import (
     activity_owned_stream,
+    agent_with_links,
     path_b_activity_publish,
+    tool_call_streams,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -43,3 +45,36 @@ async def test_a_standalone_activity_streams_to_a_stream_of_its_own(client: Clie
         activity_id=f"gen-{uuid.uuid4().hex}",
     )
     assert text == "an answer to streams"
+
+
+async def test_a_tool_call_streams_to_a_stream_of_its_own(client: Client):
+    store = RedisStreams(
+        os.environ["STREAMS_REDIS_URL"], key_prefix=f"sample-{uuid.uuid4().hex}"
+    )
+    text = await tool_call_streams.main(
+        await connect_with(client, store),
+        f"sample-wfa-{uuid.uuid4().hex}",
+        workflow_id=f"agent-{uuid.uuid4().hex}",
+    )
+    assert text == "results for streams"
+
+
+async def test_a_client_follows_an_agent_and_its_tool_calls(client: Client):
+    store = RedisStreams(
+        os.environ["STREAMS_REDIS_URL"], key_prefix=f"sample-{uuid.uuid4().hex}"
+    )
+    seen = await agent_with_links.main(
+        await connect_with(client, store),
+        f"sample-links-{uuid.uuid4().hex}",
+        workflow_id=f"agent-{uuid.uuid4().hex}",
+    )
+    assert seen == [
+        "agent:plan",
+        "lookup-0:facts",
+        "lookup-0:about",
+        "lookup-0:streams",
+        "lookup-1:facts",
+        "lookup-1:about",
+        "lookup-1:links",
+        "agent:answer",
+    ]
