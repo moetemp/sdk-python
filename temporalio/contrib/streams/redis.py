@@ -6,7 +6,10 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 from temporalio.bridge.proto.streams import RedisStoreConfig, StreamStoreConfig
-from temporalio.contrib.streams._plugin import StreamStorePlugin
+from temporalio.contrib.streams._plugin import (
+    StreamStorePlugin,
+    with_owner_start_grace,
+)
 
 __all__ = ["RedisStreams"]
 
@@ -31,6 +34,7 @@ class RedisStreams(StreamStorePlugin):
         response_timeout: timedelta | None = None,
         floor_lease: timedelta | None = None,
         floor_release_grace: timedelta | None = None,
+        owner_start_grace: timedelta | None = None,
     ) -> None:
         """Create the store's configuration.
 
@@ -59,10 +63,16 @@ class RedisStreams(StreamStorePlugin):
                 releases it. One day when unset. A Python Workflow reader
                 never releases, since its run may replay its reads until it
                 ends, so its hold lasts ``floor_lease``.
+            owner_start_grace: How long a read of a Workflow that Temporal
+                doesn't know yet answers empty before it fails with
+                :class:`temporalio.contrib.streams.StreamNotFoundError`, so
+                a reader can start before its owner. 60 seconds when unset.
+                Zero fails at once.
 
         Raises:
-            ValueError: No URL was given, ``key_prefix`` is empty, or
-                ``retention`` is shorter than a millisecond.
+            ValueError: No URL was given, ``key_prefix`` is empty,
+                ``retention`` is shorter than a millisecond, or
+                ``owner_start_grace`` is negative.
         """
         urls = [url] if isinstance(url, str) else list(url)
         if not urls:
@@ -88,5 +98,5 @@ class RedisStreams(StreamStorePlugin):
             config.floor_release_grace.FromTimedelta(floor_release_grace)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
-            StreamStoreConfig(redis=config),
+            with_owner_start_grace(StreamStoreConfig(redis=config), owner_start_grace),
         )
