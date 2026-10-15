@@ -60,7 +60,7 @@ async def test_a_standalone_activity_writes_its_own_stream(client: Client):
         assert stream.ref == StreamRef.for_activity("act", run_id="run")
         producer = stream.producer()
         assert producer.producer_id == "act@run"
-        assert producer.attempt == int(_STARTED.timestamp()) * 1000 << 16 | 3
+        assert producer.attempt == int(_STARTED.timestamp()) * 1000 << 11 | 3
         identity = producer._activity
         assert identity is not None
         assert (identity.workflow_id, identity.run_id) == ("", "run")

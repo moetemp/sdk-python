@@ -648,7 +648,7 @@ class ActivityStreamHandle:
 
         The producer id is ``<Activity id>@<scheduling run id>``, or
         ``<Activity id>@<Activity run id>`` in a standalone Activity. The
-        attempt is ``started_ms << 16 | min(temporal_attempt, 65535)``, where
+        attempt is ``started_ms << 11 | min(temporal_attempt, 2047)``, where
         ``started_ms`` is the Unix time in milliseconds at which the server
         started this attempt. A retry starts later, and so does an attempt
         after a reset that set the Temporal attempt back to one, so the
@@ -801,9 +801,9 @@ def attempt_key(attempt: int, started_ms: int | None) -> int | None:
     """
     if started_ms is None:
         return attempt
-    if attempt < 1 or not 0 < started_ms < 1 << 47:
+    if attempt < 1 or not 0 < started_ms < 1 << 42:
         return None
-    return started_ms << 16 | min(attempt, 0xFFFF)
+    return started_ms << 11 | min(attempt, 0x7FF)
 
 
 # The producers of each running Activity attempt, by topic, under the id of the
