@@ -274,8 +274,13 @@ gate tests/contrib/streams/test_live_wfa_streams.py \
   test_live_each_run_of_a_chain_gets_its_own_tool_stream \
   test_live_a_reset_run_writes_a_new_tool_stream \
   test_live_a_tool_whose_agent_never_closes_ends_by_the_owner_check
+gate tests/contrib/streams/test_live_links.py \
+  test_live_both_followers_keep_the_gates_of_an_agent \
+  test_live_a_failed_tool_a_missing_child_and_a_cycle_go_on \
+  test_live_a_follower_resumes_inside_a_segment
 gate tests/contrib/streams/test_samples.py \
-  test_a_tool_call_streams_to_a_stream_of_its_own
+  test_a_tool_call_streams_to_a_stream_of_its_own \
+  test_a_client_follows_an_agent_and_its_tool_calls
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
