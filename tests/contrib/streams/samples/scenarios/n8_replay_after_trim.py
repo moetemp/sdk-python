@@ -5,7 +5,8 @@ operation. After two entries it continues as new and hands
 ``reader.position`` to its next run. The ledger then continues as new
 itself, and its new run writes one more entry and closes the stream. The
 bookkeeper's new run starts the operation again, reads after the position,
-and gets only the new entry.
+and gets only the new entry. Its reader passes ``replay_from_store=False``,
+so each read answer goes to History.
 
 Then the ledger's streams are deleted and its Worker stops. A ``Replayer``
 replays both of the bookkeeper's runs. Every read answer is in the
@@ -108,7 +109,14 @@ class Bookkeeper:
     ) -> Books:
         client = workflow.create_nexus_client(service=LedgerService, endpoint=endpoint)
         handle = await client.start_operation(LedgerService.follow, ledger_id)
-        reader = StreamReader(handle, item_type=str, endpoint=endpoint, after=position)
+        # Recorded batches, so a replay needs neither the store nor the ledger.
+        reader = StreamReader(
+            handle,
+            item_type=str,
+            endpoint=endpoint,
+            after=position,
+            replay_from_store=False,
+        )
         while (batch := await reader.next()) is not None:
             books.entries.extend(batch)
             if position is None and len(books.entries) >= 2:

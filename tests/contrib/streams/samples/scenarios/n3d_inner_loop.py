@@ -47,6 +47,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     NewStore,
     connect,
     endpoint,
+    endpoint_name,
     run,
     two_namespaces,
 )
@@ -131,8 +132,8 @@ async def main(
     stream notifier and the namespace ``streams-b``.
     """
     b = await two_namespaces(client, new_store().notify_on_append())
-    a = await connect(client, None)
     b_queue = f"{task_queue}-b"
+    a = await connect(client, None, reads=endpoint_name(b_queue))
     name = await endpoint(client, b_queue, namespace=NAMESPACE_B)
     async with (
         Worker(
