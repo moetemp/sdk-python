@@ -129,8 +129,8 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
     # Core derives the same producer id the handle reports.
     producer_id = f"tokens@{described.run_id}"
     first, second = records[0].attempt, records[2].attempt
-    # The low 16 bits hold the Temporal attempt, the rest the attempt's start.
-    assert (first & 0xFFFF, second & 0xFFFF) == (1, 2)
+    # The low 11 bits hold the Temporal attempt, the rest the attempt's start.
+    assert (first & 0x7FF, second & 0x7FF) == (1, 2)
     assert records[1].supersession == Supersession(producer_id, first, second)
     assert [r.value for r in records if r.kind is RecordKind.DATA] == [
         "a",
