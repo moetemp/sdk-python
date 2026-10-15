@@ -129,8 +129,8 @@ async def test_a_retry_writes_an_attempt_keyed_by_its_start(client: Client):
     assert records[2].supersession == Supersession(
         records[3].producer_id, first, second
     )
-    # The low 16 bits carry the Temporal attempt, the rest the start time.
-    assert (first & 0xFFFF, second & 0xFFFF) == (1, 2)
+    # The low 11 bits carry the Temporal attempt, the rest the start time.
+    assert (first & 0x7FF, second & 0x7FF) == (1, 2)
     assert first >> 16 <= second >> 16
     assert first >> 16 > 0
 
@@ -202,5 +202,5 @@ async def test_an_attempt_after_a_reset_supersedes_the_attempts_before_it(
         (RecordKind.SUPERSEDED, None, False),
         (RecordKind.DATA, "c4", False),
     ]
-    assert records[6].attempt & 0xFFFF == 1
+    assert records[6].attempt & 0x7FF == 1
     assert records[6].attempt > records[4].attempt

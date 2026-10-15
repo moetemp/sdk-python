@@ -490,7 +490,7 @@ class ActivityProducer(google.protobuf.message.Message):
     @property
     def attempt_started_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
         """When the attempt started, as the Activity task gives it. With it, Core writes the attempt as
-        `started_unix_ms << 16 | min(attempt, 65535)`, so a later attempt and a reset attempt both
+        `started_unix_ms << 11 | min(attempt, 2047)`, so a later attempt and a reset attempt both
         supersede an earlier one. Unset writes `attempt` as it is.
         """
     def __init__(
