@@ -342,7 +342,9 @@ class StreamFollowerService:
         while True:
             left_ms = int((end - asyncio.get_running_loop().time()) * 1000)
             wait_ms = min(_IDLE_WAIT_MS, max(left_ms, 0))
-            answer = await self._read(position, wait_ms=wait_ms)
+            answer = await self._read(
+                position, wait_ms=wait_ms, wake_token=input.operation_token
+            )
             await self._hand_over(followed, stream, answer)
             position = _moved(position, answer)
             if answer.done or not answer.records:
@@ -398,10 +400,16 @@ class StreamFollowerService:
                     retryable_override=True,
                 )
 
-    async def _read(self, position: ReadInput, *, wait_ms: int) -> ReadOutput:
+    async def _read(
+        self, position: ReadInput, *, wait_ms: int, wake_token: str | None = None
+    ) -> ReadOutput:
+        # The wake token rides only on this read, not in the receiver state.
         return await self._transport.read(
             dataclasses.replace(
-                position, max_records=self._max_records, wait_ms=wait_ms
+                position,
+                max_records=self._max_records,
+                wait_ms=wait_ms,
+                wake_token=wake_token,
             )
         )
 

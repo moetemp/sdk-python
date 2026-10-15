@@ -2176,3 +2176,42 @@ async def test_live_a_default_reader_without_a_transport_names_the_opt_out(
         await client.get_workflow_handle(owner_id).signal(LiveTokenOwner.done)
     assert "StreamDirectReads" in message
     assert "replay_from_store=False" in message
+
+
+async def test_each_read_before_the_completion_carries_the_wake_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stream service wakes the operation's idle callback after an empty
+    read only when the read names the operation, and a drain read names none."""
+    inputs: list[ReadInput] = []
+    answers = [
+        answer(record(1, text="a")),
+        ReadOutput(records=[], next_token="cursor-1", done=False),
+        answer(cursor="cursor-1", done=True),
+    ]
+
+    class FakeClient:
+        async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
+            inputs.append(input)
+            return answers.pop(0)
+
+    monkeypatch.setattr(
+        reader_module,
+        "workflow",
+        types.SimpleNamespace(
+            create_nexus_client=lambda **_kwargs: FakeClient(),
+            payload_converter=lambda: converter,
+            now=lambda: datetime.now(timezone.utc),
+        ),
+    )
+    calls: list[tuple[Any, ...]] = []
+    reader = StreamReader(
+        _OpenHandle(calls, waits=0),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        replay_from_store=False,
+    )
+    assert await reader.next() == [Token("a")]
+    assert await reader.next() is None
+    token = _OpenHandle.operation_token
+    assert [i.wake_token for i in inputs] == [token, token, None]

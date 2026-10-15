@@ -717,3 +717,41 @@ async def test_live_a_failed_owner_reaches_on_close_as_a_failure(
     assert not outcome.succeeded
     assert "the owner gave up" in str(outcome.error)
     assert follower.ordered() == ["a"]
+
+
+async def test_each_progress_read_carries_the_wake_token() -> None:
+    """An empty read with the operation's token asks the notifier to wake the
+    callback after its position, so the follower hears of the next append."""
+    transport, collector = _FakeTransport(_stored(3)), _Collector()
+
+    answer = await _service(transport, collector, max_records=2).on_progress(
+        _context(), _progress("c3")
+    )
+
+    assert collector.values == ["v1", "v2", "v3"]
+    assert {r.wake_token for r in transport.requests} == {_token()}
+    # The token rides on the read only, not in the state the server keeps.
+    state = CONVERTER.payload_converter.from_payload(
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
+        ReadInput,
+    )
+    assert state.wake_token is None
+
+
+async def test_the_completion_drain_sends_no_wake_token() -> None:
+    transport, collector = _FakeTransport(_stored(1), closed=True), _Collector()
+
+    await _service(transport, collector).on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultSuccess("finished"),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                ReadInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    assert [r.wake_token for r in transport.requests] == [None]

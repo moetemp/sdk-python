@@ -179,14 +179,20 @@ handler attaches, and a cancel detaches.
 What happens underneath:
 
 1. The handler's start attaches the caller's callback to the stream's
-   notifier on the server, and returns the stream reference in the
-   operation token.
+   notifier on the server as an idle callback, which hears no progress
+   until it waits, and returns the stream reference in the operation token.
 2. Core notifies the notifier after every append, a Workflow's publishes
    included, or a StreamDriver does it from the store's notification log.
    Notifications are folded: at most one call is in flight, and the newest
    one wins.
-3. The notifier delivers the latest notification to the caller as progress.
-4. The close completes the caller's operation with the close result.
+3. A reader reads first. Each read names its operation (`wake_token`). A
+   read that finds nothing asks the notifier to wake that operation's
+   callback once the stream moves past the read, then reads once more, and
+   answers what that finds. So a record that lands while the wait is set up
+   is not lost.
+4. The notifier delivers one notification to each waiting callback as
+   progress, and the callback is idle again until the reader waits again.
+5. The close completes the caller's operation with the close result.
 
 ### When Core notifies
 
@@ -197,14 +203,14 @@ over Nexus:
 
 - A Workflow `StreamReader` waits `idle_wait` (2 seconds by default) before
   it sleeps on progress. A Worker follower waits 1 second.
-- The notifier sends the progress to every attached caller, so one append
+- The notifier sends the progress to every waiting caller, so one append
   wakes all sleeping readers.
-- A gap shorter than the idle wait costs only the read that returns the next
-  record. A busy stream costs at most about one progress task per caller per
-  debounce window.
-- The attach starts the notifier, so the first append reaches a caller that
-  has no record to read yet. On a stream with records, the attach announces
-  the newest one. A close always reaches every caller.
+- A reader that finds records on each read never waits, so it gets no
+  progress at all. A gap shorter than the idle wait costs only the read that
+  returns the next record. A reader that waits gets one delivery per idle
+  stretch, however many appends come in it, within the debounce window.
+- The attach starts the notifier and announces nothing, since the reader
+  reads first. A close always reaches every caller, waiting or not.
 
 ## The caller side
 

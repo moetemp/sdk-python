@@ -22,7 +22,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-da70516ed19e74c49ecddf0248c7e09a091fe26c}
+SERVER_REF=${SERVER_REF:-24f9238c19b889912f47a24ccdcf7d5b88b76b12}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -345,6 +345,10 @@ gate tests/contrib/streams/test_nexus_follower.py \
   test_live_a_follower_resumes_on_another_worker \
   test_live_a_late_follower_reads_the_backlog_in_pages \
   test_live_a_failed_owner_reaches_on_close_as_a_failure
+gate tests/contrib/streams/test_nexus_read_wakes.py \
+  test_live_a_reader_that_never_waits_gets_no_progress \
+  test_live_an_idle_reader_is_woken_once_per_idle_stretch \
+  test_live_a_record_between_the_empty_read_and_the_wait_is_not_lost
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_nexus_scenario_demos.py \
