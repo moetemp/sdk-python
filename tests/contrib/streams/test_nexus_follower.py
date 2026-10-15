@@ -25,10 +25,12 @@ import pytest
 import temporalio.api.workflowservice.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.proto.streams.v1 import StreamLink as StreamLinkProto
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamRef, get_stream_handle
+from temporalio.contrib.streams._ref import to_reference
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
@@ -43,8 +45,6 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHandler,
     follow_stream,
 )
-from temporalio.bridge.proto.streams.v1 import StreamLink as StreamLinkProto
-from temporalio.contrib.streams._ref import to_reference
 from temporalio.contrib.streams.nexus._generated import (
     FollowedWire,
     FollowedWireLinkState,
@@ -69,12 +69,12 @@ from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
+from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.test_nexus_stream_operation import (
     OwnerUntilDone,
     _skip_without_notifier,
     connect,
 )
-from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 from tests.helpers.nexus import end_standalone_operation, make_nexus_endpoint_name
@@ -1000,7 +1000,7 @@ class _FakeFollowTransport:
         ]
 
     async def read(self, request: ReadInput) -> ReadOutput:
-        raise AssertionError("a follower with follow_links follows")
+        raise AssertionError(f"a follower with follow_links follows, not {request}")
 
     async def follow(self, request: FollowInput) -> FollowOutput:
         self.requests.append(request)

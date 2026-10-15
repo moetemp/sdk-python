@@ -33,6 +33,7 @@ from temporalio.api.common.v1 import Payload
 from temporalio.bridge.proto.streams import NexusLimits
 from temporalio.client import Client, NexusHandlerCallback, NexusOperationHandle
 from temporalio.contrib.streams._errors import StreamRecordError
+from temporalio.contrib.streams._follow import FollowedItem
 from temporalio.contrib.streams._plugin import store_for_client
 from temporalio.contrib.streams._record import (
     Cursor,
@@ -42,7 +43,6 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams._wire import RUN_ID_KEY, WireRecord
-from temporalio.contrib.streams._follow import FollowedItem
 from temporalio.contrib.streams.nexus._generated import (
     FollowInput,
     FollowOutput,
