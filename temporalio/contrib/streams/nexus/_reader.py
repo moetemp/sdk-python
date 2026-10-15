@@ -332,6 +332,12 @@ class StreamReader(Generic[T]):
                 to another namespace or endpoint come as ``SKIPPED`` with
                 reason ``endpoint``. A replay reads the follow's ranges again
                 with ``follow_range``.
+                While a linked stream is open, the reader follows again at
+                once after an empty answer, since the stream service waits on
+                every open stream in the call. Only the root's progress wakes
+                a reader whose links all ended. A reader resumed from a
+                position learns which links are open from the reports that
+                follow.
             max_depth: How deep a follower opens links.
             max_open: How many linked streams a follower holds open at once.
 
@@ -351,6 +357,8 @@ class StreamReader(Generic[T]):
         self._follow_answer: FollowOutput | None = None
         self._follow_pending: list[FollowedWire] = []
         self._sources: dict[int, tuple[StreamRef, int]] = {}
+        # The linked streams this reader saw open and not yet end.
+        self._open_links: set[StreamRef] = set()
         self._idle_wait_ms = idle_wait // timedelta(milliseconds=1)
         self._handle = handle
         self._item_type = item_type
@@ -647,12 +655,24 @@ class StreamReader(Generic[T]):
             self._item_type,
             self._cursor,
         )
+        for item in items:
+            if item.link_state is None:
+                continue
+            if item.link_state.kind is LinkStateKind.OPENED:
+                self._open_links.add(item.source)
+            elif item.link_state.kind in (
+                LinkStateKind.DONE,
+                LinkStateKind.UNAVAILABLE,
+            ):
+                self._open_links.discard(item.source)
         if undecodable is not None:
             self._undecodable = undecodable
             self._caught_up = False
             return items
         self._state = answer.state
-        self._caught_up = not answer.records
+        # The root's progress says nothing of a linked stream, so while one is
+        # open the reader follows again, and the call waits on every open stream.
+        self._caught_up = not answer.records and not self._open_links
         self._stream_done = answer.done
         return items
 
