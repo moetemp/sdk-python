@@ -36,8 +36,9 @@ __all__ = [
     "to_wire_link",
 ]
 
-# The most bytes a link's name may take, as Core checks it.
+# The most bytes a link's name and its other strings may take, as Core checks them.
 _MAX_LINK_NAME_BYTES = 256
+_MAX_LINK_FIELD_BYTES = 1024
 
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
@@ -96,8 +97,9 @@ def to_wire_link(link: StreamLink) -> WireLink:
     """``link`` as Core stores it.
 
     Raises:
-        ValueError: The name is empty or over 256 bytes, an ``OPEN`` has no
-            ref, or a ``JOIN`` has one.
+        ValueError: The name is empty or over 256 bytes, a cursor, the
+            namespace or the endpoint is over 1024 bytes, an ``OPEN`` has no
+            ref or has ``until``, or a ``JOIN`` has a ref or ``after``.
     """
     if not link.name or len(link.name.encode()) > _MAX_LINK_NAME_BYTES:
         raise ValueError(
@@ -105,6 +107,10 @@ def to_wire_link(link: StreamLink) -> WireLink:
         )
     if (link.event is LinkEvent.OPEN) != (link.ref is not None):
         raise ValueError("an OPEN link needs a ref, and a JOIN link has none")
+    if link.event is LinkEvent.OPEN and link.until is not None:
+        raise ValueError("an OPEN link has no until")
+    if link.event is LinkEvent.JOIN and link.after is not None:
+        raise ValueError("a JOIN link has no after")
     wire = WireLink(
         event=WireLink.Event.ValueType(int(link.event)),
         name=link.name,
@@ -113,6 +119,16 @@ def to_wire_link(link: StreamLink) -> WireLink:
         namespace=link.namespace,
         endpoint=link.endpoint,
     )
+    for name, text in (
+        ("after", wire.after),
+        ("until", wire.until),
+        ("namespace", wire.namespace),
+        ("endpoint", wire.endpoint),
+    ):
+        if len(text.encode()) > _MAX_LINK_FIELD_BYTES:
+            raise ValueError(
+                f"a link's {name} takes at most {_MAX_LINK_FIELD_BYTES} bytes"
+            )
     if link.ref is not None:
         wire.stream.CopyFrom(to_reference(link.ref))
     return wire

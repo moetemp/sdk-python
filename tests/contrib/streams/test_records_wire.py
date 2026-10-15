@@ -270,6 +270,19 @@ async def test_a_link_carries_an_optional_value_through_the_codec():
             StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x" * 257),
             "1 to 256",
         ),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", until=Cursor("c")
+            ),
+            "no until",
+        ),
+        (StreamLink(LinkEvent.JOIN, None, "x", after=Cursor("c")), "no after"),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", endpoint="e" * 1025
+            ),
+            "endpoint takes at most 1024",
+        ),
     ],
 )
 def test_a_link_that_names_nothing_is_refused(link: StreamLink, message: str):
