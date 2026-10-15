@@ -1,0 +1,1 @@
+Core: Experimental: the Activity attempt key is `started_unix_ms << 11 | min(attempt, 2047)`, so it fits 53 bits and a JSON number holds it exactly. The Nexus contract's models and JavaScript refused the earlier 16-bit form. A start time from May 2109 on is refused. The vector file holds the new keys.
