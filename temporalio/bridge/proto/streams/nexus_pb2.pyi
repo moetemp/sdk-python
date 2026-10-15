@@ -169,6 +169,8 @@ class CodecWork(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     PAYLOADS_FIELD_NUMBER: builtins.int
     CONTINUATION_FIELD_NUMBER: builtins.int
+    OWNER_KIND_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     encode: builtins.bool
     """True encodes the bodies of an append, and false decodes the bodies of a read."""
     namespace: builtins.str
@@ -182,6 +184,12 @@ class CodecWork(google.protobuf.message.Message):
     ]: ...
     continuation: builtins.int
     """Hand back in `NexusResumeRequest`. Core forgets a continuation 60 s after it asked."""
+    owner_kind: temporalio.bridge.proto.streams.streams_pb2.StreamOwnerKind.ValueType
+    """The kind of the stream's owner. For a standalone Activity owner, `workflow_id` is empty and
+    `activity_id` names the Activity, and the codec context has the namespace and the Activity id
+    only.
+    """
+    activity_id: builtins.str
     def __init__(
         self,
         *,
@@ -191,16 +199,22 @@ class CodecWork(google.protobuf.message.Message):
         payloads: collections.abc.Iterable[temporalio.api.common.v1.message_pb2.Payload]
         | None = ...,
         continuation: builtins.int = ...,
+        owner_kind: temporalio.bridge.proto.streams.streams_pb2.StreamOwnerKind.ValueType = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "continuation",
             b"continuation",
             "encode",
             b"encode",
             "namespace",
             b"namespace",
+            "owner_kind",
+            b"owner_kind",
             "payloads",
             b"payloads",
             "workflow_id",

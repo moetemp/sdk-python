@@ -33,6 +33,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     StreamStorePlugin,
+    StreamUnsupportedError,
     close_workflow_stream,
     get_stream_handle,
     workflow_writer,
@@ -169,10 +170,16 @@ def test_a_token_reads_as_the_shared_vectors_say() -> None:
             workflow_id=ref["workflow_id"],
             chain_run_id=ref.get("chain_run_id"),
             topic=ref["topic"],
+            activity_id=ref.get("activity_id"),
         )
     for token in vectors["refused"]:
-        with pytest.raises(ValueError):
-            stream_ref_from_token(token)
+        try:
+            decoded = stream_ref_from_token(token)
+        except ValueError:
+            continue
+        # A ref of a kind this release lacks decodes, and opening it refuses it.
+        with pytest.raises(StreamUnsupportedError):
+            decoded._require_supported()  # type: ignore[reportPrivateUsage]
 
 
 # Live: a caller Workflow sees the stream's progress and the close result.
