@@ -105,7 +105,9 @@ class Watcher:
             watched.positions.extend(batch)
         watched.close_result = await handle
         watched.supersessions = [
-            f"{mark.supersession.previous_attempt} -> {mark.supersession.attempt}"
+            # An Activity's attempt keeps its Temporal attempt in the low 11 bits.
+            f"{mark.supersession.previous_attempt & 0x7FF}"
+            f" -> {mark.supersession.attempt & 0x7FF}"
             for mark in reader.supersessions
         ]
         watched.stale = [str(record.value) for record in reader.stale_records]
