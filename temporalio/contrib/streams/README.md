@@ -33,11 +33,13 @@ process.
 ## Path B: an Activity streams to its Workflow
 
 An Activity writes to the stream of the Workflow that scheduled it, as
-itself: its Activity id with the scheduling run id, and its Temporal
-attempt. The run id keeps two runs of a chain apart, since Activity ids
-restart in each run. When a retry starts writing, readers first see a
-`SUPERSEDED` record, so they can drop what this Activity's failed attempt
-wrote.
+itself: its Activity id with the scheduling run id. Its producer attempt is
+`started_ms << 16 | min(attempt, 65535)`, from the time the server started
+the attempt and its Temporal attempt, so a retry and an attempt after a
+reset write a higher one. The run id keeps two runs of a chain apart, since
+Activity ids restart in each run. When a retry starts writing, readers
+first see a `SUPERSEDED` record, so they can drop what this Activity's
+failed attempt wrote.
 
 ```python
 TOKENS = topic("tokens", str)

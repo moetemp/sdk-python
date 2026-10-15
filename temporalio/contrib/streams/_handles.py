@@ -7,8 +7,9 @@ taken before the codec, and the codec itself.
 
 An Activity reaches the stream of the Workflow that scheduled it, and writes
 as itself: Core derives its producer id as
-``<Activity id>@<scheduling run id>`` and its Temporal attempt is the
-producer attempt, so a retry is reported to readers as ``SUPERSEDED``. The
+``<Activity id>@<scheduling run id>`` and its producer attempt from the
+attempt's start time and its Temporal attempt, so a retry is reported to
+readers as ``SUPERSEDED``. The
 run is part of the id because a stream outlives a run, and Activity ids
 repeat across the runs of a chain. A Local Activity writes as
 ``__temporal_local_<call number>@<scheduling run id>``, with an attempt that grows
@@ -24,8 +25,10 @@ from __future__ import annotations
 import asyncio
 import weakref
 from collections.abc import AsyncGenerator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast, overload
+
+from google.protobuf.timestamp_pb2 import Timestamp
 
 import temporalio.activity
 from temporalio.bridge.proto.streams import (
@@ -622,11 +625,16 @@ class ActivityStreamHandle:
     ) -> StreamProducer[Any]:
         """A producer on ``topic`` that writes as this Activity attempt.
 
-        The producer id is ``<Activity id>@<scheduling run id>`` and the
-        attempt is the Activity's Temporal attempt, so the first record of a
-        retry makes readers see ``SUPERSEDED``, which withdraws what this
-        Activity's earlier attempts wrote and nothing else. A retry starts a
-        new sequence, and the store deduplicates a repeated append within one
+        The producer id is ``<Activity id>@<scheduling run id>``. The attempt
+        is ``started_ms << 16 | min(temporal_attempt, 65535)``, where
+        ``started_ms`` is the Unix time in milliseconds at which the server
+        started this attempt. A retry starts later, and so does an attempt
+        after a reset that set the Temporal attempt back to one, so the
+        first record of either makes readers see ``SUPERSEDED``, which
+        withdraws what this Activity's earlier attempts wrote and nothing
+        else. An attempt that timed out but still writes started earlier, so
+        readers see its records as ``stale``. A new attempt starts a new
+        sequence, and the store deduplicates a repeated append within one
         attempt.
 
         In a Local Activity the producer id is
@@ -659,7 +667,7 @@ class ActivityStreamHandle:
                     self._inner,
                     name,
                     f"{identity.activity_id}@{identity.run_id}",
-                    identity.attempt,
+                    _activity_attempt(identity),
                     activity=identity,
                 )
             self._producers[name] = producer
@@ -715,8 +723,41 @@ def activity_handle() -> ActivityStreamHandle:
         activity_id=info.activity_id,
         attempt=info.attempt,
     )
+    _set_attempt_start(identity, info.started_time)
     inner = StreamHandle(store_for_client(client), client, ref)
     return ActivityStreamHandle(inner, identity, _attempt_producers(), local_call)
+
+
+def _set_attempt_start(identity: ActivityProducer, started: datetime) -> None:
+    started_time = Timestamp()
+    started_time.FromDatetime(started)
+    # A start time Core refuses, such as the epoch that a test environment
+    # gives, leaves the Temporal attempt as the producer attempt.
+    if attempt_key(identity.attempt, started_time.ToMilliseconds()) is not None:
+        identity.attempt_started_time.CopyFrom(started_time)
+
+
+def _activity_attempt(identity: ActivityProducer) -> int:
+    started_ms = None
+    if identity.HasField("attempt_started_time"):
+        started_ms = identity.attempt_started_time.ToMilliseconds()
+    key = attempt_key(identity.attempt, started_ms)
+    assert key is not None
+    return key
+
+
+def attempt_key(attempt: int, started_ms: int | None) -> int | None:
+    """The producer attempt Core writes for an Activity attempt.
+
+    ``started_ms`` is the Unix time in milliseconds at which the server
+    started the attempt, or ``None`` when the producer sends none. Returns
+    ``None`` for an attempt that Core refuses.
+    """
+    if started_ms is None:
+        return attempt
+    if attempt < 1 or not 0 < started_ms < 1 << 47:
+        return None
+    return started_ms << 16 | min(attempt, 0xFFFF)
 
 
 # The producers of each running Activity attempt, by topic, under the id of the
