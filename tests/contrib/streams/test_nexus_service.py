@@ -1234,3 +1234,116 @@ async def test_the_codec_step_uses_the_activitys_context():
             is_local=False,
         )
     }
+
+
+@workflow.defn
+class SchedulesAnUnpolledTool:
+    """Schedules one tool call that no Worker polls, so it stays pending."""
+
+    @workflow.run
+    async def run(self, task_queue: str) -> None:
+        await workflow.execute_activity(
+            "never_polled",
+            activity_id="tool-1",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+
+
+@asynccontextmanager
+async def workflow_activity_stream_of(
+    service: Service, topic: str = "out"
+) -> AsyncIterator[StreamRef]:
+    """A fresh stream of a pending Activity that a running Workflow scheduled."""
+    async with new_worker(service.backing.client, SchedulesAnUnpolledTool) as worker:
+        agent = await service.backing.client.start_workflow(
+            SchedulesAnUnpolledTool.run,
+            f"unpolled-{uuid.uuid4().hex}",
+            id=f"streams-service-{uuid.uuid4().hex}",
+            task_queue=worker.task_queue,
+        )
+        for _ in range(100):
+            described = await agent.describe()
+            if described.raw_description.pending_activities:
+                break
+            await asyncio.sleep(0.1)
+        try:
+            yield StreamRef.for_workflow_activity(
+                agent.id,
+                run_id=agent.result_run_id or "",
+                activity_id="tool-1",
+                topic=topic,
+            )
+        finally:
+            await agent.terminate()
+
+
+async def test_a_workflow_activity_stream_appends_and_reads_over_nexus(
+    service: Service,
+):
+    async with workflow_activity_stream_of(service) as ref:
+        await append(service, ref, "a", "b")
+        answer = await read(service, ref, wait_ms=0)
+    assert texts(answer) == ["a", "b"]
+    assert {r.producer_id for r in records_of(answer)} == {"p"}
+
+
+async def test_an_authorizer_refusal_names_the_activity_and_its_workflow(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return False
+
+    async with serve(server, backing, authorize=authorize) as service:
+        async with workflow_activity_stream_of(service) as ref:
+            with pytest.raises(HTTPStatusError) as refused:
+                await append(service, ref, "a")
+
+    assert refused.value.status == 403
+    assert (
+        f"of Activity {ref.activity_id!r} of Workflow {ref.workflow_id!r}"
+        in refused.value.detail
+    )
+    assert [(a.stream.kind, a.stream.chain_run_id) for a in seen] == [
+        ("workflow_activity", ref.chain_run_id)
+    ]
+
+
+async def test_the_codec_step_uses_the_workflow_activitys_context():
+    seen: list[SerializationContext] = []
+
+    class Recording(PayloadCodec, WithSerializationContext):
+        def with_context(self, context: SerializationContext) -> Recording:
+            seen.append(context)
+            return self
+
+        async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+        async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+    work = CodecWork(
+        encode=True,
+        namespace="default",
+        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+        workflow_id="agent",
+        activity_id="tool-1",
+        payloads=[Payload(metadata={"encoding": b"binary/test"}, data=b"x")],
+    )
+    await _run_codec(DataConverter(payload_codec=Recording()), work)
+
+    assert set(seen) == {
+        ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id="agent",
+            workflow_type=None,
+            is_local=False,
+        )
+    }

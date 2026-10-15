@@ -68,7 +68,9 @@ class StreamAccess:
 
     Check ``stream.kind`` before an owner field. A Workflow's stream names
     ``workflow_id``, and a standalone Activity's names ``activity_id`` with
-    an empty ``workflow_id``.
+    an empty ``workflow_id``. The stream of an Activity that a Workflow
+    scheduled names ``workflow_id``, ``activity_id`` and the scheduling run
+    in ``chain_run_id``.
     """
 
     context: nexusrpc.handler.StartOperationContext
@@ -234,11 +236,14 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         if allowed:
             return
         stream = access.stream
-        owner = (
-            f"Activity {stream.activity_id!r}"
-            if stream.kind == "activity"
-            else f"Workflow {stream.workflow_id!r}"
-        )
+        if stream.kind == "activity":
+            owner = f"Activity {stream.activity_id!r}"
+        elif stream.kind == "workflow_activity":
+            owner = (
+                f"Activity {stream.activity_id!r} of Workflow {stream.workflow_id!r}"
+            )
+        else:
+            owner = f"Workflow {stream.workflow_id!r}"
         raise nexusrpc.HandlerError(
             f"the caller may not {access.operation} stream {stream.topic!r} of {owner}",
             type=nexusrpc.HandlerErrorType.UNAUTHORIZED,

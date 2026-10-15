@@ -904,3 +904,43 @@ async def test_live_a_follower_that_reads_a_burst_gets_no_extra_progress(
         await _closed(follower)
     assert follower.ordered() == texts
     assert calls == 1, _progress_calls
+
+
+async def test_a_follower_decodes_a_tool_stream_with_the_activity_and_its_workflow() -> (
+    None
+):
+    seen: list[temporalio.converter.SerializationContext] = []
+    converter = dataclasses.replace(
+        CONVERTER, payload_codec=_ContextRecordingCodec(seen)
+    )
+    collector = _Collector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=converter, namespace="default"),
+        transport=_FakeTransport(_stored(2)),
+    )
+    ref = StreamRef.for_workflow_activity(
+        "agent", run_id="run-1", activity_id="tool-1", topic="tokens"
+    )
+
+    await service.on_progress(
+        _context(),
+        OnProgressRequest(
+            progress=NexusOperationProgress(position="c2", counter=1),
+            source_context=_source_context(),
+            operation_token=_token(ref),
+        ),
+    )
+
+    assert collector.values == ["v1", "v2"]
+    assert set(seen) == {
+        temporalio.converter.ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id="agent",
+            workflow_type=None,
+            is_local=False,
+        )
+    }

@@ -130,7 +130,7 @@ class StreamOperationHandler(
         ref = await self._open_stream(ctx, input)
         first_wake = ctx.headers.get(FIRST_WAKE_HEADER)
         stream = stream_address(client.namespace, ref)
-        if ref.kind not in ("workflow", "activity"):
+        if ref.kind not in ("workflow", "activity", "workflow_activity"):
             # Core refuses an owner kind this release doesn't open.
             stream.owner_kind = StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
         request = AttachCallerRequest(
