@@ -135,6 +135,7 @@ class StreamStoreConfig(google.protobuf.message.Message):
     NOTIFY_ON_APPEND_FIELD_NUMBER: builtins.int
     MAX_NOTIFIERS_FIELD_NUMBER: builtins.int
     NOTIFY_EVERY_APPEND_FIELD_NUMBER: builtins.int
+    OWNER_START_GRACE_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
@@ -154,6 +155,13 @@ class StreamStoreConfig(google.protobuf.message.Message):
     stream. For a deployment whose readers can't arm,
     such as a hand-written reader over HTTP. Off by default.
     """
+    @property
+    def owner_start_grace(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a read waits for a Workflow that Temporal doesn't know yet, counted from the read's
+        first owner check. Until then the read answers empty, so a reader can start before its
+        owner does. After it the read fails as NOT_FOUND. Unset waits 60 seconds, and zero fails at
+        once.
+        """
     def __init__(
         self,
         *,
@@ -162,11 +170,19 @@ class StreamStoreConfig(google.protobuf.message.Message):
         notify_on_append: builtins.bool = ...,
         max_notifiers: builtins.int = ...,
         notify_every_append: builtins.bool = ...,
+        owner_start_grace: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "memory", b"memory", "redis", b"redis", "store", b"store"
+            "memory",
+            b"memory",
+            "owner_start_grace",
+            b"owner_start_grace",
+            "redis",
+            b"redis",
+            "store",
+            b"store",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -180,6 +196,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
             b"notify_every_append",
             "notify_on_append",
             b"notify_on_append",
+            "owner_start_grace",
+            b"owner_start_grace",
             "redis",
             b"redis",
             "store",

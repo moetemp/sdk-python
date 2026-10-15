@@ -52,8 +52,8 @@ use it:
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
-| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, and a Local Activity as `__temporal_local_<call number>@<scheduling run id>`. A flush of the Python `workflow_writer` is a Local Activity, so it writes the same way |
-| `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53 |
+| `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, a Local Activity as `__temporal_local_<call number>@<scheduling run id>`, and a Workflow as `@<run id>` |
+| `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53. A Workflow's is `prefix << 16 \| retry`: `prefix` is the WorkflowTaskStarted event id of the run's last completed Workflow Task (0 before one), and `retry` counts the reruns of the task since then, from 1 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
@@ -67,7 +67,10 @@ The entry id that Redis assigns is the record's position. Readers never
 see a `SUPERSEDED` record in the log: a reader synthesizes one when a
 producer's newer attempt first appears. It withdraws only the records with
 the same `producer_id` and a lower `attempt`. It names no position, so the
-records of other producers on the topic stay valid, wherever they are.
+records of other producers on the topic stay valid, wherever they are. For
+a Workflow producer, `@<run id>`, a newer attempt is a supersession only
+when its `attempt >> 16` stays the same and its low 16 bits rise. A higher
+`attempt >> 16` is the run's next Workflow Task, which withdraws nothing.
 
 ## Appending a batch
 
@@ -121,8 +124,8 @@ touches no record. A missing field or `meta` is not a failure. Do it only
 after the attempt's last append returned, since a retry of an earlier batch
 would find no field to compare with and land a second time. Readers lose
 nothing: a store compares a batch only with its own attempt's field, and
-readers find a newer attempt from the records. A `workflow_writer` flush
-retires its attempt this way.
+readers find a newer attempt from the records. Core retires a Workflow's
+earlier attempts this way once the server accepts a Workflow Task.
 
 ## Cursors
 
