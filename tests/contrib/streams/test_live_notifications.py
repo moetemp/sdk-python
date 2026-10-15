@@ -533,12 +533,16 @@ def _positions_payloads(history: Any) -> list[Any]:
 
 async def _read_from_the_store(client: Client) -> tuple[Any, str, Any]:
     """Run a positions-only reader over an owner that publishes and closes."""
-    async with new_worker(
-        client, PublishesAndCloses, ReadsFromTheStore, max_cached_workflows=0
-    ) as worker:
+    # The owner runs on a Worker with a cache. With none, an eviction can
+    # cancel its close's Local Activity, and the task's rerun shows readers a
+    # SUPERSEDED before the second FINISH.
+    async with (
+        new_worker(client, PublishesAndCloses) as owners,
+        new_worker(client, ReadsFromTheStore, max_cached_workflows=0) as worker,
+    ):
         owner_id = new_workflow_id()
         owner = await client.start_workflow(
-            PublishesAndCloses.run, id=owner_id, task_queue=worker.task_queue
+            PublishesAndCloses.run, id=owner_id, task_queue=owners.task_queue
         )
         reader = await client.start_workflow(
             ReadsFromTheStore.run,
