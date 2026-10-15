@@ -57,8 +57,9 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_nexus
   2 appends after `SUPERSEDED`. Attempt 1 then appends late, and the record arrives marked `stale`.
   Left out: fencing and a retraction at the timeout.
 - **8, `s8_publisher_replay`.** `Publisher` publishes with `workflow_writer`, and a `Replayer`
-  replays its History with a store at a port where nothing listens. Each flush's result comes from
-  its marker. Left out: a Workflow that reads a stream, which `j8_replay_opt_out` shows.
+  replays its History with a store at a port where nothing listens. History holds no marker for
+  the publishes, and the replay sends nothing to the store. Left out: a Workflow that reads a
+  stream, which `j8_replay_opt_out` shows.
 
 ## Readers that sleep
 
@@ -87,9 +88,9 @@ They turn on `notify_on_append()` themselves.
   `replay_from_store=True` and one with `False`. A Worker restart replays both. Then a `Replayer`
   with no connected store replays only the one that kept its batches in History.
 
-This release publishes from Workflow code with `workflow_writer`, through Local Activities rather
-than with the Workflow Task. The demos of 5a, 6 and 7a publish from a client or an Activity. The
-dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
+This release publishes from Workflow code with `workflow_writer`, and Core appends each
+activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a
+client or an Activity. The dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
 
 ## Bridge demos
 
