@@ -865,3 +865,69 @@ async def test_live_a_retried_start_on_an_activity_stream_attaches_once(
     )
     assert len(described.callbacks) == 1
     await owner.terminate(reason="done")
+
+
+@workflow.defn
+class SchedulesAToolNoOnePolls:
+    @workflow.run
+    async def run(self, task_queue: str) -> None:
+        await workflow.execute_activity(
+            "never_polled",
+            activity_id="tool-1",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+
+
+async def test_live_a_retried_start_on_a_tool_stream_attaches_once(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+    await _skip_without_notifier(client, StreamRef.for_workflow("probe"))
+    task_queue = f"agent-{uuid.uuid4().hex}"
+    async with Worker(
+        store_client, task_queue=task_queue, workflows=[SchedulesAToolNoOnePolls]
+    ):
+        agent = await store_client.start_workflow(
+            SchedulesAToolNoOnePolls.run,
+            f"unpolled-{uuid.uuid4().hex}",
+            id=f"agent-{uuid.uuid4().hex}",
+            task_queue=task_queue,
+        )
+        for _ in range(100):
+            if (await agent.describe()).raw_description.pending_activities:
+                break
+            await asyncio.sleep(0.1)
+        ref = StreamRef.for_workflow_activity(
+            agent.id,
+            run_id=agent.result_run_id or "",
+            activity_id="tool-1",
+            topic="tokens",
+        )
+
+        async def open_tool_stream(_ctx: Any, _prompt: str) -> StreamRef:
+            return ref
+
+        handler: StreamOperationHandler[str, Any] = StreamOperationHandler(
+            open_tool_stream
+        )
+        first = await handler.start(start_context(), "hi")
+        again = await handler.start(start_context(), "hi")
+
+        assert again.token == first.token
+        assert stream_ref_from_token(first.token) == ref
+        described = await client.workflow_service.describe_stream_notifier(
+            DescribeStreamNotifierRequest(
+                namespace=client.namespace,
+                stream_ref=StreamReference(
+                    owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+                    workflow_id=agent.id,
+                    run_id=agent.result_run_id or "",
+                    activity_id="tool-1",
+                    topic="tokens",
+                ),
+            )
+        )
+        assert len(described.callbacks) == 1
+        await agent.terminate()
