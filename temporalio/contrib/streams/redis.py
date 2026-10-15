@@ -35,6 +35,7 @@ class RedisStreams(StreamStorePlugin):
         floor_lease: timedelta | None = None,
         floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
+        notify_doorbells: int | None = None,
     ) -> None:
         """Create the store's configuration.
 
@@ -68,11 +69,15 @@ class RedisStreams(StreamStorePlugin):
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
+            notify_doorbells: With a notification log, how many doorbell
+                streams an append rings when its slot's log takes a first
+                entry. A driver blocks on each one. Core's 16 when unset.
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
                 ``retention`` is shorter than a millisecond, or
-                ``owner_start_grace`` is negative.
+                ``owner_start_grace`` is negative, or ``notify_doorbells`` is
+                below one.
         """
         urls = [url] if isinstance(url, str) else list(url)
         if not urls:
@@ -83,11 +88,16 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"retention must be at least a millisecond, got {retention}"
             )
+        if notify_doorbells is not None and notify_doorbells < 1:
+            raise ValueError(
+                f"notify_doorbells must be at least 1, got {notify_doorbells}"
+            )
         config = RedisStoreConfig(
             urls=urls,
             cluster=cluster,
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
+            notify_doorbells=notify_doorbells or 0,
         )
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:

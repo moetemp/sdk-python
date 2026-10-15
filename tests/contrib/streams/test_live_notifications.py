@@ -13,9 +13,12 @@ Workflow Task.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 import uuid
+from collections.abc import AsyncIterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -32,6 +35,7 @@ from temporalio.bridge.proto.streams import ReadRangeRequest
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import (
     RecordKind,
+    StreamDriver,
     StreamPosition,
     StreamStorePlugin,
     close_workflow_stream,
@@ -117,6 +121,26 @@ async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     return await connect_with(client, store(request.param).notify_on_append())
 
 
+@pytest.fixture(params=["memory", "redis"])
+async def driven(
+    request: pytest.FixtureRequest, client: Client
+) -> AsyncIterator[Client]:
+    """A client whose store keeps a notification log, with a StreamDriver running."""
+    await skip_without_notifier(client)
+    streams = await connect_with(
+        client, store(request.param).notify_on_append(notification_log=True)
+    )
+    driver = asyncio.create_task(
+        StreamDriver(streams, sweep_interval=timedelta(seconds=2)).run()
+    )
+    try:
+        yield streams
+    finally:
+        driver.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await driver
+
+
 async def until(check: Any, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while not await check():
@@ -148,6 +172,24 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
         assert notifier is not None and notifier.counter > 0
         await records.aclose()
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_live_a_sleeping_client_wakes_through_the_driver(driven: Client):
+    async with new_worker(driven, Waits) as worker:
+        owner = await running_owner(driven, worker.task_queue)
+        handle = get_stream_handle(driven, owner, topic=TOKENS)
+        records = handle.read()
+        first = asyncio.ensure_future(records.__anext__())
+        # Past the idle wait, the read came back empty and the reader waits
+        # on the notifier, which its poll started.
+        await asyncio.sleep(3)
+        started = time.monotonic()
+        await handle.producer(producer_id="p", attempt=1).append("woke")
+        assert (await asyncio.wait_for(first, 10)).value == "woke"
+        # The driver's notification woke it, not the poll limit.
+        assert time.monotonic() - started < QUICK
+        await records.aclose()
+        await driven.get_workflow_handle(owner).signal(Waits.finish)
 
 
 async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
@@ -191,6 +233,11 @@ async def test_live_every_append_notifies(client: Client):
     streams = await connect_with(client, MemoryStreams().notify_on_append())
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
+        # A notification for a stream with no notifier is dropped, so a
+        # sleeping reader starts the notifier first.
+        sleeping = get_stream_handle(streams, owner, topic=TOKENS).read()
+        reading = asyncio.ensure_future(sleeping.__anext__())
+        await until(lambda: _has_notifier(streams, owner))
         producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
@@ -210,7 +257,13 @@ async def test_live_every_append_notifies(client: Client):
             assert notifier is not None
             counters.append(notifier.counter)
         assert counters == sorted(counters) and len(set(counters)) == 3
+        await reading
+        await sleeping.aclose()
         await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def _has_notifier(client: Client, owner: str) -> bool:
+    return await describe_notifier(client, owner) is not None
 
 
 def store_for(client: Client) -> StreamStorePlugin:
@@ -309,6 +362,29 @@ async def test_live_a_workflow_reader_sleeps_and_wakes_on_an_append(
     await Replayer(workflows=[Reads], plugins=[store]).replay_workflow(
         await reader.fetch_history()
     )
+
+
+async def test_live_a_workflow_reader_wakes_through_the_driver(driven: Client):
+    async with new_worker(driven, Waits, Reads) as worker:
+        owner = await running_owner(driven, worker.task_queue)
+        reader_id = new_workflow_id()
+        reader = await driven.start_workflow(
+            Reads.run,
+            args=[owner, 2, False],
+            id=reader_id,
+            task_queue=worker.task_queue,
+        )
+        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await producer.append("first")
+        await _sleeping(driven, reader_id, owner)
+        started = time.monotonic()
+        await producer.append("second")
+        assert await asyncio.wait_for(reader.result(), 20) == ["first", "second"]
+        # The driver's notification woke it, not the recheck.
+        assert time.monotonic() - started < QUICK
+        await driven.get_workflow_handle(owner).signal(Waits.finish)
 
 
 async def _completed_tasks(handle: Any) -> int:

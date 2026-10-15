@@ -5,11 +5,12 @@ one a Local Activity that runs Core's read and returns the records with
 their bodies through the codec. Replay takes each batch from its marker and
 does no I/O, so user code sees the same records, every kind included.
 
-The reader sleeps while the stream is idle. Its first read attaches the
-running Workflow to the stream's notifier as a wake target, under a
-subscription id that replay gives back. A read that waits ``idle_wait`` and
-finds nothing answers ``wake_after``, the counter of the read's position.
-The reader then waits, with no Local Activity and no
+The reader sleeps while the stream is idle. When a read that waited
+``idle_wait`` comes back empty, the next read attaches the running Workflow
+to the stream's notifier as a wake target, under a subscription id that
+replay gives back, and reads once more with no wait. That read finds a
+record that landed before the attach, or answers ``wake_after``, the counter
+of the read's position. The reader then waits, with no Local Activity and no
 timer, until a wake for its subscription carries a higher counter, a
 recheck, a close, or a request to attach again. The server records each
 wake on the next Workflow Task scheduled event, so a wake adds no event.
@@ -181,6 +182,8 @@ class _ReaderState:
     # The notifier counter of the last empty read, while the reader sleeps.
     sleep_after: int | None = None
     attach: bool = True
+    # Set once a read came back empty, so the next read attaches first.
+    attach_now: bool = False
     attached_run_id: str = ""
     done: bool = False
     close_failure: Failure | None = None
@@ -322,6 +325,12 @@ class WorkflowStreamReader(Generic[T]):
                 if response.HasField("close_failure"):
                     state.close_failure = response.close_failure
             elif not records:
+                if state.attach and not self._closed():
+                    # Attach only when the stream goes idle, then read once
+                    # more, since an append between the empty read and the
+                    # attach notified no one.
+                    state.attach_now = True
+                    continue
                 state.sleep_after = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
@@ -377,19 +386,24 @@ class WorkflowStreamReader(Generic[T]):
         converter = runtime._workflow_context_failure_converter
         return converter.from_failure(failure, workflow.payload_converter())
 
+    def _closed(self) -> bool:
+        wake = wake_state(self.subscription_id)
+        return wake is not None and wake.closed
+
     def _input(self, *, attach: bool, unsubscribe: bool = False) -> _ReadInput:
         state = self._state
+        attaching = state.attach and state.attach_now and attach
         return _ReadInput(
             workflow_id=self._ref.workflow_id,
             chain_run_id=self._ref.chain_run_id or "",
             topic=self._topic,
             after=state.cursor,
             state=base64.b64encode(state.state).decode(),
-            wait_ms=self._idle_wait // timedelta(milliseconds=1),
+            # The read right after an attach only closes the gap, so it
+            # doesn't wait.
+            wait_ms=0 if attaching else self._idle_wait // timedelta(milliseconds=1),
             max_records=self._max_records,
-            subscription_id=self.subscription_id
-            if (state.attach and attach) or unsubscribe
-            else "",
+            subscription_id=self.subscription_id if attaching or unsubscribe else "",
             generation=state.generation,
             read_run_id=state.read_run_id,
             unsubscribe=unsubscribe,
@@ -399,14 +413,14 @@ class WorkflowStreamReader(Generic[T]):
 
     async def _read(self) -> ReadResponse:
         state = self._state
-        wake = wake_state(self.subscription_id)
         # A closed stream needs no wake, so the read doesn't attach.
-        input = self._input(attach=wake is None or not wake.closed)
+        input = self._input(attach=not self._closed())
         state.reads += 1
         input.read_seq = state.reads
         response, state.read_run_id, read_by = await self._run(input)
         if input.subscription_id:
             state.attach = False
+            state.attach_now = False
             state.attached_run_id = read_by
         return response
 

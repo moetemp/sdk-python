@@ -106,8 +106,11 @@ class Connector:
 - Each read is one Local Activity, which adds one marker event when its
   Workflow Task completes. By default the marker holds the read's range, and
   replay reads the range from the store again (see below).
-- The first read attaches the run to the stream's notifier. While the stream
-  is idle, the reader waits with no Local Activity and no timer. The server
+- The reader reads first. Only when a read comes back empty does the next
+  read attach the run to the stream's notifier, and that read doesn't wait,
+  so it finds a record that landed before the attach. A reader that never
+  goes idle never attaches. While the stream is idle, the reader waits with
+  no Local Activity and no timer. The server
   records each wake on the next Workflow Task's scheduled event, so a wake
   adds no event of its own.
 - A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
