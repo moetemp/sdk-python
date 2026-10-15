@@ -282,9 +282,10 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
   the grace, not at once. Appends and `latest()` don't wait. Zero turns the
   grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
-  `RedisStreams.delete_workflow_streams` removes them at once.
-- **Not in this release.** Streams owned by an Activity or by no one raise
-  `StreamUnsupportedError`.
+  `RedisStreams.delete_workflow_streams` removes them at once, and
+  `delete_activity_streams` removes the streams of a standalone Activity.
+- **Not in this release.** Streams owned by a Workflow Activity or by no one
+  raise `StreamUnsupportedError`.
 
 ## Further reading
 
