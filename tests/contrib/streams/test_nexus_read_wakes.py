@@ -22,7 +22,12 @@ import pytest
 import temporalio.nexus
 from temporalio import workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.contrib.streams import StreamRef, close_workflow_stream, workflow_writer
+from temporalio.contrib.streams import (
+    StreamRef,
+    close_workflow_stream,
+    get_stream_handle,
+    workflow_writer,
+)
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     StreamOperationHandler,
@@ -87,8 +92,11 @@ class WakeReader:
 
 
 class _Lane:
-    def __init__(self, client: Client, endpoint: str, task_queue: str) -> None:
+    def __init__(
+        self, client: Client, store: MemoryStreams, endpoint: str, task_queue: str
+    ) -> None:
         self.client = client
+        self.store = store
         self.endpoint = endpoint
         self.task_queue = task_queue
         self.owner_id = f"wake-owner-{uuid.uuid4()}"
@@ -113,12 +121,13 @@ async def lane(client: Client, env: WorkflowEnvironment) -> AsyncIterator[_Lane]
     task_queue = f"wake-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
+    store = MemoryStreams().notify_on_append()
     streams = await Client.connect(
         client.service_client.config.target_host,
         namespace=client.namespace,
-        plugins=[MemoryStreams().notify_on_append()],
+        plugins=[store],
     )
-    lane = _Lane(streams, endpoint, task_queue)
+    lane = _Lane(streams, store, endpoint, task_queue)
 
     async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
         await temporalio.nexus.client().start_workflow(
@@ -175,11 +184,21 @@ async def test_live_an_idle_reader_is_woken_once_per_idle_stretch(lane: _Lane):
     await _owner_up(lane)
     # The reader reads "first", finds nothing more and waits.
     await asyncio.sleep(4)
-    await lane.owner().signal(WakeOwner.publish, ["second", "third"])
+    # One append of two records, so one notification for the stretch.
+    await (
+        get_stream_handle(lane.client, lane.owner_id, topic=STREAM.topic)
+        .producer(producer_id="writer", attempt=1)
+        .append(Token("second"), Token("third"))
+    )
     await asyncio.sleep(4)
-    await lane.owner().signal(WakeOwner.close)
+    # A close from outside writes no record, so it reaches the reader as the
+    # completion and not as progress.
+    await lane.store.close_stream(
+        lane.client, StreamRef.for_workflow(lane.owner_id, topic=STREAM.topic), "done"
+    )
     assert await asyncio.wait_for(reader.result(), 30) == ["first", "second", "third"]
-    # One wait, so one delivery for the two appends of that stretch.
+    await lane.owner().signal(WakeOwner.close)
+    # One wait, so one delivery for the stretch.
     assert _deliveries(await reader.fetch_history()) == 1
 
 

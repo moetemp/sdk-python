@@ -43,6 +43,7 @@ from temporalio.contrib.streams.nexus import (
     StreamOperationHandler,
     stream_ref_from_token,
 )
+from temporalio.contrib.streams.nexus._operation import FIRST_WAKE_HEADER
 from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
@@ -200,7 +201,11 @@ class StreamOperationCaller:
         nexus_client = workflow.create_nexus_client(
             service=ChatService, endpoint=endpoint
         )
-        handle = await nexus_client.start_operation(ChatService.chat, "hello")
+        # This caller never reads, so it asks for the first wake at the start,
+        # as a follower does. After that delivery its callback is idle.
+        handle = await nexus_client.start_operation(
+            ChatService.chat, "hello", headers={FIRST_WAKE_HEADER: "0"}
+        )
         last = 0
         while (progress := await handle.progress(after_counter=last)) is not None:
             self._counters.append(progress.counter)
@@ -395,8 +400,6 @@ async def test_a_workflows_own_publishes_reach_the_caller_as_progress(
     task_queue = f"stream-owner-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
-    # Every append notifies, so a caller that waits on progress and never
-    # reads still hears of each one.
     store = MemoryStreams().notify_on_append()
     streams_client = await connect(client, store)
 
@@ -428,13 +431,13 @@ async def test_a_workflows_own_publishes_reach_the_caller_as_progress(
             task_queue=task_queue,
         )
 
-        # A Workflow's records are notified once the Local Activity of their
-        # flush lands them.
-        async def several_progresses() -> list[int] | None:
+        # A Workflow's records are notified when the activation that
+        # published them completes, and the caller's first wake hears of them.
+        async def first_progress() -> list[int] | None:
             counters = await caller.query(StreamOperationCaller.counters)
-            return counters if len(counters) >= 2 else None
+            return counters or None
 
-        assert await _wait_for(several_progresses), "the caller saw too little progress"
+        assert await _wait_for(first_progress), "the caller saw no progress"
         await streams_client.get_workflow_handle(owner_id).signal(
             StreamOwnerThatPublishes.done
         )
