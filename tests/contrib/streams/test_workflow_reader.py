@@ -741,7 +741,14 @@ class ReadsAStream:
 
 async def test_a_reader_names_an_activity_owner_in_each_read(client: Client):
     global _fake
-    _fake = FakeReads([ReadResponse(records=[data("c1", "a")], cursor="c1", done=True)])
+    # The Activity closed its stream, so the reader ends at once.
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")], cursor="c1", done=True, closed_by="act@run"
+            )
+        ]
+    )
     ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
     async with new_worker(client, ReadsAStream, activities=[fake_read]) as worker:
         seen = await client.execute_workflow(
@@ -855,3 +862,53 @@ async def test_the_read_activity_reads_a_standalone_activitys_stream(client: Cli
     ] == ["one"]
     # One run is the Activity's chain, so the read names it with no describe.
     assert raw.payload.metadata["temporal.io/stream-read-run-id"] == run_id.encode()
+
+
+@workflow.defn
+class ReadsAnActivityRun:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
+        async with workflow_reader(ref, replay_from_store=False) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
+async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
+    client: Client,
+):
+    # Core ends the read when the run ends, with no outcome. Only the notifier
+    # knows the run's failure, so the reader attaches and waits for its close.
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
+            ReadResponse(cursor="c1", done=True),
+        ]
+    )
+    failure = Failure(
+        message="boom", application_failure_info=ApplicationFailureInfo(type="Boom")
+    )
+    async with new_worker(client, ReadsAnActivityRun, activities=[fake_read]) as worker:
+        handle = await client.start_workflow(
+            ReadsAnActivityRun.run, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+        await _fake.until(2)
+        await handle.signal(
+            ReadsAnActivityRun.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        with pytest.raises(WorkflowFailureError) as raised:
+            await asyncio.wait_for(handle.result(), 20)
+    cause = raised.value.cause
+    assert isinstance(cause, ApplicationError) and cause.type == "Boom"
+    assert [i.subscription_id for i in _fake.inputs] == ["", "1"]

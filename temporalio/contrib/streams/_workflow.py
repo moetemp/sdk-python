@@ -18,6 +18,7 @@ wake on the next Workflow Task scheduled event, so a wake adds no event.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import timedelta
@@ -94,6 +95,10 @@ _FINAL_ERRORS: tuple[type[StreamError], ...] = (
     StreamRefusedError,
     StreamUnsupportedError,
 )
+# How long a reader of an Activity's stream waits for the notifier's close
+# after its read ended with the run. The notifier checks the owner every 30
+# seconds by default, and debounces its deliveries.
+_OWNER_CLOSE_WAIT = timedelta(seconds=60)
 # Held on the run's runtime: how many readers the run made. Replay makes them
 # in the same order, so each reader gets the same number.
 _READERS_ATTRIBUTE = "_temporal_stream_readers"
@@ -190,6 +195,11 @@ class _ReaderState:
     attach_now: bool = False
     attached_run_id: str = ""
     done: bool = False
+    # Set when the read of an Activity's stream ended because the run ended,
+    # with no close.
+    owner_ended: bool = False
+    # Set once the reader attached to hear how an Activity run ended.
+    owner_attached: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
     reads: int = 0
@@ -304,6 +314,7 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
+                await self._wait_for_owner_close()
                 raise self._end()
             if (
                 state.sleep_after is not None
@@ -325,7 +336,19 @@ class WorkflowStreamReader(Generic[T]):
             state.cursor = response.cursor
             state.state = response.state
             if response.done:
+                owner_ended = self._ref.kind == "activity" and not (
+                    response.closed_by
+                    or response.HasField("close_result")
+                    or response.HasField("close_failure")
+                )
+                if owner_ended and state.attach and not state.owner_attached:
+                    # Only the notifier knows how the Activity run ended, and it
+                    # tells only the readers attached to it.
+                    state.owner_attached = True
+                    state.attach_now = True
+                    continue
                 state.done = True
+                state.owner_ended = owner_ended
                 if response.HasField("close_failure"):
                     state.close_failure = response.close_failure
             elif not records:
@@ -338,6 +361,32 @@ class WorkflowStreamReader(Generic[T]):
                 state.sleep_after = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
+
+    async def _wait_for_owner_close(self) -> None:
+        """Wait for the notifier's close after a standalone Activity's run ended.
+
+        Core ends the read once the run ended, with no outcome. The
+        notifier's owner check closes the stream with the run's failure a
+        little later, and wakes the readers attached to it, so a reader that
+        never attached attaches first. Only a reader of an Activity's stream
+        waits, and at most ``_OWNER_CLOSE_WAIT``, since a Workflow owner's
+        normal end has no close and the wait would delay every such reader.
+        """
+        state = self._state
+        if not state.owner_ended or state.attach:
+            return
+        state.owner_ended = False
+
+        def settled() -> bool:
+            wake = wake_state(self.subscription_id)
+            return wake is not None and (wake.closed or wake.resubscribe)
+
+        try:
+            await workflow.wait_condition(
+                settled, timeout=_OWNER_CLOSE_WAIT.total_seconds()
+            )
+        except asyncio.TimeoutError:
+            pass
 
     def _cut_task(self) -> None:
         if self._cutoff is None:
