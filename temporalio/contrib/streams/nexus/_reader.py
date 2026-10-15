@@ -881,7 +881,9 @@ def followed_items(
         items.append(FollowedItem(ref, depth, record, None, None))
     if items:
         last = items[-1]
-        position = FollowPosition(cursor, base64.b64encode(answer.state).decode())
+        position = FollowPosition(
+            cursor, base64.b64encode(answer.state or b"").decode()
+        )
         items[-1] = FollowedItem(
             last.source, last.depth, last.record, last.link_state, position
         )
