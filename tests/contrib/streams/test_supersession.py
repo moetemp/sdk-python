@@ -21,7 +21,8 @@ from tests.contrib.streams._support import connect_with, new_workflow_id
 from tests.contrib.streams.test_workflow_writer import (
     STEPS,
     UNSANDBOXED,
-    FailsAfterAFlush,
+    FailsAfterAPublish,
+    tick,
 )
 from tests.helpers import new_worker
 
@@ -129,14 +130,33 @@ async def test_track_supersession_pairs_records_and_closes_the_read():
     assert closed == [True]
 
 
-async def test_a_reader_sees_each_value_once_after_a_flush_reruns(client: Client):
+def test_a_workflow_rerun_withdraws_only_its_own_tasks_records():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    task_one, task_two = 1 << 16, 7 << 16
+    for record in (data("@run", task_one | 1, "x"), data("@run", task_two | 1, "a")):
+        assert tracker.observe(record) == []
+    withdrawn = tracker.observe(superseded("@run", task_two | 1, task_two | 2))
+    assert [r.value for r in withdrawn] == ["a"]
+    # A later task is a continuation, not a rerun, so it withdraws nothing.
+    tracker.observe(data("@run", task_two | 2, "a"))
+    assert tracker.observe(superseded("@run", task_one | 1, task_one | 2)) == []
+
+
+def test_a_workflow_producer_holds_only_its_newest_tasks_records():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    tracker.observe(data("@run", 1 << 16 | 1, "x"))
+    tracker.observe(data("@run", 3 << 16 | 1, "y"))
+    assert [r.value for r in tracker.standing()] == ["y"]
+
+
+async def test_a_reader_sees_each_value_once_after_a_task_reruns(client: Client):
     streams = await connect_with(client, MemoryStreams())
     workflow_id = new_workflow_id()
     async with new_worker(
-        streams, FailsAfterAFlush, workflow_runner=UNSANDBOXED
+        streams, FailsAfterAPublish, activities=[tick], workflow_runner=UNSANDBOXED
     ) as worker:
         await streams.execute_workflow(
-            FailsAfterAFlush.run, id=workflow_id, task_queue=worker.task_queue
+            FailsAfterAPublish.run, id=workflow_id, task_queue=worker.task_queue
         )
     shown: list[str | None] = []
     read = get_stream_handle(streams, workflow_id).read(topic=STEPS)
@@ -145,4 +165,4 @@ async def test_a_reader_sees_each_value_once_after_a_flush_reruns(client: Client
             shown.remove(old.value)
         if record.kind is RecordKind.DATA and not record.stale:
             shown.append(record.value)
-    assert shown == ["a", "b"]
+    assert shown == ["before", "a", "b"]
