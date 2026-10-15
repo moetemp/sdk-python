@@ -339,6 +339,7 @@ class AttachStreamCallbackRequest:
     callback: CallbackNexus | None = None
     operation_token: str
     start_time: Timestamp | None = None
+    idle: bool | None = None
 
 
 class _AttachStreamCallbackRequestTransferTypeConverter(
@@ -389,6 +390,7 @@ class _AttachStreamCallbackRequestTransferTypeConverter(
             )
             if value.HasField("start_time")
             else None,
+            idle=value.idle if bool(value.idle) else None,
         )
 
     @typing_extensions.override
@@ -414,6 +416,8 @@ class _AttachStreamCallbackRequestTransferTypeConverter(
             message.start_time.CopyFrom(
                 _TimestampTransferTypeConverter().to_transfer_type(value.start_time)
             )
+        if value.idle is not None:
+            message.idle = value.idle
         return message
 
 
@@ -846,3 +850,112 @@ class _NotifyStreamResponseTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _NotifyStreamResponseTransferTypeConverter
 )(NotifyStreamResponse)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True, kw_only=True)
+class WaitStreamCallbackRequest:
+    namespace: str = dataclasses.field(default_factory=_support.workflow_namespace)
+    stream_ref: StreamReference | None = None
+    request_id: str
+    after_counter: int | None = None
+
+
+class _WaitStreamCallbackRequestTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        WaitStreamCallbackRequest,
+        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+    ]
+):
+    transfer_type: (
+        type[
+            temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
+        ]
+        | None
+    ) = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+        type_hint: type[WaitStreamCallbackRequest],
+    ) -> WaitStreamCallbackRequest:
+        if not value.request_id:
+            raise ValueError(
+                "missing required field WaitStreamCallbackRequest.request_id"
+            )
+        request_id = value.request_id
+        return WaitStreamCallbackRequest(
+            namespace=value.namespace,
+            stream_ref=_StreamReferenceTransferTypeConverter().from_transfer_type(
+                value.stream_ref, StreamReference
+            )
+            if value.HasField("stream_ref")
+            else None,
+            request_id=request_id,
+            after_counter=value.after_counter if value.after_counter != 0 else None,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: WaitStreamCallbackRequest,
+    ) -> (
+        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
+    ):
+        message = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest()
+        message.namespace = value.namespace
+        if value.stream_ref is not None:
+            message.stream_ref.CopyFrom(
+                _StreamReferenceTransferTypeConverter().to_transfer_type(
+                    value.stream_ref
+                )
+            )
+        message.request_id = value.request_id
+        if value.after_counter is not None:
+            message.after_counter = value.after_counter
+        return message
+
+
+temporalio.converter.transfer_type_convertible(
+    _WaitStreamCallbackRequestTransferTypeConverter
+)(WaitStreamCallbackRequest)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
+class WaitStreamCallbackResponse:
+    pass
+
+
+class _WaitStreamCallbackResponseTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        WaitStreamCallbackResponse,
+        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
+    ]
+):
+    transfer_type: (
+        type[
+            temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse
+        ]
+        | None
+    ) = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
+        type_hint: type[WaitStreamCallbackResponse],
+    ) -> WaitStreamCallbackResponse:
+        return WaitStreamCallbackResponse()
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: WaitStreamCallbackResponse,
+    ) -> temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse:
+        message = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse()
+        return message
+
+
+temporalio.converter.transfer_type_convertible(
+    _WaitStreamCallbackResponseTransferTypeConverter
+)(WaitStreamCallbackResponse)  # pyright: ignore[reportUnusedCallResult]

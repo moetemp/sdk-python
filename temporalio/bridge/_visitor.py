@@ -712,6 +712,16 @@ class PayloadVisitor:
     ) -> None:
         pass
 
+    async def _visit_temporal_api_workflowservice_v1_WaitStreamCallbackRequest(
+        self, fs: VisitorFunctions, o: Any
+    ) -> None:
+        pass
+
+    async def _visit_temporal_api_workflowservice_v1_WaitStreamCallbackResponse(
+        self, fs: VisitorFunctions, o: Any
+    ) -> None:
+        pass
+
     async def _visit_temporal_api_notificationservice_v1_OnCompleteRequest(
         self, fs: VisitorFunctions, o: Any
     ):
