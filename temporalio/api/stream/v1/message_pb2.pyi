@@ -36,18 +36,23 @@ class StreamReference(google.protobuf.message.Message):
     ACTIVITY_ID_FIELD_NUMBER: builtins.int
     owner_kind: temporalio.api.enums.v1.stream_pb2.StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`. Empty for other kinds."""
+    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`. The Workflow that scheduled the
+    owning Activity, for `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`. Empty for other kinds.
+    """
     run_id: builtins.str
     """For `STREAM_OWNER_KIND_WORKFLOW`, the id of the first run in the owning Workflow's run
     chain. The stream notifier is keyed by it, so one notifier serves the stream across the
     chain's runs, and a stream that reuses the Workflow id in a new chain gets a notifier of its
-    own. For `STREAM_OWNER_KIND_ACTIVITY`, the id of the owning Activity run. An empty run id is
-    refused.
+    own. For `STREAM_OWNER_KIND_ACTIVITY`, the id of the owning Activity run. For
+    `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`, the id of the run that scheduled the Activity, not
+    the chain's first run. An empty run id is refused.
     """
     topic: builtins.str
     """The stream's topic within its owner."""
     activity_id: builtins.str
-    """The owning standalone Activity, for `STREAM_OWNER_KIND_ACTIVITY`. Empty for other kinds."""
+    """The owning standalone Activity, for `STREAM_OWNER_KIND_ACTIVITY`. The owning Activity's id
+    in the scheduling run, for `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`. Empty for other kinds.
+    """
     def __init__(
         self,
         *,
