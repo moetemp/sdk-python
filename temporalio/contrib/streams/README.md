@@ -179,7 +179,7 @@ async for record in get_stream_handle(client, ref).read():
 - **Producer.** The Activity writes as `<Activity id>@<run id>`. Retries,
   backoff, pause and reset keep the stream open.
 - **Attempt.** Each attempt writes the producer attempt
-  `started_ms << 16 | min(attempt, 65535)`, where `started_ms` is the Unix
+  `started_ms << 11 | min(attempt, 2047)`, where `started_ms` is the Unix
   time in milliseconds at which the server started the attempt. A retry and
   an attempt after a reset start later, so readers see `SUPERSEDED` before
   their records. An attempt that timed out but still writes started
