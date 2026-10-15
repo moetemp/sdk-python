@@ -3,17 +3,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING
+from collections.abc import Mapping
 
 import google.protobuf.empty_pb2
 
-import temporalio.api.cloud.cloudservice.v1
-import temporalio.api.operatorservice.v1
-import temporalio.api.testservice.v1
 import temporalio.api.workflowservice.v1
+import temporalio.api.operatorservice.v1
+import temporalio.api.cloud.cloudservice.v1
+import temporalio.api.testservice.v1
 import temporalio.bridge.proto.health.v1
+
 
 if TYPE_CHECKING:
     from temporalio.service import ServiceClient
@@ -1102,6 +1103,24 @@ class WorkflowService:
             req=req,
             service=self._service,
             resp_type=temporalio.api.workflowservice.v1.NotifyStreamResponse,
+            retry=retry,
+            metadata=metadata,
+            timeout=timeout,
+        )
+
+    async def notify_streams(
+        self,
+        req: temporalio.api.workflowservice.v1.NotifyStreamsRequest,
+        retry: bool = False,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> temporalio.api.workflowservice.v1.NotifyStreamsResponse:
+        """Invokes the WorkflowService.notify_streams rpc method."""
+        return await self._client._rpc_call(
+            rpc="notify_streams",
+            req=req,
+            service=self._service,
+            resp_type=temporalio.api.workflowservice.v1.NotifyStreamsResponse,
             retry=retry,
             metadata=metadata,
             timeout=timeout,

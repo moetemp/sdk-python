@@ -240,7 +240,7 @@ class StreamWake(google.protobuf.message.Message):
     position: builtins.str
     """The position that came with `counter`, in the producer's terms."""
     counter: builtins.int
-    """The highest counter the notifier has seen. A reader that armed its read at a counter wakes
+    """The highest counter the notifier has seen. A reader that subscribed after a counter wakes
     when this value is above it. Zero when the notifier has seen no notification.
     """
     @property
@@ -310,3 +310,72 @@ class StreamWake(google.protobuf.message.Message):
     ) -> None: ...
 
 global___StreamWake = StreamWake
+
+class StreamNotification(google.protobuf.message.Message):
+    """One stream's entry in a NotifyStreams request: the same fields as a NotifyStream request that
+    does not close the stream.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class MetadataEntry(google.protobuf.message.Message):
+        DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+        KEY_FIELD_NUMBER: builtins.int
+        VALUE_FIELD_NUMBER: builtins.int
+        key: builtins.str
+        value: builtins.str
+        def __init__(
+            self,
+            *,
+            key: builtins.str = ...,
+            value: builtins.str = ...,
+        ) -> None: ...
+        def ClearField(
+            self,
+            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
+        ) -> None: ...
+
+    STREAM_REF_FIELD_NUMBER: builtins.int
+    POSITION_FIELD_NUMBER: builtins.int
+    COUNTER_FIELD_NUMBER: builtins.int
+    METADATA_FIELD_NUMBER: builtins.int
+    @property
+    def stream_ref(self) -> global___StreamReference: ...
+    position: builtins.str
+    """Where the stream stands, in the producer's terms. At most 1 KiB of UTF-8."""
+    counter: builtins.int
+    """The newest counter of the stream. Must be positive. The notifier ignores a counter at or
+    below the one it holds.
+    """
+    @property
+    def metadata(
+        self,
+    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
+        """Small details passed on to the callbacks. At most 2 KiB in total, counted as UTF-8 bytes."""
+    def __init__(
+        self,
+        *,
+        stream_ref: global___StreamReference | None = ...,
+        position: builtins.str = ...,
+        counter: builtins.int = ...,
+        metadata: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream_ref", b"stream_ref"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "counter",
+            b"counter",
+            "metadata",
+            b"metadata",
+            "position",
+            b"position",
+            "stream_ref",
+            b"stream_ref",
+        ],
+    ) -> None: ...
+
+global___StreamNotification = StreamNotification
