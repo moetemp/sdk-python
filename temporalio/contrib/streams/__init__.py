@@ -89,6 +89,12 @@ from temporalio.contrib.streams._errors import (
     StreamStorageError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._follow import (
+    FollowedItem,
+    FollowPosition,
+    LinkState,
+    LinkStateKind,
+)
 from temporalio.contrib.streams._handles import (
     ActivityStreamHandle,
     StreamHandle,
@@ -119,6 +125,11 @@ from temporalio.contrib.streams._workflow import (
     start_activity_with_stream,
     workflow_reader,
 )
+from temporalio.contrib.streams._workflow_follow import (
+    FollowBatch,
+    WorkflowStreamFollower,
+    workflow_follower,
+)
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     close_workflow_stream,
@@ -131,7 +142,12 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "FollowBatch",
+    "FollowPosition",
+    "FollowedItem",
     "LinkEvent",
+    "LinkState",
+    "LinkStateKind",
     "RecordKind",
     "StreamBatch",
     "StreamClosedError",
@@ -140,13 +156,13 @@ __all__ = [
     "StreamError",
     "StreamExpiredError",
     "StreamHandle",
+    "StreamLink",
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
     "StreamPosition",
     "StreamProducer",
     "StreamProducerError",
-    "StreamLink",
     "StreamRecord",
     "StreamRecordError",
     "StreamRef",
@@ -160,14 +176,16 @@ __all__ = [
     "Supersession",
     "SupersessionTracker",
     "TaskCutoff",
+    "WorkflowStreamFollower",
     "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
     "close_workflow_stream",
     "get_stream_handle",
+    "start_activity_with_stream",
     "topic",
     "track_supersession",
-    "start_activity_with_stream",
+    "workflow_follower",
     "workflow_reader",
     "workflow_writer",
 ]

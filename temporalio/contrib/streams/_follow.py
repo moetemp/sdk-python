@@ -22,9 +22,15 @@ from temporalio.contrib.streams._body import decode_body
 from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.contrib.streams._plugin import call
 from temporalio.contrib.streams._record import Cursor, StreamLink, StreamRecord
-from temporalio.contrib.streams._ref import StreamRef, from_address, owner_context
-from temporalio.contrib.streams._wire import from_read, from_wire_link
-from temporalio.converter import DataConverter
+from temporalio.contrib.streams._ref import (
+    StreamRef,
+    from_address,
+    from_reference,
+    owner_context,
+)
+from temporalio.contrib.streams._wire import from_wire_link, to_record
+from temporalio.converter import DataConverter, FailureConverter, PayloadConverter
+from temporalio.converter._payload_codec import _apply_to_failure_payloads
 
 if TYPE_CHECKING:
     from temporalio.contrib.streams._handles import StreamHandle
@@ -107,11 +113,137 @@ class FollowedItem(Generic[T]):
     item and the rest of its batch again."""
 
 
-@dataclass
-class _Source:
+@dataclass(frozen=True)
+class FollowSourceInfo:
+    """What a follow knows of one source, by its number."""
+
     ref: StreamRef
     depth: int
-    converter: DataConverter
+
+
+def update_sources(
+    sources: dict[int, FollowSourceInfo], response: FollowResponse
+) -> None:
+    """Add the sources ``response`` names to ``sources``."""
+    for source in response.sources:
+        sources[source.number] = FollowSourceInfo(
+            from_address(source.stream), source.depth
+        )
+
+
+async def decode_follow(
+    converter: DataConverter,
+    namespace: str,
+    root: StreamRef,
+    response: FollowResponse,
+) -> None:
+    """Run the codec over every body and failure in ``response``, in place.
+
+    Each source decodes in its own owner's context, and each link outcome
+    in the context of the linked stream.
+    """
+    contexts: dict[int, DataConverter] = {
+        0: converter.with_context(
+            owner_context(namespace, root.workflow_id, root.activity_id)
+        )
+    }
+    for source in response.sources:
+        stream = source.stream
+        contexts[source.number] = converter.with_context(
+            owner_context(
+                stream.namespace or namespace, stream.workflow_id, stream.activity_id
+            )
+        )
+    for followed in response.records:
+        if followed.HasField("record"):
+            stored = followed.record.stored
+            if followed.record.HasField("stored") and stored.HasField("body"):
+                context = contexts.get(followed.source, contexts[0])
+                stored.body.CopyFrom(await decode_body(context, stored.body))
+            continue
+        state = followed.link_state
+        if not (state.HasField("close_result") or state.HasField("close_failure")):
+            continue
+        context = contexts[0]
+        if state.link.HasField("stream"):
+            linked = from_reference(state.link.stream)
+            context = converter.with_context(
+                owner_context(
+                    state.link.namespace or namespace,
+                    linked.workflow_id,
+                    linked.activity_id,
+                )
+            )
+        if state.HasField("close_result"):
+            state.close_result.CopyFrom(await decode_body(context, state.close_result))
+        if state.HasField("close_failure"):
+            await _apply_to_failure_payloads(
+                state.close_failure, context._transform_inbound_payloads
+            )
+    if response.HasField("close_failure"):
+        await _apply_to_failure_payloads(
+            response.close_failure, contexts[0]._transform_inbound_payloads
+        )
+
+
+def follow_items(
+    payload_converter: PayloadConverter,
+    failure_converter: FailureConverter,
+    sources: dict[int, FollowSourceInfo],
+    response: FollowResponse,
+    result_type: type | None,
+    cursor: str,
+) -> tuple[list[FollowedItem[Any]], str]:
+    """The items of a decoded ``response``, and the root cursor after them.
+
+    The last item carries the position after the batch.
+    """
+    items: list[FollowedItem[Any]] = []
+    for followed in response.records:
+        source = sources[followed.source]
+        record = link_state = None
+        if followed.HasField("record"):
+            record = to_record(
+                payload_converter,
+                followed.record,
+                result_type if followed.source == 0 else None,
+            )
+            if followed.source == 0:
+                cursor = record.cursor.token
+        else:
+            link_state = _link_state(
+                payload_converter, failure_converter, followed.link_state
+            )
+        items.append(FollowedItem(source.ref, source.depth, record, link_state, None))
+    if items:
+        position = FollowPosition(cursor, base64.b64encode(response.state).decode())
+        last = items[-1]
+        items[-1] = FollowedItem(
+            last.source, last.depth, last.record, last.link_state, position
+        )
+    return items, cursor
+
+
+def _link_state(
+    payload_converter: PayloadConverter,
+    failure_converter: FailureConverter,
+    wire: WireLinkState,
+) -> LinkState:
+    result: Any = None
+    error: BaseException | None = None
+    if wire.HasField("close_result"):
+        result = payload_converter.from_payloads([wire.close_result])[0]
+    if wire.HasField("close_failure"):
+        error = failure_converter.from_failure(wire.close_failure, payload_converter)
+    elif wire.HasField("error"):
+        error = error_from_failure(wire.error)
+    return LinkState(
+        kind=LinkStateKind(wire.kind),
+        link=from_wire_link(wire.link),
+        result=result,
+        error=error,
+        reason=wire.reason,
+    )
 
 
 async def follow(
@@ -137,75 +269,28 @@ async def follow(
         max_open=max_open,
     )
     request.wait.FromTimedelta(_FOLLOW_WAIT)
-    sources = {0: _Source(handle.ref.with_topic(topic), 0, handle._converter)}
+    root = handle.ref.with_topic(topic)
+    sources = {0: FollowSourceInfo(root, 0)}
+    converter = handle._client.data_converter
+    namespace = handle._client.namespace
     while True:
         response: FollowResponse = await call(service.follow(request))
-        for source in response.sources:
-            ref = from_address(source.stream)
-            sources[source.number] = _Source(
-                ref,
-                source.depth,
-                handle._client.data_converter.with_context(
-                    owner_context(
-                        source.stream.namespace or handle._client.namespace,
-                        ref.workflow_id,
-                        ref.activity_id,
-                    )
-                ),
-            )
-        last = len(response.records) - 1
-        for index, followed in enumerate(response.records):
-            source = sources[followed.source]
-            record = link_state = None
-            if followed.HasField("record"):
-                record = await from_read(
-                    source.converter,
-                    followed.record,
-                    result_type if followed.source == 0 else None,
-                )
-                if followed.source == 0:
-                    cursor = record.cursor.token
-            else:
-                link_state = await _link_state(handle, followed.link_state)
-            position = None
-            if index == last:
-                position = FollowPosition(
-                    cursor, base64.b64encode(response.state).decode()
-                )
-            yield FollowedItem(source.ref, source.depth, record, link_state, position)
+        update_sources(sources, response)
+        await decode_follow(converter, namespace, root, response)
+        items, cursor = follow_items(
+            converter.payload_converter,
+            converter.failure_converter,
+            sources,
+            response,
+            result_type,
+            cursor,
+        )
+        for item in items:
+            yield item
         if response.done:
             if response.HasField("close_failure"):
-                raise await handle._converter.decode_failure(response.close_failure)
+                raise converter.failure_converter.from_failure(
+                    response.close_failure, converter.payload_converter
+                )
             return
-        request.after = cursor
         request.state = response.state
-
-
-async def _link_state(handle: StreamHandle, wire: WireLinkState) -> LinkState:
-    link = from_wire_link(wire.link)
-    converter = handle._converter
-    if link.ref is not None:
-        # The outcome is the linked stream's, so it decodes in that owner's context.
-        converter = handle._client.data_converter.with_context(
-            owner_context(
-                link.namespace or handle._client.namespace,
-                link.ref.workflow_id,
-                link.ref.activity_id,
-            )
-        )
-    result: Any = None
-    error: BaseException | None = None
-    if wire.HasField("close_result"):
-        body = await decode_body(converter, wire.close_result)
-        result = converter.payload_converter.from_payloads([body])[0]
-    if wire.HasField("close_failure"):
-        error = await converter.decode_failure(wire.close_failure)
-    elif wire.HasField("error"):
-        error = error_from_failure(wire.error)
-    return LinkState(
-        kind=LinkStateKind(wire.kind),
-        link=link,
-        result=result,
-        error=error,
-        reason=wire.reason,
-    )
