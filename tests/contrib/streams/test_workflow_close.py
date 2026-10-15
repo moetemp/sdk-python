@@ -10,6 +10,7 @@ server.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 
@@ -174,7 +175,7 @@ async def test_a_writer_cannot_open_on_a_topic_the_run_closed(streams: Client):
         )
     assert "already closed" in said
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
-    assert [r.kind for r in records] == [RecordKind.FINISH]
+    assert [r.value for r in records if r.kind is RecordKind.DATA] == []
 
 
 # Workflow ids whose task already failed once, in this process.
@@ -217,7 +218,8 @@ async def test_a_rerun_after_the_close_finds_its_flushes_landed(
     assert result == "closed"
     assert workflow_id in _failed_once
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
-    # The first run of the task wrote everything once. The rerun wrote nothing.
+    # The first run of the task wrote everything once. Core dropped the
+    # rerun's records, since the run's own close came after them.
     assert [(r.kind, r.value) for r in records] == [
         (RecordKind.DATA, "one"),
         (RecordKind.DATA, "two"),
@@ -235,19 +237,16 @@ class PublishesAfterAnOutsideClose:
         await workflow.wait_condition(lambda: self.go)
         writer = workflow_writer(STEPS)
         writer.publish("late")
-        try:
-            await writer.flush()
-        except BaseException as error:
-            cause = getattr(error, "cause", None) or error
-            return getattr(cause, "type", type(cause).__name__)
-        return "landed"
+        # Ends the activation, so Core tries the append before the run ends.
+        await workflow.sleep(timedelta(milliseconds=10))
+        return "went on"
 
     @workflow.signal
     def publish(self) -> None:
         self.go = True
 
 
-async def test_a_flush_after_a_close_by_someone_else_fails(streams: Client):
+async def test_a_publish_after_a_close_by_someone_else_is_dropped(streams: Client):
     workflow_id = new_workflow_id()
     async with new_worker(streams, PublishesAfterAnOutsideClose) as worker:
         handle = await streams.start_workflow(
@@ -258,4 +257,8 @@ async def test_a_flush_after_a_close_by_someone_else_fails(streams: Client):
         await get_stream_handle(streams, workflow_id).close(topic=STEPS)
         await handle.signal(PublishesAfterAnOutsideClose.publish)
         said = await asyncio.wait_for(handle.result(), 30)
-    assert said == "StreamClosedError"
+    # A retry could never land on a closed topic, so Core drops the records
+    # and the run goes on.
+    assert said == "went on"
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.value for r in records if r.kind is RecordKind.DATA] == []
