@@ -118,13 +118,6 @@ class StreamReadTransport(Protocol):
         """Answer with the records after ``request``'s cursor."""
         ...
 
-    async def follow(self, request: FollowInput) -> FollowOutput:
-        """Answer with the items after ``request``'s position on a stream and its links.
-
-        Only a follower with ``follow_links`` calls it.
-        """
-        ...
-
 
 class StoreTransport:
     """Reads through the stream service in Core, on the store of a client.
@@ -247,9 +240,10 @@ class StreamFollower(Protocol[T]):
     type hint.
 
     A follower that sets ``follow_links = True`` asks for the streams its
-    stream's link records open too. The service then calls the stream
-    service's ``follow``, and each batch holds :attr:`FollowBatch.items`. Only
-    the root's records decode into the type argument.
+    stream's link records open too. The service then calls the transport's
+    ``follow``, which :class:`StoreTransport`, ``ClientTransport`` and
+    ``HttpTransport`` have, and each batch holds :attr:`FollowBatch.items`.
+    Only the root's records decode into the type argument.
     """
 
     async def on_records(self, batch: FollowBatch[T]) -> None:
@@ -492,7 +486,15 @@ class StreamFollowerService:
     async def _follow(
         self, position: FollowInput, *, wait_ms: int, wake_token: str | None = None
     ) -> FollowOutput:
-        return await self._transport.follow(
+        follow = getattr(self._transport, "follow", None)
+        if follow is None:
+            raise nexusrpc.HandlerError(
+                "the follower asks for links, and its transport can't follow; use "
+                "StoreTransport, ClientTransport or HttpTransport",
+                type=nexusrpc.HandlerErrorType.INTERNAL,
+                retryable_override=False,
+            )
+        return await follow(
             dataclasses.replace(
                 position,
                 max_records=self._max_records,

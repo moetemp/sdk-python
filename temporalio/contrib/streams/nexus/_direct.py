@@ -27,7 +27,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from ssl import SSLContext
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import temporalio.activity
 import temporalio.workflow
@@ -88,6 +88,7 @@ __all__ = [
     "HttpTransport",
     "StreamDirectReads",
     "StreamDirectTransport",
+    "StreamFollowTransport",
     "StreamServiceCallError",
 ]
 
@@ -171,6 +172,16 @@ class StreamDirectTransport(StreamReadTransport, Protocol):
     async def read_range(self, request: ReadRangeInput) -> ReadOutput:
         """Answer again the records of an earlier read that named a floor holder."""
         ...
+
+
+class StreamFollowTransport(Protocol):
+    """A transport that also follows links, which a reader with ``follow_links`` needs.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    :class:`HttpTransport` and :class:`ClientTransport` follow.
+    """
 
     async def follow(self, request: FollowInput) -> FollowOutput:
         """Answer with the items after ``request``'s position on a stream and its links."""
@@ -543,7 +554,7 @@ async def _follow(endpoint: str, reader_id: str, input: FollowInput) -> RawValue
     info = temporalio.activity.info()
     plugin = _plugin_of(temporalio.activity.client())
     holder = f"{info.workflow_namespace}/{info.workflow_run_id}/{reader_id}"
-    answer = await plugin.transport(endpoint).follow(
+    answer = await _following(plugin.transport(endpoint), endpoint).follow(
         dataclasses.replace(input, floor_holder=holder)
     )
     if answer.replay is None:
@@ -575,6 +586,15 @@ async def _follow(endpoint: str, reader_id: str, input: FollowInput) -> RawValue
             data=json.dumps(document, separators=(",", ":"), sort_keys=True).encode(),
         )
     )
+
+
+def _following(transport: Any, endpoint: str) -> StreamFollowTransport:
+    if not hasattr(transport, "follow") or not hasattr(transport, "follow_range"):
+        raise StreamUnsupportedError(
+            f"the transport of endpoint {endpoint!r} can't follow links; use "
+            "HttpTransport or ClientTransport, or pass follow_links=False"
+        )
+    return cast(StreamFollowTransport, transport)
 
 
 def _follow_key(range: FollowRangeInput) -> bytes:
@@ -788,7 +808,8 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
             return follow_batch_payload(_from_json(cached, FollowOutput))
         endpoint = payload.metadata.get(_ENDPOINT_KEY, b"").decode()
         try:
-            again = await self._plugin.transport(endpoint).follow_range(range)
+            transport = _following(self._plugin.transport(endpoint), endpoint)
+            again = await transport.follow_range(range)
         except StreamReplayMismatchError as error:
             raise temporalio.workflow.NondeterminismError(
                 f"a direct stream follow from endpoint {endpoint!r} replayed other "
