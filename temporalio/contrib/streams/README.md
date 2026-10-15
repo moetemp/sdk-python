@@ -221,8 +221,9 @@ async def follow(workflow_id: str) -> int:
 
 Known limits:
 
-- **Not over Nexus.** The Nexus stream service serves only streams that a
-  Workflow owns.
+- **Over Nexus.** A `StreamOperationHandler` can hand out an Activity's
+  stream, and the Nexus stream service serves it. See
+  [Streams over Nexus](docs/nexus.md).
 - **Clock skew.** The attempt uses the server's attempt start time. After a
   failover to a cluster whose clock is behind by more than the retry
   interval, a new attempt can look older, and its records are `stale`.
@@ -311,8 +312,9 @@ Known limits:
   Activities. A run with thousands of them makes each check larger.
 - **Codec keys.** A codec that keys on the Activity type or task queue
   can't decode the close outcome.
-- **Not over Nexus.** The Nexus stream service does not serve these
-  streams.
+- **Over Nexus.** A `StreamOperationHandler` can hand out a tool call's
+  stream, and the Nexus stream service serves it, as for a standalone
+  Activity. See [Streams over Nexus](docs/nexus.md).
 
 The sample runs in full in `tests/contrib/streams/samples/tool_call_streams.py`.
 
