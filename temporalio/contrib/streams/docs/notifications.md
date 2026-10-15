@@ -53,29 +53,21 @@ client waits for the notifications still out when it stops. A process that
 holds only a client calls `await store.flush_notifications()` before it
 exits.
 
-A reader that can't arm, such as a hand-written reader over HTTP, waits for
-a notification that never comes. For such readers, use
-`notify_on_append(every_append=True)`. Then every append notifies.
-
 ## When Core notifies
 
-A producer sends nothing to Temporal while no reader sleeps.
-
-1. A reader reads with `arm` and waits up to its idle time, 2 seconds by
-   default. A read that finds records returns them at once.
-2. A read that waits its whole idle time and finds nothing arms the stream
-   in the store, in the same step. It answers `wake_after`, the counter of
-   its position.
+1. A reader reads and waits up to its idle time, 2 seconds by default. A
+   read that finds records returns them at once.
+2. A read that waits its whole idle time and finds nothing answers
+   `wake_after`, the counter of its position.
 3. The reader sleeps until the notifier's counter is above `wake_after`, the
    stream closes, or a time limit passes.
-4. The next append finds the arm and notifies the notifier once. Core clears
-   the arm after the notification lands. A failed notification keeps the
-   arm, so the next append notifies again.
+4. Every append notifies the notifier. Notifications for one stream fold
+   into one call in flight, and a failed last notification is tried twice
+   more.
 5. The notifier wakes every sleeping reader with one notification.
 
-So a busy stream, with no gap longer than the idle time, costs no
-notification. A busy stream sends its last counter again once a day, so its
-notifier does not reach its idle timeout.
+So a busy stream sends a notification for each append that finds no call in
+flight, whether or not a reader sleeps.
 
 ## A client reader
 
@@ -89,8 +81,8 @@ async for record in handle.read():
 ```
 
 The sleep holds one gRPC long poll, not a store connection. At the poll
-limit the reader reads again with `arm`. That read finds records whose
-notification was lost, or arms again. On a server without the notifier, the
+limit the reader reads again. That read finds records whose notification
+was lost, or comes back empty and sleeps again. On a server without the notifier, the
 reader waits in the store instead, as without notifications.
 
 ## A Workflow reader
@@ -114,8 +106,11 @@ class Connector:
 - Each read is one Local Activity, which adds one marker event when its
   Workflow Task completes. By default the marker holds the read's range, and
   replay reads the range from the store again (see below).
-- The first read attaches the run to the stream's notifier. While the stream
-  is idle, the reader waits with no Local Activity and no timer. The server
+- The reader reads first. Only when a read comes back empty does the next
+  read attach the run to the stream's notifier, and that read doesn't wait,
+  so it finds a record that landed before the attach. A reader that never
+  goes idle never attaches. While the stream is idle, the reader waits with
+  no Local Activity and no timer. The server
   records each wake on the next Workflow Task's scheduled event, so a wake
   adds no event of its own.
 - A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
@@ -242,9 +237,9 @@ ended, and a client reader ends at its next read.
 
 ## A lost notification
 
-A producer can stop after its append and before its notification lands. The
-arm stays in the store, so the next append by any producer notifies. For
-the last append before a quiet period, a time-based check finds the record:
+A producer can stop after its append and before its notification lands.
+The next append by any producer notifies again. For the last append before
+a quiet period, a time-based check finds the record:
 
 - A client reader reads again at the poll limit (60 seconds).
 - The notifier asks an idle Workflow reader to read again after 1 minute,

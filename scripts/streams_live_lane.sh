@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-af03cc33024701b096392d58cd859e5cfff01626}
+SERVER_REF=${SERVER_REF:-da70516ed19e74c49ecddf0248c7e09a091fe26c}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -269,9 +269,10 @@ gate() {
 }
 gate tests/contrib/streams/test_live_notifications.py \
   test_live_an_idle_client_reader_wakes_on_the_next_append \
-  test_live_a_busy_stream_sends_no_notification \
+  test_live_a_sleeping_client_wakes_through_the_driver \
+  test_live_a_workflow_reader_wakes_through_the_driver \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
-  test_live_every_append_mode_notifies_each_append \
+  test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
   test_live_a_workflow_reader_sleeps_and_wakes_on_an_append \
   test_live_a_workflow_reader_on_an_empty_stream_wakes_on_the_first_append \

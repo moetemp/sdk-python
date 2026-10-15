@@ -1125,6 +1125,24 @@ class WorkflowService:
             timeout=timeout,
         )
 
+    async def notify_streams(
+        self,
+        req: temporalio.api.workflowservice.v1.NotifyStreamsRequest,
+        retry: bool = False,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> temporalio.api.workflowservice.v1.NotifyStreamsResponse:
+        """Invokes the WorkflowService.notify_streams rpc method."""
+        return await self._client._rpc_call(
+            rpc="notify_streams",
+            req=req,
+            service=self._service,
+            resp_type=temporalio.api.workflowservice.v1.NotifyStreamsResponse,
+            retry=retry,
+            metadata=metadata,
+            timeout=timeout,
+        )
+
     async def patch_schedule(
         self,
         req: temporalio.api.workflowservice.v1.PatchScheduleRequest,

@@ -2,9 +2,9 @@
 
 The owner Workflow publishes three bursts, with a gap longer than the
 reader's 2 second idle wait between them, then closes its stream. During
-each gap the client's read arms the stream and waits on the notifier with a
-long poll, so it holds no store connection. The first append of the next
-burst notifies once, and the reader reads the burst.
+each gap the client's read comes back empty and the reader waits on the
+notifier with a long poll, so it holds no store connection. The first append
+of the next burst wakes it, and the reader reads the burst.
 
 It needs a server with the stream notifier, and the store's
 ``notify_on_append()``.

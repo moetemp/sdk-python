@@ -74,7 +74,7 @@ __all__ = [
 T = TypeVar("T")
 
 _READ_WAIT = timedelta(seconds=30)
-# How long a read that sleeps on the notifier waits in the store before it arms.
+# How long a read that sleeps on the notifier waits in the store before it sleeps.
 _IDLE_WAIT = timedelta(seconds=2)
 
 
@@ -300,8 +300,8 @@ class StreamHandle:
 
         With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
         on, an idle read sleeps on the stream's notifier on the server. A read
-        that waits 2 seconds and finds nothing arms the stream, then waits
-        until a producer notifies, the stream closes, or the server's wait
+        that waits 2 seconds and finds nothing comes back empty, and the
+        reader waits until a producer notifies, the stream closes, or the server's wait
         limit (60 seconds by default) passes, and then reads again. That read
         also finds records whose notification was lost. Without
         notifications, or on a server without the stream notifier, an idle
@@ -348,7 +348,8 @@ class StreamHandle:
         service = await self._plugin._service_for(self._client)
         address = self._address(topic, run_id=await self._read_run_id())
         request = ReadRequest(stream=address, after=after.token)
-        self._sleep_on_notifier(request, self._plugin._waits_on_notifier())
+        sleep = self._plugin._waits_on_notifier()
+        self._set_wait(request, sleep)
         while True:
             response = await call(service.read(request))
             for record in response.records:
@@ -359,27 +360,27 @@ class StreamHandle:
                 return
             request.after = response.cursor
             request.state = response.state
-            if response.armed:
-                await self._wait_for_notification(service, request, response)
+            if sleep and not response.records:
+                sleep = await self._wait_for_notification(service, request, response)
 
     @staticmethod
-    def _sleep_on_notifier(request: ReadRequest, sleep: bool) -> None:
+    def _set_wait(request: ReadRequest, sleep: bool) -> None:
         # A read that sleeps on the notifier waits only its idle time in the
-        # store, and the store arms the stream when that wait finds nothing.
-        request.arm = sleep
+        # store before it sleeps.
         request.wait.FromTimedelta(_IDLE_WAIT if sleep else _READ_WAIT)
 
     async def _wait_for_notification(
-        self, service: StreamService, request: ReadRequest, armed: ReadResponse
-    ) -> None:
-        """Wait until the stream moves past the armed read, closes, or the poll ends.
+        self, service: StreamService, request: ReadRequest, empty: ReadResponse
+    ) -> bool:
+        """Wait until the stream moves past an empty read, closes, or the poll ends.
 
-        Every answer leads to a read with ``arm``. After the server's wait
-        limit, that read finds records whose notification was lost, or arms
-        again.
+        Every answer leads to another read. After the server's wait limit,
+        that read finds records whose notification was lost, or comes back
+        empty and sleeps again. Returns whether the read can sleep on the
+        notifier again.
         """
         wait = WaitForNotificationRequest(
-            stream=request.stream, after_counter=armed.wake_after
+            stream=request.stream, after_counter=empty.wake_after
         )
         try:
             await call(service.wait_for_notification(wait))
@@ -387,7 +388,9 @@ class StreamHandle:
             # The server has no stream notifier, so the store's blocking read is
             # the only way to wait, for this read and the process's later ones.
             self._plugin._notifier_unsupported = True
-            self._sleep_on_notifier(request, False)
+            self._set_wait(request, False)
+            return False
+        return True
 
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """The cursor of the newest record on ``topic``, or ``BEGINNING`` when empty.

@@ -120,8 +120,8 @@ def superseded(cursor: str, producer: str, attempt: int) -> ReadRecord:
     )
 
 
-def armed(cursor: str, wake_after: int) -> ReadResponse:
-    return ReadResponse(cursor=cursor, armed=True, wake_after=wake_after)
+def empty(cursor: str, wake_after: int) -> ReadResponse:
+    return ReadResponse(cursor=cursor, wake_after=wake_after)
 
 
 @workflow.defn
@@ -200,17 +200,17 @@ async def _run_reader(
     return result, fake, handle
 
 
-async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
+async def test_a_reader_sleeps_after_an_empty_read_until_a_higher_counter(
     client: Client,
 ):
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(2)
-        # A wake at the armed counter names no new record, so the reader sleeps on.
+        await fake.until(3)
+        # A wake at the empty read's counter names no new record, so the reader sleeps on.
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=5)
         )
         await asyncio.sleep(1)
-        assert len(fake.inputs) == 2
+        assert len(fake.inputs) == 3
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=6)
         )
@@ -219,7 +219,8 @@ async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
         client,
         [
             ReadResponse(records=[data("c1", "a"), data("c2", "b")], cursor="c2"),
-            armed("c2", 5),
+            empty("c2", 5),
+            empty("c2", 5),
             ReadResponse(
                 records=[superseded("c2", "p", 2), data("c3", "c", attempt=2)],
                 cursor="c3",
@@ -232,19 +233,19 @@ async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
         ["data a", "data b"],
         ["superseded p@2", "data c"],
     ]
-    # The first read attaches, and the later ones don't.
-    assert [i.subscription_id for i in fake.inputs] == ["1", "", ""]
-    assert [i.after for i in fake.inputs] == ["", "c2", "c2"]
-    assert all(i.arm for i in fake.inputs)
+    # Only the read after the first empty read attaches, and it doesn't wait.
+    assert [i.subscription_id for i in fake.inputs] == ["", "", "1", ""]
+    assert [i.after for i in fake.inputs] == ["", "c2", "c2", "c2"]
+    assert [i.wait_ms == 0 for i in fake.inputs] == [False, False, True, False]
 
 
 async def test_a_recheck_reads_again_whatever_the_counter(client: Client):
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(1)
+        await fake.until(2)
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", recheck=True)
         )
-        await fake.until(2)
+        await fake.until(3)
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", recheck=True)
         )
@@ -252,19 +253,20 @@ async def test_a_recheck_reads_again_whatever_the_counter(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("", 0),
-            armed("", 0),
+            empty("", 0),
+            empty("", 0),
+            empty("", 0),
             ReadResponse(records=[data("c1", "lost")], cursor="c1", done=True),
         ],
         drive,
     )
     assert batches == [["data lost"]]
-    assert len(fake.inputs) == 3
+    assert len(fake.inputs) == 4
 
 
-async def test_a_close_is_read_to_the_end_without_arming(client: Client):
+async def test_a_close_is_read_to_the_end(client: Client):
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(1)
+        await fake.until(2)
         await handle.signal(
             ReadsBatches.wake,
             StreamWake(subscription_id="1", counter=9, closed=True),
@@ -273,14 +275,15 @@ async def test_a_close_is_read_to_the_end_without_arming(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("c0", 3),
+            empty("c0", 3),
+            empty("c0", 3),
             ReadResponse(records=[data("c1", "x")], cursor="c1"),
             ReadResponse(records=[data("c2", "y")], cursor="c2", done=True),
         ],
         drive,
     )
     assert batches == [["data x"], ["data y"]]
-    assert [i.arm for i in fake.inputs] == [True, False, False]
+    assert [i.subscription_id for i in fake.inputs] == ["", "1", "", ""]
 
 
 async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Client):
@@ -290,7 +293,7 @@ async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Cli
     )
 
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(1)
+        await fake.until(2)
         await handle.signal(
             ReadsBatches.wake,
             StreamWake(
@@ -302,7 +305,8 @@ async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Cli
         await _run_reader(
             client,
             [
-                armed("c0", 3),
+                empty("c0", 3),
+                empty("c0", 3),
                 ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
             ],
             drive,
@@ -339,11 +343,11 @@ async def test_the_end_of_a_read_carries_the_close_failure(client: Client):
 
 async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(1)
+        await fake.until(2)
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", resubscribe=True)
         )
-        await fake.until(2)
+        await fake.until(4)
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=2)
         )
@@ -351,15 +355,21 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("c0", 1),
-            armed("c0", 1),
+            empty("c0", 1),
+            empty("c0", 1),
+            empty("c0", 1),
+            empty("c0", 1),
             ReadResponse(records=[data("c1", "z")], cursor="c1", done=True),
         ],
         drive,
     )
     assert batches == [["data z"]]
+    # After a resubscribe the reader reads first and attaches again under the
+    # new generation at its next empty read.
     assert [(i.subscription_id, i.generation) for i in fake.inputs] == [
+        ("", 0),
         ("1", 0),
+        ("", 1),
         ("1", 1),
         ("", 1),
     ]
@@ -368,7 +378,12 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
 async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
     global _fake
     _fake = fake = FakeReads(
-        [armed("c0", 5), ReadResponse(records=[data("c1", "x")], cursor="c1")]
+        [
+            empty("c0", 5),
+            empty("c0", 5),
+            empty("c0", 5),
+            ReadResponse(records=[data("c1", "x")], cursor="c1"),
+        ]
     )
     async with new_worker(client, ReadsBatches, activities=[fake_read]) as worker:
         handle = await client.start_workflow(
@@ -377,9 +392,9 @@ async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
             id=new_workflow_id(),
             task_queue=worker.task_queue,
         )
-        await fake.until(1)
-        # A wake below the armed counter wakes nothing, but ends one more task
-        # that the reset can go back to, past the armed read's marker.
+        await fake.until(2)
+        # A wake below the empty read's counter wakes nothing, but ends one more task
+        # that the reset can go back to, past the empty read's marker.
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=1)
         )
@@ -414,21 +429,36 @@ async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
         new_run = client.get_workflow_handle(handle.id, run_id=reset.run_id)
         batches = await asyncio.wait_for(new_run.result(), 20)
     assert batches == [["data x"]]
-    # The reset run replayed the first read, then attached itself to read.
-    attach = fake.inputs[1]
-    assert attach.subscription_id == "1" and attach.arm and not attach.unsubscribe
+    # The reset run replayed the first two reads, read once more, then
+    # attached itself at that empty read.
+    assert [i.subscription_id for i in fake.inputs[:4]] == ["", "1", "", "1"]
+    assert not fake.inputs[3].unsubscribe
 
 
 async def test_a_reader_stopped_early_detaches(client: Client):
     batches, fake, _ = await _run_reader(
         client,
-        [ReadResponse(records=[data("c1", "a")], cursor="c1", state=b"seen")],
+        [
+            empty("c0", 1),
+            ReadResponse(records=[data("c1", "a")], cursor="c1", state=b"seen"),
+        ],
         _no_drive,
         stop_after=1,
     )
     assert batches == [["data a"]]
     last = fake.inputs[-1]
     assert last.unsubscribe and last.subscription_id == "1"
+
+
+async def test_a_reader_that_never_went_idle_has_nothing_to_detach(client: Client):
+    batches, fake, _ = await _run_reader(
+        client,
+        [ReadResponse(records=[data("c1", "a")], cursor="c1")],
+        _no_drive,
+        stop_after=1,
+    )
+    assert batches == [["data a"]]
+    assert [(i.subscription_id, i.unsubscribe) for i in fake.inputs] == [("", False)]
 
 
 async def test_a_position_resumes_the_next_run(client: Client):
@@ -458,7 +488,7 @@ async def test_a_read_that_fails_for_good_fails_with_the_stream_error(client: Cl
 
 async def test_a_reader_replays_from_its_markers_and_wakes(client: Client):
     async def drive(handle: Any, fake: FakeReads) -> None:
-        await fake.until(2)
+        await fake.until(3)
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=8)
         )
@@ -467,7 +497,8 @@ async def test_a_reader_replays_from_its_markers_and_wakes(client: Client):
         client,
         [
             ReadResponse(records=[data("c1", "a")], cursor="c1"),
-            armed("c1", 7),
+            empty("c1", 7),
+            empty("c1", 7),
             ReadResponse(records=[data("c2", "b")], cursor="c2", done=True),
         ],
         drive,
@@ -546,7 +577,6 @@ async def test_the_read_activity_reads_and_decodes_through_core(client: Client):
                 topic="tokens",
                 after="",
                 state="",
-                arm=False,
                 wait_ms=100,
                 max_records=10,
             ),

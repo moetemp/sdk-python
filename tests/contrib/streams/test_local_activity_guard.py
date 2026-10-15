@@ -53,7 +53,6 @@ class CallsAsNormalActivity:
                     topic="tokens",
                     after="",
                     state="",
-                    arm=False,
                     wait_ms=100,
                     max_records=10,
                 )
@@ -120,6 +119,7 @@ def _summaries(history: WorkflowHistory) -> list[str]:
 async def _read_two_batches(client: Client) -> WorkflowHistory:
     reader_tests._fake = FakeReads(
         [
+            ReadResponse(cursor="", wake_after=0),
             ReadResponse(records=[data("c1", "a")], cursor="c1"),
             ReadResponse(records=[data("c2", "b")], cursor="c2", done=True),
         ]
@@ -134,7 +134,8 @@ async def _read_two_batches(client: Client) -> WorkflowHistory:
 
 async def test_each_read_marker_says_what_it_read(client: Client):
     history = await _read_two_batches(client)
-    assert _summaries(history)[:2] == [
+    assert _summaries(history)[:3] == [
+        "stream read tokens after the start",
         "stream subscribe and read tokens after the start",
         "stream read tokens after c1",
     ]

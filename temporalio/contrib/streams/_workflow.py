@@ -5,11 +5,12 @@ one a Local Activity that runs Core's read and returns the records with
 their bodies through the codec. Replay takes each batch from its marker and
 does no I/O, so user code sees the same records, every kind included.
 
-The reader sleeps while the stream is idle. Its first read attaches the
-running Workflow to the stream's notifier as a wake target, under a
-subscription id that replay gives back. A read that waits ``idle_wait`` and
-finds nothing arms the stream and answers ``wake_after``, the counter of
-the read's position. The reader then waits, with no Local Activity and no
+The reader sleeps while the stream is idle. When a read that waited
+``idle_wait`` comes back empty, the next read attaches the running Workflow
+to the stream's notifier as a wake target, under a subscription id that
+replay gives back, and reads once more with no wait. That read finds a
+record that landed before the attach, or answers ``wake_after``, the counter
+of the read's position. The reader then waits, with no Local Activity and no
 timer, until a wake for its subscription carries a higher counter, a
 recheck, a close, or a request to attach again. The server records each
 wake on the next Workflow Task scheduled event, so a wake adds no event.
@@ -153,7 +154,6 @@ class _ReadInput:
     topic: str
     after: str
     state: str
-    arm: bool
     wait_ms: int
     max_records: int
     subscription_id: str = ""
@@ -179,8 +179,11 @@ class _ReaderState:
     number: int
     generation: int = 0
     read_run_id: str | None = None
-    armed_at: int | None = None
+    # The notifier counter of the last empty read, while the reader sleeps.
+    sleep_after: int | None = None
     attach: bool = True
+    # Set once a read came back empty, so the next read attaches first.
+    attach_now: bool = False
     attached_run_id: str = ""
     done: bool = False
     close_failure: Failure | None = None
@@ -275,9 +278,9 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         if state.done or state.attach:
             return
-        await self._run(self._input(arm=False, unsubscribe=True))
+        await self._run(self._input(attach=False, unsubscribe=True))
         state.attach = True
-        state.armed_at = None
+        state.sleep_after = None
 
     async def __anext__(self) -> StreamBatch[T]:
         """Read until records arrive, sleeping on the notifier while the stream is idle.
@@ -299,14 +302,14 @@ class WorkflowStreamReader(Generic[T]):
             if state.done:
                 raise self._end()
             if (
-                state.armed_at is not None
+                state.sleep_after is not None
                 and state.attached_run_id != workflow.info().run_id
             ):
                 # A reset run replays the attach of the run it was reset from,
                 # and the notifier wakes only that run. So it attaches itself.
-                state.armed_at = None
+                state.sleep_after = None
                 state.attach = True
-            if state.armed_at is not None:
+            if state.sleep_after is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
             self._cut_task()
@@ -321,8 +324,14 @@ class WorkflowStreamReader(Generic[T]):
                 state.done = True
                 if response.HasField("close_failure"):
                     state.close_failure = response.close_failure
-            elif response.armed:
-                state.armed_at = response.wake_after
+            elif not records:
+                if state.attach and not self._closed():
+                    # Attach only when the stream goes idle, then read once
+                    # more, since an append between the empty read and the
+                    # attach notified no one.
+                    state.attach_now = True
+                    continue
+                state.sleep_after = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
 
@@ -339,17 +348,20 @@ class WorkflowStreamReader(Generic[T]):
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
-        armed_at = self._state.armed_at
-        assert armed_at is not None
+        sleep_after = self._state.sleep_after
+        assert sleep_after is not None
         return wake is not None and (
-            wake.counter > armed_at or wake.recheck or wake.closed or wake.resubscribe
+            wake.counter > sleep_after
+            or wake.recheck
+            or wake.closed
+            or wake.resubscribe
         )
 
     def _take_wake(self) -> None:
         state = self._state
         wake = wake_state(self.subscription_id)
         assert wake is not None
-        state.armed_at = None
+        state.sleep_after = None
         wake.recheck = False
         if wake.resubscribe and not wake.closed:
             # The notifier dropped this reader. A new generation makes the
@@ -374,20 +386,24 @@ class WorkflowStreamReader(Generic[T]):
         converter = runtime._workflow_context_failure_converter
         return converter.from_failure(failure, workflow.payload_converter())
 
-    def _input(self, *, arm: bool, unsubscribe: bool = False) -> _ReadInput:
+    def _closed(self) -> bool:
+        wake = wake_state(self.subscription_id)
+        return wake is not None and wake.closed
+
+    def _input(self, *, attach: bool, unsubscribe: bool = False) -> _ReadInput:
         state = self._state
+        attaching = state.attach and state.attach_now and attach
         return _ReadInput(
             workflow_id=self._ref.workflow_id,
             chain_run_id=self._ref.chain_run_id or "",
             topic=self._topic,
             after=state.cursor,
             state=base64.b64encode(state.state).decode(),
-            arm=arm,
-            wait_ms=self._idle_wait // timedelta(milliseconds=1),
+            # The read right after an attach only closes the gap, so it
+            # doesn't wait.
+            wait_ms=0 if attaching else self._idle_wait // timedelta(milliseconds=1),
             max_records=self._max_records,
-            subscription_id=self.subscription_id
-            if (state.attach and arm) or unsubscribe
-            else "",
+            subscription_id=self.subscription_id if attaching or unsubscribe else "",
             generation=state.generation,
             read_run_id=state.read_run_id,
             unsubscribe=unsubscribe,
@@ -397,15 +413,14 @@ class WorkflowStreamReader(Generic[T]):
 
     async def _read(self) -> ReadResponse:
         state = self._state
-        wake = wake_state(self.subscription_id)
-        # A closed stream needs no wake, so the read neither attaches nor arms.
-        arm = wake is None or not wake.closed
-        input = self._input(arm=arm)
+        # A closed stream needs no wake, so the read doesn't attach.
+        input = self._input(attach=not self._closed())
         state.reads += 1
         input.read_seq = state.reads
         response, state.read_run_id, read_by = await self._run(input)
         if input.subscription_id:
             state.attach = False
+            state.attach_now = False
             state.attached_run_id = read_by
         return response
 
@@ -537,7 +552,7 @@ def workflow_reader(
         after: Where to start: a cursor, ``BEGINNING``, ``END``, or the
             position of an earlier reader.
         idle_wait: How long a read waits in the store for a record before
-            it arms the stream and the reader sleeps.
+            it comes back empty and the reader sleeps.
         max_records: The most records one batch holds. Records ride in the
             Local Activity's result, so this bounds the marker's size.
         start_to_close_timeout: How long one read may run. ``idle_wait``
@@ -661,7 +676,6 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         after=input.after,
         max_records=input.max_records,
         state=base64.b64decode(input.state),
-        arm=input.arm,
     )
     if input.positions_only:
         request.floor_holder = floor_holder

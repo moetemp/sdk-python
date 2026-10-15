@@ -569,6 +569,15 @@ impl ClientRef {
                         notify_stream
                     )
                 }
+                "notify_streams" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        notify_streams
+                    )
+                }
                 "patch_schedule" => {
                     rpc_call!(
                         connection,
