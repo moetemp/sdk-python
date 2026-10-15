@@ -330,6 +330,10 @@ gate tests/contrib/streams/test_live_links.py \
 gate tests/contrib/streams/test_samples.py \
   test_a_tool_call_streams_to_a_stream_of_its_own \
   test_a_client_follows_an_agent_and_its_tool_calls
+gate tests/contrib/streams/test_live_agent_links_nexus.py \
+  test_live_a_caller_follows_an_agent_and_its_tools_across_namespaces \
+  test_live_a_caller_resumes_its_follow_in_a_new_run \
+  test_live_a_worker_follower_asks_for_the_agents_links
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \

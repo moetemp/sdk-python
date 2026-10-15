@@ -707,6 +707,10 @@ while (items := await reader.next_followed()) is not None:
   and the caller may follow it on its own. `append` takes no links. A
   `DONE` report over Nexus carries no close outcome.
 
+The sample `tests/contrib/streams/samples/nexus_agent_links.py` runs a caller
+in one namespace that follows an agent and its tool calls in another, goes on
+in a new run from its position, and replays.
+
 ## Limits and timeouts
 
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata
