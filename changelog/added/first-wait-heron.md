@@ -1,0 +1,1 @@
+Core: Experimental: `AttachCallerRequest` takes `wake_after_counter`. With it Core asks the notifier for the idle callback's first wake right after the attach, once the stream holds a record above that counter. A follower that reads only when woken sets it. A reader that reads first leaves it unset and waits through its reads' `wake_token`.
