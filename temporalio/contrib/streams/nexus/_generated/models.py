@@ -2318,7 +2318,7 @@ class StreamOperationToken:
     chain: str
     """The first run of the run chain the start attached to, so a cancel detaches from it
     even after the Workflow id moved on to a new chain. For an Activity owner, the
-    Activity run.
+    Activity run. For a Workflow Activity owner, the run that scheduled it.
     """
 
     def to_token(self) -> str:

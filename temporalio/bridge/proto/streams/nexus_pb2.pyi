@@ -187,7 +187,8 @@ class CodecWork(google.protobuf.message.Message):
     owner_kind: temporalio.bridge.proto.streams.streams_pb2.StreamOwnerKind.ValueType
     """The kind of the stream's owner. For a standalone Activity owner, `workflow_id` is empty and
     `activity_id` names the Activity, and the codec context has the namespace and the Activity id
-    only.
+    only. For a Workflow Activity owner, both are set, and the codec context has the namespace,
+    the Activity id and the Workflow id.
     """
     activity_id: builtins.str
     def __init__(
