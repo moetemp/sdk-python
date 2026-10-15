@@ -64,7 +64,11 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHandler,
     TemporalStreamsHttpClient,
 )
-from temporalio.contrib.streams.nexus._generated import ReadRangeInput
+from temporalio.contrib.streams.nexus._generated import (
+    FollowInput,
+    FollowRangeInput,
+    ReadRangeInput,
+)
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.contrib.streams.nexus._handler import _handler_error, _run_codec
 from temporalio.converter import (
@@ -1347,3 +1351,47 @@ async def test_the_codec_step_uses_the_workflow_activitys_context():
             is_local=False,
         )
     }
+
+
+async def test_a_follow_over_nexus_expands_a_link_and_replays_its_ranges(
+    service: Service,
+):
+    agent, child = await stream_of(service), await stream_of(service)
+    store = service.backing.client
+    await (
+        get_stream_handle(store, child)
+        .producer(producer_id="tool", attempt=1)
+        .append("a1", "a2")
+    )
+    parent = get_stream_handle(store, agent).producer(producer_id="agent", attempt=1)
+    await parent.append("d1")
+    await parent.link(child, name="sub")
+
+    answer = await service.caller.follow(
+        FollowInput(stream=agent, wait_ms=0, floor_holder="caller/run/1")
+    )
+    again = await service.caller.follow_range(
+        FollowRangeInput(
+            stream=agent,
+            ranges=answer.replay.ranges if answer.replay else [],
+            follow_digest=answer.replay.follow_digest if answer.replay else b"",
+            floor_holder="caller/run/1",
+        )
+    )
+
+    by_source = [
+        (f.source, f.link_state.kind if f.link_state else "record")
+        for f in answer.records
+    ]
+    assert by_source[:2] == [(0, "record"), (0, "record")]
+    child_number = by_source[2][0]
+    assert by_source[2:] == [
+        (child_number, "opened"),
+        (child_number, "record"),
+        (child_number, "record"),
+    ]
+    assert {s.number: s.stream.workflow_id for s in answer.sources}[child_number] == (
+        child.workflow_id
+    )
+    assert answer.replay is not None
+    assert [f.source for f in again.records] == [f.source for f in answer.records]

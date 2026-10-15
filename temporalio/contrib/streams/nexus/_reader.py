@@ -26,22 +26,39 @@ from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast
 
 from temporalio import workflow
+from temporalio.bridge.proto.streams import ReadRecord
+from temporalio.bridge.proto.streams.v1 import StreamLink as WireLink
 from temporalio.common import RawValue
 from temporalio.contrib.streams._errors import (
     StreamError,
     StreamRecordError,
     StreamUnsupportedError,
 )
-from temporalio.contrib.streams._record import Cursor, RecordKind, Supersession
+from temporalio.contrib.streams._follow import (
+    FollowedItem,
+    FollowPosition,
+    LinkState,
+    LinkStateKind,
+)
+from temporalio.contrib.streams._record import (
+    Cursor,
+    RecordKind,
+    StreamRecord,
+    Supersession,
+)
 from temporalio.contrib.streams._ref import StreamRef
-from temporalio.contrib.streams._wire import WireRecord
+from temporalio.contrib.streams._wire import WireRecord, from_wire_link, to_record
 from temporalio.contrib.streams.nexus._generated import (
+    FollowedWire,
+    FollowInput,
+    FollowOutput,
     ReadInput,
     ReadOutput,
     RecordWire,
     TemporalStreams,
 )
 from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
+from temporalio.converter import PayloadConverter
 from temporalio.exceptions import ActivityError, ApplicationError
 
 __all__ = [
@@ -275,6 +292,9 @@ class StreamReader(Generic[T]):
         drain_limit: timedelta = timedelta(seconds=60),
         idle_wait: timedelta = timedelta(seconds=2),
         replay_from_store: bool = True,
+        follow_links: bool = False,
+        max_depth: int = 4,
+        max_open: int = 16,
     ) -> None:
         """Read the stream ``handle``'s operation returns.
 
@@ -305,15 +325,32 @@ class StreamReader(Generic[T]):
                 which names this option. ``False`` reads through Nexus
                 operations and records each read's answer, records included,
                 so it needs no transport.
+            follow_links: Follow the stream's link records too, through the
+                stream service's ``follow``. Read the items with
+                :meth:`next_followed` in place of :meth:`next`. Each item
+                names its source stream, and link reports come as items. Links
+                to another namespace or endpoint come as ``SKIPPED`` with
+                reason ``endpoint``. A replay reads the follow's ranges again
+                with ``follow_range``.
+            max_depth: How deep a follower opens links.
+            max_open: How many linked streams a follower holds open at once.
 
         Raises:
-            ValueError: ``drain_limit`` is not positive, or ``idle_wait`` is
-                negative.
+            ValueError: ``drain_limit`` is not positive, ``idle_wait`` is
+                negative, or a follow bound is below one.
         """
         if drain_limit <= timedelta(0):
             raise ValueError("drain_limit must be positive")
         if idle_wait < timedelta(0):
             raise ValueError("idle_wait must not be negative")
+        if max_depth < 1 or max_open < 1:
+            raise ValueError("max_depth and max_open must be at least 1")
+        self._follow_links = follow_links
+        self._max_depth = max_depth
+        self._max_open = max_open
+        self._follow_answer: FollowOutput | None = None
+        self._follow_pending: list[FollowedWire] = []
+        self._sources: dict[int, tuple[StreamRef, int]] = {}
         self._idle_wait_ms = idle_wait // timedelta(milliseconds=1)
         self._handle = handle
         self._item_type = item_type
@@ -398,8 +435,33 @@ class StreamReader(Generic[T]):
                 nothing for ``drain_limit`` and the stream never ended. Or the
                 stream ended, but the operation didn't complete within
                 ``drain_limit``.
-            ValueError: The operation's token does not name a stream.
+            ValueError: The operation's token does not name a stream, or the
+                reader follows links, so :meth:`next_followed` reads it.
         """
+        if self._follow_links:
+            raise ValueError("a reader with follow_links=True reads with next_followed")
+        return cast("list[T] | None", await self._next())
+
+    async def next_followed(self) -> list[FollowedItem[T]] | None:
+        """The next batch of a reader with ``follow_links=True``, or ``None`` at the end.
+
+        As :meth:`next`, but each item names its source stream and carries
+        a record, which may be any kind, or a link report. The root's
+        records decode into ``item_type``. A linked stream's records decode
+        with the default rules, since its topic may hold another type. The
+        last item of each batch carries the position after the batch.
+
+        Raises:
+            ValueError: The reader does not follow links.
+            temporalio.exceptions.NexusOperationError: As :meth:`next`.
+            temporalio.contrib.streams.StreamRecordError: As :meth:`next`.
+            StreamIncompleteError: As :meth:`next`.
+        """
+        if not self._follow_links:
+            raise ValueError("a reader without follow_links=True reads with next")
+        return cast("list[FollowedItem[T]] | None", await self._next())
+
+    async def _next(self) -> list[Any] | None:
         if self._undecodable is not None:
             error, self._undecodable = self._undecodable, None
             raise error
@@ -485,7 +547,9 @@ class StreamReader(Generic[T]):
                 cursor=self.cursor,
             ) from None
 
-    async def _read(self) -> list[T]:
+    async def _read(self) -> list[Any]:
+        if self._follow_links:
+            return await self._read_followed()
         if not self._pending:
             await self._fetch()
         batch: list[T] = []
@@ -568,6 +632,94 @@ class StreamReader(Generic[T]):
             )
             self._answer = await client.execute_operation(TemporalStreams.read, input)
         self._pending = list(self._answer.records)
+
+    async def _read_followed(self) -> list[FollowedItem[Any]]:
+        if not self._follow_pending:
+            await self._fetch_followed()
+        answer = self._follow_answer
+        assert answer is not None and self._stream is not None
+        items, self._cursor, undecodable, self._follow_pending = followed_items(
+            workflow.payload_converter(),
+            self._sources,
+            self._stream,
+            answer,
+            self._follow_pending,
+            self._item_type,
+            self._cursor,
+        )
+        if undecodable is not None:
+            self._undecodable = undecodable
+            self._caught_up = False
+            return items
+        self._state = answer.state
+        self._caught_up = not answer.records
+        self._stream_done = answer.done
+        return items
+
+    async def _fetch_followed(self) -> None:
+        if self._stream is None:
+            token = self._handle.operation_token
+            if not token:
+                raise ValueError("the operation has no token, so it names no stream")
+            self._stream = stream_ref_from_token(token)
+        latest = self._handle.latest_progress
+        if latest is not None:
+            self._counter = max(self._counter, latest.counter)
+        input = FollowInput(
+            stream=self._stream,
+            after_token=(self._cursor or None) if self._state is None else None,
+            state=self._state,
+            max_records=_BATCH,
+            wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else self._idle_wait_ms,
+            max_depth=self._max_depth,
+            max_open=self._max_open,
+            wake_token=None
+            if self._operation_resolved
+            else self._handle.operation_token or None,
+        )
+        if self._replay_from_store:
+            self._follow_answer = await self._direct_follow(input)
+        else:
+            client = workflow.create_nexus_client(
+                service=TemporalStreams, endpoint=self._endpoint
+            )
+            self._follow_answer = await client.execute_operation(
+                TemporalStreams.follow, input
+            )
+        self._follow_pending = list(self._follow_answer.records)
+
+    async def _direct_follow(self, input: FollowInput) -> FollowOutput:
+        # Imported here, since that module imports the follower, which imports this one.
+        from temporalio.contrib.streams.nexus._direct import (
+            DIRECT_FOLLOW_ACTIVITY,
+            follow_answer_of,
+        )
+
+        wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
+        try:
+            raw = await workflow.execute_local_activity(
+                DIRECT_FOLLOW_ACTIVITY,
+                args=[self._endpoint, self._reader_id, input],
+                result_type=RawValue,
+                start_to_close_timeout=wait + _DIRECT_READ_SLACK,
+                summary=f"stream follow {input.stream.topic}",
+            )
+        except ValueError as error:
+            if DIRECT_FOLLOW_ACTIVITY not in str(error):
+                raise
+            raise StreamUnsupportedError(
+                f"a stream follow with replay_from_store=True follows directly from "
+                f"endpoint {self._endpoint!r}, and the Worker has no "
+                "StreamDirectReads; register it on the Worker's client with a "
+                "transport for the endpoint, or pass replay_from_store=False to the "
+                "StreamReader"
+            ) from error
+        except (ActivityError, ApplicationError) as error:
+            unsupported = _unsupported(error)
+            if unsupported is None:
+                raise
+            raise StreamUnsupportedError(unsupported) from error
+        return follow_answer_of(raw.payload)
 
     async def _direct_read(self, input: ReadInput) -> ReadOutput:
         # Imported here, since that module imports the follower, which imports this one.
@@ -664,3 +816,88 @@ def _unsupported(error: BaseException) -> str | None:
             return found.message
         found = found.cause if isinstance(found, ActivityError) else None
     return None
+
+
+def followed_items(
+    payload_converter: PayloadConverter,
+    sources: dict[int, tuple[StreamRef, int]],
+    root: StreamRef,
+    answer: FollowOutput,
+    pending: list[FollowedWire],
+    item_type: type | None,
+    cursor: str,
+) -> tuple[list[FollowedItem[Any]], str, StreamRecordError | None, list[FollowedWire]]:
+    """The items of ``pending``, which are the rest of ``answer``, in follow order.
+
+    Returns the items, the root cursor after them, the error of a record that
+    did not decode, and the items left after it. The root's records decode
+    into ``item_type``. The last item of a whole answer carries the position
+    after it.
+    """
+    for source in answer.sources:
+        sources[source.number] = (source.stream, source.depth)
+    items: list[FollowedItem[Any]] = []
+    pending = list(pending)
+    while pending:
+        followed = pending.pop(0)
+        ref, depth = sources.get(followed.source, (root, 0))
+        if followed.link_state is not None:
+            state = followed.link_state
+            kind = LinkStateKind[state.kind.upper()]
+            items.append(
+                FollowedItem(
+                    ref,
+                    depth,
+                    None,
+                    LinkState(
+                        kind=kind,
+                        link=from_wire_link(WireLink.FromString(state.link)),
+                        error=StreamError(state.error) if state.error else None,
+                        reason=state.reason or "",
+                    ),
+                    None,
+                )
+            )
+            continue
+        stored = followed.record
+        if stored is None:
+            continue
+        try:
+            record = _followed_record(
+                payload_converter, stored, item_type if followed.source == 0 else None
+            )
+        except Exception as error:
+            at = Cursor(stored.token)
+            return (
+                items,
+                cursor,
+                StreamRecordError(
+                    f"stream record at {at} could not be read: {error}", at
+                ),
+                pending,
+            )
+        if followed.source == 0:
+            cursor = stored.token
+        items.append(FollowedItem(ref, depth, record, None, None))
+    if items:
+        last = items[-1]
+        position = FollowPosition(cursor, base64.b64encode(answer.state).decode())
+        items[-1] = FollowedItem(
+            last.source, last.depth, last.record, last.link_state, position
+        )
+    return items, cursor, None, pending
+
+
+def _followed_record(
+    payload_converter: PayloadConverter, stored: Any, item_type: type | None
+) -> StreamRecord[Any]:
+    if stored.error:
+        raise ValueError(stored.error)
+    read = ReadRecord(cursor=stored.token, stale=bool(stored.stale))
+    if stored.superseded is not None:
+        read.superseded.producer_id = stored.superseded.producer_id
+        read.superseded.previous_attempt = stored.superseded.previous_attempt
+        read.superseded.attempt = stored.superseded.attempt
+    else:
+        read.stored.CopyFrom(WireRecord.FromString(stored.record))
+    return to_record(payload_converter, read, item_type)

@@ -42,7 +42,10 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams._wire import RUN_ID_KEY, WireRecord
+from temporalio.contrib.streams._follow import FollowedItem
 from temporalio.contrib.streams.nexus._generated import (
+    FollowInput,
+    FollowOutput,
     ReadInput,
     ReadOutput,
     RecordWire,
@@ -52,7 +55,11 @@ from temporalio.contrib.streams.nexus._operation import (
     FIRST_WAKE_HEADER,
     stream_ref_from_token,
 )
-from temporalio.contrib.streams.nexus._reader import ReadStaleRecord, ReadSupersession
+from temporalio.contrib.streams.nexus._reader import (
+    ReadStaleRecord,
+    ReadSupersession,
+    followed_items,
+)
 from temporalio.nexus.system.notification_service import (
     NotificationService,
     OnCompleteRequest,
@@ -111,6 +118,13 @@ class StreamReadTransport(Protocol):
         """Answer with the records after ``request``'s cursor."""
         ...
 
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links.
+
+        Only a follower with ``follow_links`` calls it.
+        """
+        ...
+
 
 class StoreTransport:
     """Reads through the stream service in Core, on the store of a client.
@@ -146,6 +160,14 @@ class StoreTransport:
         transfer = _transfer(request)
         answer = await serve_in_core(self._client, "read", transfer, self._limits, None)
         return _from_transfer(answer, ReadOutput)
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links."""
+        transfer = _transfer(request)
+        answer = await serve_in_core(
+            self._client, "follow", transfer, self._limits, None
+        )
+        return _from_transfer(answer, FollowOutput)
 
 
 @dataclass(frozen=True)
@@ -184,6 +206,12 @@ class FollowBatch(Generic[T]):
     cursor: Cursor
     """Past every record of the batch."""
 
+    items: Sequence[FollowedItem[Any]] = ()
+    """For a follower with ``follow_links``, every item of the batch in follow
+    order: records of the stream and of the streams its links open, each with
+    its source, and link reports. :attr:`records` then holds the data records
+    of every source, and :attr:`cursor` is the root's."""
+
 
 @dataclass(frozen=True)
 class FollowOutcome:
@@ -217,6 +245,11 @@ class StreamFollower(Protocol[T]):
     The type argument of ``on_records``'s :class:`FollowBatch` annotation is
     what each record body decodes into. Without one, bodies decode with no
     type hint.
+
+    A follower that sets ``follow_links = True`` asks for the streams its
+    stream's link records open too. The service then calls the stream
+    service's ``follow``, and each batch holds :attr:`FollowBatch.items`. Only
+    the root's records decode into the type argument.
     """
 
     async def on_records(self, batch: FollowBatch[T]) -> None:
@@ -232,6 +265,7 @@ class StreamFollower(Protocol[T]):
 class _Followed:
     follower: StreamFollower[Any]
     item_type: type | None
+    follow_links: bool = False
 
 
 @service_handler(service=NotificationService)
@@ -315,7 +349,11 @@ class StreamFollowerService:
                 )
             transport = StoreTransport(client)
         self._followers = {
-            key: _Followed(follower, _item_type(follower))
+            key: _Followed(
+                follower,
+                _item_type(follower),
+                bool(getattr(follower, "follow_links", False)),
+            )
             for key, follower in followers.items()
         }
         self._client = client
@@ -338,6 +376,8 @@ class StreamFollowerService:
             stream = stream_ref_from_token(input.operation_token)
         except ValueError as error:
             raise _refused(f"the progress names no stream: {error}") from None
+        if followed.follow_links:
+            return await self._progress_followed(ctx, followed, stream, input)
         position = _state_in(input.receiver_state or b"", stream)
         end = _budget_end(ctx)
         behind = False
@@ -364,6 +404,8 @@ class StreamFollowerService:
     ) -> OnCompleteResponse:
         """Read the rest of the stream, then hand over how the operation ended."""
         followed = self._followed(input.source_context)
+        if followed.follow_links:
+            return await self._complete_followed(ctx, followed, input)
         position = (
             _state_in(input.receiver_state, None) if input.receiver_state else None
         )
@@ -380,6 +422,134 @@ class StreamFollowerService:
             outcome = dataclasses.replace(outcome, result=input.result.value)
         await followed.follower.on_close(outcome)
         return OnCompleteResponse()
+
+    async def _progress_followed(
+        self,
+        ctx: StartOperationContext,
+        followed: _Followed,
+        stream: StreamRef,
+        input: OnProgressRequest,
+    ) -> OnProgressResponse:
+        position = _follow_state_in(input.receiver_state or b"", stream)
+        end = _budget_end(ctx)
+        behind = False
+        while True:
+            left_ms = int((end - asyncio.get_running_loop().time()) * 1000)
+            answer = await self._follow(
+                position,
+                wait_ms=min(_IDLE_WAIT_MS, max(left_ms, 0)),
+                wake_token=input.operation_token,
+            )
+            position = await self._hand_over_followed(followed, position, answer)
+            if answer.done or not answer.records:
+                break
+            if asyncio.get_running_loop().time() >= end:
+                behind = True
+                break
+        return OnProgressResponse(
+            receiver_state=_follow_state_out(position, self._state_cap), behind=behind
+        )
+
+    async def _complete_followed(
+        self,
+        ctx: StartOperationContext,
+        followed: _Followed,
+        input: OnCompleteRequest,
+    ) -> OnCompleteResponse:
+        position = (
+            _follow_state_in(input.receiver_state, None)
+            if input.receiver_state
+            else None
+        )
+        if position is None:
+            stream = await self._stream_of(input.source_context)
+            if stream is not None:
+                position = FollowInput(stream=stream)
+        if position is not None:
+            end = _request_end(ctx)
+            wait_ms = 0
+            while True:
+                answer = await self._follow(position, wait_ms=wait_ms)
+                position = await self._hand_over_followed(followed, position, answer)
+                if answer.done:
+                    break
+                wait_ms = 0 if answer.records else _DRAIN_WAIT_MS
+                if asyncio.get_running_loop().time() >= end:
+                    raise nexusrpc.HandlerError(
+                        "the stream and its links did not end within the request "
+                        "timeout",
+                        type=nexusrpc.HandlerErrorType.INTERNAL,
+                        retryable_override=True,
+                    )
+        outcome = FollowOutcome(stream=position.stream if position else None)
+        if isinstance(input.result, OnCompleteRequestResultFailure):
+            outcome = dataclasses.replace(outcome, error=input.result.value)
+        else:
+            outcome = dataclasses.replace(outcome, result=input.result.value)
+        await followed.follower.on_close(outcome)
+        return OnCompleteResponse()
+
+    async def _follow(
+        self, position: FollowInput, *, wait_ms: int, wake_token: str | None = None
+    ) -> FollowOutput:
+        return await self._transport.follow(
+            dataclasses.replace(
+                position,
+                max_records=self._max_records,
+                wait_ms=wait_ms,
+                wake_token=wake_token,
+            )
+        )
+
+    async def _hand_over_followed(
+        self, followed: _Followed, position: FollowInput, answer: FollowOutput
+    ) -> FollowInput:
+        """Hand one follow answer's items over, and return the position after it."""
+        sources: dict[int, tuple[StreamRef, int]] = {}
+        cursor = position.after_token or ""
+        items, cursor, undecodable, pending = followed_items(
+            self._converter().payload_converter,
+            sources,
+            position.stream,
+            answer,
+            list(answer.records),
+            followed.item_type,
+            cursor,
+        )
+        errors: list[StreamRecordError] = []
+        while undecodable is not None:
+            # A record that does not decode is reported, and the rest goes on.
+            errors.append(undecodable)
+            more, cursor, undecodable, pending = followed_items(
+                self._converter().payload_converter,
+                sources,
+                position.stream,
+                dataclasses.replace(answer, sources=[]),
+                pending,
+                followed.item_type,
+                cursor,
+            )
+            items.extend(more)
+        records = [
+            item.record
+            for item in items
+            if item.record is not None
+            and item.record.kind is RecordKind.DATA
+            and not item.record.stale
+        ]
+        if items or errors:
+            await followed.follower.on_records(
+                FollowBatch(
+                    stream=position.stream,
+                    records=records,
+                    supersessions=[],
+                    stale_records=[],
+                    errors=errors,
+                    cursor=Cursor(cursor),
+                    items=items,
+                )
+            )
+        return FollowInput(stream=position.stream, state=answer.state)
 
     async def _drain(
         self, ctx: StartOperationContext, followed: _Followed, position: ReadInput
@@ -666,6 +836,39 @@ def _state_out(position: ReadInput, cap: int) -> bytes:
     # Core's read state lets the marks hold across reads, and the cursor alone
     # still loses no record.
     return _CONTRACT.to_payload(dataclasses.replace(position, state=None)).data
+
+
+def _follow_state_in(state: bytes, stream: StreamRef | None) -> FollowInput:
+    """The follow position a receiver state holds, on ``stream`` when given."""
+    if not state:
+        assert stream is not None
+        return FollowInput(stream=stream)
+    try:
+        position = _CONTRACT.from_payload(
+            Payload(metadata={"encoding": b"json/plain"}, data=state), FollowInput
+        )
+    except Exception as error:
+        raise _refused(
+            f"the receiver state is not a follow position: {error}"
+        ) from None
+    if stream is not None:
+        position = dataclasses.replace(position, stream=stream)
+    return position
+
+
+def _follow_state_out(position: FollowInput, cap: int) -> bytes:
+    state = _CONTRACT.to_payload(position).data
+    if len(state) > cap:
+        # The follow state holds every open link's position, so dropping it
+        # would lose their records.
+        raise nexusrpc.HandlerError(
+            f"the follow position takes {len(state)} bytes, over the receiver state "
+            f"cap of {cap}; raise callback.nexusHandler.receiverStateMaxSize and "
+            "max_receiver_state_bytes, or lower the follower's open links",
+            type=nexusrpc.HandlerErrorType.INTERNAL,
+            retryable_override=False,
+        )
+    return state
 
 
 def _moved_token(answer: ReadOutput) -> str | None:
