@@ -253,12 +253,13 @@ _TOKEN_VECTORS = json.loads(
     (Path(__file__).parent / "operation_token_vectors.json").read_text()
 )
 
-# Core's canonical crates/streams/nexus/temporal_streams.nexusrpc.yaml at
-# moetemp/sdk-rust moe/bridge/v2/cn4-nexus-stream-calls 6f588812. This branch's
-# Core pin has no copy to compare with, so the digest pins it, and N0b
-# generates from Core's own copy.
+# Core's crates/streams/nexus/temporal_streams.nexusrpc.yaml at moetemp/sdk-rust
+# moe/bridge/v2/cn4-nexus-stream-calls 6f588812, with the read state bound at
+# 16 KiB as Core's bounded read state set it. This branch's Core pin carries a
+# later copy with the read arm, which a later layer takes, so the digest pins
+# the copy these bindings come from, and N0b generates from Core's own copy.
 _CORE_CONTRACT_SHA256 = (
-    "413686183d4769fd9a4c4d2b54900f8786a8d7e1be3419da1566d59d428285e0"
+    "f3dc5dca434059700e776401d378d0fbfd3e72e76577c3bb7b601c2b020093f2"
 )
 
 
