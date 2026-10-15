@@ -764,3 +764,10 @@ it with the settings above and a scratch Redis, and runs those tests against
 it, along with Core's live notifier test. It fails unless each test on its
 gated list passes. A release of streams over Nexus needs a green run of it,
 until CI has a lane with such a server.
+
+The push cases in `tests/contrib/streams/test_nexus_push.py` run a
+StreamDriver over a store with a notification log, on memory, standalone
+Redis and a Redis Cluster that the lane starts unless
+`STREAMS_REDIS_CLUSTER_URL` names one. A sleeping caller wakes through the
+driver, and a busy stream delivers at most two progress notifications per
+debounce window.

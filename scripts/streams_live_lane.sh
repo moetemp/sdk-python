@@ -351,6 +351,9 @@ gate tests/contrib/streams/test_nexus_read_wakes.py \
   test_live_a_reader_that_never_waits_gets_no_progress \
   test_live_an_idle_reader_is_woken_once_per_idle_stretch \
   test_live_a_record_between_the_empty_read_and_the_wait_is_not_lost
+gate tests/contrib/streams/test_nexus_push.py \
+  test_live_a_sleeping_nexus_reader_wakes_through_the_driver \
+  test_live_a_busy_stream_notifies_at_most_once_per_debounce_window
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_nexus_scenario_demos.py \
