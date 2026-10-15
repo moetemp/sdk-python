@@ -16,18 +16,19 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n"temporal/api/enums/v1/stream.proto\x12\x15temporal.api.enums.v1*T\n\x0fStreamOwnerKind\x12!\n\x1dSTREAM_OWNER_KIND_UNSPECIFIED\x10\x00\x12\x1e\n\x1aSTREAM_OWNER_KIND_WORKFLOW\x10\x01\x42\x83\x01\n\x18io.temporal.api.enums.v1B\x0bStreamProtoP\x01Z!go.temporal.io/api/enums/v1;enums\xaa\x02\x17Temporalio.Api.Enums.V1\xea\x02\x1aTemporalio::Api::Enums::V1b\x06proto3'
+    b'\n"temporal/api/enums/v1/stream.proto\x12\x15temporal.api.enums.v1*t\n\x0fStreamOwnerKind\x12!\n\x1dSTREAM_OWNER_KIND_UNSPECIFIED\x10\x00\x12\x1e\n\x1aSTREAM_OWNER_KIND_WORKFLOW\x10\x01\x12\x1e\n\x1aSTREAM_OWNER_KIND_ACTIVITY\x10\x02\x42\x83\x01\n\x18io.temporal.api.enums.v1B\x0bStreamProtoP\x01Z!go.temporal.io/api/enums/v1;enums\xaa\x02\x17Temporalio.Api.Enums.V1\xea\x02\x1aTemporalio::Api::Enums::V1b\x06proto3'
 )
 
 _STREAMOWNERKIND = DESCRIPTOR.enum_types_by_name["StreamOwnerKind"]
 StreamOwnerKind = enum_type_wrapper.EnumTypeWrapper(_STREAMOWNERKIND)
 STREAM_OWNER_KIND_UNSPECIFIED = 0
 STREAM_OWNER_KIND_WORKFLOW = 1
+STREAM_OWNER_KIND_ACTIVITY = 2
 
 
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = b"\n\030io.temporal.api.enums.v1B\013StreamProtoP\001Z!go.temporal.io/api/enums/v1;enums\252\002\027Temporalio.Api.Enums.V1\352\002\032Temporalio::Api::Enums::V1"
     _STREAMOWNERKIND._serialized_start = 61
-    _STREAMOWNERKIND._serialized_end = 145
+    _STREAMOWNERKIND._serialized_end = 177
 # @@protoc_insertion_point(module_scope)
