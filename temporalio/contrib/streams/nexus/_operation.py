@@ -20,13 +20,12 @@ import temporalio.nexus
 from temporalio.bridge.proto.streams import (
     AttachCallerRequest,
     DetachCallerRequest,
-    StreamAddress,
     StreamOwnerKind,
 )
 from temporalio.bridge.streams_generated import StreamNexusService
 from temporalio.client import Client
 from temporalio.contrib.streams._plugin import call, store_for_client
-from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._ref import StreamRef, stream_address
 from temporalio.contrib.streams.nexus._generated.models import StreamOperationToken
 from temporalio.contrib.streams.nexus._handler import _handler_error
 
@@ -130,19 +129,12 @@ class StreamOperationHandler(
         service = await _caller_calls(client)
         ref = await self._open_stream(ctx, input)
         first_wake = ctx.headers.get(FIRST_WAKE_HEADER)
+        stream = stream_address(client.namespace, ref)
+        if ref.kind not in ("workflow", "activity"):
+            # Core refuses an owner kind this release doesn't open.
+            stream.owner_kind = StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
         request = AttachCallerRequest(
-            stream=StreamAddress(
-                namespace=client.namespace,
-                # Core refuses an owner kind this release doesn't open.
-                owner_kind=(
-                    StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW
-                    if ref.kind == "workflow"
-                    else StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
-                ),
-                workflow_id=ref.workflow_id,
-                run_id=ref.chain_run_id or "",
-                topic=ref.topic,
-            ),
+            stream=stream,
             request_id=ctx.request_id,
             callback_url=ctx.callback_url,
             callback_headers=dict(ctx.callback_headers),

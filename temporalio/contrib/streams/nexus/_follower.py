@@ -40,7 +40,7 @@ from temporalio.contrib.streams._record import (
     StreamRecord,
     Supersession,
 )
-from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams._wire import RUN_ID_KEY, WireRecord
 from temporalio.contrib.streams.nexus._generated import (
     ReadInput,
@@ -53,7 +53,6 @@ from temporalio.contrib.streams.nexus._operation import (
     stream_ref_from_token,
 )
 from temporalio.contrib.streams.nexus._reader import ReadStaleRecord, ReadSupersession
-from temporalio.converter import WorkflowSerializationContext
 from temporalio.nexus.system.notification_service import (
     NotificationService,
     OnCompleteRequest,
@@ -424,9 +423,7 @@ class StreamFollowerService:
     ) -> None:
         """Hand one answer's records over."""
         converter = self._converter().with_context(
-            WorkflowSerializationContext(
-                namespace=self._namespace(), workflow_id=stream.workflow_id
-            )
+            owner_context(self._namespace(), stream.workflow_id, stream.activity_id)
         )
         records: list[StreamRecord[Any]] = []
         supersessions: list[ReadSupersession] = []

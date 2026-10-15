@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -199,6 +200,65 @@ async def test_a_follower_gets_each_page_up_to_the_position() -> None:
     assert state.stream == REF
     # The reads carry the state each answer gave, up to the empty one.
     assert [r.state for r in transport.requests] == [None] + [b"core-state"] * 3
+
+
+class _ContextRecordingCodec(
+    temporalio.converter.PayloadCodec, temporalio.converter.WithSerializationContext
+):
+    """Passes payloads through and keeps each context it was given."""
+
+    def __init__(self, seen: list[temporalio.converter.SerializationContext]) -> None:
+        self.seen = seen
+
+    def with_context(
+        self, context: temporalio.converter.SerializationContext
+    ) -> _ContextRecordingCodec:
+        self.seen.append(context)
+        return self
+
+    async def encode(self, payloads: Any) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Any) -> list[Payload]:
+        return list(payloads)
+
+
+async def test_a_follower_decodes_an_activity_stream_with_the_activitys_context() -> (
+    None
+):
+    seen: list[temporalio.converter.SerializationContext] = []
+    converter = dataclasses.replace(
+        CONVERTER, payload_codec=_ContextRecordingCodec(seen)
+    )
+    collector = _Collector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=converter, namespace="default"),
+        transport=_FakeTransport(_stored(2)),
+    )
+    ref = StreamRef.for_activity("tool-1", run_id="run-1", topic="tokens")
+
+    await service.on_progress(
+        _context(),
+        OnProgressRequest(
+            progress=NexusOperationProgress(position="c2", counter=1),
+            source_context=_source_context(),
+            operation_token=_token(ref),
+        ),
+    )
+
+    assert collector.values == ["v1", "v2"]
+    assert set(seen) == {
+        temporalio.converter.ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id=None,
+            workflow_type=None,
+            is_local=False,
+        )
+    }
 
 
 async def test_a_follower_answers_behind_when_its_budget_runs_out() -> None:
