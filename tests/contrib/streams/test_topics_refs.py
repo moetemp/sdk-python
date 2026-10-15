@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.proto.streams import StreamOwnerKind
 from temporalio.contrib.streams import (
     DEFAULT_TOPIC,
     StreamRef,
@@ -14,10 +15,11 @@ from temporalio.contrib.streams import (
     StreamUnsupportedError,
     topic,
 )
+from temporalio.contrib.streams._ref import owner_context, stream_address
 from temporalio.contrib.streams._topic import (
     resolve_topic,
 )
-from temporalio.converter import DataConverter
+from temporalio.converter import ActivitySerializationContext, DataConverter
 
 OUT = topic("out", dict)
 
@@ -56,13 +58,60 @@ def test_a_ref_names_a_standalone_activity_stream():
     assert ref.with_topic("other").activity_id == "act"
 
 
+def test_a_ref_names_a_workflow_activity_stream():
+    ref = StreamRef.for_workflow_activity(
+        "wf", run_id="run", activity_id="act", topic=OUT
+    )
+    assert ref == StreamRef(
+        "workflow_activity", "wf", topic="out", chain_run_id="run", activity_id="act"
+    )
+    assert (
+        StreamRef.for_workflow_activity("wf", run_id="run", activity_id="act").topic
+        == DEFAULT_TOPIC
+    )
+    assert ref.with_topic("other").activity_id == "act"
+    ref._require_supported()
+
+
+def test_a_workflow_activity_ref_maps_to_its_address_and_context():
+    ref = StreamRef.for_workflow_activity("wf", run_id="run", activity_id="act")
+    address = stream_address("ns", ref, topic="t")
+    assert address.owner_kind == StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY
+    assert (address.namespace, address.workflow_id, address.run_id) == (
+        "ns",
+        "wf",
+        "run",
+    )
+    assert (address.activity_id, address.topic) == ("act", "t")
+    context = owner_context("ns", ref.workflow_id, ref.activity_id)
+    assert context == ActivitySerializationContext(
+        namespace="ns",
+        activity_id="act",
+        workflow_id="wf",
+        workflow_type=None,
+        activity_type=None,
+        activity_task_queue=None,
+        is_local=False,
+    )
+    # A standalone Activity has no Workflow in its context.
+    standalone = StreamRef.for_activity("act", run_id="run")
+    assert isinstance(
+        context := owner_context("ns", standalone.workflow_id, standalone.activity_id),
+        ActivitySerializationContext,
+    )
+    assert context.workflow_id is None
+
+
 @pytest.mark.parametrize(
     "ref",
     [
         StreamRef.for_workflow("wf", topic=OUT, chain_run_id="run"),
         StreamRef.for_activity("act", run_id="run", topic=OUT),
+        StreamRef.for_workflow_activity(
+            "wf", run_id="run", activity_id="act", topic=OUT
+        ),
     ],
-    ids=["workflow", "activity"],
+    ids=["workflow", "activity", "workflow_activity"],
 )
 def test_a_ref_round_trips_through_the_default_converter(ref: StreamRef):
     converter = DataConverter.default.payload_converter
@@ -112,6 +161,14 @@ def test_a_ref_refuses_what_it_cannot_name():
         StreamRef("activity", "wf", activity_id="act")
     with pytest.raises(ValueError, match="needs an activity_id"):
         StreamRef.for_activity("")
+    with pytest.raises(ValueError, match="needs its workflow_id"):
+        StreamRef("workflow_activity", "", chain_run_id="run", activity_id="act")
+    with pytest.raises(ValueError, match="needs its activity_id"):
+        StreamRef("workflow_activity", "wf", chain_run_id="run")
+    with pytest.raises(ValueError, match="needs its chain_run_id"):
+        StreamRef("workflow_activity", "wf", activity_id="act")
+    with pytest.raises(ValueError, match="needs its chain_run_id"):
+        StreamRef.for_workflow_activity("wf", run_id="", activity_id="act")
 
 
 @pytest.mark.parametrize("kind", ["standalone", "nexus"])
@@ -126,7 +183,7 @@ def test_a_ref_from_a_later_release_decodes_and_fails_where_it_opens(kind: str):
     )
     ref = converter.from_payloads([payload], [StreamRef])[0]
     assert ref.kind == kind
-    with pytest.raises(StreamUnsupportedError, match="a Workflow or a standalone"):
+    with pytest.raises(StreamUnsupportedError, match="a Workflow or an Activity"):
         ref._require_supported()
 
 
