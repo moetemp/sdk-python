@@ -34,7 +34,7 @@ process.
 
 An Activity writes to the stream of the Workflow that scheduled it, as
 itself: its Activity id with the scheduling run id. Its producer attempt is
-`started_ms << 16 | min(attempt, 65535)`, from the time the server started
+`started_ms << 11 | min(attempt, 2047)`, from the time the server started
 the attempt and its Temporal attempt, so a retry and an attempt after a
 reset write a higher one. The run id keeps two runs of a chain apart, since
 Activity ids restart in each run. When a retry starts writing, readers
