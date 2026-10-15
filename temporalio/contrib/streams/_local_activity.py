@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +44,14 @@ from temporalio.contrib.streams._errors import StreamUnsupportedError
 
 LOCAL_ACTIVITY_HEADER = "__temporal_streams_local_activity"
 """The header that carries a Local Activity call's number."""
+
+STREAM_OWNER_HEADER = "__temporal_stream_owner"
+"""The header that marks an Activity as the owner of its own stream.
+
+Core closes the streams of a marked Activity when the scheduling Workflow
+sees the Activity end. Only the key counts, since a header codec may encode
+the value.
+"""
 
 LOCAL_ATTEMPTS = 10_000
 """How many Local Activity attempts a producer attempt has room for."""
@@ -140,6 +148,48 @@ def current_local_call() -> LocalCall | None:
     return _local_call.get()
 
 
+_owns_stream: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "temporal_streams_owns_stream", default=False
+)
+
+
+def owns_stream() -> bool:
+    """Whether the Workflow scheduled the running Activity to own its stream."""
+    return _owns_stream.get()
+
+
+@dataclass
+class _OwnerRequest:
+    activity_id: str | None = None
+
+
+_owner_request: contextvars.ContextVar[_OwnerRequest | None] = contextvars.ContextVar(
+    "temporal_streams_owner_request", default=None
+)
+
+
+def start_owning_activity(
+    start: Callable[[], workflow.ActivityHandle[Any]],
+) -> tuple[workflow.ActivityHandle[Any], str]:
+    """Run ``start`` with the stream owner header on the Activity it schedules.
+
+    Returns the handle and the Activity id the command carries.
+    """
+    request = _OwnerRequest()
+    token = _owner_request.set(request)
+    try:
+        handle = start()
+    finally:
+        _owner_request.reset(token)
+    if request.activity_id is None:
+        raise StreamUnsupportedError(
+            "the stream owner header was not set, since the Workflow runs without "
+            "the stream store's Worker interceptor; build the Worker from a client "
+            "that carries the store"
+        )
+    return handle, request.activity_id
+
+
 class StreamsInterceptor(temporalio.worker.Interceptor):
     """Numbers each Local Activity call and reads the number in the Activity.
 
@@ -164,14 +214,22 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
     async def execute_activity(
         self, input: temporalio.worker.ExecuteActivityInput
     ) -> Any:
-        stamp = input.headers.get(LOCAL_ACTIVITY_HEADER)
-        if stamp is None or not temporalio.activity.info().is_local:
+        if temporalio.activity.info().is_local:
+            stamp = input.headers.get(LOCAL_ACTIVITY_HEADER)
+            if stamp is None:
+                return await self.next.execute_activity(input)
+            token = _local_call.set(LocalCall(number=json.loads(stamp.data)["call"]))
+            try:
+                return await self.next.execute_activity(input)
+            finally:
+                _local_call.reset(token)
+        if STREAM_OWNER_HEADER not in input.headers:
             return await self.next.execute_activity(input)
-        token = _local_call.set(LocalCall(number=json.loads(stamp.data)["call"]))
+        owner_token = _owns_stream.set(True)
         try:
             return await self.next.execute_activity(input)
         finally:
-            _local_call.reset(token)
+            _owns_stream.reset(owner_token)
 
 
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
@@ -191,6 +249,33 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         self._calls += 1
         input.headers = _stamped(input.headers, self._calls)
         return super().start_local_activity(input)
+
+    def start_activity(
+        self, input: temporalio.worker.StartActivityInput
+    ) -> workflow.ActivityHandle[Any]:
+        request = _owner_request.get()
+        if request is None:
+            return super().start_activity(input)
+        # Only the helper's own call takes the header, not one an inner
+        # interceptor starts.
+        _owner_request.set(None)
+        input.headers = {**input.headers, STREAM_OWNER_HEADER: _OWNER_MARK}
+        handle = super().start_activity(input)
+        activity_id = input.activity_id
+        if activity_id is None:
+            # The default id is the call's sequence, which only the SDK's handle holds.
+            seq = getattr(handle, "_seq", None)
+            if seq is None:
+                raise StreamUnsupportedError(
+                    "an interceptor replaced the Activity handle, so the default "
+                    "Activity id is unknown; pass activity_id"
+                )
+            activity_id = str(seq)
+        request.activity_id = activity_id
+        return handle
+
+
+_OWNER_MARK = Payload(metadata={"encoding": _ENCODING}, data=b"true")
 
 
 def _stamped(headers: Mapping[str, Payload], call: int) -> Mapping[str, Payload]:

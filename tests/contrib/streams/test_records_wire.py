@@ -11,7 +11,15 @@ from temporalio.api.common.v1 import Payload
 from temporalio.bridge.proto.streams import ReadRecord, Supersession
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.common import RawValue
-from temporalio.contrib.streams import Cursor, RecordKind, StreamRecordError
+from temporalio.contrib.streams import (
+    Cursor,
+    LinkEvent,
+    RecordKind,
+    StreamLink,
+    StreamRecordError,
+    StreamRef,
+    StreamUnsupportedError,
+)
 from temporalio.contrib.streams import Supersession as ReportedSupersession
 from temporalio.contrib.streams._body import (
     batch_digest,
@@ -19,6 +27,7 @@ from temporalio.contrib.streams._body import (
     decode_body,
     encode_bodies,
 )
+from temporalio.contrib.streams._ref import from_reference, to_reference
 from temporalio.contrib.streams._wire import RUN_ID_KEY, WireRecord, from_read, to_wire
 from temporalio.converter import DataConverter, PayloadCodec
 
@@ -193,3 +202,100 @@ async def test_the_codec_runs_on_the_body_and_never_on_the_hashes():
         str,
     )
     assert record.value == "a"
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        StreamLink(
+            LinkEvent.OPEN,
+            StreamRef.for_workflow_activity(
+                "agent", run_id="run", activity_id="tool-1", topic="tokens"
+            ),
+            "tool-1",
+            after=Cursor("c7"),
+        ),
+        StreamLink(
+            LinkEvent.OPEN,
+            StreamRef.for_workflow("child", chain_run_id="r"),
+            "sub-3",
+            namespace="other",
+            endpoint="streams",
+        ),
+        StreamLink(LinkEvent.OPEN, StreamRef.for_activity("act"), "saa"),
+        StreamLink(LinkEvent.JOIN, None, "sub-3", until=Cursor("c9")),
+        StreamLink(LinkEvent.JOIN, None, "tool-1"),
+    ],
+    ids=["wfa-after", "workflow-remote", "activity", "join-until", "join-end"],
+)
+async def test_a_link_reads_back_as_it_was_written(link: StreamLink):
+    wire = to_wire(
+        CONVERTER.payload_converter,
+        topic="events",
+        kind=RecordKind.LINK,
+        link=link,
+        producer_id="p",
+        attempt=1,
+        sequence=4,
+    )
+    assert wire.kind == StreamRecordKind.STREAM_RECORD_KIND_LINK
+    assert not wire.HasField("body")
+    record = await from_read(CONVERTER, stored(wire, "c4"), None)
+    assert record.kind is RecordKind.LINK
+    assert record.link == link
+    assert record.value is None
+
+
+async def test_a_link_carries_an_optional_value_through_the_codec():
+    link = StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("child"), "sub")
+    wire = to_wire(
+        CONVERTER.payload_converter,
+        topic="events",
+        kind=RecordKind.LINK,
+        link=link,
+        value={"label": "search"},
+    )
+    record = await from_read(CONVERTER, stored(wire), dict)
+    assert record.value == {"label": "search"}
+    assert record.link == link
+
+
+@pytest.mark.parametrize(
+    "link, message",
+    [
+        (StreamLink(LinkEvent.OPEN, None, "x"), "needs a ref"),
+        (StreamLink(LinkEvent.JOIN, StreamRef.for_workflow("wf"), "x"), "needs a ref"),
+        (StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("wf"), ""), "1 to 256"),
+        (
+            StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x" * 257),
+            "1 to 256",
+        ),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", until=Cursor("c")
+            ),
+            "no until",
+        ),
+        (StreamLink(LinkEvent.JOIN, None, "x", after=Cursor("c")), "no after"),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", endpoint="e" * 1025
+            ),
+            "endpoint takes at most 1024",
+        ),
+    ],
+)
+def test_a_link_that_names_nothing_is_refused(link: StreamLink, message: str):
+    with pytest.raises(ValueError, match=message):
+        to_wire(CONVERTER.payload_converter, topic="t", kind=RecordKind.LINK, link=link)
+    with pytest.raises(ValueError, match="needs a link"):
+        to_wire(CONVERTER.payload_converter, topic="t", kind=RecordKind.LINK)
+
+
+def test_a_ref_of_a_later_owner_kind_decodes_from_a_link():
+    reference = to_reference(StreamRef.for_workflow("wf"))
+    reference.owner_kind = 9  # type: ignore[assignment]
+    ref = from_reference(reference)
+    assert ref.kind == "kind_9"
+    with pytest.raises(StreamUnsupportedError):
+        ref._require_supported()
