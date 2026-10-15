@@ -668,6 +668,45 @@ class ToolsHandler:
 runs a tool as a standalone Activity in another namespace and a caller
 Workflow that reads its stream, directly or recorded.
 
+## Follow links over Nexus
+
+A stream can hold link records that open other streams, such as one per tool
+call of an agent (see [Link records and followers](../README.md)). A caller
+follows them all through the stream service's `follow` operation, which
+Core serves on the owner's Worker.
+
+```python
+reader = StreamReader(handle, item_type=Event, endpoint="agents", follow_links=True)
+while (items := await reader.next_followed()) is not None:
+    for item in items:
+        if item.link_state is not None:
+            ...                     # OPENED, DONE, UNAVAILABLE or SKIPPED
+        elif item.record is not None:
+            ...                     # a record of item.source
+```
+
+- **Reader.** `StreamReader(..., follow_links=True)` reads with
+  `next_followed()`. Each item names its source stream and its depth. The
+  root's records decode into `item_type`, and a linked stream's records with
+  the default rules. The last item of each batch carries the position after
+  it. With `replay_from_store=True` each step runs in a Local Activity, and a
+  replay reads the step's ranges again with `follow_range` through the same
+  transport.
+- **Follower service.** A `StreamFollower` that sets `follow_links = True`
+  gets `FollowBatch.items` in follow order, and `FollowBatch.records` holds
+  the data records of every source. The receiver state holds the follow
+  position, which holds every open link. A position larger than
+  `max_receiver_state_bytes` fails the call, so raise the server's
+  `callback.nexusHandler.receiverStateMaxSize` for a follower with many open
+  links.
+- **Authorization.** `authorize` sees one `follow` access for the root. Core
+  opens the linked streams in the same namespace with no further check, so
+  allowing a follow allows every stream its links reach.
+- **Limits.** A link to another namespace or to a stream behind another
+  endpoint is not expanded. It comes as `SKIPPED` with reason `endpoint`,
+  and the caller may follow it on its own. `append` takes no links. A
+  `DONE` report over Nexus carries no close outcome.
+
 ## Limits and timeouts
 
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata
