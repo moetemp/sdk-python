@@ -250,6 +250,10 @@ so a run that goes longer than that should Continue-as-New.
 replays with no store. See
 [Positions or recorded](docs/notifications.md#positions-or-recorded) to choose.
 
+With `notify_on_append(notification_log=True)`, producers make no call to
+Temporal, and a `StreamDriver` you run forwards the notifications from the
+store. See [Run a StreamDriver](docs/notifications.md#run-a-streamdriver).
+
 A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See
 [Readers that sleep](docs/notifications.md).

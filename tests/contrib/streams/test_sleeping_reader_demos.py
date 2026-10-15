@@ -25,6 +25,7 @@ from tests.contrib.streams.samples.scenarios import (
     j5b_dashboard_and_relay,
     j7a_close_with_error,
     j8_replay_opt_out,
+    j9_stream_driver,
 )
 from tests.contrib.streams.test_live_notifications import skip_without_notifier
 
@@ -114,3 +115,16 @@ async def test_j8_only_a_reader_that_records_batches_replays_with_no_store(
     for events in outcome.read.values():
         assert events == ["opened", "credited 10", "debited 4"]
     assert outcome.replays_with_no_store == {"store": False, "history": True}
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def logged(request: pytest.FixtureRequest, client: Client) -> Client:
+    await skip_without_notifier(client)
+    store = MemoryStreams() if request.param == "memory" else redis_store()
+    return await connect_with(client, store.notify_on_append(notification_log=True))
+
+
+async def test_j9_a_driver_wakes_the_client_on_each_burst(logged: Client):
+    task_queue, workflow_id = ids("j9")
+    read = await j9_stream_driver.main(logged, task_queue, workflow_id=workflow_id)
+    assert read == [f"burst {b} update {n}" for b in range(3) for n in range(2)]

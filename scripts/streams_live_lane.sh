@@ -12,6 +12,8 @@
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7941)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6441.
+#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with Core's
+#                      redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five more ports.
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 #   PYTEST_TARGETS     the tests to run (default: tests/contrib/streams). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.
@@ -156,6 +158,13 @@ if [[ -z "${STREAMS_REDIS_URL:-}" ]]; then
   export STREAMS_REDIS_URL="redis://127.0.0.1:$REDIS_PORT/0"
 fi
 
+if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
+  # Three primaries with one replica each, as the driver's cluster tests need.
+  eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
+    bash "$SDK_DIR/temporalio/bridge/sdk-core/crates/streams/scripts/redis-test-servers.sh" |
+    grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
+fi
+
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -208,7 +217,7 @@ uv run --no-sync pytest ${PYTEST_TARGETS:-tests/contrib/streams} \
 
 # A live test that skips here proves nothing, so a skip for a missing notifier or missing Redis
 # fails the lane.
-gated='no stream notifier|STREAMS_REDIS_URL'
+gated='no stream notifier|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -228,6 +237,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_an_idle_client_reader_wakes_on_the_next_append \
   test_live_a_sleeping_client_wakes_through_the_driver \
   test_live_a_workflow_reader_wakes_through_the_driver \
+  test_live_streams_on_many_slots_all_wake_through_the_driver \
+  test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
   test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
@@ -251,7 +262,8 @@ gate tests/contrib/streams/test_sleeping_reader_demos.py \
   test_j3_a_tail_reads_every_line_of_a_sparse_log \
   test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage \
   test_j7a_both_readers_raise_the_close_error_after_the_last_record \
-  test_j8_only_a_reader_that_records_batches_replays_with_no_store
+  test_j8_only_a_reader_that_records_batches_replays_with_no_store \
+  test_j9_a_driver_wakes_the_client_on_each_burst
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed

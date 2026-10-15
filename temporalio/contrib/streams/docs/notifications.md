@@ -61,13 +61,69 @@ exits.
    `wake_after`, the counter of its position.
 3. The reader sleeps until the notifier's counter is above `wake_after`, the
    stream closes, or a time limit passes.
-4. Every append notifies the notifier. Notifications for one stream fold
-   into one call in flight, and a failed last notification is tried twice
-   more.
+4. Every append notifies the notifier, from the producer's process or, with
+   a notification log, from a StreamDriver (see below). Notifications for
+   one stream fold into one call in flight, and a failed last notification
+   is tried twice more.
 5. The notifier wakes every sleeping reader with one notification.
 
-So a busy stream sends a notification for each append that finds no call in
-flight, whether or not a reader sleeps.
+The server drops a notification for a stream with no notifier, and a
+reader's attach or wait starts the notifier. So a reader reads first, and
+attaches only when a read comes back empty, then reads once more before it
+sleeps, which catches an append that landed before the notifier existed.
+
+The notifier delivers the first notification of a window at once and the
+newest one at the window's end (`streamnotifier.debounceWindow`, 1 second by
+default). So a busy stream costs at most about two deliveries per window,
+whatever its append rate, and a Workflow reader wakes on about one Workflow
+Task per window.
+
+## Run a StreamDriver
+
+By default the producer's process tells the server after each append. With
+a notification log, the append writes a log entry in the same store step
+instead, and a StreamDriver forwards it. The producer then makes no call to
+Temporal, and an append's notification can't be lost to a producer that
+stops right after its append.
+
+```python
+store = RedisStreams("redis://localhost:6379").notify_on_append(
+    notification_log=True
+)
+client = await Client.connect("localhost:7233", plugins=[store])
+
+# In a process of its own, one or more per store.
+await StreamDriver(client).run()
+```
+
+- Turn the log on in every process that appends. A store that keeps no log
+  refuses the setting, and `StreamDriver` raises `ValueError` without it.
+- Run at least one driver. Each needs its own `consumer` name, which it gets
+  from the host, the process id and a random suffix unless you pass one.
+  Drivers share the log's entries as a consumer group (`streams-driver`).
+- A driver blocks on the log's doorbells and drains each slot that rings. It
+  folds each drain to the newest counter per stream, sends one
+  `NotifyStreams` call per namespace, and acks the entries only after the
+  call landed. Delivery is at least once. A repeat carries an old counter
+  and wakes nobody.
+- A doorbell is not written with the append, so it can be lost. Every
+  `sweep_interval` (30 seconds) the driver looks at every slot that holds
+  entries, which bounds that delay. The Workflow reader's recheck and the
+  client's poll limit bound the rest.
+- A driver takes the entries another driver left unacked for `claim_idle`
+  (60 seconds), so a dead driver's work moves on.
+- The client needs the right to call `NotifyStreams` in its namespace. It
+  sends one call per namespace.
+
+On Redis the log is one stream per Redis Cluster slot,
+`<prefix>:{<slot tag>}:n`, in the same slot as the stream's own keys, so one
+script writes both and a reshard moves them together. A standalone Redis
+uses the same keys. `RedisStreams(notify_doorbells=...)` sets how many
+doorbell streams there are, `<prefix>:{<doorbell tag>}:bell` (16 by
+default). With the log on, the application's ACL user also needs
+`~<prefix>:{*}:n` and `%W~<prefix>:{*}:bell`, and the driver's user needs
+read and write on those keys and `+xreadgroup +xautoclaim +xack +xdel
++xgroup|create +xlen +xadd +cluster|slots`.
 
 ## A client reader
 
@@ -250,7 +306,9 @@ a quiet period, a time-based check finds the record:
 
 `scripts/streams_live_lane.sh` starts a server with the notifier and the
 settings above, with short poll and recheck limits, and runs the stream
-tests against it. It fails when a live test skips or when a gated test did
+tests against it. It also starts a Redis Cluster of three primaries
+with one replica each, unless `STREAMS_REDIS_CLUSTER_URL` names one, and the
+driver cases run on memory, Redis and the cluster. It fails when a live test skips or when a gated test did
 not pass.
 
 ```bash
