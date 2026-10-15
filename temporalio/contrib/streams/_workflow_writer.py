@@ -260,8 +260,9 @@ def workflow_writer(
     """A writer on ``topic`` of the running Workflow's own stream.
 
     Call it from Workflow code. All writers on one topic of a run share one
-    ``FINISH``. Publishing adds no event to History. A store that refuses
-    the append fails the Workflow Task, which retries.
+    ``FINISH``. Publishing adds no event to History. A store that fails the
+    append fails the Workflow Task, which retries. A topic the store reports
+    closed drops the activation's records on it, since no retry could land.
 
     Args:
         topic: A :func:`temporalio.contrib.streams.topic` definition, whose
