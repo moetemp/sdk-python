@@ -18,7 +18,6 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     FollowedItem,
     FollowPosition,
-    LinkStateKind,
     RecordKind,
     StreamRef,
     activity_handle,

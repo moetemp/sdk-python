@@ -136,6 +136,7 @@ def to_wire_link(link: StreamLink) -> WireLink:
 
 
 def from_wire_link(wire: WireLink) -> StreamLink:
+    """The link Core stored in ``wire``."""
     return StreamLink(
         event=LinkEvent(wire.event),
         ref=from_reference(wire.stream) if wire.HasField("stream") else None,
