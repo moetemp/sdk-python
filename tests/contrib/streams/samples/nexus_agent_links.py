@@ -18,6 +18,7 @@ python -m tests.contrib.streams.samples.nexus_agent_links``.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -98,6 +99,45 @@ class Agent:
         return "answered"
 
 
+# When the slow tool appended each token, by agent id. The tool runs in the
+# caller's process in the lane, so the test reads this directly.
+appended_at: dict[str, dict[str, float]] = {}
+
+
+@activity.defn
+async def slow_search(query: str) -> str:
+    """Writes one token every 3 seconds, four in all."""
+    out = activity_handle().producer(topic=TOKENS)
+    times = appended_at.setdefault(activity.info().workflow_id or "", {})
+    for step in range(1, 5):
+        await out.append(f"{query}-{step}")
+        times[f"tool-0:{query}-{step}"] = time.monotonic()
+        await asyncio.sleep(3)
+    return "ok"
+
+
+@workflow.defn
+class SlowAgent:
+    """Links one slow tool, and writes nothing on its own stream while it runs."""
+
+    @workflow.run
+    async def run(self, query: str) -> str:
+        events = workflow_writer(EVENTS)
+        events.publish("plan")
+        handle, ref = start_activity_with_stream(
+            slow_search,
+            query,
+            activity_id="tool-0",
+            start_to_close_timeout=timedelta(minutes=2),
+            topic=TOKENS,
+        )
+        events.link(ref, name="tool-0")
+        await handle
+        events.join(name="tool-0")
+        events.publish("answer")
+        return "answered"
+
+
 class AgentsHandler:
     """Starts the agent, or finds the one with the id, and hands its stream over."""
 
@@ -110,13 +150,23 @@ class AgentsHandler:
         try:
             # A caller that goes on in a new run starts the operation again, and
             # gets the same agent, running or done.
-            await temporalio.nexus.client().start_workflow(
-                Agent.run,
-                ["streams", "links"],
-                id=agent_id,
-                task_queue=self._agents_queue,
-                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
-            )
+            client = temporalio.nexus.client()
+            if agent_id.startswith("slow-"):
+                await client.start_workflow(
+                    SlowAgent.run,
+                    "slow",
+                    id=agent_id,
+                    task_queue=self._agents_queue,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            else:
+                await client.start_workflow(
+                    Agent.run,
+                    ["streams", "links"],
+                    id=agent_id,
+                    task_queue=self._agents_queue,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
         except WorkflowAlreadyStartedError:
             pass
         return StreamRef.for_workflow(agent_id, topic=EVENTS)
@@ -228,8 +278,8 @@ def owner_workers(lane: Lane) -> tuple[Worker, Worker, Worker]:
         Worker(
             lane.owner,
             task_queue=f"{lane.queue}-agents",
-            workflows=[Agent],
-            activities=[search],
+            workflows=[Agent, SlowAgent],
+            activities=[search, slow_search],
         ),
     )
 

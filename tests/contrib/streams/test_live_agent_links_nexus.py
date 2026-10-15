@@ -10,10 +10,12 @@ set.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
 
+from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.nexus import (
@@ -21,6 +23,7 @@ from temporalio.contrib.streams.nexus import (
     FollowBatch,
     FollowOutcome,
     StreamFollowerService,
+    StreamReader,
     follow_stream,
 )
 from temporalio.worker import Worker
@@ -151,3 +154,71 @@ async def test_live_a_worker_follower_asks_for_the_agents_links(
     ]
     [outcome] = follower.outcomes
     assert outcome.succeeded
+
+
+@workflow.defn
+class FollowsLive:
+    """Follows an agent and answers what it saw so far."""
+
+    def __init__(self) -> None:
+        self.items: list[str] = []
+
+    @workflow.run
+    async def run(self, agents: str, streams: str, agent_id: str) -> list[str]:
+        client = workflow.create_nexus_client(service=demo.Agents, endpoint=agents)
+        handle = await client.start_operation(demo.Agents.run_agent, agent_id)
+        reader = StreamReader(
+            handle, item_type=str, endpoint=streams, follow_links=True
+        )
+        while (batch := await reader.next_followed()) is not None:
+            self.items.extend(demo.describe(item) for item in batch)
+        await handle
+        return self.items
+
+    @workflow.query
+    def seen(self) -> list[str]:
+        return self.items
+
+
+async def test_live_a_caller_sees_a_busy_tool_while_the_agent_is_idle(
+    lane: Client,  # noqa: F811
+    new_store: Callable[[], StreamStorePlugin],  # noqa: F811
+):
+    task_queue, workflow_id, agent_id = _ids("links-live")
+    agent_id = f"slow-{agent_id}"
+    the_lane = await demo.lane(lane, task_queue, new_store)
+    caller = await Client.connect(
+        lane.service_client.config.target_host,
+        namespace=lane.namespace,
+        plugins=[demo.direct_reads(the_lane)],
+    )
+    tokens = [f"tool-0:slow-{step}" for step in range(1, 5)]
+    seen_at: dict[str, float] = {}
+    agents, streams, agent = demo.owner_workers(the_lane)
+    async with agents, streams, agent:
+        async with Worker(caller, task_queue=task_queue, workflows=[FollowsLive]):
+            handle = await caller.start_workflow(
+                FollowsLive.run,
+                args=[the_lane.agents, the_lane.streams, agent_id],
+                id=workflow_id,
+                task_queue=task_queue,
+            )
+            # The agent links the tool, then appends nothing until the tool
+            # returns, while the tool appends a token every 3 seconds.
+            deadline = time.monotonic() + 60
+            while len(seen_at) < len(tokens) and time.monotonic() < deadline:
+                seen = await handle.query(FollowsLive.seen)
+                now = time.monotonic()
+                for item in seen:
+                    if item in tokens and item not in seen_at:
+                        seen_at[item] = now
+                await asyncio.sleep(0.2)
+            items = await asyncio.wait_for(handle.result(), 60)
+    appended = demo.appended_at[agent_id]
+    lags = {token: seen_at[token] - appended[token] for token in tokens}
+    assert all(lag < 5 for lag in lags.values()), lags
+    # The agent's next record comes only after the tool.
+    assert [i for i in items if i in tokens or i == "agent:answer"] == [
+        *tokens,
+        "agent:answer",
+    ]

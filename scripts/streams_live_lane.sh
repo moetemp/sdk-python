@@ -333,7 +333,8 @@ gate tests/contrib/streams/test_samples.py \
 gate tests/contrib/streams/test_live_agent_links_nexus.py \
   test_live_a_caller_follows_an_agent_and_its_tools_across_namespaces \
   test_live_a_caller_resumes_its_follow_in_a_new_run \
-  test_live_a_worker_follower_asks_for_the_agents_links
+  test_live_a_worker_follower_asks_for_the_agents_links \
+  test_live_a_caller_sees_a_busy_tool_while_the_agent_is_idle
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
