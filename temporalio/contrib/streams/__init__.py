@@ -99,7 +99,9 @@ from temporalio.contrib.streams._handles import (
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
     Supersession,
 )
@@ -129,6 +131,7 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "LinkEvent",
     "RecordKind",
     "StreamBatch",
     "StreamClosedError",
@@ -143,6 +146,7 @@ __all__ = [
     "StreamPosition",
     "StreamProducer",
     "StreamProducerError",
+    "StreamLink",
     "StreamRecord",
     "StreamRecordError",
     "StreamRef",

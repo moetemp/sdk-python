@@ -64,7 +64,13 @@ from temporalio.contrib.streams._plugin import (
     call,
     store_for_client,
 )
-from temporalio.contrib.streams._record import Cursor, RecordKind, StreamRecord
+from temporalio.contrib.streams._record import (
+    Cursor,
+    LinkEvent,
+    RecordKind,
+    StreamLink,
+    StreamRecord,
+)
 from temporalio.contrib.streams._ref import StreamRef, owner_context, stream_address
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wire import WireRecord, from_read, to_wire
@@ -174,7 +180,47 @@ class StreamProducer(Generic[T]):
         async with self._lock:
             return await self._write(RecordKind.FINISH, [None])
 
-    async def _write(self, kind: RecordKind, values: Any) -> Cursor:
+    async def link(
+        self,
+        ref: StreamRef,
+        *,
+        name: str,
+        after: Cursor | None = None,
+        value: Any = None,
+    ) -> Cursor:
+        """Write a ``LINK`` that opens ``ref``'s stream, and return its cursor.
+
+        A follower reads the linked stream from strictly after ``after``, or
+        from its oldest record, in one order with this stream. ``name`` names
+        the link within this producer, and :meth:`join` names it again.
+        ``ref`` is stored as plaintext. ``value``, when given, goes through
+        the converter and codec as a ``DATA`` value does.
+
+        Raises:
+            ValueError: ``name`` is empty or over 256 bytes.
+            StreamError: As :meth:`append` raises.
+        """
+        link = StreamLink(LinkEvent.OPEN, ref, name, after=after)
+        async with self._lock:
+            return await self._write(RecordKind.LINK, [value], link)
+
+    async def join(self, *, name: str, until: Cursor | None = None) -> Cursor:
+        """Write a ``LINK`` that says this producer waited for link ``name``.
+
+        A follower holds this stream's later records until the linked stream
+        reached ``until``, or its end when ``until`` is ``None``.
+
+        Raises:
+            ValueError: ``name`` is empty or over 256 bytes.
+            StreamError: As :meth:`append` raises.
+        """
+        link = StreamLink(LinkEvent.JOIN, None, name, until=until)
+        async with self._lock:
+            return await self._write(RecordKind.LINK, [None], link)
+
+    async def _write(
+        self, kind: RecordKind, values: Any, link: StreamLink | None = None
+    ) -> Cursor:
         if self._local_call is not None:
             self._attempt = await self._local_call.attempt(self._handle._client)
         converter = self._handle._converter
@@ -187,6 +233,7 @@ class StreamProducer(Generic[T]):
                 producer_id=self._producer_id,
                 attempt=self._attempt,
                 sequence=self._sequence + index,
+                link=link,
             )
             for index, value in enumerate(values)
         ]
@@ -218,6 +265,8 @@ async def _append_records(
     records = []
     for wire in wires:
         record = AppendRecord(kind=wire.kind)
+        if wire.HasField("link"):
+            record.link.CopyFrom(wire.link)
         if wire.HasField("body"):
             record.body.CopyFrom(next(bodies))
             record.content_hash = content_hash(wire.body)
