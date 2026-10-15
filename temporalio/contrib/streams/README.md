@@ -147,6 +147,90 @@ Known limits:
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
 
+## Streams owned by a standalone Activity
+
+A standalone Activity is one that a client starts with `start_activity`,
+with no Workflow. It owns streams of its own. In a standalone Activity,
+`activity_handle()` is the Activity's own stream, and the producer and
+close calls are the ones a Workflow Activity uses.
+
+```python
+@activity.defn
+async def generate(prompt: str) -> str:
+    stream = activity_handle()
+    out = stream.producer(topic=TOKENS)
+    async for token in model(prompt):
+        await out.append(token)
+    await stream.close(topic=TOKENS, result="done")
+    return "ok"
+
+handle = await client.start_activity(generate, "hi", id="gen-1", ...)
+ref = StreamRef.for_activity(handle.id, run_id=handle.run_id, topic=TOKENS)
+async for record in get_stream_handle(client, ref).read():
+    ...
+```
+
+- **Owner.** The stream belongs to one Activity run. The ref names the
+  Activity id and its run. A ref with no run names the newest run of the id
+  when a read starts, and the read stays on that run. A new run of the same
+  Activity id has new streams.
+- **Readers.** A client reads with `get_stream_handle(client, ref)`, and
+  Workflow code with `workflow_reader(ref)`, as for a Workflow's stream.
+- **Producer.** The Activity writes as `<Activity id>@<run id>`. Retries,
+  backoff, pause and reset keep the stream open.
+- **Attempt.** Each attempt writes the producer attempt
+  `started_ms << 16 | min(attempt, 65535)`, where `started_ms` is the Unix
+  time in milliseconds at which the server started the attempt. A retry and
+  an attempt after a reset start later, so readers see `SUPERSEDED` before
+  their records. An attempt that timed out but still writes started
+  earlier, so its late records are `stale`. Workflow Activities use the same
+  rule.
+- **Close.** The Activity closes its stream with `close(result=)` or
+  `close(error=)`. The SDK closes nothing when the Activity returns, so make
+  the close the last step. When the run ends with no close, the stream's
+  notifier on the server closes it within its owner check interval (30
+  seconds by default). A completed run gives a null result. A failed,
+  canceled, terminated or timed-out run gives the run's own failure, which a
+  Workflow reader raises after its last batch. A client reader that the
+  notifier did not wake ends with no outcome.
+- **Codec.** Records and closes go through the codec with an
+  `ActivitySerializationContext` that holds only the namespace and the
+  Activity id, since a reader can build no more from the ref.
+- **Server.** The server must run standalone Activities
+  (`activity.enableStandalone`) and the stream notifier.
+- **Deleting.** `delete_activity_streams(namespace, activity_id)` removes
+  the streams of every run of an Activity id.
+
+A standalone Activity reads and follows other streams as a client does. To
+go on after a retry, heartbeat the cursor of each record it handled, and
+read after the cursor in the heartbeat details:
+
+```python
+@activity.defn
+async def follow(workflow_id: str) -> int:
+    details = activity.info().heartbeat_details
+    after = Cursor(details[0]) if details else BEGINNING
+    seen = 0
+    async for record in get_stream_handle(activity.client(), workflow_id).read(
+        after=after
+    ):
+        seen += 1
+        activity.heartbeat(record.cursor.token)
+    return seen
+```
+
+Known limits:
+
+- **Not over Nexus.** The Nexus stream service serves only streams that a
+  Workflow owns.
+- **Clock skew.** The attempt uses the server's attempt start time. After a
+  failover to a cluster whose clock is behind by more than the retry
+  interval, a new attempt can look older, and its records are `stale`.
+- **Workflow Activities.** A Workflow Activity writes to its Workflow's
+  stream and owns none.
+
+The sample runs in full in `tests/contrib/streams/samples/activity_owned_stream.py`.
+
 ## A Workflow publishes to its own stream
 
 Workflow code can't do I/O, so `workflow_writer` hands its records to Core

@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-227384cfff31f57c6e2b7c53db9703cf7c0b252d}
+SERVER_REF=${SERVER_REF:-4e7fafc5e7373a7554b3a67f740ccc5de2c6a39b}
 PORT_BASE=${PORT_BASE:-7941}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -56,6 +56,12 @@ history.enableChasm:
 history.enableCHASMCallbacks:
   - value: true
 streamnotifier.enabled:
+  - value: true
+# Streams that a standalone Activity owns need standalone Activities.
+activity.enableStandalone:
+  - value: true
+# Resetting a standalone Activity is an operator command.
+history.enableStandaloneActivityOperatorCommands:
   - value: true
 # The owner check closes a stopped owner's stream by its close status, so the
 # cases where an owner ends without a close finish in seconds, not minutes.
@@ -251,6 +257,12 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
   test_live_a_replay_of_a_lost_range_fails_the_task
+gate tests/contrib/streams/test_live_activity_owner.py \
+  test_live_both_readers_follow_a_standalone_activity_across_its_retry \
+  test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
+  test_live_an_activity_that_fails_with_no_close_fails_the_workflow_reader \
+  test_live_an_attempt_after_a_reset_supersedes_with_no_divergence \
+  test_live_a_terminated_activity_fails_the_workflow_reader
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
