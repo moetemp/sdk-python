@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-c00e031c83bf47c5fd0241aec0717391cd1722c1}
+SERVER_REF=${SERVER_REF:-41d8b0b3d675b6d2058cc1a3d9b1859ccb87a118}
 PORT_BASE=${PORT_BASE:-7941}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
