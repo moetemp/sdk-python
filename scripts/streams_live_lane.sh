@@ -344,7 +344,9 @@ gate tests/contrib/streams/test_nexus_follower.py \
   test_live_a_follower_reads_through_the_client_transport \
   test_live_a_follower_resumes_on_another_worker \
   test_live_a_late_follower_reads_the_backlog_in_pages \
-  test_live_a_failed_owner_reaches_on_close_as_a_failure
+  test_live_a_failed_owner_reaches_on_close_as_a_failure \
+  test_live_a_follower_on_an_empty_stream_hears_the_first_append \
+  test_live_a_follower_that_reads_a_burst_gets_no_extra_progress
 gate tests/contrib/streams/test_nexus_read_wakes.py \
   test_live_a_reader_that_never_waits_gets_no_progress \
   test_live_an_idle_reader_is_woken_once_per_idle_stretch \

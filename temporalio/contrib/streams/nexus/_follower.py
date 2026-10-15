@@ -48,7 +48,10 @@ from temporalio.contrib.streams.nexus._generated import (
     RecordWire,
 )
 from temporalio.contrib.streams.nexus._handler import serve_in_core
-from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
+from temporalio.contrib.streams.nexus._operation import (
+    FIRST_WAKE_HEADER,
+    stream_ref_from_token,
+)
 from temporalio.contrib.streams.nexus._reader import ReadStaleRecord, ReadSupersession
 from temporalio.converter import WorkflowSerializationContext
 from temporalio.nexus.system.notification_service import (
@@ -561,6 +564,9 @@ async def follow_stream(
         arg,
         id=operation_id,
         schedule_to_close_timeout=schedule_to_close_timeout,
+        # The follower reads only when woken, so its callback asks for the
+        # first wake at the attach, from the stream's start.
+        headers={FIRST_WAKE_HEADER: "0"},
         completion_callbacks=[
             NexusHandlerCallback(
                 task_queue=task_queue,

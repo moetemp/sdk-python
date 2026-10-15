@@ -545,6 +545,15 @@ the stream service on a Nexus endpoint's HTTP ingress. With neither, the
 service raises at construction. The stream service and the follower must use
 the same payload codec.
 
+**The first wake.** A follower reads only inside a progress call, so its
+idle callback must be woken once before it can read at all. `follow_stream`
+sends the start header `temporal-stream-first-wake-after: 0`, and the
+handler asks Core for that first wake at the attach. The first record of the
+stream then reaches the follower, or at once when the stream already holds
+one. After that, each progress call reads until it finds nothing, and that
+empty read asks for the next wake. A follower that reads a burst in one call
+gets one delivery for it, not one per append.
+
 **Where the position lives.** Each answer to `OnProgress` carries the read
 position, and the server keeps it on the callback and sends it back with the
 next call and with `OnComplete`. So the Worker keeps nothing between calls,
