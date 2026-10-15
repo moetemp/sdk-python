@@ -22,6 +22,7 @@ from temporalio.contrib.streams import (
     BEGINNING,
     Cursor,
     RecordKind,
+    StreamClosedError,
     StreamCursorError,
     StreamNotFoundError,
     StreamProducerError,
@@ -33,6 +34,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import (
+    ActivitySerializationContext,
     DataConverter,
     PayloadCodec,
     SerializationContext,
@@ -128,7 +130,10 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
     described = await streams_client.get_workflow_handle(workflow_id).describe()
     # Core derives the same producer id the handle reports.
     producer_id = f"tokens@{described.run_id}"
-    assert records[1].supersession == Supersession(producer_id, 1, 2)
+    first, second = records[0].attempt, records[2].attempt
+    # The low 11 bits hold the Temporal attempt, the rest the attempt's start.
+    assert (first & 0x7FF, second & 0x7FF) == (1, 2)
+    assert records[1].supersession == Supersession(producer_id, first, second)
     assert [r.value for r in records if r.kind is RecordKind.DATA] == [
         "a",
         "a",
@@ -136,10 +141,10 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
         "c",
     ]
     assert [(r.producer_id, r.attempt, r.sequence) for r in records[2:]] == [
-        (producer_id, 2, 1),
-        (producer_id, 2, 2),
-        (producer_id, 2, 3),
-        (producer_id, 2, 4),
+        (producer_id, second, 1),
+        (producer_id, second, 2),
+        (producer_id, second, 3),
+        (producer_id, second, 4),
     ]
 
 
@@ -536,3 +541,86 @@ async def test_an_activity_gets_one_producer_per_topic(client: Client):
         get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
     assert [r.value for r in records] == ["started", "started"]
+
+
+@activity.defn
+async def owns_a_stream(tokens: list[str]) -> str:
+    stream = activity_handle()
+    await stream.producer(topic=TOKENS).append(*tokens)
+    await stream.close(topic=TOKENS, result="done")
+    return activity.info().activity_run_id or ""
+
+
+async def test_a_standalone_activity_writes_and_closes_its_own_stream(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    activity_id = new_workflow_id()
+    async with new_worker(streams_client, activities=[owns_a_stream]) as worker:
+        handle = await streams_client.start_activity(
+            owns_a_stream,
+            ["a", "b"],
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        run_id = await handle.result()
+    assert run_id
+    ref = StreamRef.for_activity(activity_id, run_id=run_id, topic=TOKENS)
+    records = await read_all(get_stream_handle(streams_client, ref).read())
+    assert [(r.kind, r.value) for r in records] == [
+        (RecordKind.DATA, "a"),
+        (RecordKind.DATA, "b"),
+    ]
+    assert {r.producer_id for r in records} == {f"{activity_id}@{run_id}"}
+    # A ref with no run names the newest run of the Activity id.
+    newest = StreamRef.for_activity(activity_id, topic=TOKENS)
+    assert [
+        r.value
+        for r in await read_all(get_stream_handle(streams_client, newest).read())
+    ] == ["a", "b"]
+    # The close names the Activity as its closer.
+    late = get_stream_handle(streams_client, ref).producer(
+        producer_id="late", attempt=1
+    )
+    with pytest.raises(StreamClosedError) as closed:
+        await late.append("x")
+    assert closed.value.closed_by == f"{activity_id}@{run_id}"
+
+
+@activity.defn
+async def owns_a_keyed_stream() -> None:
+    stream = activity_handle()
+    await stream.producer(topic=TOKENS).append("keyed")
+    # The close is part of what the codec must decode. It also ends the read,
+    # which would otherwise wait for Core's next owner check.
+    await stream.close(topic=TOKENS, error=ApplicationError("keyed close"))
+
+
+class ActivityKeyedCodec(WorkflowKeyedCodec):
+    """Keys each payload by the Activity id of its context, or the Workflow id."""
+
+    def with_context(self, context: SerializationContext) -> ActivityKeyedCodec:
+        if isinstance(context, ActivitySerializationContext):
+            return ActivityKeyedCodec(f"activity {context.activity_id}")
+        return ActivityKeyedCodec(getattr(context, "workflow_id", None) or "")
+
+
+async def test_an_activity_stream_uses_the_activitys_namespace_and_id_as_context(
+    client: Client,
+):
+    keyed = await connect_with(
+        client, MemoryStreams(), DataConverter(payload_codec=ActivityKeyedCodec())
+    )
+    activity_id = new_workflow_id()
+    async with new_worker(keyed, activities=[owns_a_keyed_stream]) as worker:
+        handle = await keyed.start_activity(
+            owns_a_keyed_stream,
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        await handle.result()
+    ref = StreamRef.for_activity(activity_id, run_id=handle.run_id, topic=TOKENS)
+    records = get_stream_handle(keyed, ref).read()
+    assert (await records.__anext__()).value == "keyed"
+    with pytest.raises(ApplicationError, match="keyed close"):
+        await records.__anext__()

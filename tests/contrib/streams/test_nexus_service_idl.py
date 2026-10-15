@@ -152,12 +152,12 @@ def test_a_reference_of_another_kind_decodes_for_the_handler_to_refuse():
     document = _to_json(ReadInput(stream=StreamRef.for_workflow("wf-1")))
     stream = document["stream"]
     assert isinstance(stream, dict)
-    stream["kind"] = "activity"
+    stream["kind"] = "nexus"
     decoded = _from_json(document, ReadInput)
     assert isinstance(decoded, ReadInput)
-    assert decoded.stream.kind == "activity"
+    assert decoded.stream.kind == "nexus"
     # Opening a handle on it is what refuses it.
-    with pytest.raises(StreamUnsupportedError, match="'activity'"):
+    with pytest.raises(StreamUnsupportedError, match="'nexus'"):
         decoded.stream._require_supported()  # type: ignore[reportPrivateUsage]
 
 

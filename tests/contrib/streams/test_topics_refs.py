@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from temporalio.api.common.v1 import Payload
@@ -44,11 +46,45 @@ def test_a_ref_names_a_workflow_stream():
     assert ref.with_topic("other").workflow_id == "wf"
 
 
-def test_a_ref_round_trips_through_the_default_converter():
-    ref = StreamRef.for_workflow("wf", topic=OUT, chain_run_id="run")
+def test_a_ref_names_a_standalone_activity_stream():
+    ref = StreamRef.for_activity("act", run_id="run", topic=OUT)
+    assert ref == StreamRef(
+        "activity", "", topic="out", chain_run_id="run", activity_id="act"
+    )
+    assert StreamRef.for_activity("act").chain_run_id is None
+    assert StreamRef.for_activity("act").topic == DEFAULT_TOPIC
+    assert ref.with_topic("other").activity_id == "act"
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        StreamRef.for_workflow("wf", topic=OUT, chain_run_id="run"),
+        StreamRef.for_activity("act", run_id="run", topic=OUT),
+    ],
+    ids=["workflow", "activity"],
+)
+def test_a_ref_round_trips_through_the_default_converter(ref: StreamRef):
     converter = DataConverter.default.payload_converter
     payload = converter.to_payloads([ref])[0]
     assert converter.from_payloads([payload], [StreamRef])[0] == ref
+
+
+@dataclass(frozen=True)
+class _RefBeforeActivities:
+    kind: str
+    workflow_id: str
+    topic: str = DEFAULT_TOPIC
+    chain_run_id: str | None = None
+
+
+def test_an_older_release_decodes_an_activity_ref_and_refuses_it_where_it_opens():
+    converter = DataConverter.default.payload_converter
+    payload = converter.to_payloads([StreamRef.for_activity("act", run_id="run")])[0]
+    old = converter.from_payloads([payload], [_RefBeforeActivities])[0]
+    assert old == _RefBeforeActivities("activity", "", DEFAULT_TOPIC, "run")
+    # An older release took any kind but "workflow" as unsupported.
+    assert old.kind != "workflow"
 
 
 def test_a_ref_with_the_old_run_id_decodes_as_the_newest_chain():
@@ -68,9 +104,17 @@ def test_a_ref_refuses_what_it_cannot_name():
         StreamRef("workflow", "")
     with pytest.raises(ValueError):
         StreamRef("workflow", "wf", topic="")
+    with pytest.raises(ValueError, match="has no activity_id"):
+        StreamRef("workflow", "wf", activity_id="act")
+    with pytest.raises(ValueError, match="needs an activity_id"):
+        StreamRef("activity", "")
+    with pytest.raises(ValueError, match="has no workflow_id"):
+        StreamRef("activity", "wf", activity_id="act")
+    with pytest.raises(ValueError, match="needs an activity_id"):
+        StreamRef.for_activity("")
 
 
-@pytest.mark.parametrize("kind", ["activity", "nexus"])
+@pytest.mark.parametrize("kind", ["standalone", "nexus"])
 def test_a_ref_from_a_later_release_decodes_and_fails_where_it_opens(kind: str):
     # Decoding happens while a Workflow Task applies its input, where a raise
     # fails the task on every retry. Opening the handle is where the caller
@@ -82,7 +126,7 @@ def test_a_ref_from_a_later_release_decodes_and_fails_where_it_opens(kind: str):
     )
     ref = converter.from_payloads([payload], [StreamRef])[0]
     assert ref.kind == kind
-    with pytest.raises(StreamUnsupportedError, match="only Workflow-owned"):
+    with pytest.raises(StreamUnsupportedError, match="a Workflow or a standalone"):
         ref._require_supported()
 
 
