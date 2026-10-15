@@ -170,6 +170,10 @@ class _ReadInput:
     """The reader's id in its run, which names its hold on the records."""
     read_seq: int = 0
     """How many reads the reader made, this one included."""
+    owner_kind: str = "workflow"
+    """The owner kind of the stream, as :attr:`StreamRef.kind`."""
+    activity_id: str = ""
+    """The owning standalone Activity, for an ``"activity"`` owner."""
 
 
 @dataclass
@@ -395,6 +399,8 @@ class WorkflowStreamReader(Generic[T]):
         attaching = state.attach and state.attach_now and attach
         return _ReadInput(
             workflow_id=self._ref.workflow_id,
+            owner_kind=self._ref.kind,
+            activity_id=self._ref.activity_id or "",
             chain_run_id=self._ref.chain_run_id or "",
             topic=self._topic,
             after=state.cursor,
@@ -525,7 +531,7 @@ def workflow_reader(
     cutoff: TaskCutoff | None = TaskCutoff(),
     replay_from_store: bool = True,
 ) -> WorkflowStreamReader[Any]:
-    """A reader of a Workflow's stream, for Workflow code.
+    """A reader of a stream, for Workflow code.
 
     Each read is one Local Activity, which adds one marker event when its
     Workflow Task completes. While the stream is idle, the reader waits for
@@ -538,15 +544,19 @@ def workflow_reader(
     turns on.
 
     The reader follows the owner's run chain across Continue-as-New, as
-    every read does. To go on in the next run of the reading Workflow, pass
+    every read does. On the stream of a standalone Activity it reads the
+    Activity run, and ends when that run closes the stream or ends. When
+    the run ends with no close, the stream's notifier closes it with the
+    run's outcome, and the reader raises the run's failure after its last
+    batch. To go on in the next run of the reading Workflow, pass
     :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
     the run that attached, so after a reset, the new run reads once more
     to attach itself before it sleeps.
 
     Args:
         ref: The stream's owner, as a
-            :class:`temporalio.contrib.streams.StreamRef` or a Workflow id
-            in this namespace.
+            :class:`temporalio.contrib.streams.StreamRef` of any owner, or
+            a Workflow id in this namespace.
         topic: The topic to read. Without one, the ref's topic.
         result_type: The type records decode to, for a plain string topic.
         after: Where to start: a cursor, ``BEGINNING``, ``END``, or the
@@ -636,8 +646,12 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     info = temporalio.activity.info()
     client = temporalio.activity.client()
     store = store_for_client(client)
-    ref = StreamRef.for_workflow(
-        input.workflow_id, topic=input.topic, chain_run_id=input.chain_run_id or None
+    ref = StreamRef(
+        input.owner_kind,
+        input.workflow_id,
+        topic=input.topic,
+        chain_run_id=input.chain_run_id or None,
+        activity_id=input.activity_id or None,
     )
     handle = StreamHandle(store, client, ref)
     service = await store._service_for(client)
