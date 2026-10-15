@@ -48,6 +48,7 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._wire import WireRecord, from_wire_link, to_record
+from temporalio.contrib.streams._workflow import TaskCutoff
 from temporalio.contrib.streams.nexus._generated import (
     FollowedWire,
     FollowInput,
@@ -84,6 +85,8 @@ _MAX_RECHECK = timedelta(hours=1)
 # leaves room for the call around it.
 _DIRECT_READ_SLACK = timedelta(seconds=10)
 _READERS_ATTRIBUTE = "_temporal_stream_nexus_readers"
+# When a following reader ends the Workflow Task it steps in.
+_TASK_CUTOFF = TaskCutoff()
 
 
 class _RecheckDue(Exception):
@@ -715,6 +718,17 @@ class StreamReader(Generic[T]):
             follow_answer_of,
         )
 
+        # Steps follow each other while a link is open, and Local Activities
+        # keep the Workflow Task open, so the reader ends the task as a
+        # Workflow reader does. Otherwise the run's state shows only at the
+        # Local Activity heartbeat.
+        runtime: Any = workflow._Runtime.current()
+        commands, seconds = runtime._task_progress()
+        if (
+            commands >= _TASK_CUTOFF.commands
+            or seconds >= _TASK_CUTOFF.time.total_seconds()
+        ):
+            runtime._request_task_heartbeat()
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
