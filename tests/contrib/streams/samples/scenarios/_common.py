@@ -22,12 +22,13 @@ from temporalio.contrib.streams.redis import RedisStreams
 FOLLOW_TIMEOUT = 30.0
 
 
-def store(*, notify: bool = False) -> StreamStorePlugin:
+def store(*, notify: bool = False, log: bool = False) -> StreamStorePlugin:
     """Redis when ``STREAMS_REDIS_URL`` is set, else this process's memory.
 
     Each Redis store gets a key prefix of its own, so demos that share a
     Redis never see each other's records. ``notify`` turns on the
-    notifications that wake a sleeping reader.
+    notifications that wake a sleeping reader, and ``log`` sends them through
+    the store's notification log, which a StreamDriver reads.
     """
     url = os.environ.get("STREAMS_REDIS_URL")
     plugin: StreamStorePlugin = (
@@ -35,6 +36,8 @@ def store(*, notify: bool = False) -> StreamStorePlugin:
         if url
         else MemoryStreams()
     )
+    if log:
+        return plugin.notify_on_append(notification_log=True)
     return plugin.notify_on_append() if notify else plugin
 
 
@@ -113,19 +116,21 @@ def values(records: list[StreamRecord[Any]]) -> list[Any]:
     return [r.value for r in records if r.kind is RecordKind.DATA]
 
 
-def run(main: Callable[..., Awaitable[Any]], *, notify: bool = False) -> None:
+def run(
+    main: Callable[..., Awaitable[Any]], *, notify: bool = False, log: bool = False
+) -> None:
     """Run a demo's ``main`` against a dev server, from the command line.
 
     ``TEMPORAL_ADDRESS`` names the server (``localhost:7233`` by default),
     and ``STREAMS_REDIS_URL`` picks Redis over memory. ``notify`` is for the
     demos of readers that sleep, which need a server with the stream
-    notifier.
+    notifier. ``log`` is for the StreamDriver demo.
     """
 
     async def go() -> None:
         client = await Client.connect(
             os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
-            plugins=[store(notify=notify)],
+            plugins=[store(notify=notify, log=log)],
         )
         name = os.path.basename(sys.argv[0]).removesuffix(".py")
         result = await main(

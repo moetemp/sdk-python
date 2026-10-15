@@ -108,6 +108,11 @@ async def skip_without_notifier(client: Client) -> None:
 def store(kind: str) -> StreamStorePlugin:
     if kind == "memory":
         return MemoryStreams()
+    if kind == "cluster":
+        url = os.environ.get("STREAMS_REDIS_CLUSTER_URL", "")
+        if not url:
+            pytest.skip("set STREAMS_REDIS_CLUSTER_URL to run on a Redis Cluster")
+        return RedisStreams(url, cluster=True, key_prefix=f"live-{uuid.uuid4().hex}")
     url = os.environ.get("STREAMS_REDIS_URL", "")
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to run on Redis")
@@ -121,7 +126,7 @@ async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     return await connect_with(client, store(request.param).notify_on_append())
 
 
-@pytest.fixture(params=["memory", "redis"])
+@pytest.fixture(params=["memory", "redis", "cluster"])
 async def driven(
     request: pytest.FixtureRequest, client: Client
 ) -> AsyncIterator[Client]:
@@ -190,6 +195,30 @@ async def test_live_a_sleeping_client_wakes_through_the_driver(driven: Client):
         assert time.monotonic() - started < QUICK
         await records.aclose()
         await driven.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_live_streams_on_many_slots_all_wake_through_the_driver(
+    driven: Client,
+):
+    # On a cluster each owner's chain hashes to its own slot, so its log
+    # entries land on that slot's primary, and the driver drains them all.
+    async with new_worker(driven, Waits) as worker:
+        owners = [await running_owner(driven, worker.task_queue) for _ in range(8)]
+        reads = [get_stream_handle(driven, o, topic=TOKENS).read() for o in owners]
+        firsts = [asyncio.ensure_future(r.__anext__()) for r in reads]
+        await asyncio.sleep(3)
+        for owner in owners:
+            await (
+                get_stream_handle(driven, owner, topic=TOKENS)
+                .producer(producer_id="p", attempt=1)
+                .append(owner)
+            )
+        woke = await asyncio.wait_for(asyncio.gather(*firsts), 15)
+        assert [r.value for r in woke] == owners
+        for read in reads:
+            await read.aclose()
+        for owner in owners:
+            await driven.get_workflow_handle(owner).signal(Waits.finish)
 
 
 async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
@@ -385,6 +414,58 @@ async def test_live_a_workflow_reader_wakes_through_the_driver(driven: Client):
         # The driver's notification woke it, not the recheck.
         assert time.monotonic() - started < QUICK
         await driven.get_workflow_handle(owner).signal(Waits.finish)
+
+
+@workflow.defn
+class ReadsQuickly:
+    """Reads ``count`` records with a short idle wait, so it sleeps between them."""
+
+    @workflow.run
+    async def run(self, owner: str, count: int) -> int:
+        seen = 0
+        async with workflow_reader(
+            owner, topic=TOKENS, idle_wait=timedelta(milliseconds=50)
+        ) as reader:
+            async for batch in reader:
+                seen += len(batch.records)
+                if seen >= count:
+                    break
+        return seen
+
+
+async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
+    driven: Client,
+):
+    # The server delivers the first notification of a window at once and the
+    # newest one at the window's end, so a busy stream wakes the reader about
+    # once per window (streamnotifier.debounceWindow, 1 second by default).
+    async with new_worker(driven, Waits, ReadsQuickly) as worker:
+        owner = await running_owner(driven, worker.task_queue)
+        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await producer.append("first")
+        reader = await driven.start_workflow(
+            ReadsQuickly.run,
+            args=[owner, 31],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(2)
+        started = time.monotonic()
+        for n in range(30):
+            await producer.append(str(n))
+            await asyncio.sleep(0.1)
+        elapsed = time.monotonic() - started
+        assert await asyncio.wait_for(reader.result(), 30) == 31
+        await driven.get_workflow_handle(owner).signal(Waits.finish)
+    wakes = sum(
+        len(e.workflow_task_scheduled_event_attributes.stream_wakes)
+        for e in (await reader.fetch_history()).events
+        if e.HasField("workflow_task_scheduled_event_attributes")
+    )
+    # One leading and one trailing delivery per window, plus the first wake.
+    assert 1 <= wakes <= 2 * (int(elapsed) + 1) + 1, wakes
 
 
 async def _completed_tasks(handle: Any) -> int:
