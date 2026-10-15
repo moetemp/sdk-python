@@ -34,6 +34,13 @@ class _StreamOwnerKindEnumTypeWrapper(
     failure. If the Workflow's run chain ends with no close and callbacks are attached, the
     stream notifier closes the stream with a failure within `streamnotifier.ownerCheckInterval`.
     """
+    STREAM_OWNER_KIND_ACTIVITY: _StreamOwnerKind.ValueType  # 2
+    """A standalone Activity owns the stream. The Activity closes the stream itself, with a result
+    or a failure. If the Activity run reaches a terminal status with no close and callbacks
+    are attached, the stream notifier closes the stream within
+    `streamnotifier.ownerCheckInterval`. A completed run gives no result. A failed, canceled,
+    terminated or timed-out run gives the run's own failure.
+    """
 
 class StreamOwnerKind(_StreamOwnerKind, metaclass=_StreamOwnerKindEnumTypeWrapper):
     """What owns a stream. The owner decides when the stream closes."""
@@ -43,5 +50,12 @@ STREAM_OWNER_KIND_WORKFLOW: StreamOwnerKind.ValueType  # 1
 """A Workflow owns the stream. The Workflow closes the stream itself, with a result or a
 failure. If the Workflow's run chain ends with no close and callbacks are attached, the
 stream notifier closes the stream with a failure within `streamnotifier.ownerCheckInterval`.
+"""
+STREAM_OWNER_KIND_ACTIVITY: StreamOwnerKind.ValueType  # 2
+"""A standalone Activity owns the stream. The Activity closes the stream itself, with a result
+or a failure. If the Activity run reaches a terminal status with no close and callbacks
+are attached, the stream notifier closes the stream within
+`streamnotifier.ownerCheckInterval`. A completed run gives no result. A failed, canceled,
+terminated or timed-out run gives the run's own failure.
 """
 global___StreamOwnerKind = StreamOwnerKind

@@ -18,6 +18,7 @@ wake on the next Workflow Task scheduled event, so a wake adds no event.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import timedelta
@@ -94,6 +95,10 @@ _FINAL_ERRORS: tuple[type[StreamError], ...] = (
     StreamRefusedError,
     StreamUnsupportedError,
 )
+# How long a reader of an Activity's stream waits for the notifier's close
+# after its read ended with the run. The notifier checks the owner every 30
+# seconds by default, and debounces its deliveries.
+_OWNER_CLOSE_WAIT = timedelta(seconds=60)
 # Held on the run's runtime: how many readers the run made. Replay makes them
 # in the same order, so each reader gets the same number.
 _READERS_ATTRIBUTE = "_temporal_stream_readers"
@@ -170,6 +175,10 @@ class _ReadInput:
     """The reader's id in its run, which names its hold on the records."""
     read_seq: int = 0
     """How many reads the reader made, this one included."""
+    owner_kind: str = "workflow"
+    """The owner kind of the stream, as :attr:`StreamRef.kind`."""
+    activity_id: str = ""
+    """The owning standalone Activity, for an ``"activity"`` owner."""
 
 
 @dataclass
@@ -186,6 +195,11 @@ class _ReaderState:
     attach_now: bool = False
     attached_run_id: str = ""
     done: bool = False
+    # Set when the read of an Activity's stream ended because the run ended,
+    # with no close.
+    owner_ended: bool = False
+    # Set once the reader attached to hear how an Activity run ended.
+    owner_attached: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
     reads: int = 0
@@ -300,6 +314,7 @@ class WorkflowStreamReader(Generic[T]):
         state = self._state
         while True:
             if state.done:
+                await self._wait_for_owner_close()
                 raise self._end()
             if (
                 state.sleep_after is not None
@@ -321,7 +336,19 @@ class WorkflowStreamReader(Generic[T]):
             state.cursor = response.cursor
             state.state = response.state
             if response.done:
+                owner_ended = self._ref.kind == "activity" and not (
+                    response.closed_by
+                    or response.HasField("close_result")
+                    or response.HasField("close_failure")
+                )
+                if owner_ended and state.attach and not state.owner_attached:
+                    # Only the notifier knows how the Activity run ended, and it
+                    # tells only the readers attached to it.
+                    state.owner_attached = True
+                    state.attach_now = True
+                    continue
                 state.done = True
+                state.owner_ended = owner_ended
                 if response.HasField("close_failure"):
                     state.close_failure = response.close_failure
             elif not records:
@@ -334,6 +361,32 @@ class WorkflowStreamReader(Generic[T]):
                 state.sleep_after = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
+
+    async def _wait_for_owner_close(self) -> None:
+        """Wait for the notifier's close after a standalone Activity's run ended.
+
+        Core ends the read once the run ended, with no outcome. The
+        notifier's owner check closes the stream with the run's failure a
+        little later, and wakes the readers attached to it, so a reader that
+        never attached attaches first. Only a reader of an Activity's stream
+        waits, and at most ``_OWNER_CLOSE_WAIT``, since a Workflow owner's
+        normal end has no close and the wait would delay every such reader.
+        """
+        state = self._state
+        if not state.owner_ended or state.attach:
+            return
+        state.owner_ended = False
+
+        def settled() -> bool:
+            wake = wake_state(self.subscription_id)
+            return wake is not None and (wake.closed or wake.resubscribe)
+
+        try:
+            await workflow.wait_condition(
+                settled, timeout=_OWNER_CLOSE_WAIT.total_seconds()
+            )
+        except asyncio.TimeoutError:
+            pass
 
     def _cut_task(self) -> None:
         if self._cutoff is None:
@@ -395,6 +448,8 @@ class WorkflowStreamReader(Generic[T]):
         attaching = state.attach and state.attach_now and attach
         return _ReadInput(
             workflow_id=self._ref.workflow_id,
+            owner_kind=self._ref.kind,
+            activity_id=self._ref.activity_id or "",
             chain_run_id=self._ref.chain_run_id or "",
             topic=self._topic,
             after=state.cursor,
@@ -525,7 +580,7 @@ def workflow_reader(
     cutoff: TaskCutoff | None = TaskCutoff(),
     replay_from_store: bool = True,
 ) -> WorkflowStreamReader[Any]:
-    """A reader of a Workflow's stream, for Workflow code.
+    """A reader of a stream, for Workflow code.
 
     Each read is one Local Activity, which adds one marker event when its
     Workflow Task completes. While the stream is idle, the reader waits for
@@ -538,15 +593,19 @@ def workflow_reader(
     turns on.
 
     The reader follows the owner's run chain across Continue-as-New, as
-    every read does. To go on in the next run of the reading Workflow, pass
+    every read does. On the stream of a standalone Activity it reads the
+    Activity run, and ends when that run closes the stream or ends. When
+    the run ends with no close, the stream's notifier closes it with the
+    run's outcome, and the reader raises the run's failure after its last
+    batch. To go on in the next run of the reading Workflow, pass
     :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
     the run that attached, so after a reset, the new run reads once more
     to attach itself before it sleeps.
 
     Args:
         ref: The stream's owner, as a
-            :class:`temporalio.contrib.streams.StreamRef` or a Workflow id
-            in this namespace.
+            :class:`temporalio.contrib.streams.StreamRef` of any owner, or
+            a Workflow id in this namespace.
         topic: The topic to read. Without one, the ref's topic.
         result_type: The type records decode to, for a plain string topic.
         after: Where to start: a cursor, ``BEGINNING``, ``END``, or the
@@ -636,8 +695,12 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     info = temporalio.activity.info()
     client = temporalio.activity.client()
     store = store_for_client(client)
-    ref = StreamRef.for_workflow(
-        input.workflow_id, topic=input.topic, chain_run_id=input.chain_run_id or None
+    ref = StreamRef(
+        input.owner_kind,
+        input.workflow_id,
+        topic=input.topic,
+        chain_run_id=input.chain_run_id or None,
+        activity_id=input.activity_id or None,
     )
     handle = StreamHandle(store, client, ref)
     service = await store._service_for(client)

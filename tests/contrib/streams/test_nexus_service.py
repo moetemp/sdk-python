@@ -565,7 +565,7 @@ async def test_argument_mistakes_are_bad_requests(service: Service):
 async def test_a_reference_this_release_cannot_open_is_refused(service: Service):
     # The SDK cannot build a ref of another owner kind, so the body is raw.
     body_ = json.dumps(
-        {"stream": {"kind": "activity", "workflow_id": "wf", "topic": "t"}}
+        {"stream": {"kind": "nexus", "workflow_id": "wf", "topic": "t"}}
     ).encode()
     with pytest.raises(HTTPStatusError) as refused:
         await asyncio.to_thread(
@@ -576,7 +576,7 @@ async def test_a_reference_this_release_cannot_open_is_refused(service: Service)
     assert refused.value.status == 501
     assert not refused.value.retryable
     assert refused_as(refused.value) == "StreamUnsupportedError"
-    assert "activity" in refused.value.detail
+    assert "nexus" in refused.value.detail
 
 
 async def test_a_read_says_done_once_the_owner_closes(service: Service):

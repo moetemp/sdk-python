@@ -77,6 +77,8 @@ The store cleans up after itself, with no job to run:
   the keyspace with `SCAN`, so run it rarely. Run it only after the chain
   closed and its producers stopped: it also removes the close flag and the
   dedupe state, so a late append writes a fresh log.
+  `delete_activity_streams(namespace, activity_id)` does the same for the
+  streams of every run of a standalone Activity id.
 
 ## When a Workflow closes
 

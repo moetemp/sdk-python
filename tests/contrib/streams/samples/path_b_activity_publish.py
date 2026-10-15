@@ -1,8 +1,9 @@
 """Path B: an Activity streams tokens to its Workflow's stream.
 
 The Activity writes as itself (its Activity id with the scheduling run id,
-and its Temporal attempt), so a retry is reported to readers as
-``SUPERSEDED`` and the reader can drop what the failed attempt wrote.
+and an attempt from the attempt's start time), so a retry is reported to
+readers as ``SUPERSEDED`` and the reader can drop what the failed attempt
+wrote.
 Records an Activity appends are visible at once.
 """
 
