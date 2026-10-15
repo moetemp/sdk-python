@@ -49,6 +49,7 @@ from temporalio.contrib.streams import (
     workflow_writer,
 )
 from temporalio.contrib.streams._workflow import read_activity
+from temporalio.contrib.streams._workflow_follow import follow_activity
 from temporalio.contrib.streams._workflow_writer import (
     PUBLISH_ACTIVITY,
     _FlushGate,
@@ -517,6 +518,7 @@ async def test_a_worker_registers_the_builtin_activities_once(client: Client):
         publish_activity,
         read_activity,
         close_activity,
+        follow_activity,
     ]
     with pytest.warns(UserWarning, match="same plugin type"):
         worker = Worker(
@@ -529,6 +531,7 @@ async def test_a_worker_registers_the_builtin_activities_once(client: Client):
         publish_activity,
         read_activity,
         close_activity,
+        follow_activity,
     ]
     assert PUBLISH_ACTIVITY == "__temporal_streams_publish"
 
