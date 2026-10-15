@@ -138,13 +138,19 @@ class Connector:
 | A client | `await get_stream_handle(client, workflow_id).close(result, error=...)` |
 | Nobody | The owner's run chain ends. The notifier's owner check closes the stream |
 
-`close_workflow_stream` lands what the topic's writer buffered and writes
-`FINISH` first. Then one Local Activity closes the store and the notifier.
+`close_workflow_stream` puts the run's `FINISH` in the activation, after
+what the run published before. Core appends it before it starts the close's
+Local Activity, which closes the store and the notifier.
 Every read ends after the last record. A sleeping reader wakes. The store
 keeps the first close's outcome and hands it to every reader that reaches
 the end, so a client read raises the close's error after its last record,
 and a Workflow reader raises it after its last batch. A close with a result
 ends the read with no error.
+
+A close from an Activity or a client is not visible to the owner
+Workflow's writer. Core drops the Workflow's later records on that topic
+(DD-179), and the run goes on. Close from the owner Workflow, or have
+readers check how the stream closed.
 
 Close explicitly. Without a close, the notifier's owner check closes the
 stream up to `ownerCheckInterval` plus `ownerCloseGrace` after the owner
