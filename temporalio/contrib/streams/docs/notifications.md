@@ -149,7 +149,7 @@ ends the read with no error.
 
 A close from an Activity or a client is not visible to the owner
 Workflow's writer. Core drops the Workflow's later records on that topic
-(DD-179), and the run goes on. Close from the owner Workflow, or have
+and the run goes on. Close from the owner Workflow, or have
 readers check how the stream closed.
 
 Close explicitly. Without a close, the notifier's owner check closes the
