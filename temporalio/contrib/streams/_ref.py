@@ -29,16 +29,17 @@ from temporalio.converter import (
 
 __all__ = ["StreamOwnerKind", "StreamRef"]
 
-StreamOwnerKind = Literal["workflow", "activity"]
+StreamOwnerKind = Literal["workflow", "activity", "workflow_activity"]
 """The owner kinds this release opens.
 
 A Workflow owns a stream through its run chain. A standalone Activity owns a
-stream through one run. :attr:`StreamRef.kind` is a plain string, so a ref
+stream through one run. An Activity that a Workflow scheduled owns a stream
+through its scheduling run. :attr:`StreamRef.kind` is a plain string, so a ref
 that names an owner kind a later release adds still decodes, and is refused
 where a handle opens.
 """
 
-_KINDS = ("workflow", "activity")
+_KINDS = ("workflow", "activity", "workflow_activity")
 
 
 @dataclass(frozen=True)
@@ -50,14 +51,19 @@ class StreamRef:
     read on it follows the chain across Continue-as-New and ends only when
     the chain ends. An ``"activity"`` ref carries ``activity_id`` and an
     empty ``workflow_id``. The stream belongs to one run of a standalone
-    Activity, and a read on it ends when that run ends. ``topic`` is the
-    topic a handle opened from the ref addresses when a call names none.
+    Activity, and a read on it ends when that run ends. A
+    ``"workflow_activity"`` ref carries ``workflow_id``, ``activity_id`` and
+    ``chain_run_id``. The stream belongs to the Activity with that id that
+    the run ``chain_run_id`` of the Workflow scheduled, and it ends when that
+    run sees the Activity end. ``topic`` is the topic a handle opened from
+    the ref addresses when a call names none.
 
     ``chain_run_id`` picks which chain: the one that holds that run. A
     Workflow id can start a new chain once the old one closed, and without
     ``chain_run_id`` a ref names the newest chain. It never stops a read at
     that run's end. For an Activity ref it is the Activity run. Without it
-    the ref names the newest run of the Activity id when a read starts.
+    the ref names the newest run of the Activity id when a read starts. For a
+    Workflow Activity ref it is the scheduling run, and it is required.
 
     The default data converter carries it as JSON, so it can be a Workflow
     argument or an Activity result.
@@ -78,8 +84,10 @@ class StreamRef:
 
         Raises:
             ValueError: ``kind`` or ``topic`` is empty, a Workflow ref has no
-                ``workflow_id`` or has an ``activity_id``, or an Activity ref
-                has no ``activity_id`` or has a ``workflow_id``.
+                ``workflow_id`` or has an ``activity_id``, an Activity ref
+                has no ``activity_id`` or has a ``workflow_id``, or a
+                Workflow Activity ref lacks one of ``workflow_id``,
+                ``activity_id`` and ``chain_run_id``.
         """
         if not self.kind:
             raise ValueError("a StreamRef needs a kind")
@@ -93,6 +101,10 @@ class StreamRef:
                 raise ValueError("an Activity StreamRef needs an activity_id")
             if self.workflow_id:
                 raise ValueError("an Activity StreamRef has no workflow_id")
+        if self.kind == "workflow_activity":
+            for name in ("workflow_id", "activity_id", "chain_run_id"):
+                if not getattr(self, name):
+                    raise ValueError(f"a Workflow Activity StreamRef needs its {name}")
         if not self.topic:
             raise ValueError("a StreamRef needs a topic name")
 
@@ -100,14 +112,13 @@ class StreamRef:
         """Refuse to open a stream whose owner kind this release lacks.
 
         Raises:
-            StreamUnsupportedError: ``kind`` is not ``"workflow"`` or
-                ``"activity"``.
+            StreamUnsupportedError: ``kind`` is not ``"workflow"``,
+                ``"activity"`` or ``"workflow_activity"``.
         """
         if self.kind not in _KINDS:
             raise StreamUnsupportedError(
                 f"streams owned by kind {self.kind!r} are not supported in this "
-                "release; only streams owned by a Workflow or a standalone "
-                "Activity are"
+                "release; only streams owned by a Workflow or an Activity are"
             )
 
     @classmethod
@@ -148,6 +159,30 @@ class StreamRef:
             "activity", "", topic=name, chain_run_id=run_id, activity_id=activity_id
         )
 
+    @classmethod
+    def for_workflow_activity(
+        cls,
+        workflow_id: str,
+        *,
+        run_id: str,
+        activity_id: str,
+        topic: str | StreamTopic[Any] | None = None,
+    ) -> StreamRef:
+        """A ref to ``topic`` of the stream of Activity ``activity_id`` of a Workflow run.
+
+        ``run_id`` is the run that scheduled the Activity. An Activity id
+        names one Activity only within a run, so it is required. Without
+        ``topic`` it names :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        """
+        name, _ = resolve_topic(topic)
+        return cls(
+            "workflow_activity",
+            workflow_id,
+            topic=name,
+            chain_run_id=run_id,
+            activity_id=activity_id,
+        )
+
     def with_topic(self, topic: str | StreamTopic[Any] | None) -> StreamRef:
         """The same owner, naming ``topic`` instead.
 
@@ -177,6 +212,10 @@ def stream_address(
     if ref.kind == "activity":
         address.owner_kind = _OwnerKind.STREAM_OWNER_KIND_ACTIVITY
         address.activity_id = ref.activity_id or ""
+    elif ref.kind == "workflow_activity":
+        address.owner_kind = _OwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY
+        address.workflow_id = ref.workflow_id
+        address.activity_id = ref.activity_id or ""
     else:
         address.owner_kind = _OwnerKind.STREAM_OWNER_KIND_WORKFLOW
         address.workflow_id = ref.workflow_id
@@ -188,8 +227,9 @@ def owner_context(
 ) -> SerializationContext:
     """The codec context of every record and close of one owner's streams.
 
-    An Activity owner gets only its namespace and id, since a reader can
-    build no more from the ref.
+    An Activity owner gets only its namespace, its id and the id of the
+    Workflow that scheduled it, if any, since a reader can build no more from
+    the ref.
     """
     if activity_id:
         return ActivitySerializationContext(
@@ -197,7 +237,7 @@ def owner_context(
             activity_id=activity_id,
             activity_type=None,
             activity_task_queue=None,
-            workflow_id=None,
+            workflow_id=workflow_id or None,
             workflow_type=None,
             is_local=False,
         )

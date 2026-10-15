@@ -307,7 +307,8 @@ class StreamStorePlugin(SimplePlugin):
         An admin helper for cleanup and compliance requests. Deleting a
         Workflow does not delete its streams. Their retention bounds what is
         left, and this removes it at once, across every run chain of the
-        Workflow id. It asks Temporal nothing, so it can run after the
+        Workflow id, and the streams of every Activity that a run of the
+        Workflow scheduled. It asks Temporal nothing, so it can run after the
         Workflow is gone. On Redis it walks the keyspace, so run it rarely,
         not on a hot path.
 

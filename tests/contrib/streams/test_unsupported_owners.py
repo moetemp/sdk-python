@@ -1,6 +1,6 @@
 """Owners and readers this release does not support say so.
 
-Only a Workflow or a standalone Activity owns a stream in this release.
+Only a Workflow or an Activity owns a stream in this release.
 Every other owner raises ``StreamUnsupportedError``.
 """
 
@@ -32,7 +32,7 @@ async def test_a_ref_refuses_owner_kinds_this_release_lacks_where_it_opens(
     streams_client = await connect_with(client, MemoryStreams())
     for kind in ("standalone", "nexus"):
         ref = StreamRef(kind, "x")  # type: ignore[arg-type]
-        with pytest.raises(StreamUnsupportedError, match="a Workflow or a standalone"):
+        with pytest.raises(StreamUnsupportedError, match="a Workflow or an Activity"):
             get_stream_handle(streams_client, ref)
 
 

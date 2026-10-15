@@ -5,8 +5,8 @@ checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
 needs the plaintext or the user's types: converting values, the two hashes
 taken before the codec, and the codec itself.
 
-An Activity reaches the stream of the Workflow that scheduled it, and writes
-as itself: Core derives its producer id as
+An Activity reaches the stream of the Workflow that scheduled it, or its own
+stream when the Workflow scheduled it to own one, and writes as itself: Core derives its producer id as
 ``<Activity id>@<scheduling run id>`` and its producer attempt from the
 attempt's start time and its Temporal attempt, so a retry is reported to
 readers as ``SUPERSEDED``. The
@@ -28,7 +28,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -54,7 +54,11 @@ from temporalio.contrib.streams._errors import (
     StreamNotFoundError,
     StreamUnsupportedError,
 )
-from temporalio.contrib.streams._local_activity import LocalCall, current_local_call
+from temporalio.contrib.streams._local_activity import (
+    LocalCall,
+    current_local_call,
+    owns_stream,
+)
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     call,
@@ -226,8 +230,9 @@ class StreamHandle:
 
     A handle on a Workflow's stream follows the run chain, so a read goes on
     across Continue-as-New and ends when the chain closes. A handle on a
-    standalone Activity's stream ends a read when the Activity run ends. A
-    topic is a
+    standalone Activity's stream ends a read when the Activity run ends, and
+    a handle on the stream of an Activity that a Workflow scheduled ends a
+    read when the Workflow saw the Activity end. A topic is a
     :class:`temporalio.contrib.streams.StreamTopic`, which carries the record
     type, or a plain string with ``result_type=`` for a name decided at
     runtime. A call that names no topic addresses the topic of :attr:`ref`.
@@ -516,15 +521,15 @@ class StreamHandle:
         ``chain_run_id`` is the Workflow id's newest, the read names no run
         and follows that chain to its end. Once a newer chain took the id,
         the old chain has ended, and a read on any of its runs delivers what
-        is left and ends. One Activity run is its own chain, so a read on an
-        Activity's stream names the ref's run and asks Temporal nothing.
+        is left and ends. An Activity's stream belongs to one run, so a read
+        on it names the ref's run and asks Temporal nothing.
 
         Raises:
             StreamNotFoundError: Temporal holds no run ``chain_run_id``.
             StreamError: Describing the Workflow failed.
         """
         run_id = self._ref.chain_run_id
-        if not run_id or self._ref.kind == "activity":
+        if not run_id or self._ref.kind != "workflow":
             return run_id or ""
         workflow_id = self._ref.workflow_id
         try:
@@ -549,9 +554,8 @@ class StreamHandle:
 class ActivityStreamHandle:
     """The running Activity's stream, as the Activity sees it.
 
-    In an Activity that a Workflow scheduled, it is the scheduling
-    Workflow's stream. In a standalone Activity, it is the Activity's own
-    stream.
+    It is the Activity's own stream or the scheduling Workflow's stream, as
+    :func:`temporalio.contrib.streams.activity_handle` picked.
 
     Reads and positions as :class:`temporalio.contrib.streams.StreamHandle`
     does. :meth:`producer` writes as this Activity, which is the only
@@ -696,16 +700,31 @@ class ActivityStreamHandle:
         return producer
 
 
-def activity_handle() -> ActivityStreamHandle:
+def activity_handle(
+    scope: Literal["activity", "workflow"] | None = None,
+) -> ActivityStreamHandle:
     """The running Activity's stream.
 
-    In an Activity that a Workflow scheduled, it is the stream of the
-    scheduling Workflow. Its ref names the chain of the scheduling run with
-    ``chain_run_id``, so its producers write to that chain even once a new
+    ``scope="activity"`` is the Activity's own stream, and
+    ``scope="workflow"`` the stream of the Workflow that scheduled it. With
+    no ``scope``, an Activity that a Workflow scheduled with
+    :func:`temporalio.contrib.streams.start_activity_with_stream` gets its own
+    stream, and any other Activity that a Workflow scheduled gets the
+    Workflow's stream. A standalone Activity has only its own stream.
+
+    The Workflow's stream is named by its ref with ``chain_run_id`` set to
+    the scheduling run, so its producers write to that chain even once a new
     chain took the Workflow id. A read on it follows that chain across
     Continue-as-New and ends when the chain ends.
 
-    In a standalone Activity, it is the Activity's own stream, named by
+    The own stream of an Activity that a Workflow scheduled is named by
+    :meth:`temporalio.contrib.streams.StreamRef.for_workflow_activity` with
+    the Workflow id, the scheduling run and the Activity id. Every attempt
+    writes to it. It closes when the scheduling Workflow sees the Activity
+    end: with a null result when the Activity completed, else with the
+    failure that History holds. The Activity may close it first itself.
+
+    The own stream of a standalone Activity is named by
     :meth:`temporalio.contrib.streams.StreamRef.for_activity` with the
     Activity id and run. Every attempt of the run writes to it, and it stays
     open until the Activity closes it or the run ends. When the run ends
@@ -716,23 +735,42 @@ def activity_handle() -> ActivityStreamHandle:
     To write to another stream, use :func:`get_stream_handle` with
     ``temporalio.activity.client()`` and a producer id of your own.
 
-    A Local Activity writes too, while the Workflow Task that runs it is
-    still open. Its attempt is not durable, so the store plugin's Worker
-    interceptor numbers each call for a producer id that survives a rerun,
-    and its first append asks the server for an attempt that grows across
-    reruns. See :meth:`ActivityStreamHandle.producer`.
+    A Local Activity writes the Workflow's stream too, while the Workflow
+    Task that runs it is still open. Its attempt is not durable, so the
+    store plugin's Worker interceptor numbers each call for a producer id
+    that survives a rerun, and its first append asks the server for an
+    attempt that grows across reruns. See :meth:`ActivityStreamHandle.producer`.
 
     Raises:
         StreamUnsupportedError: A standalone Activity got no run id from
-            the server. Or it is a Local Activity that the Worker's stream
-            interceptor did not number. Its first append raises it when its
-            History or attempts are too long to encode.
-        ValueError: No stream store is registered on the Worker's client.
+            the server, or asked for ``scope="workflow"``. A Local Activity
+            asked for ``scope="activity"``, since it has no server state
+            that could end its stream. Or it is a Local Activity that the
+            Worker's stream interceptor did not number. Its first append
+            raises it when its History or attempts are too long to encode.
+        ValueError: ``scope`` is not ``"activity"``, ``"workflow"`` or
+            ``None``, or no stream store is registered on the Worker's
+            client.
         RuntimeError: Not called from inside an Activity.
     """
+    # A caller without a type checker can pass any value.
+    if cast(Any, scope) not in (None, "activity", "workflow"):
+        raise ValueError(f"scope must be 'activity' or 'workflow', got {scope!r}")
     info = temporalio.activity.info()
     if info.workflow_id is None or info.workflow_run_id is None:
+        if scope == "workflow":
+            raise StreamUnsupportedError(
+                "a standalone Activity has no scheduling Workflow, so it has no "
+                "Workflow stream"
+            )
         return _standalone_handle(info)
+    if info.is_local and scope == "activity":
+        raise StreamUnsupportedError(
+            "a Local Activity can't own a stream, since the server holds no state "
+            "for it that could end the stream"
+        )
+    if scope is None:
+        scope = "activity" if owns_stream() else "workflow"
     local_call = None
     if info.is_local:
         local_call = current_local_call()
@@ -743,7 +781,16 @@ def activity_handle() -> ActivityStreamHandle:
                 "a rerun; build the Worker from a client that carries the store"
             )
     client = temporalio.activity.client()
-    ref = StreamRef.for_workflow(info.workflow_id, chain_run_id=info.workflow_run_id)
+    if scope == "activity":
+        ref = StreamRef.for_workflow_activity(
+            info.workflow_id,
+            run_id=info.workflow_run_id,
+            activity_id=info.activity_id,
+        )
+    else:
+        ref = StreamRef.for_workflow(
+            info.workflow_id, chain_run_id=info.workflow_run_id
+        )
     identity = ActivityProducer(
         workflow_id=info.workflow_id,
         run_id=info.workflow_run_id,
@@ -752,7 +799,7 @@ def activity_handle() -> ActivityStreamHandle:
     )
     _set_attempt_start(identity, info.started_time)
     inner = StreamHandle(store_for_client(client), client, ref)
-    return ActivityStreamHandle(inner, identity, _attempt_producers(), local_call)
+    return ActivityStreamHandle(inner, identity, _attempt_producers(scope), local_call)
 
 
 def _standalone_handle(info: temporalio.activity.Info) -> ActivityStreamHandle:
@@ -806,20 +853,20 @@ def attempt_key(attempt: int, started_ms: int | None) -> int | None:
     return started_ms << 11 | min(attempt, 0x7FF)
 
 
-# The producers of each running Activity attempt, by topic, under the id of the
-# attempt's context. The context isn't hashable, so a finalizer drops the entry
-# with it.
-_activity_producers: dict[int, dict[str, StreamProducer[Any]]] = {}
+# The producers of each running Activity attempt, by scope and topic, under
+# the id of the attempt's context. The context isn't hashable, so a finalizer
+# drops the entry with it.
+_activity_producers: dict[int, dict[str, dict[str, StreamProducer[Any]]]] = {}
 
 
-def _attempt_producers() -> dict[str, StreamProducer[Any]]:
+def _attempt_producers(scope: str = "activity") -> dict[str, StreamProducer[Any]]:
     context = temporalio.activity._Context.current()
     key = id(context)
-    producers = _activity_producers.get(key)
-    if producers is None:
-        producers = _activity_producers[key] = {}
+    scopes = _activity_producers.get(key)
+    if scopes is None:
+        scopes = _activity_producers[key] = {}
         weakref.finalize(context, _activity_producers.pop, key, None)
-    return producers
+    return scopes.setdefault(scope, {})
 
 
 def get_stream_handle(
@@ -834,8 +881,9 @@ def get_stream_handle(
     A handle on a Workflow's stream follows the Workflow's run chain, so a
     read continues across Continue-as-New and ends when the chain closes.
     ``topic`` is the topic a call that names none addresses. To open the
-    stream of a standalone Activity, pass a ref from
-    :meth:`temporalio.contrib.streams.StreamRef.for_activity`.
+    stream of an Activity, pass a ref from
+    :meth:`temporalio.contrib.streams.StreamRef.for_activity` or
+    :meth:`temporalio.contrib.streams.StreamRef.for_workflow_activity`.
 
     Args:
         client: A client that carries a stream store plugin.

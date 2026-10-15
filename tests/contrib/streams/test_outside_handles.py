@@ -27,9 +27,11 @@ from temporalio.contrib.streams import (
     StreamNotFoundError,
     StreamProducerError,
     StreamRef,
+    StreamUnsupportedError,
     Supersession,
     activity_handle,
     get_stream_handle,
+    start_activity_with_stream,
     topic,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -624,3 +626,139 @@ async def test_an_activity_stream_uses_the_activitys_namespace_and_id_as_context
     assert (await records.__anext__()).value == "keyed"
     with pytest.raises(ApplicationError, match="keyed close"):
         await records.__anext__()
+
+
+@activity.defn
+async def names_its_streams() -> list[StreamRef]:
+    return [
+        activity_handle().ref,
+        activity_handle(scope="activity").ref,
+        activity_handle(scope="workflow").ref,
+    ]
+
+
+@workflow.defn
+class StartsActivitiesWithStreams:
+    @workflow.run
+    async def run(self) -> list[list[StreamRef]]:
+        timeout = timedelta(seconds=10)
+        owned, ref = start_activity_with_stream(
+            names_its_streams, start_to_close_timeout=timeout, topic=TOKENS
+        )
+        named, named_ref = start_activity_with_stream(
+            names_its_streams, activity_id="tool-1", start_to_close_timeout=timeout
+        )
+        plain = workflow.start_activity(
+            names_its_streams, activity_id="plain", start_to_close_timeout=timeout
+        )
+        return [[ref, *await owned], [named_ref, *await named], await plain]
+
+
+async def test_activity_handle_follows_the_header_and_scope_overrides_it(
+    client: Client,
+):
+    streams_client = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams_client, StartsActivitiesWithStreams, activities=[names_its_streams]
+    ) as worker:
+        handle = await streams_client.start_workflow(
+            StartsActivitiesWithStreams.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+        )
+        [owned, named, plain] = await handle.result()
+    run_id = handle.result_run_id or ""
+    workflow_ref = StreamRef.for_workflow(workflow_id, chain_run_id=run_id)
+
+    def own(activity_id: str) -> StreamRef:
+        return StreamRef.for_workflow_activity(
+            workflow_id, run_id=run_id, activity_id=activity_id
+        )
+
+    # The helper's ref names the default id the SDK gave the call, and the
+    # Activity with the header opens its own stream with no scope.
+    assert owned == [own("1").with_topic(TOKENS), own("1"), own("1"), workflow_ref]
+    assert named == [own("tool-1"), own("tool-1"), own("tool-1"), workflow_ref]
+    # An Activity without the header keeps the Workflow's stream.
+    assert plain == [workflow_ref, own("plain"), workflow_ref]
+
+
+@workflow.defn
+class StartsWithoutAStore:
+    @workflow.run
+    async def run(self) -> str:
+        try:
+            start_activity_with_stream(
+                names_its_streams, start_to_close_timeout=timedelta(seconds=10)
+            )
+        except StreamUnsupportedError as error:
+            return str(error)
+        return ""
+
+
+async def test_the_helper_needs_the_store_interceptor(client: Client):
+    async with new_worker(
+        client, StartsWithoutAStore, activities=[names_its_streams]
+    ) as worker:
+        message = await client.execute_workflow(
+            StartsWithoutAStore.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert "interceptor" in message
+
+
+@activity.defn
+async def asks_for_a_scope(scope: str) -> str:
+    try:
+        activity_handle(scope=scope)  # type: ignore[arg-type]
+    except (StreamUnsupportedError, ValueError) as error:
+        return f"{type(error).__name__}: {error}"
+    return "ok"
+
+
+@workflow.defn
+class AsksLocallyForItsOwnStream:
+    @workflow.run
+    async def run(self) -> list[str]:
+        return [
+            await workflow.execute_local_activity(
+                asks_for_a_scope,
+                scope,
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            for scope in ["activity", "workflow", "nonsense"]
+        ]
+
+
+async def test_a_local_activity_cannot_own_a_stream(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    async with new_worker(
+        streams_client, AsksLocallyForItsOwnStream, activities=[asks_for_a_scope]
+    ) as worker:
+        answers = await streams_client.execute_workflow(
+            AsksLocallyForItsOwnStream.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert answers[0].startswith("StreamUnsupportedError: a Local Activity can't own")
+    assert answers[1] == "ok"
+    assert answers[2].startswith("ValueError: scope must be")
+
+
+async def test_a_standalone_activity_has_no_workflow_scope(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+    async with new_worker(streams_client, activities=[asks_for_a_scope]) as worker:
+        answers = [
+            await streams_client.execute_activity(
+                asks_for_a_scope,
+                scope,
+                id=new_workflow_id(),
+                task_queue=worker.task_queue,
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            for scope in ["workflow", "activity"]
+        ]
+    assert answers[0].startswith("StreamUnsupportedError: a standalone Activity")
+    assert answers[1] == "ok"
