@@ -8,11 +8,12 @@ stream service on a Nexus endpoint, and waits for progress once a read finds
 nothing new. Every append notifies the operation's callers, and the server
 folds the notifications of a busy stream into one per debounce window.
 
-By default every read is a Nexus operation of the Workflow, so History
-records what each read answered, and a replay hands over the same batches at
-the same points. With ``replay_from_store=True`` each read runs in a Local
-Activity, History keeps only the range that crossed and its digest, and a
-replay reads that range again from the owner's store.
+By default, ``replay_from_store=True``, each read runs in a Local Activity,
+History keeps only the range that crossed and its digest, and a replay reads
+that range again from the owner's store. It needs a direct-read transport
+for the endpoint. With ``replay_from_store=False`` every read is a Nexus
+operation of the Workflow, so History records what each read answered, and a
+replay hands over the same batches at the same points.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast
 
 from temporalio import workflow
-from temporalio.common import RawValue
+from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib.streams._errors import (
     StreamError,
     StreamRecordError,
@@ -218,10 +219,10 @@ class StreamReader(Generic[T]):
     progress, so this read is what finds its record. Each such read costs a
     timer and a read in History.
 
-    By default every read is a Nexus operation result in the caller's
-    History, about three events and up to one read answer (1 MiB of records)
-    each. With ``replay_from_store=True`` a read is one Local Activity marker
-    of a few hundred bytes, as below. To read a long stream, Continue-as-New before History grows too large: pass
+    By default a read is one Local Activity marker of a few hundred bytes, as
+    below. With ``replay_from_store=False`` every read is a Nexus operation
+    result in the caller's History, about three events and up to one read
+    answer (1 MiB of records) each. To read a long stream, Continue-as-New before History grows too large: pass
     :attr:`position` to the new run, start the operation again there, and
     build the reader with ``after=position``. The position is at most about
     22 KiB. After a successful completion, the
@@ -273,7 +274,7 @@ class StreamReader(Generic[T]):
         after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
         idle_wait: timedelta = timedelta(seconds=2),
-        replay_from_store: bool = False,
+        replay_from_store: bool = True,
     ) -> None:
         """Read the stream ``handle``'s operation returns.
 
@@ -297,10 +298,13 @@ class StreamReader(Generic[T]):
                 it well below the 10 second timeout of a Nexus request.
             replay_from_store: Read in a Local Activity and record only the
                 range of each read and its digest, so the records stay out
-                of History. It needs :class:`StreamDirectReads` on the
-                Worker's client with a transport for ``endpoint``, and on
-                any Replayer. ``False`` records each read's answer, records
-                included.
+                of History. The default. It needs :class:`StreamDirectReads`
+                on the Worker's client with a transport for ``endpoint``, and
+                on any Replayer. Without one, the read raises
+                :class:`temporalio.contrib.streams.StreamUnsupportedError`,
+                which names this option. ``False`` reads through Nexus
+                operations and records each read's answer, records included,
+                so it needs no transport.
 
         Raises:
             ValueError: ``drain_limit`` is not positive, or ``idle_wait`` is
@@ -573,11 +577,22 @@ class StreamReader(Generic[T]):
                 args=[self._endpoint, self._reader_id, input, self._direct_reads + 1],
                 result_type=RawValue,
                 start_to_close_timeout=wait + _DIRECT_READ_SLACK,
+                # A Worker without StreamDirectReads has no such Activity, and
+                # a retry would find none either.
+                retry_policy=RetryPolicy(non_retryable_error_types=["NotFoundError"]),
                 summary=f"stream read {input.stream.topic}",
             )
             self._direct_reads += 1
         except (ActivityError, ApplicationError) as error:
             unsupported = _unsupported(error)
+            if unsupported is None and _not_registered(error, DIRECT_READ_ACTIVITY):
+                unsupported = (
+                    f"a stream read with replay_from_store=True (the default) reads "
+                    f"directly from endpoint {self._endpoint!r}, and the Worker has no "
+                    "StreamDirectReads; register it on the Worker's client with a "
+                    "transport for the endpoint, or pass replay_from_store=False to "
+                    "the StreamReader"
+                )
             if unsupported is None:
                 raise
             # A Worker without the transport is a deployment fault, so the
@@ -629,6 +644,16 @@ def _next_reader() -> int:
     number = getattr(runtime, _READERS_ATTRIBUTE, 0) + 1
     setattr(runtime, _READERS_ATTRIBUTE, number)
     return number
+
+
+def _not_registered(error: BaseException, activity: str) -> bool:
+    """Whether the Worker refused the read Activity as one it doesn't have."""
+    cause = error.cause if isinstance(error, ActivityError) else error
+    return (
+        isinstance(cause, ApplicationError)
+        and cause.type == "NotFoundError"
+        and activity in cause.message
+    )
 
 
 def _unsupported(error: BaseException) -> str | None:

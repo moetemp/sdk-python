@@ -215,6 +215,7 @@ The caller Workflow starts the operation as usual and reads it with a
 from temporalio.contrib.streams.nexus import StreamReader
 
 handle = await nexus_client.start_operation(ConversationService.respond, request)
+# Reads directly by default, so the Worker needs a transport (see Direct reads).
 reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT)
 while (batch := await reader.next()) is not None:
     for message in batch:
@@ -305,9 +306,9 @@ values at the same points.
 
 Reading a stream adds to the caller's History in two ways.
 
-- By default each read is a synchronous Nexus operation, about three events,
-  and its answer holds up to 1 MiB of records. A direct read is one marker
-  of about 1 KiB. A gap in the stream shorter than
+- By default a read is a direct read, one marker of about 1 KiB. With
+  `replay_from_store=False` each read is a synchronous Nexus operation,
+  about three events, and its answer holds up to 1 MiB of records. A gap in the stream shorter than
   `idle_wait` costs one read. A longer gap costs one empty read, then one
   progress task.
 - Each progress delivery costs at most one Workflow Task, three events,
@@ -352,16 +353,8 @@ Two cases stop a reader that would otherwise read for ever.
 
 ### Direct reads
 
-A reader can keep the records out of its History. Build it with
-`replay_from_store=True`:
-
-```python
-reader = StreamReader(
-    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=True
-)
-```
-
-Then each read runs in a Local Activity, not as a Nexus operation of the
+By default, `replay_from_store=True`, a reader keeps the records out of its
+History. Each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and Core's digest of them, not the records. The marker is about
 1 KiB. Most of it is the stream service's read state, which grows with the
@@ -374,9 +367,20 @@ Workflow code sees it. On the live Workflow Task it takes the batch the
 Local Activity cached. On a replay it reads the range again through the
 stream service's `read_range`, which checks the records against the digest.
 
-It is off by default, since it needs a way to reach the endpoint outside the
-Workflow. Register `StreamDirectReads` on the caller Worker's client, and on
-any `Replayer`, with a transport for each endpoint:
+It needs a way to reach the endpoint outside the Workflow. Register
+`StreamDirectReads` on the caller Worker's client, and on any `Replayer`,
+with a transport for each endpoint. Without one, every read fails at once
+with `StreamUnsupportedError`, which names the opt-out. To read through
+Nexus operations instead, with each answer in History and no transport,
+build the reader with `replay_from_store=False`:
+
+```python
+reader = StreamReader(
+    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=False
+)
+```
+
+A transport:
 
 ```python
 from temporalio.contrib.streams.nexus import HttpTransport, StreamDirectReads
@@ -430,7 +434,8 @@ worker_client = await Client.connect(
   HTTP ingress and from a Workflow's Nexus call it is `None`.
 - It needs a server with the RPC turned on
   (`frontend.enableExecuteSyncNexusOperation`, off by default). Temporal Cloud
-  doesn't serve it yet.
+  doesn't serve it yet. So on Temporal Cloud no transport works today, and a
+  reader there needs `replay_from_store=False`.
 - It encodes the input and decodes the answer with the client's payload
   codec, under the wrappers that turn reads back into batches. So the
   handler's namespace must use the same codec.
@@ -458,8 +463,8 @@ A replay that misses the cache needs the endpoint and the records:
 | The store down, the endpoint gone, 401, 403, 429, 5xx, `NotFound`, `NamespaceNotActive` or a timeout | The Workflow Task fails and is retried |
 | No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
 
-A live read on a Worker with no transport for the endpoint fails its Local
-Activity. The reader raises that again from `next()` as
+A live read on a Worker with no `StreamDirectReads`, or with no transport for
+the endpoint, fails its Local Activity at once, with no retry. The reader raises that again from `next()` as
 `StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
 is retried once the Worker is fixed. Workflow code that catches every
 `Exception` around `next()` swallows it, so catch narrower errors there, or
@@ -468,7 +473,10 @@ raise `StreamUnsupportedError` again.
 So keep the endpoint and its Worker up, and keep the floor lease longer
 than a run can wait before a replay. To stop direct reads, deploy readers
 with `replay_from_store=False`. A run that already has direct-read markers
-still needs the transport to replay them.
+still needs the transport to replay them. The mode decides the commands a
+read sends, so a History recorded in one mode replays only with code that
+builds the reader in the same mode. A run recorded before this default
+changed replays with `replay_from_store=False`.
 
 A record that crossed as an error replays as the same error, even when the
 codec decodes it now, since live Workflow code never saw it.
