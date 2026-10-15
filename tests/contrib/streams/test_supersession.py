@@ -173,7 +173,7 @@ async def test_a_reader_sees_each_value_once_after_a_task_reruns(client: Client)
 
 def test_a_rerun_withdraws_the_links_of_its_earlier_attempt():
     tracker: SupersessionTracker[str] = SupersessionTracker()
-    link = StreamRecord(
+    link: StreamRecord[str] = StreamRecord(
         kind=RecordKind.LINK,
         cursor=Cursor("l1"),
         topic="t",
