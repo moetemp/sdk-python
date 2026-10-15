@@ -53,7 +53,6 @@ class CallsAsNormalActivity:
                     topic="tokens",
                     after="",
                     state="",
-                    arm=False,
                     wait_ms=100,
                     max_records=10,
                 )

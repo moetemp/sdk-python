@@ -226,9 +226,8 @@ gate() {
 }
 gate tests/contrib/streams/test_live_notifications.py \
   test_live_an_idle_client_reader_wakes_on_the_next_append \
-  test_live_a_busy_stream_sends_no_notification \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
-  test_live_every_append_mode_notifies_each_append \
+  test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
   test_live_a_workflow_reader_sleeps_and_wakes_on_an_append \
   test_live_a_workflow_reader_on_an_empty_stream_wakes_on_the_first_append \

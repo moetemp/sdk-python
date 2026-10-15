@@ -136,7 +136,8 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
         handle = get_stream_handle(notifying, owner, topic=TOKENS)
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
-        # Past the idle wait, the reader armed and waits on the notifier.
+        # Past the idle wait, the read came back empty and the reader waits
+        # on the notifier.
         await asyncio.sleep(3)
         started = time.monotonic()
         await handle.producer(producer_id="p", attempt=1).append("woke")
@@ -146,22 +147,6 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
         notifier = await describe_notifier(notifying, owner)
         assert notifier is not None and notifier.counter > 0
         await records.aclose()
-        await notifying.get_workflow_handle(owner).signal(Waits.finish)
-
-
-async def test_live_a_busy_stream_sends_no_notification(notifying: Client):
-    async with new_worker(notifying, Waits) as worker:
-        owner = await running_owner(notifying, worker.task_queue)
-        handle = get_stream_handle(notifying, owner, topic=TOKENS)
-        producer = handle.producer(producer_id="p", attempt=1)
-        records = handle.read()
-        for n in range(5):
-            await producer.append(str(n))
-            assert (await asyncio.wait_for(records.__anext__(), 5)).value == str(n)
-            await asyncio.sleep(0.2)
-        await records.aclose()
-        notifier = await describe_notifier(notifying, owner)
-        assert notifier is None or notifier.counter == 0
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
@@ -201,11 +186,9 @@ async def two_processes(client: Client) -> tuple[Client, Client]:
     return reading, silent
 
 
-async def test_live_every_append_mode_notifies_each_append(client: Client):
+async def test_live_every_append_notifies(client: Client):
     await skip_without_notifier(client)
-    streams = await connect_with(
-        client, MemoryStreams().notify_on_append(every_append=True)
-    )
+    streams = await connect_with(client, MemoryStreams().notify_on_append())
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
@@ -282,7 +265,7 @@ class Reads:
 
 
 async def _sleeping(client: Client, reader_id: str, owner: str) -> None:
-    """Wait until the reader attached and its read armed the stream."""
+    """Wait until the reader attached and its read came back empty."""
 
     async def attached() -> bool:
         notifier = await describe_notifier(client, owner)
@@ -291,7 +274,7 @@ async def _sleeping(client: Client, reader_id: str, owner: str) -> None:
         )
 
     await until(attached)
-    # Past the attach, the next read waits the idle time and arms.
+    # Past the attach, the next read waits the idle time and comes back empty.
     await asyncio.sleep(3)
 
 
