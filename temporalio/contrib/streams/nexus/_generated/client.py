@@ -17,12 +17,18 @@ import temporalio.converter
 from .models import (
     AppendInput,
     AppendOutput,
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadInput,
     ReadOutput,
     ReadRangeInput,
     StreamRef,
     _AppendInputTransferTypeConverter,
     _AppendOutputTransferTypeConverter,
+    _FollowInputTransferTypeConverter,
+    _FollowOutputTransferTypeConverter,
+    _FollowRangeInputTransferTypeConverter,
     _ReadInputTransferTypeConverter,
     _ReadOutputTransferTypeConverter,
     _ReadRangeInputTransferTypeConverter,
@@ -398,6 +404,118 @@ class TemporalStreamsHttpClient:
         answer: typing.Any = json.loads(raw)
         return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
 
+    async def follow(
+        self,
+        request: FollowInput,
+    ) -> FollowOutput:
+        """Answer with the records after the caller's position on a stream and on
+        every stream its link records open, in one order. Order within each stream
+        is kept. A linked stream's records come after its OPEN link, and the
+        linking stream's records after a JOIN come after the linked stream reached
+        the JOIN's point. Each item names its source, and a linked stream's state
+        comes as a link_state item. A linked stream that can't be read or that
+        ends never fails the call. Links to another namespace or endpoint are not
+        followed. The call waits like read, and the state resumes every open
+        stream.
+        """
+        wire: typing.Any = _FollowInputTransferTypeConverter().to_transfer_type(request)
+        body = json.dumps(wire).encode()
+        raw = await _exchange(
+            f"{self._base_url}/follow",
+            body,
+            self._headers,
+            self._timeout,
+            self._ssl_context,
+            self._payload_codec,
+        )
+        if not raw:
+            raise ValueError("follow answered with an empty body")
+        answer: typing.Any = json.loads(raw)
+        return _FollowOutputTransferTypeConverter().from_transfer_type(
+            answer, FollowOutput
+        )
+
+    async def follow_until_records(
+        self,
+        request: FollowInput,
+        *,
+        deadline: float,
+    ) -> FollowOutput:
+        """Calls ``follow`` until it answers with something, or until ``deadline``.
+
+        Each attempt sets ``wait_ms`` from the budget left, so the endpoint parks
+        for the caller instead of the caller spinning. The first answer whose
+        ``records`` is non-empty, or whose ``done`` is true, is returned. When the
+        deadline passes first, the last answer is returned, which still carries
+        the caller's resume position.
+
+        After an answer with nothing, the next attempt sends the ``state`` that
+        answer carried, so the endpoint keeps nothing between calls.
+
+        ``deadline`` is the whole budget in seconds. The single-shot method stays
+        available for a caller that wants one attempt.
+        """
+        end = time.monotonic() + deadline
+        answer: FollowOutput | None = None
+        backoff = _LONG_POLL_MIN_BACKOFF
+        while True:
+            wait = self._poll_budget(end - time.monotonic())
+            wait_ms = int(wait * 1000)
+            wait_ms = min(wait_ms, 60000)
+            wait_ms = max(wait_ms, 0)
+            wait = wait_ms / 1000
+            attempt = dataclasses.replace(request, wait_ms=wait_ms)
+            started = time.monotonic()
+            try:
+                answer = await self.follow(attempt)
+            except HTTPStatusError as error:
+                if not error.retryable or time.monotonic() >= end:
+                    raise
+                await _long_poll_pause(backoff, end)
+                backoff = _long_poll_next_backoff(backoff)
+                continue
+            if answer.records or answer.done:
+                return answer
+            if answer.state is not None:
+                request = dataclasses.replace(request, state=answer.state)
+            if time.monotonic() >= end:
+                return answer
+            if time.monotonic() - started < wait / 2:
+                await _long_poll_pause(backoff, end)
+                backoff = _long_poll_next_backoff(backoff)
+            else:
+                backoff = _LONG_POLL_MIN_BACKOFF
+
+    async def follow_range(
+        self,
+        request: FollowRangeInput,
+    ) -> FollowOutput:
+        """Answer again the records of an earlier follow that named a floor_holder,
+        for a Workflow that replays that follow. The call reads each range again
+        with the follow's input state, checks each against its digest and the
+        order against the follow's digest, and answers the same records in the
+        same order. Other records or another order are refused as
+        StreamReplayMismatchError.
+        """
+        wire: typing.Any = _FollowRangeInputTransferTypeConverter().to_transfer_type(
+            request
+        )
+        body = json.dumps(wire).encode()
+        raw = await _exchange(
+            f"{self._base_url}/follow_range",
+            body,
+            self._headers,
+            self._timeout,
+            self._ssl_context,
+            self._payload_codec,
+        )
+        if not raw:
+            raise ValueError("follow_range answered with an empty body")
+        answer: typing.Any = json.loads(raw)
+        return _FollowOutputTransferTypeConverter().from_transfer_type(
+            answer, FollowOutput
+        )
+
     def stream(
         self,
         *,
@@ -579,6 +697,120 @@ class StreamHandle:
                 stored_records=stored_records,
                 state=state,
                 records_digest=records_digest,
+                floor_holder=floor_holder,
+            ),
+        )
+
+    async def follow(
+        self,
+        *,
+        after_token: str | None = None,
+        state: bytes | None = None,
+        max_records: int | None = None,
+        wait_ms: int | None = None,
+        max_depth: int | None = None,
+        max_open: int | None = None,
+        floor_holder: str | None = None,
+        wake_token: str | None = None,
+    ) -> FollowOutput:
+        """Answer with the records after the caller's position on a stream and on
+        every stream its link records open, in one order. Order within each stream
+        is kept. A linked stream's records come after its OPEN link, and the
+        linking stream's records after a JOIN come after the linked stream reached
+        the JOIN's point. Each item names its source, and a linked stream's state
+        comes as a link_state item. A linked stream that can't be read or that
+        ends never fails the call. Links to another namespace or endpoint are not
+        followed. The call waits like read, and the state resumes every open
+        stream.
+
+        This handle supplies ``stream``; the flat caller's ``follow`` takes it
+        spelled out.
+        """
+        return await self._client.follow(
+            FollowInput(
+                stream=self._stream,
+                after_token=after_token,
+                state=state,
+                max_records=max_records,
+                wait_ms=wait_ms,
+                max_depth=max_depth,
+                max_open=max_open,
+                floor_holder=floor_holder,
+                wake_token=wake_token,
+            ),
+        )
+
+    async def follow_until_records(
+        self,
+        *,
+        after_token: str | None = None,
+        state: bytes | None = None,
+        max_records: int | None = None,
+        max_depth: int | None = None,
+        max_open: int | None = None,
+        floor_holder: str | None = None,
+        wake_token: str | None = None,
+        deadline: float,
+    ) -> FollowOutput:
+        """Calls ``follow`` until it answers with something, or until ``deadline``.
+
+        Each attempt sets ``wait_ms`` from the budget left, so the endpoint parks
+        for the caller instead of the caller spinning. The first answer whose
+        ``records`` is non-empty, or whose ``done`` is true, is returned. When the
+        deadline passes first, the last answer is returned, which still carries
+        the caller's resume position.
+
+        After an answer with nothing, the next attempt sends the ``state`` that
+        answer carried, so the endpoint keeps nothing between calls.
+
+        ``deadline`` is the whole budget in seconds. The single-shot method stays
+        available for a caller that wants one attempt.
+
+        This handle supplies ``stream``; the flat caller's
+        ``follow_until_records`` takes it spelled out.
+        """
+        return await self._client.follow_until_records(
+            FollowInput(
+                stream=self._stream,
+                after_token=after_token,
+                state=state,
+                max_records=max_records,
+                max_depth=max_depth,
+                max_open=max_open,
+                floor_holder=floor_holder,
+                wake_token=wake_token,
+            ),
+            deadline=deadline,
+        )
+
+    async def follow_range(
+        self,
+        *,
+        state: bytes | None = None,
+        ranges: list[bytes],
+        follow_digest: bytes,
+        max_depth: int | None = None,
+        max_open: int | None = None,
+        floor_holder: str | None = None,
+    ) -> FollowOutput:
+        """Answer again the records of an earlier follow that named a floor_holder,
+        for a Workflow that replays that follow. The call reads each range again
+        with the follow's input state, checks each against its digest and the
+        order against the follow's digest, and answers the same records in the
+        same order. Other records or another order are refused as
+        StreamReplayMismatchError.
+
+        This handle supplies ``stream``; the flat caller's ``follow_range`` takes
+        it spelled out.
+        """
+        return await self._client.follow_range(
+            FollowRangeInput(
+                stream=self._stream,
+                state=state,
+                ranges=ranges,
+                follow_digest=follow_digest,
+                max_depth=max_depth,
+                max_open=max_open,
                 floor_holder=floor_holder,
             ),
         )

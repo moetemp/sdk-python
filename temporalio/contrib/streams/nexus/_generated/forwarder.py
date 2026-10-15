@@ -11,11 +11,17 @@ import nexusrpc.handler
 from .models import (
     AppendInput,
     AppendOutput,
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadInput,
     ReadOutput,
     ReadRangeInput,
     _AppendInputTransferTypeConverter,
     _AppendOutputTransferTypeConverter,
+    _FollowInputTransferTypeConverter,
+    _FollowOutputTransferTypeConverter,
+    _FollowRangeInputTransferTypeConverter,
     _ReadInputTransferTypeConverter,
     _ReadOutputTransferTypeConverter,
     _ReadRangeInputTransferTypeConverter,
@@ -110,3 +116,48 @@ class TemporalStreamsForwarder(abc.ABC):
         )
         answer: typing.Any = await self.forward("read_range", ctx, transfer)
         return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
+
+    @nexusrpc.handler.sync_operation
+    async def follow(
+        self,
+        ctx: nexusrpc.handler.StartOperationContext,
+        input: FollowInput,
+    ) -> FollowOutput:
+        """Answer with the records after the caller's position on a stream and on
+        every stream its link records open, in one order. Order within each stream
+        is kept. A linked stream's records come after its OPEN link, and the
+        linking stream's records after a JOIN come after the linked stream reached
+        the JOIN's point. Each item names its source, and a linked stream's state
+        comes as a link_state item. A linked stream that can't be read or that
+        ends never fails the call. Links to another namespace or endpoint are not
+        followed. The call waits like read, and the state resumes every open
+        stream.
+        """
+        transfer: typing.Any = _FollowInputTransferTypeConverter().to_transfer_type(
+            input
+        )
+        answer: typing.Any = await self.forward("follow", ctx, transfer)
+        return _FollowOutputTransferTypeConverter().from_transfer_type(
+            answer, FollowOutput
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def follow_range(
+        self,
+        ctx: nexusrpc.handler.StartOperationContext,
+        input: FollowRangeInput,
+    ) -> FollowOutput:
+        """Answer again the records of an earlier follow that named a floor_holder,
+        for a Workflow that replays that follow. The call reads each range again
+        with the follow's input state, checks each against its digest and the
+        order against the follow's digest, and answers the same records in the
+        same order. Other records or another order are refused as
+        StreamReplayMismatchError.
+        """
+        transfer: typing.Any = (
+            _FollowRangeInputTransferTypeConverter().to_transfer_type(input)
+        )
+        answer: typing.Any = await self.forward("follow_range", ctx, transfer)
+        return _FollowOutputTransferTypeConverter().from_transfer_type(
+            answer, FollowOutput
+        )
