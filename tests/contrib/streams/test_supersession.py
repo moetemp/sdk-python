@@ -9,8 +9,11 @@ import pytest
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
+    StreamRef,
     Supersession,
     SupersessionTracker,
     get_stream_handle,
@@ -166,3 +169,21 @@ async def test_a_reader_sees_each_value_once_after_a_task_reruns(client: Client)
         if record.kind is RecordKind.DATA and not record.stale:
             shown.append(record.value)
     assert shown == ["before", "a", "b"]
+
+
+def test_a_rerun_withdraws_the_links_of_its_earlier_attempt():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    link = StreamRecord(
+        kind=RecordKind.LINK,
+        cursor=Cursor("l1"),
+        topic="t",
+        producer_id="tool@run",
+        attempt=1,
+        link=StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("child"), "sub"),
+    )
+    assert tracker.observe(link) == []
+    assert tracker.observe(data("tool@run", 1, "a")) == []
+    assert tracker.observe(superseded("tool@run", 1, 2)) == [
+        link,
+        data("tool@run", 1, "a"),
+    ]
