@@ -41,6 +41,10 @@ class _StreamOwnerKindEnumTypeWrapper(
     STREAM_OWNER_KIND_WORKFLOW: _StreamOwnerKind.ValueType  # 1
     STREAM_OWNER_KIND_ACTIVITY: _StreamOwnerKind.ValueType  # 2
     """A standalone Activity run. It is a chain of one run, so its streams end with the run."""
+    STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: _StreamOwnerKind.ValueType  # 3
+    """An Activity that a Workflow run scheduled. It is a chain of one, keyed by the scheduling run
+    and the Activity id, so its streams end with the Activity.
+    """
 
 class StreamOwnerKind(_StreamOwnerKind, metaclass=_StreamOwnerKindEnumTypeWrapper):
     """What owns a stream. The owner decides when the stream closes."""
@@ -49,6 +53,10 @@ STREAM_OWNER_KIND_UNSPECIFIED: StreamOwnerKind.ValueType  # 0
 STREAM_OWNER_KIND_WORKFLOW: StreamOwnerKind.ValueType  # 1
 STREAM_OWNER_KIND_ACTIVITY: StreamOwnerKind.ValueType  # 2
 """A standalone Activity run. It is a chain of one run, so its streams end with the run."""
+STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: StreamOwnerKind.ValueType  # 3
+"""An Activity that a Workflow run scheduled. It is a chain of one, keyed by the scheduling run
+and the Activity id, so its streams end with the Activity.
+"""
 global___StreamOwnerKind = StreamOwnerKind
 
 class _StreamFailureKind:
@@ -357,15 +365,19 @@ class StreamAddress(google.protobuf.message.Message):
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The owning Workflow. Empty for an Activity owner."""
+    """The owning Workflow, or the Workflow that scheduled a Workflow Activity. Empty for a
+    standalone Activity owner.
+    """
     run_id: builtins.str
     """Pins the stream to the run chain that holds this run. Empty follows the chain that holds the
     Workflow id when the call starts. For an Activity owner, the Activity run, and empty names
-    the newest run of the Activity id when the call starts.
+    the newest run of the Activity id when the call starts. For a Workflow Activity owner, the
+    run that scheduled the Activity. It is required, since an Activity id names nothing across
+    runs.
     """
     topic: builtins.str
     activity_id: builtins.str
-    """The owning standalone Activity. Empty for a Workflow owner."""
+    """The owning Activity. Empty for a Workflow owner."""
     def __init__(
         self,
         *,
@@ -399,7 +411,8 @@ global___StreamAddress = StreamAddress
 class ChainId(google.protobuf.message.Message):
     """A Workflow's run chain. Its streams are keyed by its first run, so they follow
     Continue-as-New, and a new chain on the same Workflow id gets streams of its own. A standalone
-    Activity run is a chain of one run, with the run as `first_run_id`.
+    Activity run is a chain of one run, with the run as `first_run_id`. A Workflow Activity is a
+    chain of one, with the scheduling run as `first_run_id`.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -411,7 +424,7 @@ class ChainId(google.protobuf.message.Message):
     ACTIVITY_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     workflow_id: builtins.str
-    """Empty for an Activity owner."""
+    """Empty for a standalone Activity owner."""
     first_run_id: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     """`UNSPECIFIED` is a Workflow owner, so a chain from before the Activity kind stays valid."""
@@ -534,6 +547,7 @@ class AppendRecord(google.protobuf.message.Message):
     KIND_FIELD_NUMBER: builtins.int
     BODY_FIELD_NUMBER: builtins.int
     CONTENT_HASH_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
     kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
@@ -543,20 +557,31 @@ class AppendRecord(google.protobuf.message.Message):
     encrypts with a fresh nonce makes a retry's bytes differ, so a retry is recognized by this.
     Empty when there is no body.
     """
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink:
+        """Set on LINK only. A LINK's body is optional."""
     def __init__(
         self,
         *,
         kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType = ...,
         body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         content_hash: builtins.bytes = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body"]
+        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "body", b"body", "content_hash", b"content_hash", "kind", b"kind"
+            "body",
+            b"body",
+            "content_hash",
+            b"content_hash",
+            "kind",
+            b"kind",
+            "link",
+            b"link",
         ],
     ) -> None: ...
 
@@ -1048,6 +1073,608 @@ class ReleaseFloorResponse(google.protobuf.message.Message):
 
 global___ReleaseFloorResponse = ReleaseFloorResponse
 
+class FollowRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    AFTER_FIELD_NUMBER: builtins.int
+    STATE_FIELD_NUMBER: builtins.int
+    WAIT_FIELD_NUMBER: builtins.int
+    MAX_RECORDS_FIELD_NUMBER: builtins.int
+    MAX_DEPTH_FIELD_NUMBER: builtins.int
+    MAX_OPEN_FIELD_NUMBER: builtins.int
+    FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    SUBSCRIBER_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The root stream."""
+    after: builtins.str
+    """The root cursor, on the first call. Later calls resume from `state` and ignore it."""
+    state: builtins.bytes
+    """The `state` of the previous answer. Empty on the first call."""
+    @property
+    def wait(self) -> google.protobuf.duration_pb2.Duration:
+        """How long to wait for a record when no source has one. Core waits at most 60 seconds."""
+    max_records: builtins.int
+    """How many stored records one answer holds at most, across all sources. Zero uses 100. Core
+    answers with at most 1,000.
+    """
+    max_depth: builtins.int
+    """How deep links are followed. The root is depth zero. Zero uses 4. The first call's limits
+    hold for the whole follow, and `state` keeps them.
+    """
+    max_open: builtins.int
+    """How many linked streams are open at once. Zero uses 16."""
+    floor_holder: builtins.str
+    """For a positions-only follower: each source holds its records as `<floor_holder>/<source>`."""
+    @property
+    def subscriber(self) -> global___FollowSubscriber:
+        """Set by a Workflow follower, so an empty answer attaches each idle source."""
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        after: builtins.str = ...,
+        state: builtins.bytes = ...,
+        wait: google.protobuf.duration_pb2.Duration | None = ...,
+        max_records: builtins.int = ...,
+        max_depth: builtins.int = ...,
+        max_open: builtins.int = ...,
+        floor_holder: builtins.str = ...,
+        subscriber: global___FollowSubscriber | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "stream", b"stream", "subscriber", b"subscriber", "wait", b"wait"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "after",
+            b"after",
+            "floor_holder",
+            b"floor_holder",
+            "max_depth",
+            b"max_depth",
+            "max_open",
+            b"max_open",
+            "max_records",
+            b"max_records",
+            "state",
+            b"state",
+            "stream",
+            b"stream",
+            "subscriber",
+            b"subscriber",
+            "wait",
+            b"wait",
+        ],
+    ) -> None: ...
+
+global___FollowRequest = FollowRequest
+
+class FollowSubscriber(google.protobuf.message.Message):
+    """The Workflow that follows, so each idle source wakes it."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    SUBSCRIPTION_PREFIX_FIELD_NUMBER: builtins.int
+    GENERATION_FIELD_NUMBER: builtins.int
+    workflow_id: builtins.str
+    run_id: builtins.str
+    subscription_prefix: builtins.str
+    """Each source subscribes as `<subscription_prefix>.<source>`."""
+    generation: builtins.int
+    def __init__(
+        self,
+        *,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+        subscription_prefix: builtins.str = ...,
+        generation: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "generation",
+            b"generation",
+            "run_id",
+            b"run_id",
+            "subscription_prefix",
+            b"subscription_prefix",
+            "workflow_id",
+            b"workflow_id",
+        ],
+    ) -> None: ...
+
+global___FollowSubscriber = FollowSubscriber
+
+class FollowedRecord(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SOURCE_FIELD_NUMBER: builtins.int
+    RECORD_FIELD_NUMBER: builtins.int
+    LINK_STATE_FIELD_NUMBER: builtins.int
+    source: builtins.int
+    """The source the item belongs to. Zero is the root. A SKIPPED link names the source that holds
+    the link.
+    """
+    @property
+    def record(self) -> global___ReadRecord: ...
+    @property
+    def link_state(self) -> global___LinkState: ...
+    def __init__(
+        self,
+        *,
+        source: builtins.int = ...,
+        record: global___ReadRecord | None = ...,
+        link_state: global___LinkState | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "item", b"item", "link_state", b"link_state", "record", b"record"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "item",
+            b"item",
+            "link_state",
+            b"link_state",
+            "record",
+            b"record",
+            "source",
+            b"source",
+        ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["item", b"item"]
+    ) -> typing_extensions.Literal["record", "link_state"] | None: ...
+
+global___FollowedRecord = FollowedRecord
+
+class LinkState(google.protobuf.message.Message):
+    """What happened to a link, as the follower saw it."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class _Kind:
+        ValueType = typing.NewType("ValueType", builtins.int)
+        V: typing_extensions.TypeAlias = ValueType
+
+    class _KindEnumTypeWrapper(
+        google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+            LinkState._Kind.ValueType
+        ],
+        builtins.type,
+    ):  # noqa: F821
+        DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+        KIND_UNSPECIFIED: LinkState._Kind.ValueType  # 0
+        KIND_OPENED: LinkState._Kind.ValueType  # 1
+        """The linked stream is open, and its records follow."""
+        KIND_DONE: LinkState._Kind.ValueType  # 2
+        """The linked stream's segment ended: the stream closed, or it reached the JOIN's `until`. A
+        closed stream gives its close outcome.
+        """
+        KIND_UNAVAILABLE: LinkState._Kind.ValueType  # 3
+        """The linked stream can't be read. `error` says why. The follow goes on without it."""
+        KIND_SKIPPED: LinkState._Kind.ValueType  # 4
+        """The link was not followed. `reason` says why."""
+
+    class Kind(_Kind, metaclass=_KindEnumTypeWrapper): ...
+    KIND_UNSPECIFIED: LinkState.Kind.ValueType  # 0
+    KIND_OPENED: LinkState.Kind.ValueType  # 1
+    """The linked stream is open, and its records follow."""
+    KIND_DONE: LinkState.Kind.ValueType  # 2
+    """The linked stream's segment ended: the stream closed, or it reached the JOIN's `until`. A
+    closed stream gives its close outcome.
+    """
+    KIND_UNAVAILABLE: LinkState.Kind.ValueType  # 3
+    """The linked stream can't be read. `error` says why. The follow goes on without it."""
+    KIND_SKIPPED: LinkState.Kind.ValueType  # 4
+    """The link was not followed. `reason` says why."""
+
+    KIND_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    ERROR_FIELD_NUMBER: builtins.int
+    REASON_FIELD_NUMBER: builtins.int
+    kind: global___LinkState.Kind.ValueType
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink: ...
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    @property
+    def error(self) -> global___StreamFailure:
+        """Set on UNAVAILABLE."""
+    reason: builtins.str
+    """Set on SKIPPED: `depth`, `limit`, `cycle`, `open` or `endpoint`."""
+    def __init__(
+        self,
+        *,
+        kind: global___LinkState.Kind.ValueType = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        error: global___StreamFailure | None = ...,
+        reason: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "error",
+            b"error",
+            "link",
+            b"link",
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "error",
+            b"error",
+            "kind",
+            b"kind",
+            "link",
+            b"link",
+            "reason",
+            b"reason",
+        ],
+    ) -> None: ...
+
+global___LinkState = LinkState
+
+class FollowSource(google.protobuf.message.Message):
+    """A source that an answer's records name."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NUMBER_FIELD_NUMBER: builtins.int
+    PARENT_FIELD_NUMBER: builtins.int
+    DEPTH_FIELD_NUMBER: builtins.int
+    STREAM_FIELD_NUMBER: builtins.int
+    NAME_FIELD_NUMBER: builtins.int
+    number: builtins.int
+    parent: builtins.int
+    """The source that holds the source's link. Zero for the root and its links."""
+    depth: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress: ...
+    name: builtins.str
+    """The link's name. Empty for the root."""
+    def __init__(
+        self,
+        *,
+        number: builtins.int = ...,
+        parent: builtins.int = ...,
+        depth: builtins.int = ...,
+        stream: global___StreamAddress | None = ...,
+        name: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "depth",
+            b"depth",
+            "name",
+            b"name",
+            "number",
+            b"number",
+            "parent",
+            b"parent",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___FollowSource = FollowSource
+
+class SourceRange(google.protobuf.message.Message):
+    """One read of one source, as `ReadRange` reads it again."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SOURCE_FIELD_NUMBER: builtins.int
+    CHAIN_FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    START_CURSOR_FIELD_NUMBER: builtins.int
+    CURSOR_FIELD_NUMBER: builtins.int
+    STORED_RECORDS_FIELD_NUMBER: builtins.int
+    STATE_IN_FIELD_NUMBER: builtins.int
+    RECORDS_DIGEST_FIELD_NUMBER: builtins.int
+    START_FROM_END_FIELD_NUMBER: builtins.int
+    DONE_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    ERROR_FIELD_NUMBER: builtins.int
+    source: builtins.int
+    chain_first_run_id: builtins.str
+    start_cursor: builtins.str
+    cursor: builtins.str
+    stored_records: builtins.int
+    state_in: builtins.bytes
+    records_digest: builtins.bytes
+    start_from_end: builtins.bool
+    done: builtins.bool
+    """The read ended the source's stream, with this outcome."""
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    @property
+    def error(self) -> global___StreamFailure:
+        """The read failed, so the source is unavailable. No other field but `source` is set."""
+    def __init__(
+        self,
+        *,
+        source: builtins.int = ...,
+        chain_first_run_id: builtins.str = ...,
+        start_cursor: builtins.str = ...,
+        cursor: builtins.str = ...,
+        stored_records: builtins.int = ...,
+        state_in: builtins.bytes = ...,
+        records_digest: builtins.bytes = ...,
+        start_from_end: builtins.bool = ...,
+        done: builtins.bool = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        error: global___StreamFailure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "error",
+            b"error",
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "chain_first_run_id",
+            b"chain_first_run_id",
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "cursor",
+            b"cursor",
+            "done",
+            b"done",
+            "error",
+            b"error",
+            "records_digest",
+            b"records_digest",
+            "source",
+            b"source",
+            "start_cursor",
+            b"start_cursor",
+            "start_from_end",
+            b"start_from_end",
+            "state_in",
+            b"state_in",
+            "stored_records",
+            b"stored_records",
+        ],
+    ) -> None: ...
+
+global___SourceRange = SourceRange
+
+class SourceWake(google.protobuf.message.Message):
+    """An idle source that a Workflow follower waits on."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SOURCE_FIELD_NUMBER: builtins.int
+    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    WAKE_AFTER_FIELD_NUMBER: builtins.int
+    source: builtins.int
+    subscription_id: builtins.str
+    wake_after: builtins.int
+    """The source's notification counter. A wake above it names a new record."""
+    def __init__(
+        self,
+        *,
+        source: builtins.int = ...,
+        subscription_id: builtins.str = ...,
+        wake_after: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "source",
+            b"source",
+            "subscription_id",
+            b"subscription_id",
+            "wake_after",
+            b"wake_after",
+        ],
+    ) -> None: ...
+
+global___SourceWake = SourceWake
+
+class FollowResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RECORDS_FIELD_NUMBER: builtins.int
+    STATE_FIELD_NUMBER: builtins.int
+    DONE_FIELD_NUMBER: builtins.int
+    SOURCES_FIELD_NUMBER: builtins.int
+    RANGES_FIELD_NUMBER: builtins.int
+    WAKES_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    FOLLOW_DIGEST_FIELD_NUMBER: builtins.int
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___FollowedRecord
+    ]: ...
+    state: builtins.bytes
+    """The composite position: every source's cursor and read state, and the gates. Opaque to lang."""
+    done: builtins.bool
+    """The root ended and every linked segment ended. No later call returns a record."""
+    @property
+    def sources(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___FollowSource
+    ]:
+        """Each source that `records` names."""
+    @property
+    def ranges(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___SourceRange
+    ]:
+        """Each read of this answer, in read order."""
+    @property
+    def wakes(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___SourceWake
+    ]:
+        """On an empty answer of a Workflow follower, each idle source."""
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """The root's close outcome, with `done`."""
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    follow_digest: builtins.bytes
+    """SHA-256 over the order of `records`, as `FollowRange` checks it."""
+    def __init__(
+        self,
+        *,
+        records: collections.abc.Iterable[global___FollowedRecord] | None = ...,
+        state: builtins.bytes = ...,
+        done: builtins.bool = ...,
+        sources: collections.abc.Iterable[global___FollowSource] | None = ...,
+        ranges: collections.abc.Iterable[global___SourceRange] | None = ...,
+        wakes: collections.abc.Iterable[global___SourceWake] | None = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        follow_digest: builtins.bytes = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure", b"close_failure", "close_result", b"close_result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "done",
+            b"done",
+            "follow_digest",
+            b"follow_digest",
+            "ranges",
+            b"ranges",
+            "records",
+            b"records",
+            "sources",
+            b"sources",
+            "state",
+            b"state",
+            "wakes",
+            b"wakes",
+        ],
+    ) -> None: ...
+
+global___FollowResponse = FollowResponse
+
+class FollowRangeRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    STATE_IN_FIELD_NUMBER: builtins.int
+    RANGES_FIELD_NUMBER: builtins.int
+    FOLLOW_DIGEST_FIELD_NUMBER: builtins.int
+    FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    MAX_DEPTH_FIELD_NUMBER: builtins.int
+    MAX_OPEN_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The root stream, as the Follow named it."""
+    state_in: builtins.bytes
+    """The `state` the Follow started from."""
+    @property
+    def ranges(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___SourceRange
+    ]:
+        """The Follow's `ranges`."""
+    follow_digest: builtins.bytes
+    """The Follow's `follow_digest`."""
+    floor_holder: builtins.str
+    """As in `FollowRequest`."""
+    max_depth: builtins.int
+    """The first Follow's limits, for a `state_in` that is empty. A non-empty `state_in` keeps them."""
+    max_open: builtins.int
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        state_in: builtins.bytes = ...,
+        ranges: collections.abc.Iterable[global___SourceRange] | None = ...,
+        follow_digest: builtins.bytes = ...,
+        floor_holder: builtins.str = ...,
+        max_depth: builtins.int = ...,
+        max_open: builtins.int = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "floor_holder",
+            b"floor_holder",
+            "follow_digest",
+            b"follow_digest",
+            "max_depth",
+            b"max_depth",
+            "max_open",
+            b"max_open",
+            "ranges",
+            b"ranges",
+            "state_in",
+            b"state_in",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___FollowRangeRequest = FollowRangeRequest
+
 class LatestRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -1504,7 +2131,9 @@ class DeleteOwnerRequest(google.protobuf.message.Message):
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The Workflow whose streams go, for a Workflow owner."""
+    """The Workflow whose streams go, for a Workflow owner. The streams of every Activity that the
+    Workflow scheduled go too.
+    """
     activity_id: builtins.str
     """The standalone Activity whose streams go, across all its runs, for an Activity owner."""
     def __init__(
