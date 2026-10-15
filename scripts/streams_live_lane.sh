@@ -300,6 +300,12 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
   test_live_a_replay_of_a_lost_range_fails_the_task
+gate tests/contrib/streams/test_live_activity_stream_nexus.py \
+  test_live_a_caller_reads_a_tool_calls_activity_stream \
+  test_live_a_reader_wakes_at_most_once_per_burst_of_a_tool \
+  test_live_a_worker_follows_a_tool_calls_activity_stream \
+  test_live_a_tool_that_fails_with_no_close_fails_the_operation \
+  test_live_an_authorizer_takes_activity_reads_from_one_caller_namespace
 gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_both_readers_follow_a_standalone_activity_across_its_retry \
   test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
