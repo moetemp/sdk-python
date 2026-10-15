@@ -41,6 +41,10 @@ class _StreamOwnerKindEnumTypeWrapper(
     STREAM_OWNER_KIND_WORKFLOW: _StreamOwnerKind.ValueType  # 1
     STREAM_OWNER_KIND_ACTIVITY: _StreamOwnerKind.ValueType  # 2
     """A standalone Activity run. It is a chain of one run, so its streams end with the run."""
+    STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: _StreamOwnerKind.ValueType  # 3
+    """An Activity that a Workflow run scheduled. It is a chain of one, keyed by the scheduling run
+    and the Activity id, so its streams end with the Activity.
+    """
 
 class StreamOwnerKind(_StreamOwnerKind, metaclass=_StreamOwnerKindEnumTypeWrapper):
     """What owns a stream. The owner decides when the stream closes."""
@@ -49,6 +53,10 @@ STREAM_OWNER_KIND_UNSPECIFIED: StreamOwnerKind.ValueType  # 0
 STREAM_OWNER_KIND_WORKFLOW: StreamOwnerKind.ValueType  # 1
 STREAM_OWNER_KIND_ACTIVITY: StreamOwnerKind.ValueType  # 2
 """A standalone Activity run. It is a chain of one run, so its streams end with the run."""
+STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: StreamOwnerKind.ValueType  # 3
+"""An Activity that a Workflow run scheduled. It is a chain of one, keyed by the scheduling run
+and the Activity id, so its streams end with the Activity.
+"""
 global___StreamOwnerKind = StreamOwnerKind
 
 class _StreamFailureKind:
@@ -357,15 +365,19 @@ class StreamAddress(google.protobuf.message.Message):
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The owning Workflow. Empty for an Activity owner."""
+    """The owning Workflow, or the Workflow that scheduled a Workflow Activity. Empty for a
+    standalone Activity owner.
+    """
     run_id: builtins.str
     """Pins the stream to the run chain that holds this run. Empty follows the chain that holds the
     Workflow id when the call starts. For an Activity owner, the Activity run, and empty names
-    the newest run of the Activity id when the call starts.
+    the newest run of the Activity id when the call starts. For a Workflow Activity owner, the
+    run that scheduled the Activity. It is required, since an Activity id names nothing across
+    runs.
     """
     topic: builtins.str
     activity_id: builtins.str
-    """The owning standalone Activity. Empty for a Workflow owner."""
+    """The owning Activity. Empty for a Workflow owner."""
     def __init__(
         self,
         *,
@@ -399,7 +411,8 @@ global___StreamAddress = StreamAddress
 class ChainId(google.protobuf.message.Message):
     """A Workflow's run chain. Its streams are keyed by its first run, so they follow
     Continue-as-New, and a new chain on the same Workflow id gets streams of its own. A standalone
-    Activity run is a chain of one run, with the run as `first_run_id`.
+    Activity run is a chain of one run, with the run as `first_run_id`. A Workflow Activity is a
+    chain of one, with the scheduling run as `first_run_id`.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -411,7 +424,7 @@ class ChainId(google.protobuf.message.Message):
     ACTIVITY_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     workflow_id: builtins.str
-    """Empty for an Activity owner."""
+    """Empty for a standalone Activity owner."""
     first_run_id: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     """`UNSPECIFIED` is a Workflow owner, so a chain from before the Activity kind stays valid."""
@@ -1504,7 +1517,9 @@ class DeleteOwnerRequest(google.protobuf.message.Message):
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The Workflow whose streams go, for a Workflow owner."""
+    """The Workflow whose streams go, for a Workflow owner. The streams of every Activity that the
+    Workflow scheduled go too.
+    """
     activity_id: builtins.str
     """The standalone Activity whose streams go, across all its runs, for an Activity owner."""
     def __init__(
