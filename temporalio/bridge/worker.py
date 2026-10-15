@@ -60,6 +60,9 @@ class WorkerConfig:
     plugins: Sequence[str]
     storage_drivers: set[str]
     disable_payload_error_limit: bool
+    # Where a Workflow's stream output is appended. None on a Worker with no
+    # stream store and on a Replayer, which stores nothing.
+    stream_store: temporalio.bridge.temporal_sdk_bridge.StreamStoreRef | None = None
 
 
 @dataclass
