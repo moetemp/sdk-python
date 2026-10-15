@@ -1509,7 +1509,7 @@ class ResolveStreamWake(google.protobuf.message.Message):
     """The position that came with `counter`, in the producer's terms."""
     counter: builtins.int
     """The highest counter the stream's notifier has seen. The reader reads when it is above the
-    `wake_after` of the read that armed the stream.
+    `wake_after` of its last empty read.
     """
     @property
     def metadata(
