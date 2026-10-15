@@ -20,7 +20,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-4e7fafc5e7373a7554b3a67f740ccc5de2c6a39b}
+SERVER_REF=${SERVER_REF:-c00e031c83bf47c5fd0241aec0717391cd1722c1}
 PORT_BASE=${PORT_BASE:-7941}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -69,6 +69,10 @@ streamnotifier.ownerCheckInterval:
   - value: 2s
 streamnotifier.ownerCloseGrace:
   - value: 10s
+# A Workflow Activity's stream with no close also waits this long from the
+# notifier's start. The default is 1 minute.
+streamnotifier.ownerStartGrace:
+  - value: 5s
 # A client reader reads again at the poll limit, which finds a record whose
 # notification was lost. The default is 60 seconds.
 streamnotifier.pollMaxWait:
@@ -263,6 +267,15 @@ gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_an_activity_that_fails_with_no_close_fails_the_workflow_reader \
   test_live_an_attempt_after_a_reset_supersedes_with_no_divergence \
   test_live_a_terminated_activity_fails_the_workflow_reader
+gate tests/contrib/streams/test_live_wfa_streams.py \
+  test_live_both_readers_follow_a_tool_call_across_its_retry \
+  test_live_a_tool_that_fails_closes_its_stream_with_the_failure \
+  test_live_a_tool_that_times_out_closes_its_stream_with_the_timeout \
+  test_live_each_run_of_a_chain_gets_its_own_tool_stream \
+  test_live_a_reset_run_writes_a_new_tool_stream \
+  test_live_a_tool_whose_agent_never_closes_ends_by_the_owner_check
+gate tests/contrib/streams/test_samples.py \
+  test_a_tool_call_streams_to_a_stream_of_its_own
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \

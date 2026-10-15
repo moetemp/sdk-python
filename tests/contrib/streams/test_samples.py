@@ -13,6 +13,7 @@ from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.samples import (
     activity_owned_stream,
     path_b_activity_publish,
+    tool_call_streams,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -43,3 +44,15 @@ async def test_a_standalone_activity_streams_to_a_stream_of_its_own(client: Clie
         activity_id=f"gen-{uuid.uuid4().hex}",
     )
     assert text == "an answer to streams"
+
+
+async def test_a_tool_call_streams_to_a_stream_of_its_own(client: Client):
+    store = RedisStreams(
+        os.environ["STREAMS_REDIS_URL"], key_prefix=f"sample-{uuid.uuid4().hex}"
+    )
+    text = await tool_call_streams.main(
+        await connect_with(client, store),
+        f"sample-wfa-{uuid.uuid4().hex}",
+        workflow_id=f"agent-{uuid.uuid4().hex}",
+    )
+    assert text == "results for streams"
