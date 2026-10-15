@@ -216,7 +216,10 @@ wraps the codec the client has and passes every other payload through.
 
 `close_workflow_stream` puts the run's `FINISH` in the activation, after
 what the run published before. Core appends it before it starts the close's
-Local Activity, which closes the store and the notifier.
+Local Activity, which closes the store and the notifier. A Worker with no
+Workflow cache can rerun the task of a close whose Local Activity was still
+in flight, since an eviction cancels it. Readers then see `SUPERSEDED`
+before the second `FINISH`.
 Every read ends after the last record. A sleeping reader wakes. The store
 keeps the first close's outcome and hands it to every reader that reaches
 the end, so a client read raises the close's error after its last record,
