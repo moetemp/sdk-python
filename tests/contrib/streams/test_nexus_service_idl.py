@@ -27,6 +27,9 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHttpClient,
 )
 from temporalio.contrib.streams.nexus._generated import (
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadRangeInput,
     StreamOperationToken,
 )
@@ -61,6 +64,8 @@ def test_the_service_definition_carries_the_contract_operations():
         "append": (AppendInput, AppendOutput),
         "read": (ReadInput, ReadOutput),
         "read_range": (ReadRangeInput, ReadOutput),
+        "follow": (FollowInput, FollowOutput),
+        "follow_range": (FollowRangeInput, FollowOutput),
     }
 
 
