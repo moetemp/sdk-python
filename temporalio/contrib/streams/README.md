@@ -186,9 +186,12 @@ class Agent:
   the failed task's records, then the rerun's. Records of tasks that
   completed are never withdrawn. `SupersessionTracker` applies this rule for
   a reader.
-- **Store outage.** If the store refuses the append, the Workflow Task fails
+- **Store outage.** If the store fails the append, the Workflow Task fails
   with `StreamOutputNotAppended` and retries, as for any task failure. The
   run makes no progress until the store takes the records.
+- **Closed topic.** If the store reports the topic closed, a retry could
+  never land, so Core drops that topic's records with a warning and the task
+  goes on. A Workflow can't see this through its writer.
 - **Run end.** The records of the activation that completes, fails, cancels
   or continues the run as new land with that completion. `finish()` writes
   `FINISH` with the activation. `flush()` returns at once, since nothing
