@@ -5,8 +5,8 @@ reports progress whenever the stream moves and completes the operation when
 the stream closes; the operation token names the stream. The reader turns
 that into batches of typed records: it reads from its cursor through the
 stream service on a Nexus endpoint, and waits for progress once a read finds
-nothing new. A read that waits its idle wait and finds nothing arms the stream,
-so the next append notifies the operation's callers.
+nothing new. Every append notifies the operation's callers, and the server
+folds the notifications of a busy stream into one per debounce window.
 
 By default every read is a Nexus operation of the Workflow, so History
 records what each read answered, and a replay hands over the same batches at
@@ -233,14 +233,11 @@ class StreamReader(Generic[T]):
     ``StreamExpiredError`` as its cause. A new reader with no ``after`` starts
     again at the oldest record still kept.
 
-    Each read before the completion waits up to ``idle_wait`` for a record
-    and asks the stream service to arm the stream. A read with records
-    answers at once, so a busy stream costs no notification. A read that
-    waits the whole ``idle_wait`` and finds nothing arms the stream, and the
-    reader waits for progress. The stream's next append then notifies the
-    operation's callers once. A shorter ``idle_wait`` wakes the reader on
-    shorter gaps, at the cost of a notification and a progress Workflow Task
-    for each such gap.
+    Each read before the completion waits up to ``idle_wait`` for a record.
+    A read with records answers at once. A read that waits the whole
+    ``idle_wait`` and finds nothing puts the reader to sleep on progress,
+    which the stream's next append sends. So a gap shorter than ``idle_wait``
+    costs one read and no progress Workflow Task.
 
     Bodies reach Workflow code decoded: the stream service decodes each body
     with its Worker's data converter, payload codec included, and the read's
@@ -295,10 +292,9 @@ class StreamReader(Generic[T]):
                 find nothing, or a stream that ended may wait for its
                 operation to complete, before the reader raises
                 :class:`StreamIncompleteError`.
-            idle_wait: How long a read waits for a record before it arms the
-                stream and the reader waits for progress. Zero arms on the
-                first empty read. Keep it well below the 10 second timeout of
-                a Nexus request.
+            idle_wait: How long a read waits for a record before the reader
+                waits for progress. Zero sleeps on the first empty read. Keep
+                it well below the 10 second timeout of a Nexus request.
             replay_from_store: Read in a Local Activity and record only the
                 range of each read and its digest, so the records stay out
                 of History. It needs :class:`StreamDirectReads` on the
@@ -375,9 +371,7 @@ class StreamReader(Generic[T]):
         """The next batch of records, or ``None`` once the stream has ended.
 
         Reads on while reads answer with records, and waits for the
-        operation to report progress only once a read answers with none. A
-        read like that waited ``idle_wait`` and armed the stream. An empty
-        answer that did not arm waits for progress too.
+        operation to report progress only once a read answers with none.
         Never answers with an empty batch. The stream closes in the store
         before the operation completes, so once the operation completes the
         reader reads until the stream service says the stream is done, then
@@ -549,15 +543,12 @@ class StreamReader(Generic[T]):
         latest = self._handle.latest_progress
         if latest is not None:
             self._counter = max(self._counter, latest.counter)
-        # After the completion no progress follows, so a drain read never arms.
-        arm = not self._operation_resolved
         input = ReadInput(
             stream=self._stream,
             after_token=self._cursor or None,
             max_records=_BATCH,
-            wait_ms=self._idle_wait_ms if arm else _DRAIN_WAIT_MS,
+            wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else self._idle_wait_ms,
             state=self._state,
-            arm=True if arm else None,
         )
         if self._replay_from_store:
             self._answer = await self._direct_read(input)

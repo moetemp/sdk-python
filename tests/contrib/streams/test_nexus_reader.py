@@ -911,7 +911,7 @@ def _fake_reads(
 ) -> None:
     class FakeClient:
         async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
-            calls.append(("read", input.arm, input.wait_ms))
+            calls.append(("read", input.wait_ms))
             return answers.pop(0)
 
     fake_workflow = types.SimpleNamespace(
@@ -922,20 +922,20 @@ def _fake_reads(
     monkeypatch.setattr(reader_module, "workflow", fake_workflow)
 
 
-async def test_each_read_asks_to_arm_and_waits_the_idle_wait(
+async def test_each_read_waits_the_idle_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A read with records answers at once, so only a gap longer than the idle
-    wait arms the stream and puts the reader to sleep on progress."""
+    wait puts the reader to sleep on progress."""
     calls: list[tuple[Any, ...]] = []
     _fake_reads(
         monkeypatch,
         [
             answer(record(1, text="a")),
-            ReadOutput(records=[], next_token="cursor-1", done=False, armed=True),
+            ReadOutput(records=[], next_token="cursor-1", done=False),
             answer(record(2, text="b")),
-            ReadOutput(records=[], next_token="cursor-2", done=False, armed=True),
-            # The drain after the completion waits, but never arms.
+            ReadOutput(records=[], next_token="cursor-2", done=False),
+            # The drain after the completion waits for the stream's end.
             answer(cursor="cursor-2", done=True),
         ],
         calls,
@@ -949,21 +949,20 @@ async def test_each_read_asks_to_arm_and_waits_the_idle_wait(
     assert await reader.next() == [Token("b")]
     assert await reader.next() is None
     assert calls == [
-        ("read", True, 2000),
-        ("read", True, 2000),
+        ("read", 2000),
+        ("read", 2000),
         ("progress", 0),
-        ("read", True, 2000),
-        ("read", True, 2000),
+        ("read", 2000),
+        ("read", 2000),
         ("progress", 1),
-        ("read", None, 2000),
+        ("read", 2000),
     ]
 
 
-async def test_an_empty_unarmed_answer_falls_back_to_the_progress_wait(
+async def test_a_zero_idle_wait_sleeps_on_the_first_empty_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A History from before readers armed holds empty answers without
-    ``armed``, and the reader must wait on progress after them as it did then."""
+    """An empty answer puts the reader to sleep on progress."""
     calls: list[tuple[Any, ...]] = []
     _fake_reads(
         monkeypatch,
@@ -980,8 +979,7 @@ async def test_an_empty_unarmed_answer_falls_back_to_the_progress_wait(
         idle_wait=timedelta(0),
     )
     assert await reader.next() == [Token("a")]
-    # An idle wait of zero arms on the first empty read.
-    assert calls == [("read", True, 0), ("progress", 0), ("read", True, 0)]
+    assert calls == [("read", 0), ("progress", 0), ("read", 0)]
 
 
 def test_the_idle_wait_is_not_negative() -> None:

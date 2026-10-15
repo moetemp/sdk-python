@@ -471,7 +471,7 @@ def positions_payload(
     """The result a direct read records: its range, the rest of its answer, its errors.
 
     The range already holds the answer's end and replay range, so only the
-    answer's state, ``done`` and ``armed`` go beside it. The cursor and text
+    answer's state and ``done`` go beside it. The cursor and text
     of each record that crossed as an error ride along, since a codec
     failure can be transient and a replay must not hand over a record that
     live code never saw. ``chain`` places the read among its reader's reads,
@@ -483,8 +483,6 @@ def positions_payload(
         document["seq"] = chain.seq
     if answer.state:
         document["state"] = base64.b64encode(answer.state).decode()
-    if answer.armed is not None:
-        document["armed"] = answer.armed
     errors = {record.token: record.error for record in answer.records if record.error}
     if errors:
         document["errors"] = errors
@@ -506,7 +504,6 @@ def _answer_of(range: ReadRangeInput, document: Mapping[str, Any]) -> ReadOutput
         next_token=range.to_token,
         done=document["done"],
         state=base64.b64decode(state) if state is not None else None,
-        armed=document.get("armed"),
         replay=ReadOutputReplay(
             chain_first_run_id=range.chain_first_run_id,
             after_token=range.after_token,

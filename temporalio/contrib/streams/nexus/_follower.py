@@ -82,7 +82,7 @@ _DEFAULT_STATE_CAP = 8 * 1024
 # A read after the operation completed waits this long for records, so a
 # drain to the stream's end doesn't spin.
 _DRAIN_WAIT_MS = 1000
-# A progress read waits this long for a record before it arms the stream. The
+# A progress read waits this long for a record before the call answers. The
 # Worker holds the server's callback while it waits, so it is shorter than a
 # Workflow reader's.
 _IDLE_WAIT_MS = 1000
@@ -252,11 +252,10 @@ class StreamFollowerService:
 
     On each progress call it reads from the receiver state the server sent
     back, page by page, and calls :meth:`StreamFollower.on_records` once per
-    page. Each read waits up to a second for a record and asks the stream
-    service to arm the stream. The follower stops at the first answer that
-    armed it, so the stream's next append notifies the operation again, and
-    answers with the new receiver state. A busy stream never arms, so the
-    follower also stops once half the request timeout passed. Then it answers
+    page. Each read waits up to a second for a record. The follower stops at
+    the first answer with no record, since the stream's next append notifies
+    the operation again, and answers with the new receiver state. On a busy
+    stream it also stops once half the request timeout passed. Then it answers
     ``behind``, and the server sends the same progress again at once. On the
     completion it reads the rest of the stream, then calls
     :meth:`StreamFollower.on_close`. If the stream doesn't end within the
@@ -326,7 +325,7 @@ class StreamFollowerService:
     async def on_progress(
         self, ctx: StartOperationContext, input: OnProgressRequest
     ) -> OnProgressResponse:
-        """Read the records until the stream arms, and hand them over."""
+        """Read the records until a read finds none, and hand them over."""
         followed = self._followed(input.source_context)
         if not input.operation_token:
             raise _refused(
@@ -343,10 +342,10 @@ class StreamFollowerService:
         while True:
             left_ms = int((end - asyncio.get_running_loop().time()) * 1000)
             wait_ms = min(_IDLE_WAIT_MS, max(left_ms, 0))
-            answer = await self._read(position, wait_ms=wait_ms, arm=True)
+            answer = await self._read(position, wait_ms=wait_ms)
             await self._hand_over(followed, stream, answer)
             position = _moved(position, answer)
-            if answer.done or answer.armed:
+            if answer.done or not answer.records:
                 break
             if asyncio.get_running_loop().time() >= end:
                 behind = True
@@ -399,15 +398,10 @@ class StreamFollowerService:
                     retryable_override=True,
                 )
 
-    async def _read(
-        self, position: ReadInput, *, wait_ms: int, arm: bool = False
-    ) -> ReadOutput:
+    async def _read(self, position: ReadInput, *, wait_ms: int) -> ReadOutput:
         return await self._transport.read(
             dataclasses.replace(
-                position,
-                max_records=self._max_records,
-                wait_ms=wait_ms,
-                arm=True if arm else None,
+                position, max_records=self._max_records, wait_ms=wait_ms
             )
         )
 
