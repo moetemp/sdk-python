@@ -27,7 +27,7 @@ _APPEND_OUTPUT_DECLARED: frozenset[str] = frozenset({"cursor"})
 
 
 _READ_OUTPUT_DECLARED: frozenset[str] = frozenset(
-    {"records", "next_token", "done", "state", "armed", "replay"}
+    {"records", "next_token", "done", "state", "replay"}
 )
 
 
@@ -583,19 +583,6 @@ class _ReadInputTransferTypeConverter(
                     if state_value_parsed is not None:
                         state_value = state_value_parsed
 
-        arm_value: bool | None = None
-        if "arm" in raw:
-            arm_value_raw = raw["arm"]
-            if arm_value_raw is None:
-                violations.append(
-                    Violation(path="arm", reason="explicit null not allowed")
-                )
-            else:
-                if not isinstance(arm_value_raw, bool):
-                    violations.append(Violation(path="arm", reason="expected boolean"))
-                else:
-                    arm_value = arm_value_raw
-
         floor_holder_value: str | None = None
         if "floor_holder" in raw:
             floor_holder_value_raw = raw["floor_holder"]
@@ -619,7 +606,6 @@ class _ReadInputTransferTypeConverter(
                 and key != "wait_ms"
                 and key != "latest_only"
                 and key != "state"
-                and key != "arm"
                 and key != "floor_holder"
             ):
                 violations.append(
@@ -634,7 +620,6 @@ class _ReadInputTransferTypeConverter(
             wait_ms=wait_ms_value,
             latest_only=latest_only_value,
             state=state_value,
-            arm=arm_value,
             floor_holder=floor_holder_value,
         )
 
@@ -748,11 +733,6 @@ class _ReadInputTransferTypeConverter(
                 violations.append(Violation(path="state", reason="expected bytes"))
             if len(violations) == state_violation_count:
                 out["state"] = _format_base64(state_value)
-        arm_value: typing.Any = runtime_value.arm
-        if arm_value is not None:
-            if not (isinstance(arm_value, bool)):
-                violations.append(Violation(path="arm", reason="expected boolean"))
-            out["arm"] = arm_value
         floor_holder_value: typing.Any = runtime_value.floor_holder
         if floor_holder_value is not None:
             if not (isinstance(floor_holder_value, str)):
@@ -800,12 +780,6 @@ class ReadInput:
     first call. With it the endpoint knows which producer attempts the reader already
     saw, so its superseded and stale marks are exact across calls and across handler
     Workers. A state that doesn't parse is refused as a cursor mistake.
-    """
-
-    arm: bool | None = None
-    """For a reader that sleeps until its caller hears of progress. When the call waits its
-    whole wait_ms and collects nothing, the endpoint arms the stream, so the next append
-    notifies the stream's callers. A reader with no callback leaves it out.
     """
 
     floor_holder: str | None = None
@@ -898,21 +872,6 @@ class _ReadOutputTransferTypeConverter(
                     if state_value_parsed is not None:
                         state_value = state_value_parsed
 
-        armed_value: bool | None = None
-        if "armed" in raw:
-            armed_value_raw = raw["armed"]
-            if armed_value_raw is None:
-                violations.append(
-                    Violation(path="armed", reason="explicit null not allowed")
-                )
-            else:
-                if not isinstance(armed_value_raw, bool):
-                    violations.append(
-                        Violation(path="armed", reason="expected boolean")
-                    )
-                else:
-                    armed_value = armed_value_raw
-
         replay_value: ReadOutputReplay | None = None
         if "replay" in raw:
             replay_value_raw = raw["replay"]
@@ -941,7 +900,6 @@ class _ReadOutputTransferTypeConverter(
             next_token=next_token_value,
             done=done_value,
             state=state_value,
-            armed=armed_value,
             replay=replay_value,
             additional_properties=additional_properties,
         )
@@ -998,11 +956,6 @@ class _ReadOutputTransferTypeConverter(
                 violations.append(Violation(path="state", reason="expected bytes"))
             if len(violations) == state_violation_count:
                 out["state"] = _format_base64(state_value)
-        armed_value: typing.Any = runtime_value.armed
-        if armed_value is not None:
-            if not (isinstance(armed_value, bool)):
-                violations.append(Violation(path="armed", reason="expected boolean"))
-            out["armed"] = armed_value
         replay_value: typing.Any = runtime_value.replay
         if replay_value is not None:
             replay_violation_count = len(violations)
@@ -1062,12 +1015,6 @@ class ReadOutput:
     """Pass as state on the next call of this read. It matches next_token, also when the
     answer was cut short by its byte budget. It holds at most 16 KiB, which is about 22
     KiB as base64, so it can ride in a Workflow's History. A longer state is refused.
-    """
-
-    armed: bool | None = None
-    """The call asked to arm, collected nothing and armed the stream, so the caller waits
-    for progress. Never true with records or with done. An empty answer without it falls
-    back to waiting for progress too.
     """
 
     replay: ReadOutputReplay | None = None
