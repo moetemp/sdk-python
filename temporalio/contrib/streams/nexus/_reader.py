@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, cast
 
 from temporalio import workflow
-from temporalio.common import RawValue, RetryPolicy
+from temporalio.common import RawValue
 from temporalio.contrib.streams._errors import (
     StreamError,
     StreamRecordError,
@@ -577,22 +577,23 @@ class StreamReader(Generic[T]):
                 args=[self._endpoint, self._reader_id, input, self._direct_reads + 1],
                 result_type=RawValue,
                 start_to_close_timeout=wait + _DIRECT_READ_SLACK,
-                # A Worker without StreamDirectReads has no such Activity, and
-                # a retry would find none either.
-                retry_policy=RetryPolicy(non_retryable_error_types=["NotFoundError"]),
                 summary=f"stream read {input.stream.topic}",
             )
             self._direct_reads += 1
+        except ValueError as error:
+            # The Worker refuses at the call a Local Activity it doesn't have,
+            # which is the case with no StreamDirectReads on its client.
+            if DIRECT_READ_ACTIVITY not in str(error):
+                raise
+            raise StreamUnsupportedError(
+                f"a stream read with replay_from_store=True (the default) reads "
+                f"directly from endpoint {self._endpoint!r}, and the Worker has no "
+                "StreamDirectReads; register it on the Worker's client with a "
+                "transport for the endpoint, or pass replay_from_store=False to the "
+                "StreamReader"
+            ) from error
         except (ActivityError, ApplicationError) as error:
             unsupported = _unsupported(error)
-            if unsupported is None and _not_registered(error, DIRECT_READ_ACTIVITY):
-                unsupported = (
-                    f"a stream read with replay_from_store=True (the default) reads "
-                    f"directly from endpoint {self._endpoint!r}, and the Worker has no "
-                    "StreamDirectReads; register it on the Worker's client with a "
-                    "transport for the endpoint, or pass replay_from_store=False to "
-                    "the StreamReader"
-                )
             if unsupported is None:
                 raise
             # A Worker without the transport is a deployment fault, so the
@@ -644,16 +645,6 @@ def _next_reader() -> int:
     number = getattr(runtime, _READERS_ATTRIBUTE, 0) + 1
     setattr(runtime, _READERS_ATTRIBUTE, number)
     return number
-
-
-def _not_registered(error: BaseException, activity: str) -> bool:
-    """Whether the Worker refused the read Activity as one it doesn't have."""
-    cause = error.cause if isinstance(error, ActivityError) else error
-    return (
-        isinstance(cause, ApplicationError)
-        and cause.type == "NotFoundError"
-        and activity in cause.message
-    )
 
 
 def _unsupported(error: BaseException) -> str | None:
