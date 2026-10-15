@@ -143,8 +143,8 @@ def current_local_call() -> LocalCall | None:
 class StreamsInterceptor(temporalio.worker.Interceptor):
     """Numbers each Local Activity call and reads the number in the Activity.
 
-    It also sends what the run's Workflow writers buffered before the run
-    ends.
+    Its Workflow interceptor also tells ``workflow_writer`` that the Worker
+    has a store.
     """
 
     def intercept_activity(
@@ -156,7 +156,7 @@ class StreamsInterceptor(temporalio.worker.Interceptor):
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor]:
-        """Number the Workflow's Local Activity calls and drain its writers."""
+        """Number the Workflow's Local Activity calls."""
         return _WorkflowInbound
 
 
@@ -177,14 +177,6 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
         super().init(_WorkflowOutbound(outbound))
-
-    async def execute_workflow(
-        self, input: temporalio.worker.ExecuteWorkflowInput
-    ) -> Any:
-        # Imported here, since the writer module imports this one.
-        from temporalio.contrib.streams._workflow_writer import run_then_drain
-
-        return await run_then_drain(super().execute_workflow(input))
 
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
