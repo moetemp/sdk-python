@@ -776,9 +776,12 @@ def workflow_reader(
             replay can't replay its reads, and its Workflow Task fails on
             each retry, so such a run should Continue-as-New first. Replay
             needs the store, so a ``Replayer`` needs the store plugin and a
-            client in its process that connected the same store. ``False``
-            records each batch in History, for a History that replays with
-            no store.
+            client in its process that connected the same store. A store
+            with neither holds nor a replay horizon (see
+            :attr:`temporalio.contrib.streams.StreamStorePlugin.capabilities`)
+            refuses it, and the first read fails with
+            ``StreamUnsupportedError``. ``False`` records each batch in
+            History, for a History that replays with no store.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -969,7 +972,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
             raise
         raise StreamUnsupportedError(
             f"{error}; a stream read with replay_from_store=True (the default) "
-            "needs a store that holds what a reader read, so pass "
+            "needs a store with holds or a replay horizon, so pass "
             "replay_from_store=False to record each batch in History instead"
         ) from error
     for record in response.records:

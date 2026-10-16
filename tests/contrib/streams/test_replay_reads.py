@@ -22,6 +22,7 @@ from temporalio.bridge.proto.streams import ReadRangeRequest, ReadResponse
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     END,
+    StoreCapabilities,
     StreamError,
     StreamReplayRangeLostError,
     StreamStorePlugin,
@@ -39,6 +40,7 @@ from temporalio.contrib.streams._workflow import _ReadInput, read_activity
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 from temporalio.workflow import NondeterminismError
 from tests.contrib.streams._support import connect_with, postgres_streams
@@ -203,6 +205,20 @@ async def test_a_range_the_store_lost_fails_for_a_retry(streams: Client):
         await plugin.delete_workflow_streams(streams.namespace, owner)
         with pytest.raises(StreamReplayRangeLostError):
             await codec_of(streams).decode([payload])
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_store_with_no_holds_refuses_positions_only_reads(client: Client):
+    store = MemoryStreams(capabilities=StoreCapabilities(holds=False))
+    streams = await connect_with(client, store)
+    assert not store.capabilities.holds
+    assert store.capabilities.replay_horizon is None
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        with pytest.raises(ApplicationError) as raised:
+            await read_positions(streams, owner)
+        assert raised.value.type == "StreamUnsupportedError"
+        assert "replay_from_store=False" in str(raised.value)
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
