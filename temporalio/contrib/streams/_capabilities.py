@@ -17,11 +17,13 @@ class StoreCapabilities:
     Every store keeps an ordered log per topic, and Core applies the same
     reader rules on every store. A capability changes what a producer is
     told and how much the store keeps. Without one, Core takes a fallback,
-    with a weaker guarantee that ``docs/store-capabilities.md`` names.
+    with a weaker guarantee.
 
     As a mask for :class:`temporalio.contrib.streams.memory.MemoryStreams`,
     a field set to ``False`` turns that capability off. A mask can't turn
-    on what the store doesn't have.
+    on what the store doesn't have. The store keeps its own positions,
+    horizon and limits, so a mask's ``dense_positions``,
+    ``replay_horizon`` and limits count for nothing.
     """
 
     producer_state: bool = True
@@ -59,11 +61,11 @@ class StoreCapabilities:
     dense_positions: bool = True
     """Positions in a log have no gaps."""
     replay_horizon: timedelta | None = None
-    """How long the store keeps every record for sure, or ``None`` when it says nothing."""
+    """How long the store keeps every record for sure, or ``None`` if it doesn't say."""
     max_record_bytes: int = 0
-    """The largest record the store takes, or 0 for the store's own limit."""
+    """The largest record the store takes, with its envelope."""
     max_batch_bytes: int = 0
-    """The largest batch the store takes, or 0 for the store's own limit."""
+    """The most record bytes one append takes."""
 
     @staticmethod
     def _from_proto(proto: StoreCapabilitiesProto) -> StoreCapabilities:
