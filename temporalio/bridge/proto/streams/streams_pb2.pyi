@@ -625,6 +625,7 @@ class ReadRequest(google.protobuf.message.Message):
     STATE_FIELD_NUMBER: builtins.int
     ARM_FIELD_NUMBER: builtins.int
     FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    MAX_BYTES_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
     after: builtins.str
@@ -652,6 +653,11 @@ class ReadRequest(google.protobuf.message.Message):
     id. The store holds the records after this read's start against retention for that holder,
     until `ReleaseFloor` and its grace, or until the holder's lease passes with no read.
     """
+    max_bytes: builtins.int
+    """The most stored record bytes one answer holds past its first record. Zero puts no bound. A
+    Workflow reader that records its answers in History sets it, so an answer stays below the
+    server's blob size limit.
+    """
     def __init__(
         self,
         *,
@@ -662,6 +668,7 @@ class ReadRequest(google.protobuf.message.Message):
         state: builtins.bytes = ...,
         arm: builtins.bool = ...,
         floor_holder: builtins.str = ...,
+        max_bytes: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -676,6 +683,8 @@ class ReadRequest(google.protobuf.message.Message):
             b"arm",
             "floor_holder",
             b"floor_holder",
+            "max_bytes",
+            b"max_bytes",
             "max_records",
             b"max_records",
             "state",
