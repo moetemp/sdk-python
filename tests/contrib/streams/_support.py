@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from pathlib import Path
 from typing import Any
 
+import temporalio
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.converter import DataConverter
@@ -46,3 +48,19 @@ async def read_all(records: Any, timeout: float = 10.0) -> list:
     finally:
         await records.aclose()
     return out
+
+
+def vendored_core_nexus() -> Path:
+    """The vendored Core's ``crates/streams/nexus``, with the contract and the token vectors.
+
+    Raises:
+        RuntimeError: The Core submodule isn't checked out, as in an installed
+            wheel, so the tests that check against Core's files can't run.
+    """
+    path = Path(temporalio.__file__).parent / "bridge/sdk-core/crates/streams/nexus"
+    if not path.is_dir():
+        raise RuntimeError(
+            f"the Core submodule isn't checked out at {path}; run "
+            "`git submodule update --init` to test against Core's contract"
+        )
+    return path
