@@ -84,8 +84,9 @@ class RedisStreams(StreamStorePlugin):
             cluster=cluster,
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
-            plain=plain,
         )
+        if plain:
+            config.plain = True
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
