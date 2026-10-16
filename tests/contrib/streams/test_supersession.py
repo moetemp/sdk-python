@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,6 +22,7 @@ from temporalio.contrib.streams import (
     get_stream_handle,
     track_supersession,
 )
+from temporalio.contrib.streams._supersession import _RETRY_BITS
 from temporalio.contrib.streams.memory import MemoryStreams
 from tests.contrib.streams._support import connect_with, new_workflow_id
 from tests.contrib.streams.test_workflow_writer import (
@@ -154,6 +158,42 @@ def test_a_workflow_rerun_withdraws_only_its_own_tasks_records():
     # A later task is a continuation, not a rerun, so it withdraws nothing.
     tracker.observe(data("@run", task_two | 2, "a"))
     assert tracker.observe(superseded("@run", task_one | 1, task_one | 2)) == []
+
+
+_VECTORS = (
+    Path(__file__).parents[3]
+    / "temporalio/bridge/sdk-core/crates/streams/testdata/workflow_attempts.json"
+)
+
+
+def test_the_retry_bits_match_cores_vectors():
+    vectors = json.loads(_VECTORS.read_text())
+    assert vectors["retry_bits"] == _RETRY_BITS
+    for case in vectors["attempts"]:
+        assert case["attempt"] >> _RETRY_BITS == case["prefix"], case
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(_VECTORS.read_text())["supersession"],
+    ids=lambda case: case["label"],
+)
+def test_a_workflow_supersession_withdraws_what_cores_vectors_say(
+    case: dict[str, Any],
+):
+    previous, next = case["previous"]["attempt"], case["next"]["attempt"]
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    if previous >> _RETRY_BITS:
+        # A completed earlier task, whose record no supersession withdraws.
+        tracker.observe(data("@run", 1, "earlier task"))
+    tracker.observe(data("@run", previous, "previous"))
+    withdrawn = (
+        tracker.observe(superseded("@run", previous, next))
+        if case["superseded"]
+        else []
+    )
+    tracker.observe(data("@run", next, "next"))
+    assert [r.value for r in withdrawn] == (["previous"] if case["superseded"] else [])
 
 
 def test_a_workflow_producer_holds_only_its_newest_tasks_records():
