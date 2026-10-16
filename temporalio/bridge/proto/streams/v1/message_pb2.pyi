@@ -14,6 +14,7 @@ import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
 
 import temporalio.api.common.v1.message_pb2
+import temporalio.api.failure.v1.message_pb2
 import temporalio.api.stream.v1.message_pb2
 
 if sys.version_info >= (3, 10):
@@ -46,6 +47,15 @@ class _StreamRecordKindEnumTypeWrapper(
     """A reference to another stream. `link` carries it. `body` may carry a
     value, after the payload codec.
     """
+    STREAM_RECORD_KIND_CLOSE: _StreamRecordKind.ValueType  # 5
+    """Ends `topic` for every reader, or every topic of the chain when `topic`
+    is empty. Readers drop every record after the first one. On a store
+    without close flags, producers and the owner's Core write it to close.
+    """
+    STREAM_RECORD_KIND_TOPIC: _StreamRecordKind.ValueType  # 6
+    """Names `topic` in the chain's control log `_chain`, so a closer finds the
+    chain's topics on a store that can't list them. Topic readers skip it.
+    """
 
 class StreamRecordKind(_StreamRecordKind, metaclass=_StreamRecordKindEnumTypeWrapper):
     """What a record means to a reader."""
@@ -61,6 +71,15 @@ Says nothing about that producer's outcome and does not end the stream.
 STREAM_RECORD_KIND_LINK: StreamRecordKind.ValueType  # 4
 """A reference to another stream. `link` carries it. `body` may carry a
 value, after the payload codec.
+"""
+STREAM_RECORD_KIND_CLOSE: StreamRecordKind.ValueType  # 5
+"""Ends `topic` for every reader, or every topic of the chain when `topic`
+is empty. Readers drop every record after the first one. On a store
+without close flags, producers and the owner's Core write it to close.
+"""
+STREAM_RECORD_KIND_TOPIC: StreamRecordKind.ValueType  # 6
+"""Names `topic` in the chain's control log `_chain`, so a closer finds the
+chain's topics on a store that can't list them. Topic readers skip it.
 """
 global___StreamRecordKind = StreamRecordKind
 
@@ -107,6 +126,8 @@ class StreamRecord(google.protobuf.message.Message):
     LINK_FIELD_NUMBER: builtins.int
     TASK_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
     COMPLETED_TASKS_FIELD_NUMBER: builtins.int
+    CLOSE_RESULT_FIELD_NUMBER: builtins.int
+    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The value the producer published. Lang runs it through the payload
@@ -153,6 +174,15 @@ class StreamRecord(google.protobuf.message.Message):
         A trailing zero means the list goes back to the run's start. A reader
         learns from it whether an earlier attempt it delivered completed.
         """
+    @property
+    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """On a CLOSE, the result the stream closed with, after the payload codec.
+        `producer_id` names who closed it. A CLOSE with no result and no
+        failure closed with no outcome.
+        """
+    @property
+    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """On a CLOSE, the failure the stream closed with."""
     def __init__(
         self,
         *,
@@ -169,9 +199,21 @@ class StreamRecord(google.protobuf.message.Message):
         link: global___StreamLink | None = ...,
         task_started_event_id: builtins.int = ...,
         completed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
+        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
+        self,
+        field_name: typing_extensions.Literal[
+            "body",
+            b"body",
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
+            "link",
+            b"link",
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -180,6 +222,10 @@ class StreamRecord(google.protobuf.message.Message):
             b"attempt",
             "body",
             b"body",
+            "close_failure",
+            b"close_failure",
+            "close_result",
+            b"close_result",
             "completed_tasks",
             b"completed_tasks",
             "kind",
