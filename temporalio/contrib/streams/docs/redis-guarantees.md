@@ -150,8 +150,8 @@ one stream are safe.
 
 The archive's progress lives in each stream's keys, and each slot keeps a
 set of the streams with records to archive. So with an archive, add
-`~temporal-streams:{*}:a +zadd` to the ACL below for applications, and
-also `+zrangebyscore +zrem` for drivers.
+`~temporal-streams:{*}:a +zadd +hexists` to the ACL below for applications,
+and also `+zrange +zrem` for drivers.
 
 ## When a Workflow closes
 
@@ -187,7 +187,7 @@ Every key of a namespace's streams starts with
 one namespace's applications:
 
 ```
-ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
+ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hlen +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
 ```
 
 Core's conformance suite runs as a user with exactly these rules, on a single server and on a cluster, so a store change

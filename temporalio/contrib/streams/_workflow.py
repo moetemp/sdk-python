@@ -420,6 +420,11 @@ class WorkflowStreamReader(Generic[T]):
                     # Activity can no longer append, so the read is over.
                     state.done = True
                     continue
+                if not response.chain_first_run_id:
+                    # The owner hasn't started yet, so Core attached nothing
+                    # and no notifier wakes this reader. It reads again later.
+                    await workflow.sleep(self._idle_wait)
+                    continue
                 state.sleep_after = response.wake_after
             if records:
                 return StreamBatch(records, self.position)
@@ -724,7 +729,9 @@ def workflow_reader(
     out or was canceled. To go on in the next run of the reading Workflow, pass
     :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
     the run that attached, so after a reset, the new run reads once more
-    to attach itself before it sleeps.
+    to attach itself before it sleeps. A reader of an owner that hasn't
+    started yet reads again after each ``idle_wait`` on a timer, until the
+    owner starts or its start grace ends.
 
     Args:
         ref: The stream's owner, as a
