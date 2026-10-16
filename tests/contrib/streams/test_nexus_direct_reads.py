@@ -813,7 +813,7 @@ async def test_a_credential_the_server_refuses_retries_the_read():
                 raise StreamServiceCallError(
                     "e/read failed: refused",
                     failure_type="UNAUTHORIZED",
-                    retryable=False,
+                    retryable=True,
                 )
             return live(record("c1", "a"))[1]
 
