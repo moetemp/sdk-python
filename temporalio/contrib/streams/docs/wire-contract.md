@@ -182,3 +182,19 @@ Python, and that script checks only `chain`. It knows nothing of a topic
 close. In a fleet that mixes it with Core-based writers, it goes on writing
 to a topic that Core closed, until the chain ends. Upgrade every writer of a
 stream before you rely on a topic close.
+
+## Plain mode
+
+`RedisStreams(plain=True)` runs no scripts. It uses only the log key
+`<prefix>:{<namespace>:<workflow id>:<first run id>}:t:<topic>`, with no
+`meta` and no `chain` hash. So it keeps no dedupe state, no close flags and
+no tombstone, and readers apply the reader rules above.
+
+- An append is one transaction: `MULTI`, then
+  `XADD <log> MINID <now - retention>-0 * r <record>` for each record, then
+  `PEXPIRE <log> <retention>`, then `EXEC`.
+- A close appends a `CLOSE` record to the topic's log the same way.
+- A read uses `XREAD`, `XREAD BLOCK`, `XRANGE` and `XREVRANGE`. A cursor
+  whose entry is gone reads as expired, since retention drops only the
+  oldest entries.
+- Topic listing and the delete helper use `SCAN` and `UNLINK`.
