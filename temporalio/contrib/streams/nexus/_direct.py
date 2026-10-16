@@ -311,7 +311,7 @@ async def direct_read_activity(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
     except HTTPStatusError as error:
-        if error.status in _AUTH_STATUSES:
+        if _refused_credential(error):
             # A credential that expired or lost a role is a deployment fault
             # that an operator fixes, so the read retries with backoff and
             # the caller Workflow does not fail for good.
@@ -625,6 +625,13 @@ def _named(error: HTTPStatusError) -> Exception:
     if named is None:
         return error
     return named(error.failure_message or error.detail)
+
+
+def _refused_credential(error: HTTPStatusError) -> bool:
+    # The handler's own refusal, such as its authorizer's, says it is final.
+    # A refusal with no such word came from the way to the handler.
+    explicit = getattr(error, "_retryable", None)
+    return error.status in _AUTH_STATUSES and explicit is None
 
 
 def _time_left() -> float:
