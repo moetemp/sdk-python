@@ -1,6 +1,7 @@
 from .message_pb2 import (
     StreamCallbackInfo,
     StreamNotification,
+    StreamNotificationResult,
     StreamReference,
     StreamWake,
     WorkflowWakeTarget,
@@ -9,6 +10,7 @@ from .message_pb2 import (
 __all__ = [
     "StreamCallbackInfo",
     "StreamNotification",
+    "StreamNotificationResult",
     "StreamReference",
     "StreamWake",
     "WorkflowWakeTarget",
