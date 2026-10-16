@@ -394,14 +394,17 @@ class WorkflowStreamReader(Generic[T]):
                 )
                 if owner_ended and state.attach and not state.owner_attached:
                     # Only the notifier knows how the Activity run ended, and it
-                    # tells only the readers attached to it.
+                    # tells only the readers attached to it. The next read
+                    # attaches and ends again, after this one's records.
                     state.owner_attached = True
                     state.attach_now = True
-                    continue
-                state.done = True
-                state.owner_ended = owner_ended
-                if response.HasField("close_failure"):
-                    state.close_failure = response.close_failure
+                    if not response.records:
+                        continue
+                else:
+                    state.done = True
+                    state.owner_ended = owner_ended
+                    if response.HasField("close_failure"):
+                        state.close_failure = response.close_failure
             elif not response.records:
                 if state.attach and not self._closed():
                     # Attach only when the stream goes idle, then read once

@@ -955,6 +955,58 @@ async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
 
 
 @workflow.defn
+class SaysWhatAnActivityRunHad:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
+        try:
+            async with workflow_reader(ref, replay_from_store=False) as reader:
+                async for batch in reader:
+                    seen.extend(_describe(r) for r in batch.records)
+        except ApplicationError as error:
+            seen.append(f"failed {error.type}")
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
+async def test_the_last_records_of_an_ended_activity_run_are_delivered(
+    client: Client,
+):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
+            ReadResponse(cursor="c1", done=True),
+        ]
+    )
+    failure = Failure(
+        message="boom", application_failure_info=ApplicationFailureInfo(type="Boom")
+    )
+    async with new_worker(
+        client, SaysWhatAnActivityRunHad, activities=[fake_read]
+    ) as worker:
+        handle = await client.start_workflow(
+            SaysWhatAnActivityRunHad.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await _fake.until(2)
+        await handle.signal(
+            SaysWhatAnActivityRunHad.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        seen = await asyncio.wait_for(handle.result(), 20)
+    assert seen == ["data x", "failed Boom"]
+
+
+@workflow.defn
 class ReadsPastBadRecords:
     @workflow.run
     async def run(self) -> list[str]:
