@@ -16,7 +16,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import StoreCapabilities, StreamStorePlugin
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
-from tests.contrib.streams._support import connect_with
+from tests.contrib.streams._support import connect_with, postgres_streams
 
 _DOC = (
     Path(__file__).parents[3] / "temporalio/contrib/streams/docs/store-capabilities.md"
@@ -55,6 +55,8 @@ def _offered(capabilities: StoreCapabilities) -> dict[str, str]:
 def _store(row: str) -> StreamStorePlugin:
     if row.startswith("`MemoryStreams"):
         return MemoryStreams()
+    if row.startswith("`PostgresStreams"):
+        return postgres_streams()
     url = os.environ.get("STREAMS_REDIS_URL", "")
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to check the Redis rows")
