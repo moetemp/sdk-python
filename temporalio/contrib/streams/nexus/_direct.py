@@ -1006,9 +1006,12 @@ def _log_refused_credential(endpoint: str) -> None:
 
 def _refused_credential(error: Exception) -> bool:
     if isinstance(error, HTTPStatusError):
-        return error.status in _AUTH_STATUSES
+        # The handler's own refusal, such as its authorizer's, says it is
+        # final. A refusal with no such word came from the way to the handler.
+        explicit = getattr(error, "_retryable", None)
+        return error.status in _AUTH_STATUSES and explicit is None
     if isinstance(error, StreamServiceCallError):
-        return error.failure_type in _AUTH_HANDLER_ERRORS
+        return error.failure_type in _AUTH_HANDLER_ERRORS and error.retryable
     if isinstance(error, RPCError):
         return error.status in _AUTH_RPC_STATUSES
     return False
