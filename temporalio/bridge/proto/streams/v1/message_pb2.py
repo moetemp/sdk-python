@@ -23,7 +23,7 @@ from temporalio.api.stream.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n%temporal/sdk/streams/v1/message.proto\x12\x17temporal.sdk.streams.v1\x1a$temporal/api/common/v1/message.proto\x1a$temporal/api/stream/v1/message.proto"\xc1\x03\n\x0cStreamRecord\x12-\n\x04\x62ody\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x45\n\x08metadata\x18\x02 \x03(\x0b\x32\x33.temporal.sdk.streams.v1.StreamRecord.MetadataEntry\x12\r\n\x05topic\x18\x03 \x01(\t\x12\x37\n\x04kind\x18\x04 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamRecordKind\x12\x13\n\x0bproducer_id\x18\x05 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\x03\x12\x10\n\x08sequence\x18\x07 \x01(\x03\x12\x31\n\x04link\x18\x08 \x01(\x0b\x32#.temporal.sdk.streams.v1.StreamLink\x12\x1d\n\x15task_started_event_id\x18\t \x01(\x03\x12\x17\n\x0f\x63ompleted_tasks\x18\n \x03(\x03\x1aP\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x90\x02\n\nStreamLink\x12\x38\n\x05\x65vent\x18\x01 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamLink.Event\x12\x37\n\x06stream\x18\x02 \x01(\x0b\x32\'.temporal.api.stream.v1.StreamReference\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\r\n\x05\x61\x66ter\x18\x04 \x01(\t\x12\r\n\x05until\x18\x05 \x01(\t\x12\x11\n\tnamespace\x18\x06 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x07 \x01(\t">\n\x05\x45vent\x12\x15\n\x11\x45VENT_UNSPECIFIED\x10\x00\x12\x0e\n\nEVENT_OPEN\x10\x01\x12\x0e\n\nEVENT_JOIN\x10\x02*\x95\x01\n\x10StreamRecordKind\x12"\n\x1eSTREAM_RECORD_KIND_UNSPECIFIED\x10\x00\x12\x1b\n\x17STREAM_RECORD_KIND_DATA\x10\x01\x12\x1d\n\x19STREAM_RECORD_KIND_FINISH\x10\x02\x12\x1b\n\x17STREAM_RECORD_KIND_LINK\x10\x04"\x04\x08\x03\x10\x03\x42\x32\xea\x02/Temporalio::Internal::Bridge::Api::StreamRecordb\x06proto3'
+    b'\n%temporal/sdk/streams/v1/message.proto\x12\x17temporal.sdk.streams.v1\x1a$temporal/api/common/v1/message.proto\x1a$temporal/api/stream/v1/message.proto"\xc1\x03\n\x0cStreamRecord\x12-\n\x04\x62ody\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x45\n\x08metadata\x18\x02 \x03(\x0b\x32\x33.temporal.sdk.streams.v1.StreamRecord.MetadataEntry\x12\r\n\x05topic\x18\x03 \x01(\t\x12\x37\n\x04kind\x18\x04 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamRecordKind\x12\x13\n\x0bproducer_id\x18\x05 \x01(\t\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\x03\x12\x10\n\x08sequence\x18\x07 \x01(\x03\x12\x31\n\x04link\x18\x08 \x01(\x0b\x32#.temporal.sdk.streams.v1.StreamLink\x12\x1d\n\x15task_started_event_id\x18\t \x01(\x03\x12\x17\n\x0f\x63ompleted_tasks\x18\n \x03(\x03\x1aP\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x90\x02\n\nStreamLink\x12\x38\n\x05\x65vent\x18\x01 \x01(\x0e\x32).temporal.sdk.streams.v1.StreamLink.Event\x12\x37\n\x06stream\x18\x02 \x01(\x0b\x32\'.temporal.api.stream.v1.StreamReference\x12\x0c\n\x04name\x18\x03 \x01(\t\x12\r\n\x05\x61\x66ter\x18\x04 \x01(\t\x12\r\n\x05until\x18\x05 \x01(\t\x12\x11\n\tnamespace\x18\x06 \x01(\t\x12\x10\n\x08\x65ndpoint\x18\x07 \x01(\t">\n\x05\x45vent\x12\x15\n\x11\x45VENT_UNSPECIFIED\x10\x00\x12\x0e\n\nEVENT_OPEN\x10\x01\x12\x0e\n\nEVENT_JOIN\x10\x02*\xd1\x01\n\x10StreamRecordKind\x12"\n\x1eSTREAM_RECORD_KIND_UNSPECIFIED\x10\x00\x12\x1b\n\x17STREAM_RECORD_KIND_DATA\x10\x01\x12\x1d\n\x19STREAM_RECORD_KIND_FINISH\x10\x02\x12\x1b\n\x17STREAM_RECORD_KIND_LINK\x10\x04\x12\x1c\n\x18STREAM_RECORD_KIND_CLOSE\x10\x05\x12\x1c\n\x18STREAM_RECORD_KIND_TOPIC\x10\x06"\x04\x08\x03\x10\x03\x42\x32\xea\x02/Temporalio::Internal::Bridge::Api::StreamRecordb\x06proto3'
 )
 
 _STREAMRECORDKIND = DESCRIPTOR.enum_types_by_name["StreamRecordKind"]
@@ -32,6 +32,8 @@ STREAM_RECORD_KIND_UNSPECIFIED = 0
 STREAM_RECORD_KIND_DATA = 1
 STREAM_RECORD_KIND_FINISH = 2
 STREAM_RECORD_KIND_LINK = 4
+STREAM_RECORD_KIND_CLOSE = 5
+STREAM_RECORD_KIND_TOPIC = 6
 
 
 _STREAMRECORD = DESCRIPTOR.message_types_by_name["StreamRecord"]
@@ -78,7 +80,7 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _STREAMRECORD_METADATAENTRY._options = None
     _STREAMRECORD_METADATAENTRY._serialized_options = b"8\001"
     _STREAMRECORDKIND._serialized_start = 870
-    _STREAMRECORDKIND._serialized_end = 1019
+    _STREAMRECORDKIND._serialized_end = 1079
     _STREAMRECORD._serialized_start = 143
     _STREAMRECORD._serialized_end = 592
     _STREAMRECORD_METADATAENTRY._serialized_start = 512
