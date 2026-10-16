@@ -4,6 +4,9 @@ from __future__ import annotations
 
 # BEGIN GENERATED NEXUS SYSTEM EXPORTS
 from temporalio.nexus.system.workflow_service import (
+    attach_stream_callback,
+    detach_stream_callback,
+    notify_stream,
     signal_with_start_workflow,
 )
 
@@ -137,6 +140,7 @@ from ._nexus import (
     NexusClient,
     NexusOperationCancellationType,
     NexusOperationHandle,
+    NexusOperationProgress,
     _NexusClient,
     create_nexus_client,
 )
@@ -253,6 +257,7 @@ __all__ = [
     "NexusClient",
     "NexusOperationCancellationType",
     "NexusOperationHandle",
+    "NexusOperationProgress",
     "create_nexus_client",
     "LoggerAdapter",
     "SandboxImportNotificationPolicy",
@@ -329,6 +334,9 @@ __all__ = [
     "ReturnType",
     "SelfType",
     # BEGIN GENERATED NEXUS SYSTEM __ALL__
+    "attach_stream_callback",
+    "detach_stream_callback",
+    "notify_stream",
     "signal_with_start_workflow",
     # END GENERATED NEXUS SYSTEM __ALL__
 ]

@@ -27,6 +27,17 @@ in the Core this SDK vendors, by ``scripts/gen_nexus_streams_api.py``:
 :class:`TemporalStreamsHandler` is the one hand-written piece. It runs its
 authorizer and the namespace's payload codec, the parts only the SDK has, and
 Core runs every rule of the contract on the store of its Worker's client.
+
+A Nexus operation can also hand its caller a stream.
+:class:`StreamOperationHandler` is such an operation: its start attaches the
+caller to the stream's notifier on the server and puts the
+:class:`StreamRef` in the operation token (:func:`stream_ref_from_token`).
+With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
+on, Core tells the notifier when the stream moves, which the caller sees as
+operation progress.
+:meth:`temporalio.contrib.streams.StreamStorePlugin.close_stream` completes
+the operation, or :func:`temporalio.contrib.streams.close_workflow_stream`
+from the owning Workflow.
 """
 
 from temporalio.contrib.streams import StreamRef
@@ -47,6 +58,10 @@ from temporalio.contrib.streams.nexus._handler import (
     StreamAccess,
     TemporalStreamsHandler,
 )
+from temporalio.contrib.streams.nexus._operation import (
+    StreamOperationHandler,
+    stream_ref_from_token,
+)
 
 __all__ = [
     "AppendInput",
@@ -57,8 +72,10 @@ __all__ = [
     "RecordWire",
     "StreamAccess",
     "StreamCursor",
+    "StreamOperationHandler",
     "StreamRef",
     "TemporalStreams",
     "TemporalStreamsHandler",
     "TemporalStreamsHttpClient",
+    "stream_ref_from_token",
 ]
