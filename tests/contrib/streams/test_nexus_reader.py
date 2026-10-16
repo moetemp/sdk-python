@@ -1032,6 +1032,56 @@ async def test_a_history_from_before_readers_armed_replays() -> None:
     ]
 
 
+async def test_a_bad_last_record_still_takes_the_answers_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad = to_wire(
+        converter,
+        topic=STREAM.topic,
+        kind=RecordKind.DATA,
+        value="not a token",
+        producer_id="chat",
+        attempt=1,
+        sequence=2,
+    )
+    answers = [
+        ReadOutput(
+            records=[
+                record(1, text="a"),
+                RecordWire(token="cursor-2", record=bad.SerializeToString()),
+            ],
+            next_token="cursor-9",
+            done=False,
+            state=b"s1",
+        ),
+        ReadOutput(records=[], next_token="cursor-9", done=True, state=b"s2"),
+    ]
+    sent: list[tuple[str | None, bytes | None]] = []
+
+    class FakeClient:
+        async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
+            sent.append((input.after_token, input.state))
+            return answers.pop(0)
+
+    fake_workflow = types.SimpleNamespace(
+        create_nexus_client=lambda **_kwargs: FakeClient(),
+        payload_converter=lambda: converter,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(reader_module, "workflow", fake_workflow)
+    reader = StreamReader(
+        _CompletedHandle(),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+    )
+    assert await reader.next() == [Token("a")]
+    with pytest.raises(StreamRecordError):
+        await reader.next()
+    assert await reader.next() is None
+    # The read after the bad last record sends that answer's state and token.
+    assert sent[1] == ("cursor-9", b"s1")
+
+
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
     """A read's answer is one Nexus operation result, encoded by the handler
     Worker's codec with the bodies inside it in the clear. The caller Worker's
