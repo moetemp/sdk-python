@@ -349,7 +349,11 @@ gate tests/contrib/streams/test_nexus_scenario_demos.py \
   test_n6_a_second_operation_follows_the_location_after_the_wake \
   test_n7a_a_caller_reads_every_stage_then_gets_the_failure \
   test_n7b_the_reader_marks_the_retry_and_the_stale_write \
-  test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone
+  test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone \
+  test_n9_a_direct_reader_records_ranges_and_replays_from_the_endpoint \
+  test_n9_a_shared_encryption_codec_crosses_both_ways \
+  test_n9_a_trim_below_the_floor_keeps_the_range \
+  test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task
 gate tests/contrib/streams/test_nexus_scenario_demos.py \
   test_u1a_the_app_worker_gets_each_stage_pushed_then_the_close \
   test_u4_a_standalone_connector_posts_each_message_once \

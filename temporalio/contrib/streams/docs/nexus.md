@@ -272,8 +272,9 @@ What `next()` does:
   `temporalio.contrib.streams.StreamRecordError` (a `StreamError` with
   `.cursor`), after the records before it are handed over. The next call
   goes on past it, so the Workflow can catch it and keep reading.
-- A failed read raises `temporalio.exceptions.NexusOperationError`. So does
-  a failed operation, after the records it left are handed over.
+- A failed read raises `temporalio.exceptions.NexusOperationError`, or an
+  `ActivityError` for a [direct reader](#direct-reads). A failed operation
+  raises `NexusOperationError`, after the records it left are handed over.
 - If the operation's token names no stream, it raises `ValueError`.
 
 Bodies reach the Workflow decoded. The stream service decodes them with its
@@ -287,8 +288,8 @@ an append's bodies before the codec encodes them, and a read's bodies after
 the codec decodes them. Core never stores or logs them, and sends them only
 in the read's answer. The store keeps only encoded bodies.
 
-Each read is a synchronous Nexus operation of the Workflow, so History
-records it and a replay reads the same records. When a read finds no new
+By default each read is a synchronous Nexus operation of the Workflow, so
+History records it and a replay reads the same records. When a read finds no new
 record, the reader waits on the operation's progress, which is also on the
 handle:
 
@@ -306,8 +307,9 @@ values at the same points.
 
 Reading a stream adds to the caller's History in two ways.
 
-- Each read is a synchronous Nexus operation, about three events, and its
-  answer holds up to 1 MiB of records. A gap in the stream shorter than
+- By default each read is a synchronous Nexus operation, about three events,
+  and its answer holds up to 1 MiB of records. A direct read is one marker
+  of about 1 KiB. A gap in the stream shorter than
   `idle_wait` costs one read. A longer gap costs one empty read that arms
   the stream, then one progress task.
 - Each progress delivery costs at most one Workflow Task, three events,
@@ -350,7 +352,102 @@ Two cases stop a reader that would otherwise read for ever.
   append of such a record, so this only happens for a record written to the
   store directly.
 
-## Following a stream from a Worker
+### Direct reads
+
+A reader can keep the records out of its History. Build it with
+`replay_from_store=True`:
+
+```python
+reader = StreamReader(
+    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=True
+)
+```
+
+Then each read runs in a Local Activity, not as a Nexus operation of the
+Workflow. History keeps one marker per read, with the range of records that
+crossed and Core's digest of them, not the records. The marker is about
+1 KiB. Most of it is the stream service's read state, which grows with the
+producers the reader saw. A read counts once it returned. When the read
+before was the same run's, the marker leaves out the read's input state,
+since the previous marker holds it as its answer state. The first read of a
+run, also of a reset run, keeps it. A process that replays a later marker without the ones before it
+fails the Workflow Task, and the retry replays the History from the start. All the Local Activities of one Workflow Task count
+as one Action. The Worker turns the marker back into the batch before
+Workflow code sees it. On the live Workflow Task it takes the batch the
+Local Activity cached. On a replay it reads the range again through the
+stream service's `read_range`, which checks the records against the digest.
+
+It is off by default, since it needs a way to reach the endpoint outside the
+Workflow. Register `StreamDirectReads` on the caller Worker's client, and on
+any `Replayer`, with a transport for each endpoint:
+
+```python
+from temporalio.contrib.streams.nexus import HttpTransport, StreamDirectReads
+
+reads = StreamDirectReads(
+    {
+        ENDPOINT: HttpTransport(
+            f"{http}/nexus/endpoints/{endpoint_id}/services/"
+            "temporal.sdk.streams.v1.TemporalStreams",
+            headers={"Authorization": f"Bearer {token}"},
+            payload_codec=codec,
+        )
+    }
+)
+client = await Client.connect(address, data_converter=converter, plugins=[reads])
+```
+
+`HttpTransport` calls the endpoint over the server's Nexus HTTP ingress. It
+is a stopgap for self-hosted servers, until a transport that Cloud serves
+exists.
+
+- It works on a self-hosted server only. Temporal Cloud has no HTTP ingress
+  for endpoints.
+- The server checks its credential (`headers` or `ssl_context`) against the
+  endpoint's target namespace, the handler's, and asks for write access
+  there. So the caller's Worker holds a write credential on the handler's
+  namespace. The handler's `authorize` is the check per stream. It sees
+  `operation="read_range"` and the `floor_holder` the call names.
+- Listing endpoints needs cluster admin, so give it the endpoint id.
+- Give it the codec of the handler's namespace as `payload_codec`, the same
+  one the caller's data converter has. The input then crosses encoded, and
+  the transport decodes the answer.
+
+A direct read names a floor holder, `<caller namespace>/<run id>/<reader
+number>`. The handler's store keeps the records after the read's start for
+that holder, even past its retention. Each read and each replay read renews
+the hold, and it lapses the store's floor lease after the last one
+(`RedisStreams(floor_lease=...)`, the retention by default). The reader never
+releases its hold while its run is open, since a query or a reset can still
+replay the run.
+
+A replay that misses the cache needs the endpoint and the records:
+
+| A replay finds | Then |
+|---|---|
+| Other records, cursor or count | The Workflow Task fails as nondeterminism |
+| The records gone, after the floor lease lapsed | The Workflow Task fails with `StreamReplayRangeLostError` and is retried |
+| The store down, the endpoint gone, 401, 403, 429, 5xx or a timeout | The Workflow Task fails and is retried |
+| No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
+
+A live read whose credential the endpoint refuses, 401 or 403, retries its
+Local Activity with backoff and logs an error, so a key that expired fails no
+caller Workflow. A refusal the handler marks final, such as its authorizer's,
+still fails the read for good. A live read on a Worker with no transport for the endpoint
+fails its Local Activity. The reader raises that again from `next()` as
+`StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
+is retried once the Worker is fixed. Workflow code that catches every
+`Exception` around `next()` swallows it, so catch narrower errors there, or
+raise `StreamUnsupportedError` again.
+
+So keep the endpoint and its Worker up, and keep the floor lease longer
+than a run can wait before a replay. To stop direct reads, deploy readers
+with `replay_from_store=False`. A run that already has direct-read markers
+still needs the transport to replay them.
+
+A record that crossed as an error replays as the same error, even when the
+codec decodes it now, since live Workflow code never saw it.
+
 
 A Worker can follow a stream with no caller Workflow. `follow_stream` starts
 the stream-returning operation as a standalone Nexus operation, with a
@@ -591,8 +688,10 @@ Without `authorize`, the handler refuses every append, since an append could
 write as any producer. Limit who reaches the endpoint with its allowed
 caller namespaces, and pass `authorize` to `TemporalStreamsHandler` to check
 each call. It gets a `StreamAccess` (`operation`, `stream`, the Nexus
-`context` with the caller's headers, and for an append `producer_id` and
-`attempt`) and answers whether to serve it. A refused call fails as
+`context` with the caller's headers, for an append `producer_id` and
+`attempt`, and for a direct read or its `read_range` the `floor_holder`) and
+answers whether to serve it. The caller picks the holder, so treat it as a
+claim. A refused call fails as
 unauthorized.
 
 Parked reads hold Nexus task slots on the handler's Worker for up to a few
