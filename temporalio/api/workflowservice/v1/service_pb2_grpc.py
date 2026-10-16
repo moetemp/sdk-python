@@ -653,6 +653,11 @@ class WorkflowServiceStub(object):
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.FromString,
         )
+        self.WaitStreamCallback = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/WaitStreamCallback",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.FromString,
+        )
         self.NotifyStream = channel.unary_unary(
             "/temporal.api.workflowservice.v1.WorkflowService/NotifyStream",
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.SerializeToString,
@@ -1975,6 +1980,21 @@ class WorkflowServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def WaitStreamCallback(self, request, context):
+        """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
+        notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
+        After the delivery the callback is idle again. A reader calls it when a read finds nothing.
+        The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
+        for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
+        nothing. Waiting on a callback that is not idle changes nothing.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
     def NotifyStream(self, request, context):
         """NotifyStream tells the notifier of a stream that the stream moved, or that it closed. The
         notifier passes the latest notification on to every attached callback as progress, and on close
@@ -2658,6 +2678,11 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             servicer.DetachStreamCallback,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.SerializeToString,
+        ),
+        "WaitStreamCallback": grpc.unary_unary_rpc_method_handler(
+            servicer.WaitStreamCallback,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.SerializeToString,
         ),
         "NotifyStream": grpc.unary_unary_rpc_method_handler(
             servicer.NotifyStream,
@@ -6316,6 +6341,35 @@ class WorkflowService(object):
             "/temporal.api.workflowservice.v1.WorkflowService/DetachStreamCallback",
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.SerializeToString,
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def WaitStreamCallback(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/WaitStreamCallback",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -2351,6 +2351,24 @@ class WorkflowService:
             timeout=timeout,
         )
 
+    async def wait_stream_callback(
+        self,
+        req: temporalio.api.workflowservice.v1.WaitStreamCallbackRequest,
+        retry: bool = False,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> temporalio.api.workflowservice.v1.WaitStreamCallbackResponse:
+        """Invokes the WorkflowService.wait_stream_callback rpc method."""
+        return await self._client._rpc_call(
+            rpc="wait_stream_callback",
+            req=req,
+            service=self._service,
+            resp_type=temporalio.api.workflowservice.v1.WaitStreamCallbackResponse,
+            retry=retry,
+            metadata=metadata,
+            timeout=timeout,
+        )
+
 
 class OperatorService:
     """RPC calls for the OperatorService."""
