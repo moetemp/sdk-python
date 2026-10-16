@@ -888,3 +888,31 @@ async def test_a_refusal_the_handler_marks_final_fails_the_read():
     with pytest.raises(ApplicationError) as raised:
         await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
     assert raised.value.non_retryable
+
+
+async def test_a_holding_read_from_the_end_finds_the_end_first():
+    class Ends:
+        def __init__(self) -> None:
+            self.asked: list[ReadInput] = []
+
+        async def read(self, request: ReadInput) -> ReadOutput:
+            self.asked.append(request)
+            if request.latest_only:
+                return ReadOutput(records=[], next_token="c7", done=False)
+            return live(record("c8", "a"))[1]
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
+            raise AssertionError("a live read never reads a range")
+
+    transport = Ends()
+    plugin = StreamDirectReads({"e": transport})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    await env.run(
+        direct_read_activity, "e", "1", ReadInput(stream=_STREAM, after_token="$end"), 1
+    )
+    first, second = transport.asked
+    # The end goes with no holder, then the holding read starts at its cursor.
+    assert first.latest_only and first.floor_holder is None
+    assert second.after_token == "c7" and second.floor_holder

@@ -351,7 +351,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
   test_live_a_replay_of_a_lost_range_fails_the_task \
-  test_live_a_read_after_a_timed_out_read_replays_from_the_store
+  test_live_a_read_after_a_timed_out_read_replays_from_the_store \
+  test_live_a_workflow_reader_waits_for_an_owner_that_starts_later
 gate tests/contrib/streams/test_live_activity_stream_nexus.py \
   test_live_a_caller_reads_a_tool_calls_activity_stream \
   test_live_a_reader_wakes_at_most_once_per_burst_of_a_tool \
