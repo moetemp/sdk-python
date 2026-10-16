@@ -89,8 +89,11 @@ forgets producers by the same rule, so a dropped producer gets no
 of id each, so on a stream that many calls write the tracker holds about 200
 of them and its memory stays steady. For a Workflow's producer, `@<run id>`,
 it holds only the records of the newest Workflow Task, since a rerun
-withdraws only the records of its own task. Call `forget(producer_id)` once
-a producer can't retry, to drop it sooner.
+withdraws only the records of its own task. Of one producer it keeps the
+newest `max_records_per_producer` records (10,000 by default), so a long
+attempt can't grow it either. A `SUPERSEDED` past that withdraws only the
+records still held. Call `forget(producer_id)` once a producer can't retry,
+to drop it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
@@ -374,9 +377,9 @@ class Agent:
   `ReadOnlyContextError`.
 - **Codec.** The values are converted in the Workflow. The payload codec
   runs on each record body when the Worker encodes the completion.
-- **Size.** A record holds at most 1.5 MiB, and one activation's records at
-  most 16 MiB. The publish that crosses either raises `StreamError` and
-  publishes nothing.
+- **Size.** A record holds at most 1.5 MiB. A larger publish raises
+  `StreamError` and publishes nothing. One activation's records have no
+  limit in the Workflow, since replay can't check one the same way.
 
 Known limits:
 
