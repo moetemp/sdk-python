@@ -183,6 +183,8 @@ class _ReadInput:
     """The owner kind of the stream, as :attr:`StreamRef.kind`."""
     activity_id: str = ""
     """The owning standalone Activity, for an ``"activity"`` owner."""
+    max_bytes: int = 0
+    """The most stored bytes of the records past the first, 0 for no bound."""
 
 
 @dataclass
@@ -249,10 +251,13 @@ class WorkflowStreamReader(Generic[T]):
         start_to_close_timeout: timedelta,
         cutoff: TaskCutoff | None,
         replay_from_store: bool = True,
+        *,
+        max_bytes: int = 1 << 20,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
         self._cutoff = cutoff
         self._replay_from_store = replay_from_store
+        self._max_bytes = max_bytes
         self._ref = ref
         self._topic = topic
         self._result_type = result_type
@@ -500,6 +505,7 @@ class WorkflowStreamReader(Generic[T]):
             # doesn't wait.
             wait_ms=0 if attaching else self._idle_wait // timedelta(milliseconds=1),
             max_records=self._max_records,
+            max_bytes=self._max_bytes,
             subscription_id=self.subscription_id if attaching or unsubscribe else "",
             generation=state.generation,
             read_run_id=state.read_run_id,
@@ -588,6 +594,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
     replay_from_store: bool = ...,
@@ -603,6 +610,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
     replay_from_store: bool = ...,
@@ -618,6 +626,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
     replay_from_store: bool = ...,
@@ -632,6 +641,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = BEGINNING,
     idle_wait: timedelta = timedelta(seconds=2),
     max_records: int = 100,
+    max_bytes: int = 1 << 20,
     start_to_close_timeout: timedelta | None = None,
     cutoff: TaskCutoff | None = TaskCutoff(),
     replay_from_store: bool = True,
@@ -670,6 +680,10 @@ def workflow_reader(
             it comes back empty and the reader sleeps.
         max_records: The most records one batch holds. Records ride in the
             Local Activity's result, so this bounds the marker's size.
+        max_bytes: The most stored bytes of one batch's records past its
+            first, 1 MiB by default. The first record always goes, so a
+            batch stays below the server's 2 MiB blob limit for records of
+            up to 1 MiB.
         start_to_close_timeout: How long one read may run. ``idle_wait``
             plus 10 seconds by default.
         cutoff: When the reader ends the Workflow Task it reads in, so that
@@ -711,6 +725,8 @@ def workflow_reader(
         raise ValueError("idle_wait must be positive")
     if max_records < 1:
         raise ValueError(f"max_records must be at least 1, got {max_records}")
+    if max_bytes < 1:
+        raise ValueError(f"max_bytes must be at least 1, got {max_bytes}")
     if cutoff is not None and (cutoff.commands < 1 or cutoff.time <= timedelta(0)):
         raise ValueError("a task cutoff needs a positive command count and time")
     name, result_type = resolve_topic(
@@ -726,6 +742,7 @@ def workflow_reader(
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
         cutoff,
         replay_from_store,
+        max_bytes=max_bytes,
     )
 
 
@@ -795,6 +812,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         stream=address,
         after=input.after,
         max_records=input.max_records,
+        max_bytes=input.max_bytes,
         state=base64.b64decode(input.state),
     )
     if input.positions_only:
