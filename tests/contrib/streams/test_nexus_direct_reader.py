@@ -192,6 +192,7 @@ class DirectHistory(History):
                                 range,
                                 output,
                                 ReadChain("chat-reader/1", self._seq),
+                                state_elided=self._seq > 1,
                             )
                         ]
                     ),
