@@ -576,9 +576,11 @@ class LiveTransport:
     """Answers each live read with one record, and keeps the timeout it got."""
 
     async def read(self, request: ReadInput) -> ReadOutput:
+        del request
         return live(record("c1", "a"))[1]
 
     async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        del request
         raise AssertionError("a live read never reads a range")
 
 
@@ -610,7 +612,12 @@ async def test_the_http_transport_waits_no_longer_than_the_activity_has_left(
     timeouts: list[float] = []
 
     def post(
-        url: str, body: bytes, headers: Any, timeout: float, *_: Any, **__: Any
+        url: str,
+        _body: bytes,
+        _headers: Any,
+        timeout: float,
+        *_args: Any,
+        **_kwargs: Any,
     ) -> Any:
         timeouts.append(timeout)
         raise generated_client.HTTPStatusError(url, 503, "down")
@@ -633,20 +640,20 @@ async def test_the_http_transport_waits_no_longer_than_the_activity_has_left(
     assert 0 < timeouts[0] <= 5 and timeouts[1] == 30
 
 
-async def test_a_refused_credential_retries_the_read(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_a_refused_credential_retries_the_read():
     class RefusesOnce:
         def __init__(self) -> None:
             self.calls = 0
 
         async def read(self, request: ReadInput) -> ReadOutput:
+            del request
             self.calls += 1
             if self.calls == 1:
                 raise generated_client.HTTPStatusError("http://stub", 401, "expired")
             return live(record("c1", "a"))[1]
 
         async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
             raise AssertionError("a live read never reads a range")
 
     transport = RefusesOnce()
