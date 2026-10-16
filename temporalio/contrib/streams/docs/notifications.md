@@ -60,23 +60,31 @@ exits.
 2. A read that waits its whole idle time and finds nothing answers
    `wake_after`, the counter of its position.
 3. The reader sleeps until the notifier's counter is above `wake_after`, the
-   stream closes, or a time limit passes.
+   stream closes, or a time limit passes. A Workflow reader asks the
+   notifier for this one wake in the same Local Activity as the empty read.
+   A client reader holds a long poll.
 4. Every append notifies the notifier, from the producer's process or, with
    a notification log, from a StreamDriver (see below). Notifications for
    one stream fold into one call in flight, and a failed last notification
    is tried twice more.
-5. The notifier wakes every sleeping reader with one notification.
+5. The notifier wakes every sleeping reader with one notification. A reader
+   that reads records asks for nothing, so it gets no wake while it works.
 
 The server drops a notification for a stream with no notifier, and a
 reader's attach or wait starts the notifier. So a reader reads first, and
 attaches only when a read comes back empty, then reads once more before it
 sleeps, which catches an append that landed before the notifier existed.
 
+A Workflow reader attaches as an idle target, which gets no wake until it
+waits. Each wait gets at most one wake, and uses it up. A wait whose counter
+the stream passed already wakes the reader at once. So a Workflow reader
+gets one wake per idle stretch, whatever the append rate, and the records
+that land while it reads cost no Workflow Task. Its next read finds them.
+
 The notifier delivers the first notification of a window at once and the
 newest one at the window's end (`streamnotifier.debounceWindow`, 1 second by
-default). So a busy stream costs at most about two deliveries per window,
-whatever its append rate, and a Workflow reader wakes on about one Workflow
-Task per window.
+default). A wait that the window holds back wakes the reader at the
+window's end.
 
 ## Run a StreamDriver
 
@@ -162,13 +170,17 @@ class Connector:
 - Each read is one Local Activity, which adds one marker event when its
   Workflow Task completes. By default the marker holds the read's range, and
   replay reads the range from the store again (see below).
-- The reader reads first. Only when a read comes back empty does the next
-  read attach the run to the stream's notifier, and that read doesn't wait,
-  so it finds a record that landed before the attach. A reader that never
-  goes idle never attaches. While the stream is idle, the reader waits with
-  no Local Activity and no timer. The server
-  records each wake on the next Workflow Task's scheduled event, so a wake
-  adds no event of its own.
+- Each read names the run as the subscriber. Only a read that comes back
+  empty attaches the run to the stream's notifier, in the same Local
+  Activity, and Core reads once more after the attach, so it finds a record
+  that landed before the attach. A reader that never goes idle never
+  attaches. While the stream is idle, the reader waits with no Local
+  Activity and no timer. The server records each wake on the next Workflow
+  Task's scheduled event, so a wake adds no event of its own.
+- The reader gets one wake per idle stretch. Each empty read asks the
+  notifier for the next wake, and a read that finds records asks for none.
+  So a reader that works on a batch, for example in an Activity, gets no
+  Workflow Task from the appends that land meanwhile.
 - A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
   replay must give your code the same records. `SupersessionTracker` names
   the records each `SUPERSEDED` withdraws.
