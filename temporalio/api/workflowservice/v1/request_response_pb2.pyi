@@ -14450,8 +14450,26 @@ global___NotifyStreamsRequest = NotifyStreamsRequest
 class NotifyStreamsResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    RESULTS_FIELD_NUMBER: builtins.int
+    @property
+    def results(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamNotificationResult
+    ]:
+        """One result per entry of the request, in the same order. Empty only from a server that
+        fails the whole call on a bad entry, so an empty list on success means every entry applied.
+        """
     def __init__(
         self,
+        *,
+        results: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamNotificationResult
+        ]
+        | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["results", b"results"]
     ) -> None: ...
 
 global___NotifyStreamsResponse = NotifyStreamsResponse
