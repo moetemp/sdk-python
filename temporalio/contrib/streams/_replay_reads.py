@@ -45,6 +45,9 @@ __all__ = ["POSITIONS_TYPE", "ReplayReadCodec", "positions_payload"]
 POSITIONS_TYPE = b"temporal.io/stream-read-positions"
 """The ``messageType`` of a positions-only read's result."""
 
+FOLLOW_POSITIONS_TYPE = b"temporal.io/stream-follow-positions"
+"""The ``messageType`` of a positions-only follow step's result."""
+
 _RESPONSE_TYPE = ReadResponse.DESCRIPTOR.full_name.encode()
 _READ_RUN_ID_KEY = "temporal.io/stream-read-run-id"
 _READ_BY_RUN_ID_KEY = "temporal.io/stream-read-by-run-id"
@@ -136,6 +139,30 @@ class BatchCache:
         """Drop every batch, so the next decode reads from the store."""
         self._batches.clear()
         self._bytes = 0
+
+
+class ByteCache:
+    """The newest values put in this process, by key."""
+
+    def __init__(self, size: int = _CACHE_SIZE) -> None:
+        """Keep up to ``size`` values."""
+        self._size = size
+        self._values: OrderedDict[bytes, bytes] = OrderedDict()
+
+    def put(self, key: bytes, value: bytes) -> None:
+        """Keep ``value`` under ``key``."""
+        self._values[key] = value
+        self._values.move_to_end(key)
+        while len(self._values) > self._size:
+            self._values.popitem(last=False)
+
+    def get(self, key: bytes) -> bytes | None:
+        """The value under ``key``, which stays for a later replay."""
+        return self._values.get(key)
+
+    def clear(self) -> None:
+        """Drop every value."""
+        self._values.clear()
 
 
 def positions_payload(
@@ -263,7 +290,19 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
             if self._inner is None
             else await self._inner.decode(payloads)
         )
-        return [await self._batch(p) if is_positions(p) else p for p in decoded]
+        out = []
+        for payload in decoded:
+            if is_positions(payload):
+                payload = await self._batch(payload)
+            elif payload.metadata.get("messageType") == FOLLOW_POSITIONS_TYPE:
+                # Imported here, since that module imports the plugin module.
+                from temporalio.contrib.streams._workflow_follow import replay_follow
+
+                payload = await replay_follow(
+                    self._plugin, self._body_converter, payload
+                )
+            out.append(payload)
+        return out
 
     async def _batch(self, payload: Payload) -> Payload:
         parts = Payloads.FromString(payload.data).payloads

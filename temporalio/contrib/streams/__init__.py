@@ -129,6 +129,11 @@ from temporalio.contrib.streams._workflow import (
     start_activity_with_stream,
     workflow_reader,
 )
+from temporalio.contrib.streams._workflow_follow import (
+    FollowBatch,
+    WorkflowStreamFollower,
+    workflow_follower,
+)
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     close_workflow_stream,
@@ -141,6 +146,7 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "FollowBatch",
     "FollowPosition",
     "FollowedItem",
     "LinkEvent",
@@ -175,6 +181,7 @@ __all__ = [
     "Supersession",
     "SupersessionTracker",
     "TaskCutoff",
+    "WorkflowStreamFollower",
     "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
@@ -183,6 +190,7 @@ __all__ = [
     "start_activity_with_stream",
     "topic",
     "track_supersession",
+    "workflow_follower",
     "workflow_reader",
     "workflow_writer",
 ]

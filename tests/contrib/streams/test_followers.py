@@ -1,4 +1,4 @@
-"""Following a stream and the streams its links open, from a client.
+"""Following a stream and the streams its links open, from a client and from a Workflow.
 
 An agent Workflow publishes on its own stream, links two tool calls that
 stream on their own, and links a child Workflow's stream. A follower reads
@@ -24,10 +24,13 @@ from temporalio.contrib.streams import (
     get_stream_handle,
     start_activity_with_stream,
     topic,
+    workflow_follower,
     workflow_writer,
 )
 from temporalio.contrib.streams import _follow as follow_module
+from temporalio.contrib.streams._plugin import store_for_client
 from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.worker import Replayer
 from tests.contrib.streams._support import connect_with, new_workflow_id
 from tests.helpers import new_worker
 
@@ -190,3 +193,47 @@ async def test_a_follower_resumes_from_any_batch_end_with_no_loss_or_repeat(
     # Smaller steps read in another order, and the gates still hold.
     check_order([describe(i) for i in batches])
     check_order(whole)
+
+
+@workflow.defn
+class FollowsAnAgent:
+    @workflow.run
+    async def run(self, agent_id: str, record_batches: bool) -> list[str]:
+        seen: list[str] = []
+        async with workflow_follower(
+            agent_id, topic=EVENTS, replay_from_store=not record_batches
+        ) as follower:
+            async for batch in follower:
+                seen.extend(describe(i) for i in batch.items)
+        return seen
+
+
+@pytest.mark.parametrize("record_batches", [True, False])
+async def test_a_workflow_follows_an_agent_and_replays(
+    client: Client, record_batches: bool
+):
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(
+        streams, Agent, Child, FollowsAnAgent, activities=[tool]
+    ) as worker:
+        agent_id = await run_agent(streams, worker.task_queue)
+        handle = await streams.start_workflow(
+            FollowsAnAgent.run,
+            args=[agent_id, record_batches],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        seen = await asyncio.wait_for(handle.result(), 30)
+    check_order(seen)
+    history = await handle.fetch_history()
+    if record_batches:
+        # The markers hold the batches, so a replay needs no store and no server.
+        await Replayer(
+            workflows=[FollowsAnAgent], plugins=[MemoryStreams()]
+        ).replay_workflow(history)
+    else:
+        store = store_for_client(streams)
+        store._follows.clear()
+        await Replayer(workflows=[FollowsAnAgent], plugins=[store]).replay_workflow(
+            history
+        )

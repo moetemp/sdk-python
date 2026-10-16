@@ -80,10 +80,15 @@ class StreamStorePlugin(SimplePlugin):
         # Set once the server answered that it has no stream notifier.
         self._notifier_unsupported = False
         # Imported here, since that module imports this one.
-        from temporalio.contrib.streams._replay_reads import BatchCache, ReadStates
+        from temporalio.contrib.streams._replay_reads import (
+            BatchCache,
+            ByteCache,
+            ReadStates,
+        )
 
         self._batches = BatchCache()
         self._read_states = ReadStates()
+        self._follows = ByteCache()
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
@@ -148,11 +153,12 @@ class StreamStorePlugin(SimplePlugin):
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow import read_activity
+        from temporalio.contrib.streams._workflow_follow import follow_activity
         from temporalio.contrib.streams._workflow_writer import close_activity
 
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures the Worker twice.
-        for builtin in (read_activity, close_activity):
+        for builtin in (read_activity, close_activity, follow_activity):
             if builtin not in activities:
                 activities.append(builtin)
         config["activities"] = activities
