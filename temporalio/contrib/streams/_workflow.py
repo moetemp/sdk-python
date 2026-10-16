@@ -139,6 +139,8 @@ class _ReadInput:
     """The run the read names to Core, which the first read finds."""
     unsubscribe: bool = False
     """Detach ``subscription_id`` and read nothing."""
+    max_bytes: int = 0
+    """The most stored bytes of the records past the first, 0 for no bound."""
 
 
 @dataclass
@@ -192,8 +194,11 @@ class WorkflowStreamReader(Generic[T]):
         idle_wait: timedelta,
         max_records: int,
         start_to_close_timeout: timedelta,
+        *,
+        max_bytes: int = 1 << 20,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
+        self._max_bytes = max_bytes
         self._ref = ref
         self._topic = topic
         self._result_type = result_type
@@ -384,6 +389,7 @@ class WorkflowStreamReader(Generic[T]):
             arm=arm,
             wait_ms=self._idle_wait // timedelta(milliseconds=1),
             max_records=self._max_records,
+            max_bytes=self._max_bytes,
             subscription_id=self.subscription_id
             if (state.attach and arm) or unsubscribe
             else "",
@@ -442,6 +448,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
 ) -> WorkflowStreamReader[T]: ...
 
@@ -455,6 +462,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
 ) -> WorkflowStreamReader[T]: ...
 
@@ -468,6 +476,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = ...,
     idle_wait: timedelta = ...,
     max_records: int = ...,
+    max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
 ) -> WorkflowStreamReader[Any]: ...
 
@@ -480,6 +489,7 @@ def workflow_reader(
     after: Cursor | StreamPosition = BEGINNING,
     idle_wait: timedelta = timedelta(seconds=2),
     max_records: int = 100,
+    max_bytes: int = 1 << 20,
     start_to_close_timeout: timedelta | None = None,
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
@@ -512,6 +522,10 @@ def workflow_reader(
             it arms the stream and the reader sleeps.
         max_records: The most records one batch holds. Records ride in the
             Local Activity's result, so this bounds the marker's size.
+        max_bytes: The most stored bytes of one batch's records past its
+            first, 1 MiB by default. The first record always goes, so a
+            batch stays below the server's 2 MiB blob limit for records of
+            up to 1 MiB.
         start_to_close_timeout: How long one read may run. ``idle_wait``
             plus 10 seconds by default.
 
@@ -535,6 +549,8 @@ def workflow_reader(
         raise ValueError("idle_wait must be positive")
     if max_records < 1:
         raise ValueError(f"max_records must be at least 1, got {max_records}")
+    if max_bytes < 1:
+        raise ValueError(f"max_bytes must be at least 1, got {max_bytes}")
     name, result_type = resolve_topic(
         topic if topic is not None else ref.topic, result_type
     )
@@ -546,6 +562,7 @@ def workflow_reader(
         idle_wait,
         max_records,
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
+        max_bytes=max_bytes,
     )
 
 
@@ -609,6 +626,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         stream=address,
         after=input.after,
         max_records=input.max_records,
+        max_bytes=input.max_bytes,
         state=base64.b64decode(input.state),
         arm=input.arm,
     )
