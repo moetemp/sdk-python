@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -190,7 +191,8 @@ def test_a_copy_from_an_older_attempt_stays_stale():
 def test_the_first_close_ends_the_stream():
     tracker: SupersessionTracker[str] = SupersessionTracker()
     tracker.observe(data("a", 1, "a1", sequence=1))
-    assert not tracker.drops(close("a"))
+    # A read never delivers a close, but the tracker must see it.
+    assert tracker.drops(close("a"))
     assert tracker.observe(close("a")) == []
     assert tracker.closed
     # An append that raced the close, and a second closer.
@@ -214,9 +216,19 @@ async def test_track_supersession_skips_copies_and_stops_at_the_close():
             closed.append(True)
 
     seen = [record async for record, _ in track_supersession(records())]
-    assert [r.value for r in seen] == ["a1", "a2", None]
-    assert seen[-1].kind is RecordKind.CLOSE
+    assert [r.value for r in seen] == ["a1", "a2"]
     assert closed == [True]
+
+
+def test_a_close_of_another_topic_does_not_end_the_stream():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    tracker.observe(data("a", 1, "a1", sequence=1))
+    other = dataclasses.replace(close("c"), topic="other")
+    assert tracker.drops(other)
+    tracker.observe(other)
+    assert not tracker.closed
+    tracker.observe(dataclasses.replace(close("c"), topic=""))
+    assert tracker.closed
 
 
 def test_the_tracker_forgets_the_copies_of_producers_it_saw_least_recently():
@@ -306,9 +318,10 @@ def test_the_tracker_drops_what_cores_reader_rules_drop(case: dict[str, Any]):
         if start is not None and index <= start:
             continue
         if not tracker.drops(record):
-            tracker.observe(record)
             delivered.append(index)
+        tracker.observe(record)
     assert delivered == case["delivered"]
+    assert tracker.closed == case.get("closed", False)
 
 
 def test_a_workflow_producer_holds_only_its_newest_tasks_records():
