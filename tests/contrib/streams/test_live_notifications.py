@@ -482,6 +482,120 @@ async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
     assert 1 <= wakes <= 2 * (int(elapsed) + 1) + 1, wakes
 
 
+@workflow.defn
+class ReadsThenWorks:
+    """Reads ``count`` records. After its first batch it works on a timer, then reads on."""
+
+    @workflow.run
+    async def run(self, owner: str, count: int, work_seconds: float) -> list[str]:
+        seen: list[str] = []
+        worked = False
+        async with workflow_reader(owner, topic=TOKENS) as reader:
+            async for batch in reader:
+                seen.extend(
+                    str(r.value) for r in batch.records if r.kind is RecordKind.DATA
+                )
+                if len(seen) >= count:
+                    break
+                if not worked:
+                    worked = True
+                    await workflow.sleep(work_seconds)
+        return seen
+
+
+class _History:
+    def __init__(self, events: list[Any]) -> None:
+        self.events = events
+
+
+def _wake_tasks(history: Any) -> list[list[Any]]:
+    """The wakes of each Workflow Task scheduled event that carries any."""
+    return [
+        list(e.workflow_task_scheduled_event_attributes.stream_wakes)
+        for e in history.events
+        if e.HasField("workflow_task_scheduled_event_attributes")
+        and e.workflow_task_scheduled_event_attributes.stream_wakes
+    ]
+
+
+async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works(
+    notifying: Client,
+):
+    # The reader asks for one wake per idle stretch. The appends that land
+    # while it works ask for nothing, and its next read finds them.
+    async with new_worker(notifying, Waits, ReadsThenWorks) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        reader_id = new_workflow_id()
+        reader = await notifying.start_workflow(
+            ReadsThenWorks.run,
+            args=[owner, 4, 3.0],
+            id=reader_id,
+            task_queue=worker.task_queue,
+        )
+        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await _sleeping(notifying, reader_id, owner)
+        await producer.append("first")
+
+        async def working() -> bool:
+            history = await reader.fetch_history()
+            return any(
+                e.event_type == EventType.EVENT_TYPE_TIMER_STARTED
+                for e in history.events
+            )
+
+        await until(working)
+        for value in ["a", "b", "c"]:
+            await producer.append(value)
+            await asyncio.sleep(0.3)
+        assert await asyncio.wait_for(reader.result(), 30) == ["first", "a", "b", "c"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+    # No wake after the reader started to work. A standing subscription would
+    # wake it for the appends while it worked. The lane's recheck is 3 seconds
+    # after the last notification, so it does not fall in the work either.
+    events = list((await reader.fetch_history()).events)
+    started = next(
+        i
+        for i, e in enumerate(events)
+        if e.event_type == EventType.EVENT_TYPE_TIMER_STARTED
+    )
+    assert _wake_tasks(_History(events[:started])), "the reader never slept"
+    assert not _wake_tasks(_History(events[started:])), events[started:]
+
+
+async def test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived(
+    notifying: Client,
+):
+    # The reader goes idle between most appends, so it sends a wait after
+    # almost every read, and some appends land between a read and its wait.
+    # A wait whose counter the stream passed already wakes at once. Had one
+    # missed, only the recheck would wake the reader, with `recheck` set.
+    async with new_worker(notifying, Waits, ReadsQuickly) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await producer.append("first")
+        reader = await notifying.start_workflow(
+            ReadsQuickly.run,
+            args=[owner, 21],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(1)
+        for n in range(20):
+            await producer.append(str(n))
+            await asyncio.sleep(0.05 + 0.03 * (n % 4))
+        assert await asyncio.wait_for(reader.result(), 30) == 21
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+    tasks = _wake_tasks(await reader.fetch_history())
+    assert tasks, "the reader never slept"
+    assert not any(w.recheck for wakes in tasks for w in wakes), tasks
+    # One wait at a time, so one wake per task.
+    assert all(len(wakes) == 1 for wakes in tasks), tasks
+
+
 async def _completed_tasks(handle: Any) -> int:
     history = await handle.fetch_history()
     return sum(
@@ -840,3 +954,26 @@ async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
     await Replayer(workflows=[ReadsThroughATimeout], plugins=[store]).replay_workflow(
         await reader.fetch_history()
     )
+
+
+async def test_live_a_workflow_reader_waits_for_an_owner_that_starts_later(
+    notifying: Client,
+):
+    # Inside the owner start grace, Core answers an idle read with no chain
+    # and attaches nothing, so the reader reads again on a timer.
+    async with new_worker(notifying, Waits, Reads) as worker:
+        owner = new_workflow_id()
+        reader = await notifying.start_workflow(
+            Reads.run,
+            args=[owner, 1],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(3)
+        await notifying.start_workflow(
+            Waits.run, id=owner, task_queue=worker.task_queue
+        )
+        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        await stream.producer(producer_id="p", attempt=1).append("first")
+        assert await asyncio.wait_for(reader.result(), 30) == ["first"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)

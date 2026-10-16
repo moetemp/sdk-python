@@ -929,6 +929,7 @@ class ReadRequest(google.protobuf.message.Message):
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     FLOOR_HOLDER_FIELD_NUMBER: builtins.int
+    SUBSCRIBER_FIELD_NUMBER: builtins.int
     MAX_BYTES_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> global___StreamAddress: ...
@@ -952,6 +953,13 @@ class ReadRequest(google.protobuf.message.Message):
     id. The store holds the records after this read's start against retention for that holder,
     until `ReleaseFloor` and its grace, or until the holder's lease passes with no read.
     """
+    @property
+    def subscriber(self) -> global___ReadSubscriber:
+        """Set by a Workflow reader. An answer with no records that is not `done` attaches the reader
+        idle when this process has not, asks the notifier for one wake after the answer's
+        `wake_after`, and reads once more when a record landed before the attach. An answer with
+        records sends nothing, so a reader that keeps up costs the notifier nothing.
+        """
     max_bytes: builtins.int
     """The most stored record bytes one answer holds past its first record. Zero puts no bound. A
     Workflow reader that records its answers in History sets it, so an answer stays below the
@@ -966,11 +974,14 @@ class ReadRequest(google.protobuf.message.Message):
         max_records: builtins.int = ...,
         state: builtins.bytes = ...,
         floor_holder: builtins.str = ...,
+        subscriber: global___ReadSubscriber | None = ...,
         max_bytes: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self,
-        field_name: typing_extensions.Literal["stream", b"stream", "wait", b"wait"],
+        field_name: typing_extensions.Literal[
+            "stream", b"stream", "subscriber", b"subscriber", "wait", b"wait"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -987,12 +998,51 @@ class ReadRequest(google.protobuf.message.Message):
             b"state",
             "stream",
             b"stream",
+            "subscriber",
+            b"subscriber",
             "wait",
             b"wait",
         ],
     ) -> None: ...
 
 global___ReadRequest = ReadRequest
+
+class ReadSubscriber(google.protobuf.message.Message):
+    """The Workflow reader that an idle read wakes, as `SubscribeRequest` names it."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
+    GENERATION_FIELD_NUMBER: builtins.int
+    workflow_id: builtins.str
+    run_id: builtins.str
+    subscription_id: builtins.str
+    generation: builtins.int
+    def __init__(
+        self,
+        *,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+        subscription_id: builtins.str = ...,
+        generation: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "generation",
+            b"generation",
+            "run_id",
+            b"run_id",
+            "subscription_id",
+            b"subscription_id",
+            "workflow_id",
+            b"workflow_id",
+        ],
+    ) -> None: ...
+
+global___ReadSubscriber = ReadSubscriber
 
 class Supersession(google.protobuf.message.Message):
     """A later attempt of a producer started writing. Readers synthesize it, and no store holds it."""
@@ -1348,7 +1398,9 @@ class FollowRequest(google.protobuf.message.Message):
     """For a positions-only follower: each source holds its records as `<floor_holder>/<source>`."""
     @property
     def subscriber(self) -> global___FollowSubscriber:
-        """Set by a Workflow follower, so an empty answer attaches each idle source."""
+        """Set by a Workflow follower. An empty answer attaches each idle source idle and asks its
+        notifier for one wake after the source's `wake_after`.
+        """
     def __init__(
         self,
         *,

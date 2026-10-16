@@ -294,6 +294,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_workflow_reader_wakes_through_the_driver \
   test_live_streams_on_many_slots_all_wake_through_the_driver \
   test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window \
+  test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works \
+  test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
   test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
@@ -306,7 +308,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
   test_live_a_replay_of_a_lost_range_fails_the_task \
-  test_live_a_read_after_a_timed_out_read_replays_from_the_store
+  test_live_a_read_after_a_timed_out_read_replays_from_the_store \
+  test_live_a_workflow_reader_waits_for_an_owner_that_starts_later
 gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_both_readers_follow_a_standalone_activity_across_its_retry \
   test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
