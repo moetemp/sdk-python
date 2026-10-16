@@ -86,8 +86,11 @@ it drops the producer it saw least recently. The read's state in Core
 forgets producers by the same rule, so a dropped producer gets no
 `SUPERSEDED` either. A Workflow writer makes a producer per flush, about 57
 bytes of id each, so on its streams the tracker holds about 200 flushes and
-its memory stays steady. Call `forget(producer_id)` once a producer can't
-retry, to drop it sooner.
+its memory stays steady. Of one producer it keeps the newest
+`max_records_per_producer` records (10,000 by default), so a long attempt
+can't grow it either. A `SUPERSEDED` past that withdraws only the records
+still held. Call `forget(producer_id)` once a producer can't retry, to drop
+it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.

@@ -110,6 +110,17 @@ def test_the_tracker_needs_room_for_one_producer():
         SupersessionTracker(max_producers=0)
 
 
+def test_one_producer_keeps_only_its_newest_records():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    for i in range(20_000):
+        tracker.observe(data("activity", 1, str(i)))
+    standing = tracker.standing()
+    assert len(standing) == 10_000
+    assert standing[0].value == "10000"
+    withdrawn = tracker.observe(superseded("activity", 1, 2))
+    assert len(withdrawn) == 10_000
+
+
 async def test_track_supersession_pairs_records_and_closes_the_read():
     closed = []
 

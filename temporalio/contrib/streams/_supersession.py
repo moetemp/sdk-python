@@ -27,6 +27,7 @@ T = TypeVar("T")
 _MAX_PRODUCERS = 1_000
 _MAX_STATE_BYTES = 16 << 10
 _PRODUCER_OVERHEAD = 20
+_MAX_RECORDS_PER_PRODUCER = 10_000
 
 
 class SupersessionTracker(Generic[T]):
@@ -45,18 +46,33 @@ class SupersessionTracker(Generic[T]):
     from growing with the stream.
 
     A record with an empty ``producer_id`` or no attempt can't be
-    withdrawn, so it is not held.
+    withdrawn, so it is not held. Of one producer, it holds the newest
+    ``max_records_per_producer`` records and drops the oldest past that, so
+    a long attempt, for example an Activity that streams many tokens, can't
+    grow it without bound. A ``SUPERSEDED`` then withdraws only the records
+    still held.
     """
 
-    def __init__(self, max_producers: int = _MAX_PRODUCERS) -> None:
+    def __init__(
+        self,
+        max_producers: int = _MAX_PRODUCERS,
+        max_records_per_producer: int = _MAX_RECORDS_PER_PRODUCER,
+    ) -> None:
         """Start with no records held.
 
         Raises:
-            ValueError: ``max_producers`` is below 1.
+            ValueError: ``max_producers`` or ``max_records_per_producer`` is
+                below 1.
         """
         if max_producers < 1:
             raise ValueError(f"max_producers must be at least 1, got {max_producers}")
+        if max_records_per_producer < 1:
+            raise ValueError(
+                "max_records_per_producer must be at least 1, got "
+                f"{max_records_per_producer}"
+            )
         self._max_producers = max_producers
+        self._max_records = max_records_per_producer
         self._held: OrderedDict[str, list[tuple[int, StreamRecord[T]]]] = OrderedDict()
         self._bytes = 0
         self._count = 0
@@ -92,7 +108,10 @@ class SupersessionTracker(Generic[T]):
             if record.producer_id not in self._held:
                 self._held[record.producer_id] = []
                 self._bytes += _size(record.producer_id)
-            self._held[record.producer_id].append((self._count, record))
+            held = self._held[record.producer_id]
+            held.append((self._count, record))
+            if len(held) > self._max_records:
+                del held[: len(held) - self._max_records]
             self._held.move_to_end(record.producer_id)
             while len(self._held) > 1 and (
                 len(self._held) > self._max_producers or self._bytes > _MAX_STATE_BYTES
@@ -124,6 +143,7 @@ async def track_supersession(
     records: AsyncIterable[StreamRecord[T]],
     *,
     max_producers: int = _MAX_PRODUCERS,
+    max_records_per_producer: int = _MAX_RECORDS_PER_PRODUCER,
 ) -> AsyncGenerator[tuple[StreamRecord[T], list[StreamRecord[T]]], None]:
     """Yield each record of ``records`` with the earlier records it withdraws.
 
@@ -137,9 +157,12 @@ async def track_supersession(
 
     ``withdrawn`` is empty unless ``record`` is ``SUPERSEDED`` or stale.
     Closing this generator closes ``records`` too, so the read stops.
-    ``max_producers`` bounds the tracker as in :class:`SupersessionTracker`.
+    ``max_producers`` and ``max_records_per_producer`` bound the tracker as
+    in :class:`SupersessionTracker`.
     """
-    tracker: SupersessionTracker[T] = SupersessionTracker(max_producers)
+    tracker: SupersessionTracker[T] = SupersessionTracker(
+        max_producers, max_records_per_producer
+    )
     try:
         async for record in records:
             yield record, tracker.observe(record)
