@@ -449,8 +449,9 @@ handler's store.
 
 The stream service writes and reads with its Worker's client and store
 credentials, whatever caller sent the call. So by default every caller that
-can reach the endpoint can read and append to every stream of the handler's
-namespace, as any producer. Limit who reaches the endpoint with its allowed
+can reach the endpoint can read every stream of the handler's namespace.
+Without `authorize`, the handler refuses every append, since an append could
+write as any producer. Limit who reaches the endpoint with its allowed
 caller namespaces, and pass `authorize` to `TemporalStreamsHandler` to check
 each call. It gets a `StreamAccess` (`operation`, `stream`, the Nexus
 `context` with the caller's headers, and for an append `producer_id` and
