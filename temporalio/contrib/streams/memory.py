@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 from temporalio.bridge.proto.streams import MemoryStoreConfig, StreamStoreConfig
 from temporalio.contrib.streams._capabilities import StoreCapabilities
@@ -45,9 +46,11 @@ class MemoryStreams(StreamStorePlugin):
             ValueError: ``owner_start_grace`` is negative, or a mask was
                 given to an SDK whose Core can't mask a store.
         """
-        memory = MemoryStoreConfig()
+        # Set only when asked for, so the config also fits a Core without masks.
+        mask: dict[str, Any] = {}
         if capabilities is not None:
-            memory.capabilities.CopyFrom(capabilities._to_proto())
+            mask["capabilities"] = capabilities._to_proto()
+        memory = MemoryStoreConfig(**mask)
         super().__init__(
             "temporalio.contrib.streams.MemoryStreams",
             with_owner_start_grace(StreamStoreConfig(memory=memory), owner_start_grace),
