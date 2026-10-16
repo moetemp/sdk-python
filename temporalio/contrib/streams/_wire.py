@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import temporalio.converter
+from temporalio.api.common.v1 import Payload
 from temporalio.bridge.proto.streams import ReadRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
@@ -23,7 +24,14 @@ from temporalio.contrib.streams._record import (
     Supersession,
 )
 
-__all__ = ["RUN_ID_KEY", "WireRecord", "from_read", "to_record", "to_wire"]
+__all__ = [
+    "RUN_ID_KEY",
+    "WireRecord",
+    "decode_or_mark",
+    "from_read",
+    "to_record",
+    "to_wire",
+]
 
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
@@ -33,6 +41,11 @@ stream follows the Workflow's run chain and a reader needs the run to tell a
 reset branch or a successor run apart. Its value is a payload with
 ``encoding`` ``binary/plain`` whose data is the run id.
 """
+
+# The encoding of a body the codec could not decode before Workflow code got
+# it. The data is the codec's error, so the reader raises it for this record
+# only, live and on replay.
+_UNDECODABLE_ENCODING = b"temporal.io/stream-undecodable"
 
 
 def to_wire(
@@ -94,6 +107,26 @@ async def from_read(
     return to_record(converter.payload_converter, read, result_type)
 
 
+async def decode_or_mark(
+    converter: temporalio.converter.DataConverter, read: ReadRecord
+) -> None:
+    """Run the codec on the body of ``read`` in place, for a reader in Workflow code.
+
+    A body that does not decode is replaced with one that names the error,
+    which :func:`to_record` raises as a :class:`StreamRecordError` for that
+    record alone.
+    """
+    if not (read.HasField("stored") and read.stored.HasField("body")):
+        return
+    try:
+        body = await decode_body(converter, read.stored.body)
+    except Exception as error:
+        body = Payload(
+            metadata={"encoding": _UNDECODABLE_ENCODING}, data=str(error).encode()
+        )
+    read.stored.body.CopyFrom(body)
+
+
 def to_record(
     payload_converter: temporalio.converter.PayloadConverter,
     read: ReadRecord,
@@ -121,6 +154,12 @@ def to_record(
             ),
         )
     wire = read.stored
+    if wire.body.metadata.get("encoding") == _UNDECODABLE_ENCODING:
+        raise StreamRecordError(
+            f"stream record at {cursor} could not be decoded: "
+            f"{wire.body.data.decode(errors='replace')}",
+            cursor,
+        )
     try:
         kind = RecordKind(wire.kind)
         if kind is RecordKind.SUPERSEDED:
