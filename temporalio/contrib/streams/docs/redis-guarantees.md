@@ -126,6 +126,11 @@ cluster you create the user on every node. The delete helper also needs
 `+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
 store goes on when a server refuses it.
 
+With `plain=True` the store runs no scripts, so the user above works. A user
+for plain mode alone needs only `+multi +exec +xadd +xread +xrange
++xrevrange +pexpire +scan +unlink` and the connect rules from `+info` on.
+Core's suite doesn't run plain mode as an ACL user.
+
 What crosses the wire:
 
 - **Record bodies** go through your data converter's payload codec before
