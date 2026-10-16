@@ -87,7 +87,9 @@ class StreamClosedError(StreamRefusedError):
     """The stream is closed and refuses appends.
 
     The store refused the write, so nothing was written. Records the stream
-    retains stay readable.
+    retains stay readable. Only a store with producer state refuses. On
+    another store, an append that races a close can succeed, and no reader
+    delivers it.
     """
 
     def __init__(self, message: str, *, closed_by: str = "") -> None:
@@ -112,7 +114,8 @@ class StreamProducerError(StreamRefusedError):
     ``divergent`` is true when the sequence was already written with
     different content, so the caller changed the batch on a retry. Otherwise
     the sequence is stale, most often from a second producer object for the
-    same session.
+    same session. Only a store with producer state refuses. On another
+    store, the batch lands, and readers keep the first copy.
     """
 
     def __init__(self, message: str, *, divergent: bool = False) -> None:
@@ -127,7 +130,9 @@ class StreamOutcomeUnknownError(StreamStorageError):
     The connection failed or timed out after the request left. Retrying the
     same values on the same producer is safe: the producer keeps its
     sequence until an append succeeds, and the store returns the original
-    position for a retry that repeats a batch it already holds.
+    position for a retry that repeats a batch it already holds. A store
+    without producer state can keep a second copy, which readers drop, and
+    then it returns the copy's position.
     """
 
 

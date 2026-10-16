@@ -41,6 +41,15 @@ class _StreamRecordKindEnumTypeWrapper(
     """The producer named by `producer_id` writes nothing more on `topic`.
     Says nothing about that producer's outcome and does not end the stream.
     """
+    STREAM_RECORD_KIND_CLOSE: _StreamRecordKind.ValueType  # 5
+    """Ends `topic` for every reader, or every topic of the chain when `topic`
+    is empty. Readers drop every record after the first one. On a store
+    without close flags, producers and the owner's Core write it to close.
+    """
+    STREAM_RECORD_KIND_TOPIC: _StreamRecordKind.ValueType  # 6
+    """Names `topic` in the chain's control log `_chain`, so a closer finds the
+    chain's topics on a store that can't list them. Topic readers skip it.
+    """
 
 class StreamRecordKind(_StreamRecordKind, metaclass=_StreamRecordKindEnumTypeWrapper):
     """What a record means to a reader."""
@@ -52,6 +61,15 @@ STREAM_RECORD_KIND_DATA: StreamRecordKind.ValueType  # 1
 STREAM_RECORD_KIND_FINISH: StreamRecordKind.ValueType  # 2
 """The producer named by `producer_id` writes nothing more on `topic`.
 Says nothing about that producer's outcome and does not end the stream.
+"""
+STREAM_RECORD_KIND_CLOSE: StreamRecordKind.ValueType  # 5
+"""Ends `topic` for every reader, or every topic of the chain when `topic`
+is empty. Readers drop every record after the first one. On a store
+without close flags, producers and the owner's Core write it to close.
+"""
+STREAM_RECORD_KIND_TOPIC: StreamRecordKind.ValueType  # 6
+"""Names `topic` in the chain's control log `_chain`, so a closer finds the
+chain's topics on a store that can't list them. Topic readers skip it.
 """
 global___StreamRecordKind = StreamRecordKind
 
