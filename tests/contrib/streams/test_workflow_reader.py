@@ -915,7 +915,6 @@ async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Cli
             topic="tokens",
             after="",
             state="",
-            arm=False,
             wait_ms=0,
             max_records=10,
             max_bytes=1 << 20,
