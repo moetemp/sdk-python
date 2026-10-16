@@ -207,7 +207,7 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
 
     async def _check(self, access: StreamAccess) -> None:
         if self._authorize is None:
-            if access.operation == "read":
+            if access.operation != "append":
                 return
             raise nexusrpc.HandlerError(
                 "this stream service refuses appends, since its handler has no "
