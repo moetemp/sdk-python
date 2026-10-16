@@ -146,7 +146,8 @@ class StreamProducer(Generic[T]):
         :class:`temporalio.contrib.streams.StreamOutcomeUnknownError` can be
         repeated with the same values: the store answers a repeat of the
         batch it holds last for this producer attempt with the original
-        position and writes nothing.
+        position and writes nothing. A store without producer state writes
+        the repeat and answers its position, and readers drop the copy.
 
         An empty call writes nothing and returns the cursor of this
         producer's last record, or ``BEGINNING`` when it has written none.

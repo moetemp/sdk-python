@@ -36,6 +36,7 @@ class RedisStreams(StreamStorePlugin):
         floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
         notify_doorbells: int | None = None,
+        plain: bool = False,
     ) -> None:
         """Create the store's configuration.
 
@@ -72,6 +73,10 @@ class RedisStreams(StreamStorePlugin):
             notify_doorbells: With a notification log, how many doorbell
                 streams an append rings when its slot's log takes a first
                 entry. A driver blocks on each one. Core's 16 when unset.
+            plain: Run no Lua scripts, for a Redis that refuses them. The
+                store then has no producer state, no kept last position, no
+                holds and no change feed, and Core takes the fallback of
+                each (see :attr:`capabilities`).
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
@@ -99,6 +104,8 @@ class RedisStreams(StreamStorePlugin):
             blocking_reads_per_node=blocking_reads_per_node or 0,
             notify_doorbells=notify_doorbells or 0,
         )
+        if plain:
+            config.plain = True
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
