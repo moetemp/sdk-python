@@ -112,7 +112,8 @@ class Connector:
 ```
 
 - Each read is one Local Activity, which adds one marker event when its
-  Workflow Task completes. Replay takes the batch from the marker.
+  Workflow Task completes. By default the marker holds the read's range, and
+  replay reads the range from the store again (see below).
 - The first read attaches the run to the stream's notifier. While the stream
   is idle, the reader waits with no Local Activity and no timer. The server
   records each wake on the next Workflow Task's scheduled event, so a wake
@@ -128,8 +129,97 @@ class Connector:
   reads. Change it with `cutoff=TaskCutoff(commands=..., time=...)`.
 - A read that fails for good, for example on an owner that does not exist,
   fails with an `ApplicationError` whose type names the stream error.
+- Each marker has a summary that says what the read did, for example
+  `stream read tokens after the start` or `stream unsubscribe tokens`. The UI
+  shows it on the marker, since every read marker has the same Activity type.
+- The read and close Activities run only as the Local Activities that the
+  stream API schedules. Workflow code that calls one as a normal Activity
+  gets a non-retryable `StreamUnsupportedError`.
+
+### Positions or recorded
+
+A Workflow reader keeps what it read in one of two ways. Choose per use case.
+
+| | Positions (default) | Recorded |
+|---|---|---|
+| Option | `replay_from_store=True` | `replay_from_store=False` |
+| History per read | The range, a digest and Core's read state | Every record of the batch |
+| Replay reads | The store, through the store plugin | History only |
+| Replay needs | The store, and the reader's hold on the range | Nothing outside History |
+| Run length | Continue-as-New before `floor_lease` passes | Bounded by History size |
+
+Use positions for a reader that reads a lot or reads large records, such as
+a connector that follows a busy stream. Use recorded batches for a History
+that has to replay with no store, for example one you ship to another team
+or keep past the store's retention, or for a run that waits longer than
+`floor_lease` between reads.
+
+### Replay from the store
+
+The store is the record of a stream, so History does not keep a second copy
+of what a Workflow reader read. By default, `replay_from_store=True`, each
+read's marker holds the read's range, Core's digest of its records, and
+Core's read state after the read. The state holds the newest attempt of
+each producer the read saw, up to 16 KiB. A read starts from the state the
+reader's previous read ended with, so its marker leaves that out, and
+replay takes it from the previous marker. A read counts only once it
+returned, so a failed or canceled read leaves no gap. The reader's first
+read keeps the state it started from, the one `after=` gave, and so does
+the first read of a reset run, since the markers before it are another
+run's. So a marker is a
+few hundred bytes for a stream with a few producers, whatever the batch
+holds, and up to about 17 KiB for a stream with many, such as one that
+Local Activities write to, which has a producer per call. A stream that a
+`workflow_writer` publishes to has one producer per run, `@<run id>`, so its
+state stays small. At 17 KiB, 1,000 reads add about 17 MiB to History.
+
+- On replay, the Worker reads the same range from the store again, before
+  Workflow code sees the batch. Workflow code gets the same records in both
+  modes, and no I/O runs in it. The live task takes the batch the Local
+  Activity read, from memory.
+- Replay decodes a reader's markers in order. A process that sees a later
+  read before the one ahead of it, which a Worker that replays the full
+  History never does, fails the Workflow Task, and the retry replays from
+  the start.
+- Other records in the range fail the Workflow Task as nondeterministic. A
+  range the store lost, to retention or a delete, fails the task for a
+  retry, so an operator can restore the store, reset the Workflow, or go
+  back to recorded batches.
+- The store holds the records the reader read against retention, per
+  reader run. Each read, and each replay of a read, renews the hold for
+  `floor_lease` (the retention by default, set on `RedisStreams`). The
+  reader never ends the hold itself, not at the stream's end and not at
+  `close()`, since the run may replay its reads until it ends.
+- So a run can replay a read only while the hold lasts. A run that goes
+  longer than `floor_lease` with no read and no replay, for example an
+  entity Workflow that read a stream and then waits on Signals for longer,
+  loses the range. Its next replay, after a Worker restart, an eviction or
+  a query, raises `StreamReplayRangeLostError`, and the Workflow Task fails
+  on each retry until an operator resets the run. A long-running reader
+  should Continue-as-New well before `floor_lease` passes, or pass
+  `replay_from_store=False`.
+- A positions-only reader pins every record after its first read until its
+  run ends. Plan a Continue-as-New for a long reader. Each holder costs
+  store memory and append time. `reader.continue_as_new_suggested()` says
+  when the records it read pass 256 MiB, or a day passed since its first
+  read. Pass `reader.position` as `after=` to the next run.
+- Replay needs the store. A `Replayer` needs the store plugin and a client
+  in its process that connected the same store. Without them, the read
+  raises `StreamUnsupportedError`, which names the opt-out.
+- `workflow_reader(..., replay_from_store=False)` records each batch in
+  History instead, for a History that replays with no store, such as one you
+  ship to another team or keep past the store's retention. It costs History
+  size for each record read.
+- The mode is per reader and fixed for a run. Histories written in one mode
+  replay in that mode, so a change of the default or of the option applies
+  to new runs.
+
+The store plugin does the replay step in the client's payload codec: it
+wraps the codec the client has and passes every other payload through.
 
 ## Closing a stream
+
+
 
 | Who closes | How |
 |------------|-----|
@@ -140,7 +230,10 @@ class Connector:
 
 `close_workflow_stream` puts the run's `FINISH` in the activation, after
 what the run published before. Core appends it before it starts the close's
-Local Activity, which closes the store and the notifier.
+Local Activity, which closes the store and the notifier. A Worker with no
+Workflow cache can rerun the task of a close whose Local Activity was still
+in flight, since an eviction cancels it. Readers then see `SUPERSEDED`
+before the second `FINISH`.
 Every read ends after the last record. A sleeping reader wakes. The store
 keeps the first close's outcome and hands it to every reader that reaches
 the end, so a client read raises the close's error after its last record,

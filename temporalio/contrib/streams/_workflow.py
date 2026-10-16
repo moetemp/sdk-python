@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, overload
 
 import temporalio.activity
@@ -27,6 +27,7 @@ from temporalio import workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.failure.v1 import Failure
 from temporalio.bridge.proto.streams import (
+    ReadRangeRequest,
     ReadRecord,
     ReadRequest,
     ReadResponse,
@@ -34,7 +35,7 @@ from temporalio.bridge.proto.streams import (
     UnsubscribeRequest,
 )
 from temporalio.common import RawValue
-from temporalio.contrib.streams._cursor import BEGINNING
+from temporalio.contrib.streams._cursor import BEGINNING, END
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
     StreamCursorError,
@@ -46,6 +47,7 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handles import StreamHandle
+from temporalio.contrib.streams._local_activity import require_local_activity
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     call,
@@ -53,6 +55,13 @@ from temporalio.contrib.streams._plugin import (
 )
 from temporalio.contrib.streams._record import Cursor, StreamRecord
 from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._replay_reads import (
+    ReadChain,
+    batch_payload,
+    is_chained,
+    is_positions,
+    positions_payload,
+)
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wakes import wake_state
 from temporalio.contrib.streams._wire import decode_or_mark, to_record
@@ -162,6 +171,14 @@ class _ReadInput:
     """The run the read names to Core, which the first read finds."""
     unsubscribe: bool = False
     """Detach ``subscription_id`` and read nothing."""
+    positions_only: bool = False
+    """Return the read's range and digest in place of its records."""
+    reader_id: str = ""
+    """The reader's id in its run, which names its hold on the records."""
+    read_seq: int = 0
+    """How many reads of the reader returned, this one included."""
+    chained: bool = False
+    """Set when the previous read's marker holds this read's input state."""
     max_bytes: int = 0
     """The most stored bytes of the records past the first, 0 for no bound."""
 
@@ -181,6 +198,14 @@ class _ReaderState:
     done: bool = False
     close_failure: Failure | None = None
     failure_raised: bool = False
+    reads: int = 0
+    # The run that made the last read, when that read's marker holds its
+    # answer state, so the next read can leave its input state out.
+    chain_run: str = ""
+    # What a positions-only reader read since its first read, which the store
+    # holds for it until its run ends.
+    held_bytes: int = 0
+    first_read_at: datetime | None = None
     # The records of the last read not delivered yet, after one that did not
     # convert, and the cursor past the read.
     pending: list[ReadRecord] = field(default_factory=list)
@@ -218,11 +243,13 @@ class WorkflowStreamReader(Generic[T]):
         max_records: int,
         start_to_close_timeout: timedelta,
         cutoff: TaskCutoff | None,
+        replay_from_store: bool = True,
         *,
         max_bytes: int = 1 << 20,
     ) -> None:
         """Prefer :func:`temporalio.contrib.streams.workflow_reader`."""
         self._cutoff = cutoff
+        self._replay_from_store = replay_from_store
         self._max_bytes = max_bytes
         self._ref = ref
         self._topic = topic
@@ -253,6 +280,32 @@ class WorkflowStreamReader(Generic[T]):
             self._state.cursor, base64.b64encode(self._state.state).decode()
         )
 
+    def continue_as_new_suggested(
+        self,
+        max_bytes: int = 256 << 20,
+        max_age: timedelta = timedelta(days=1),
+    ) -> bool:
+        """Whether the run should Continue-as-New to free what this reader holds.
+
+        A reader with ``replay_from_store`` holds every record after its
+        first read in the store until its run ends, since the run may replay
+        its reads. Each hold costs store memory and append time. This is
+        ``True`` once the records it read pass ``max_bytes``, or once
+        ``max_age`` of Workflow time passed since its first read. The counts
+        come from the reader's own reads, so replay gives the same answer. A
+        reader that records its batches in History holds nothing, and this
+        is ``False``.
+
+        Pass :attr:`position` as ``after`` to the next run's reader.
+        """
+        state = self._state
+        if state.first_read_at is None:
+            return False
+        return (
+            state.held_bytes >= max_bytes
+            or workflow.now() - state.first_read_at >= max_age
+        )
+
     def __aiter__(self) -> WorkflowStreamReader[T]:
         """The reader is its own iterator."""
         return self
@@ -269,7 +322,9 @@ class WorkflowStreamReader(Generic[T]):
         """Detach from the stream's notifier in a Local Activity, so its wakes stop.
 
         Idempotent. Does nothing once the stream ended or before the first
-        read attached. Iterating after a close attaches again.
+        read attached. Iterating after a close attaches again. A reader with
+        ``replay_from_store`` keeps its hold on the records it read, since
+        the run may replay its reads until it ends.
         """
         state = self._state
         if state.done or not state.attached:
@@ -433,6 +488,8 @@ class WorkflowStreamReader(Generic[T]):
             generation=state.generation,
             read_run_id=state.read_run_id,
             unsubscribe=unsubscribe,
+            positions_only=self._replay_from_store,
+            reader_id=self.subscription_id,
         )
 
     async def _read(self) -> ReadResponse:
@@ -441,25 +498,43 @@ class WorkflowStreamReader(Generic[T]):
         # A closed stream needs no wake, so the read neither attaches nor arms.
         arm = wake is None or not wake.closed
         input = self._input(arm=arm)
+        # A read counts once it returned, so a failed or canceled read leaves
+        # no gap in the chain of answer states that replay follows.
+        input.read_seq = state.reads + 1
+        input.chained = state.chain_run == workflow.info().run_id
         if input.subscription_id:
             # A read canceled while it runs may have attached already.
             state.attached = True
-        response, state.read_run_id, read_by = await self._run(input)
+        response, state.read_run_id, read_by, chained = await self._run(input)
+        state.reads = input.read_seq
+        state.chain_run = read_by if chained else ""
+        if input.positions_only:
+            if state.first_read_at is None:
+                state.first_read_at = workflow.now()
+            state.held_bytes += sum(
+                r.stored.ByteSize() for r in response.records if r.HasField("stored")
+            )
         if input.subscription_id:
             state.attach = False
             state.attached_run_id = read_by
         return response
 
-    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str]:
-        what = "unsubscribe" if input.unsubscribe else "read"
+    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str, bool]:
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
             input,
             result_type=RawValue,
             start_to_close_timeout=self._start_to_close_timeout,
-            summary=f"stream {what} {self._topic}",
+            summary=_read_summary(input),
         )
         payload: Payload = raw.payload
+        if is_positions(payload):
+            raise StreamUnsupportedError(
+                "a stream read with replay_from_store=True (the default) recorded "
+                "only its range, and only the stream store plugin on the Worker or "
+                "Replayer turns it back into records; add the plugin, or pass "
+                "replay_from_store=False to record each batch in History"
+            )
         response = ReadResponse.FromString(payload.data)
         # A marker from before the reader named its run counts as this run's.
         read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
@@ -467,7 +542,20 @@ class WorkflowStreamReader(Generic[T]):
             response,
             payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
             read_by.decode() if read_by is not None else workflow.info().run_id,
+            is_chained(payload),
         )
+
+
+def _read_summary(input: _ReadInput) -> str:
+    # The summary names what the marker did, since every stream read marker
+    # has the same Activity type.
+    if input.unsubscribe:
+        return f"stream unsubscribe {input.topic}"
+    after = {BEGINNING: "the start", END: "the end"}.get(
+        Cursor(input.after), input.after
+    )
+    what = "subscribe and read" if input.subscription_id else "read"
+    return f"stream {what} {input.topic} after {after}"
 
 
 def _next_reader() -> int:
@@ -488,6 +576,7 @@ def workflow_reader(
     max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    replay_from_store: bool = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -503,6 +592,7 @@ def workflow_reader(
     max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    replay_from_store: bool = ...,
 ) -> WorkflowStreamReader[T]: ...
 
 
@@ -518,6 +608,7 @@ def workflow_reader(
     max_bytes: int = ...,
     start_to_close_timeout: timedelta | None = ...,
     cutoff: TaskCutoff | None = ...,
+    replay_from_store: bool = ...,
 ) -> WorkflowStreamReader[Any]: ...
 
 
@@ -532,6 +623,7 @@ def workflow_reader(
     max_bytes: int = 1 << 20,
     start_to_close_timeout: timedelta | None = None,
     cutoff: TaskCutoff | None = TaskCutoff(),
+    replay_from_store: bool = True,
 ) -> WorkflowStreamReader[Any]:
     """A reader of a Workflow's stream, for Workflow code.
 
@@ -573,6 +665,20 @@ def workflow_reader(
             a busy reader doesn't hold back the rest of the Workflow. 100
             commands or 2 seconds by default. ``None`` leaves the task to
             the Local Activity heartbeat.
+        replay_from_store: Record each read's range and Core's digest of
+            its records in History, in place of the records. On by default.
+            Replay reads the range from the store again, before Workflow
+            code sees it, and a store that holds other records fails the
+            Workflow Task as nondeterministic. The store holds the records
+            the reader read against retention for ``floor_lease`` after the
+            reader's last read or replay, and the reader never ends the hold
+            itself. A run that goes longer than that with no read and no
+            replay can't replay its reads, and its Workflow Task fails on
+            each retry, so such a run should Continue-as-New first. Replay
+            needs the store, so a ``Replayer`` needs the store plugin and a
+            client in its process that connected the same store. ``False``
+            records each batch in History, for a History that replays with
+            no store.
 
     Raises:
         ValueError: ``result_type`` was passed with a topic definition, or a
@@ -610,6 +716,7 @@ def workflow_reader(
         max_records,
         start_to_close_timeout or idle_wait + timedelta(seconds=10),
         cutoff,
+        replay_from_store,
         max_bytes=max_bytes,
     )
 
@@ -624,6 +731,7 @@ async def read_activity(input: _ReadInput) -> RawValue:
     Workflow converts them with its payload converter.
     """
     try:
+        require_local_activity("the stream read Activity")
         return await _read_batch(input)
     except _FINAL_ERRORS as error:
         raise ApplicationError(
@@ -644,6 +752,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     if read_run_id is None:
         read_run_id = await handle._read_run_id()
     address = handle._address(input.topic, run_id=read_run_id)
+    floor_holder = f"{info.workflow_run_id}/{input.reader_id}"
     if input.subscription_id:
         assert info.workflow_id and info.workflow_run_id
         if input.unsubscribe:
@@ -678,15 +787,56 @@ async def _read_batch(input: _ReadInput) -> RawValue:
         state=base64.b64decode(input.state),
         arm=input.arm,
     )
+    if input.positions_only:
+        request.floor_holder = floor_holder
     request.wait.FromMilliseconds(input.wait_ms)
-    response = await call(service.read(request))
+    try:
+        response = await call(service.read(request))
+    except StreamUnsupportedError as error:
+        if not input.positions_only:
+            raise
+        raise StreamUnsupportedError(
+            f"{error}; a stream read with replay_from_store=True (the default) "
+            "needs a store that holds what a reader read, so pass "
+            "replay_from_store=False to record each batch in History instead"
+        ) from error
     for record in response.records:
         await decode_or_mark(handle._converter, record)
     if response.HasField("close_failure"):
         await _apply_to_failure_payloads(
             response.close_failure, handle._converter._transform_inbound_payloads
         )
-    return _result(response, read_run_id)
+    if not input.positions_only:
+        return _result(response, read_run_id)
+    range = ReadRangeRequest(
+        stream=address,
+        chain_first_run_id=response.chain_first_run_id,
+        after=response.start_cursor,
+        to=response.cursor,
+        stored_records=sum(1 for r in response.records if r.HasField("stored")),
+        state=request.state,
+        records_digest=response.records_digest,
+        floor_holder=floor_holder,
+        start_from_end=request.after == END.token,
+    )
+    # The Worker turns the result back into this batch before Workflow code
+    # sees it, from here while the run stays in this process.
+    store._batches.put(range, response)
+    chain = ReadChain(f"{info.workflow_run_id}/{input.reader_id}", input.read_seq)
+    if input.chained:
+        # The input is the previous read's answer state, which that read's
+        # marker holds, so replay takes it from there.
+        range.ClearField("state")
+    return RawValue(
+        positions_payload(
+            range,
+            response,
+            read_run_id,
+            info.workflow_run_id or "",
+            chain,
+            state_elided=input.chained,
+        )
+    )
 
 
 def _warn_if_no_notify(store: StreamStorePlugin) -> None:
@@ -704,18 +854,10 @@ def _warn_if_no_notify(store: StreamStorePlugin) -> None:
 
 def _result(response: ReadResponse, read_run_id: str) -> RawValue:
     # Encoded here rather than by the converter, so a converter without
-    # protobuf support still carries the batch.
+    # protobuf support still carries the batch. The run that read goes with
+    # it, so a reset run tells that run from its own.
     return RawValue(
-        Payload(
-            metadata={
-                "encoding": _RESPONSE_ENCODING,
-                "messageType": _RESPONSE_TYPE,
-                _READ_RUN_ID_KEY: read_run_id.encode(),
-                # The run that read, which a reset run tells from its own.
-                _READ_BY_RUN_ID_KEY: (
-                    temporalio.activity.info().workflow_run_id or ""
-                ).encode(),
-            },
-            data=response.SerializeToString(),
+        batch_payload(
+            response, read_run_id, temporalio.activity.info().workflow_run_id or ""
         )
     )

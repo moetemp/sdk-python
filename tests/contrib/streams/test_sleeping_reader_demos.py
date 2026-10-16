@@ -24,6 +24,7 @@ from tests.contrib.streams.samples.scenarios import (
     j3_ci_tail,
     j5b_dashboard_and_relay,
     j7a_close_with_error,
+    j8_replay_opt_out,
 )
 from tests.contrib.streams.test_live_notifications import skip_without_notifier
 
@@ -103,3 +104,13 @@ async def test_j7a_both_readers_raise_the_close_error_after_the_last_record(
         assert seen.stages == ["picked up", "at the hub"]
         assert seen.failure_type == "CourierLost"
     assert outcome.owner_ran_on
+
+
+async def test_j8_only_a_reader_that_records_batches_replays_with_no_store(
+    streams: Client,
+):
+    task_queue, workflow_id = ids("j8")
+    outcome = await j8_replay_opt_out.main(streams, task_queue, workflow_id=workflow_id)
+    for events in outcome.read.values():
+        assert events == ["opened", "credited 10", "debited 4"]
+    assert outcome.replays_with_no_store == {"store": False, "history": True}

@@ -15,6 +15,7 @@ from datetime import timezone
 from types import TracebackType
 
 import temporalio.api.common.v1
+import temporalio.api.enums.v1
 import temporalio.bridge.proto.common
 import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.proto.workflow_completion
@@ -465,6 +466,10 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                     )
             else:
                 completion.failed.failure.SetInParent()
+                if isinstance(err, temporalio.workflow.NondeterminismError):
+                    # Lang found it before Workflow code ran, for example
+                    # while turning a recorded result back into its value.
+                    completion.failed.force_cause = temporalio.api.enums.v1.WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
                 try:
                     data_converter.failure_converter.to_failure(
                         err,

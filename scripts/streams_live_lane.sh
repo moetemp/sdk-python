@@ -13,6 +13,8 @@
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7941)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6441.
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
+#   PYTEST_TARGETS     the tests to run (default: tests/contrib/streams). A narrower run fails
+#                      the gate, since the gated ids outside it don't run.
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
@@ -200,7 +202,7 @@ EOF
 sleep 12
 
 status=0
-uv run --no-sync pytest tests/contrib/streams \
+uv run --no-sync pytest ${PYTEST_TARGETS:-tests/contrib/streams} \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
@@ -233,7 +235,11 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_two_readers_wake_from_one_notification \
   test_live_a_workflow_close_ends_both_readers_with_its_outcome \
   test_live_a_position_resumes_the_reader_after_continue_as_new \
-  test_live_a_recheck_finds_a_record_whose_notification_was_lost
+  test_live_a_recheck_finds_a_record_whose_notification_was_lost \
+  test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
+  test_live_a_replay_that_finds_other_records_is_nondeterminism \
+  test_live_a_replay_of_a_lost_range_fails_the_task \
+  test_live_a_read_after_a_timed_out_read_replays_from_the_store
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
@@ -244,7 +250,8 @@ gate tests/contrib/streams/test_sleeping_reader_demos.py \
   test_j2_a_connector_posts_every_message_once_in_order \
   test_j3_a_tail_reads_every_line_of_a_sparse_log \
   test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage \
-  test_j7a_both_readers_raise_the_close_error_after_the_last_record
+  test_j7a_both_readers_raise_the_close_error_after_the_last_record \
+  test_j8_only_a_reader_that_records_batches_replays_with_no_store
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed

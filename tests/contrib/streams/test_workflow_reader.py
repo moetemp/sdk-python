@@ -26,7 +26,12 @@ from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     ResetWorkflowExecutionRequest,
 )
-from temporalio.bridge.proto.streams import ReadRecord, ReadResponse, Supersession
+from temporalio.bridge.proto.streams import (
+    ReadRangeRequest,
+    ReadRecord,
+    ReadResponse,
+    Supersession,
+)
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.bridge.proto.workflow_activation import ResolveStreamWake
@@ -36,10 +41,17 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamPosition,
     StreamRecordError,
+    StreamUnsupportedError,
     _workflow,
     get_stream_handle,
     topic,
     workflow_reader,
+)
+from temporalio.contrib.streams._replay_reads import (
+    ReadChain,
+    ReplayReadCodec,
+    batch_payload,
+    positions_payload,
 )
 from temporalio.contrib.streams._wire import decode_or_mark, to_record
 from temporalio.contrib.streams._workflow import (
@@ -64,7 +76,7 @@ TOKENS = topic("tokens", str)
 class FakeReads:
     """Core's scripted answers for the read Activity, and the inputs it got."""
 
-    def __init__(self, answers: list[ReadResponse | BaseException]) -> None:
+    def __init__(self, answers: list[Any]) -> None:
         self.answers = answers
         self.inputs: list[_ReadInput] = []
 
@@ -81,6 +93,13 @@ _fake: FakeReads | None = None
 HANG = asyncio.CancelledError()
 
 
+class Chained:
+    """An answer as the codec turns a positions-only read back, with its chain."""
+
+    def __init__(self, answer: ReadResponse) -> None:
+        self.answer = answer
+
+
 @activity.defn(name=READ_ACTIVITY)
 async def fake_read(input: _ReadInput) -> RawValue:
     assert _fake is not None
@@ -92,6 +111,15 @@ async def fake_read(input: _ReadInput) -> RawValue:
         await asyncio.sleep(30)
     if isinstance(answer, BaseException):
         raise answer
+    if isinstance(answer, Chained):
+        return RawValue(
+            batch_payload(
+                answer.answer,
+                "",
+                activity.info().workflow_run_id,
+                ReadChain(f"{activity.info().workflow_run_id}/1", input.read_seq),
+            )
+        )
     return _result(answer, "")
 
 
@@ -148,7 +176,13 @@ class ReadsBatches:
         self, owner: str, stop_after: int, after: StreamPosition | None
     ) -> list[list[str]]:
         batches: list[list[str]] = []
-        reader = workflow_reader(owner, topic=TOKENS, after=after or StreamPosition(""))
+        # The fake read Activity answers with recorded batches.
+        reader = workflow_reader(
+            owner,
+            topic=TOKENS,
+            after=after or StreamPosition(""),
+            replay_from_store=False,
+        )
         async with reader:
             async for batch in reader:
                 batches.append([_describe(r) for r in batch.records])
@@ -543,6 +577,7 @@ async def test_the_read_activity_reads_and_decodes_through_core(client: Client):
         stream = get_stream_handle(streams_client, owner, topic=TOKENS)
         await stream.producer(producer_id="w", attempt=1).append("one", "two")
         env = ActivityEnvironment(client=streams_client)
+        env.info = dataclasses.replace(env.info, is_local=True)
         raw = await env.run(
             read_activity,
             _ReadInput(
@@ -609,6 +644,91 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
         )
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
     assert said == "failed: StreamUnsupportedError"
+
+
+@workflow.defn
+class ReadsOnce:
+    @workflow.run
+    async def run(self, record_batches: bool) -> str:
+        reader = (
+            workflow_reader("owner", topic=TOKENS, replay_from_store=False)
+            if record_batches
+            else workflow_reader("owner", topic=TOKENS)
+        )
+        try:
+            async for _ in reader:
+                pass
+        except StreamUnsupportedError as error:
+            return str(error)
+        return "read"
+
+
+@pytest.mark.parametrize("record_batches", [False, True])
+async def test_a_reader_replays_from_the_store_by_default(
+    client: Client, record_batches: bool
+):
+    global _fake
+    _fake = FakeReads([ReadResponse(records=[data("c1", "a")], cursor="c1", done=True)])
+    async with new_worker(client, ReadsOnce, activities=[fake_read]) as worker:
+        await client.execute_workflow(
+            ReadsOnce.run,
+            record_batches,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert _fake.inputs[0].positions_only is not record_batches
+
+
+async def test_a_reader_at_the_end_keeps_its_hold_on_the_records(client: Client):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")],
+                cursor="c1",
+                done=True,
+                chain_first_run_id="chain",
+            )
+        ]
+    )
+    async with new_worker(client, ReadsOnce, activities=[fake_read]) as worker:
+        await client.execute_workflow(
+            ReadsOnce.run, False, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+    # The run can still replay the read, so no Local Activity ends the hold.
+    assert len(_fake.inputs) == 1
+
+
+@activity.defn(name=READ_ACTIVITY)
+async def positions_read(_input: _ReadInput) -> RawValue:
+    # What the real read Activity answers in the default mode.
+    return RawValue(
+        positions_payload(
+            ReadRangeRequest(after="", to="c1", stored_records=1, records_digest=b"d"),
+            ReadResponse(cursor="c1", done=True),
+            "",
+        )
+    )
+
+
+async def test_a_worker_without_the_store_plugin_names_the_opt_out(client: Client):
+    # The client carries no store plugin, so no codec turns the range back.
+    async with new_worker(client, ReadsOnce, activities=[positions_read]) as worker:
+        said = await client.execute_workflow(
+            ReadsOnce.run, False, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+    assert "replay_from_store=False" in said
+
+
+async def test_a_replay_with_no_connected_store_names_the_opt_out():
+    codec = ReplayReadCodec(MemoryStreams(), None, DataConverter.default)
+    payload = positions_payload(
+        ReadRangeRequest(after="", to="c1", stored_records=1, records_digest=b"d"),
+        ReadResponse(cursor="c1"),
+        "",
+    )
+    with pytest.raises(StreamUnsupportedError, match="replay_from_store=False"):
+        await codec.decode([payload])
 
 
 @workflow.defn
@@ -719,6 +839,7 @@ async def test_an_attach_without_notifications_warns_once(
     monkeypatch.setattr(_workflow, "_warned_no_notify", False)
     streams_client = await connect_with(client, MemoryStreams())
     env = ActivityEnvironment(client=streams_client)
+    env.info = dataclasses.replace(env.info, is_local=True)
     input = _ReadInput(
         workflow_id="owner",
         chain_run_id="",
@@ -736,6 +857,48 @@ async def test_an_attach_without_notifications_warns_once(
                 await env.run(read_activity, input)
     warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
     assert len(warned) == 1
+
+
+@workflow.defn
+class ReadsPastAFailedRead:
+    @workflow.run
+    async def run(self) -> list[bool]:
+        reader = workflow_reader("owner", topic=TOKENS)
+        await anext(reader)
+        try:
+            await anext(reader)
+        except (ActivityError, ApplicationError):
+            pass
+        batch = await anext(reader)
+        return [
+            reader.continue_as_new_suggested(max_bytes=10),
+            reader.continue_as_new_suggested(),
+            bool(batch.records),
+        ]
+
+
+async def test_a_failed_read_leaves_no_gap_in_the_read_chain(client: Client):
+    global _fake
+    _fake = FakeReads(
+        [
+            Chained(ReadResponse(records=[data("c1", "a")], cursor="c1", state=b"s1")),
+            ApplicationError("gone", type="StreamNotFoundError", non_retryable=True),
+            Chained(ReadResponse(records=[data("c2", "b")], cursor="c2", done=True)),
+        ]
+    )
+    async with new_worker(client, ReadsPastAFailedRead, activities=[fake_read]) as w:
+        handle = await client.start_workflow(
+            ReadsPastAFailedRead.run, id=new_workflow_id(), task_queue=w.task_queue
+        )
+        suggested = await asyncio.wait_for(handle.result(), 20)
+    reads = [(i.read_seq, i.chained, i.state) for i in _fake.inputs]
+    # The failed read counts for nothing, so the next one takes its seq and
+    # still chains from the first read's answer.
+    assert reads == [(1, False, ""), (2, True, "czE="), (2, True, "czE=")]
+    assert suggested == [True, False, True]
+    await Replayer(workflows=[ReadsPastAFailedRead]).replay_workflow(
+        await handle.fetch_history()
+    )
 
 
 async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Client):

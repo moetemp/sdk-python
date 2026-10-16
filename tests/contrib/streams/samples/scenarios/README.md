@@ -49,7 +49,7 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
 - **8, `s8_publisher_replay`.** `Publisher` publishes with `workflow_writer`, and a `Replayer`
   replays its History with a store at a port where nothing listens. History holds no marker for
   the publishes, and the replay sends nothing to the store. Left out: a Workflow that reads a
-  stream.
+  stream, which `j8_replay_opt_out` shows.
 
 ## Readers that sleep
 
@@ -74,10 +74,13 @@ They turn on `notify_on_append()` themselves.
 - **7a, `j7a_close_with_error`.** `Delivery` publishes two stages, then closes its stream with a
   `CourierLost` error and runs on. A client read and a `Dispatcher` Workflow's `workflow_reader`
   both get the two stages, then raise `CourierLost`. Left out: an owner that fails with no close.
+- **8, `j8_replay_opt_out`.** Two `Audit` Workflows read one stream, one with the default
+  `replay_from_store=True` and one with `False`. A Worker restart replays both. Then a `Replayer`
+  with no connected store replays only the one that kept its batches in History.
 
 This release publishes from Workflow code with `workflow_writer`, and Core appends each
-activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a client or an Activity. The
-dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
+activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a
+client or an Activity. The dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
 
 ## Scenarios with no demo in this release
 
