@@ -222,6 +222,24 @@ async def test_a_store_with_no_holds_refuses_positions_only_reads(client: Client
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
+async def test_a_store_with_a_replay_horizon_serves_positions_only_reads(
+    client: Client,
+):
+    horizon = StoreCapabilities(holds=False, replay_horizon=timedelta(days=30))
+    store = MemoryStreams(capabilities=horizon)
+    streams = await connect_with(client, store)
+    assert store.capabilities.replay_horizon == timedelta(days=30)
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        await (
+            get_stream_handle(streams, owner, topic=TOKENS)
+            .producer(producer_id="p", attempt=1)
+            .append("a")
+        )
+        assert is_positions(await read_positions(streams, owner))
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
 async def test_the_batch_names_the_run_that_read(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
