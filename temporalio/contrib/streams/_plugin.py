@@ -23,11 +23,13 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import temporalio.bridge.client
 from temporalio.bridge.proto.streams import (
     DeleteOwnerRequest,
+    DescribeStoreRequest,
     StreamOwnerKind,
     StreamStoreConfig,
 )
 from temporalio.bridge.streams import StreamCallFailure, StreamStore
 from temporalio.bridge.streams_generated import StreamService
+from temporalio.contrib.streams._capabilities import StoreCapabilities
 from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.plugin import SimplePlugin
 
@@ -60,6 +62,7 @@ class StreamStorePlugin(SimplePlugin):
         self._config = config
         self._service: StreamService | None = None
         self._store: StreamStore | None = None
+        self._capabilities: StoreCapabilities | None = None
         self._connecting: asyncio.Lock | None = None
         self._service_client: ServiceClient | None = None
         # Whether Client.connect connected the store, which a Worker needs.
@@ -149,6 +152,17 @@ class StreamStorePlugin(SimplePlugin):
         # The Worker looks for this name on its plugins and gives the store to Core.
         return self._store.ref if self._store is not None else None
 
+    @property
+    def capabilities(self) -> StoreCapabilities:
+        """What the store can do, as Core found when a client connected it.
+
+        Raises:
+            ValueError: No client connected this store yet.
+        """
+        if self._capabilities is None:
+            raise ValueError(f"no client has connected stream store {self.name()!r}")
+        return self._capabilities
+
     async def delete_workflow_streams(self, namespace: str, workflow_id: str) -> int:
         """Delete every stream of ``workflow_id`` in ``namespace``.
 
@@ -167,6 +181,9 @@ class StreamStorePlugin(SimplePlugin):
 
         Raises:
             ValueError: No client connected this store yet.
+            temporalio.contrib.streams.StreamUnsupportedError: The store
+                can't delete by owner (see :attr:`capabilities`). Records go
+                at retention.
             temporalio.contrib.streams.StreamStorageError: The store failed;
                 some keys may be deleted.
         """
@@ -206,8 +223,11 @@ class StreamStorePlugin(SimplePlugin):
             bridge: temporalio.bridge.client.Client = await cast(
                 Any, service_client
             )._connected_client()
-            self._store = await call(StreamStore.connect(bridge, self._config))
-            self._service = StreamService(self._store)
+            store = await call(StreamStore.connect(bridge, self._config))
+            service = StreamService(store)
+            described = await call(service.describe_store(DescribeStoreRequest()))
+            self._capabilities = StoreCapabilities._from_proto(described.capabilities)
+            self._store, self._service = store, service
             self._service_client = service_client
 
 
