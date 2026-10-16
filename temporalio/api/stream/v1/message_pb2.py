@@ -30,7 +30,7 @@ from temporalio.api.failure.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n$temporal/api/stream/v1/message.proto\x12\x16temporal.api.stream.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$temporal/api/common/v1/message.proto\x1a"temporal/api/enums/v1/common.proto\x1a"temporal/api/enums/v1/stream.proto\x1a%temporal/api/failure/v1/message.proto"\x81\x01\n\x0fStreamReference\x12:\n\nowner_kind\x18\x01 \x01(\x0e\x32&.temporal.api.enums.v1.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\r\n\x05topic\x18\x04 \x01(\t"\x9d\x03\n\x12StreamCallbackInfo\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x32\n\x08\x63\x61llback\x18\x02 \x01(\x0b\x32 .temporal.api.common.v1.Callback\x12\x33\n\x05state\x18\x03 \x01(\x0e\x32$.temporal.api.enums.v1.CallbackState\x12\x19\n\x11\x64\x65livered_counter\x18\x04 \x01(\x03\x12\x19\n\x11progress_disabled\x18\x05 \x01(\x08\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\x05\x12>\n\x1alast_attempt_complete_time\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12>\n\x14last_attempt_failure\x18\x08 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12\x43\n\x0fworkflow_target\x18\t \x01(\x0b\x32*.temporal.api.stream.v1.WorkflowWakeTarget"R\n\x12WorkflowWakeTarget\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x17\n\x0fsubscription_id\x18\x03 \x01(\t"\xe3\x02\n\nStreamWake\x12\x17\n\x0fsubscription_id\x18\x01 \x01(\t\x12\x10\n\x08position\x18\x02 \x01(\t\x12\x0f\n\x07\x63ounter\x18\x03 \x01(\x03\x12\x42\n\x08metadata\x18\x04 \x03(\x0b\x32\x30.temporal.api.stream.v1.StreamWake.MetadataEntry\x12\x0f\n\x07recheck\x18\x05 \x01(\x08\x12\x0e\n\x06\x63losed\x18\x06 \x01(\x08\x12\x35\n\x0c\x63lose_result\x18\x07 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x37\n\rclose_failure\x18\x08 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12\x13\n\x0bresubscribe\x18\t \x01(\x08\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x42\x89\x01\n\x19io.temporal.api.stream.v1B\x0cMessageProtoP\x01Z#go.temporal.io/api/stream/v1;stream\xaa\x02\x18Temporalio.Api.Stream.V1\xea\x02\x1bTemporalio::Api::Stream::V1b\x06proto3'
+    b'\n$temporal/api/stream/v1/message.proto\x12\x16temporal.api.stream.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a$temporal/api/common/v1/message.proto\x1a"temporal/api/enums/v1/common.proto\x1a"temporal/api/enums/v1/stream.proto\x1a%temporal/api/failure/v1/message.proto"\x81\x01\n\x0fStreamReference\x12:\n\nowner_kind\x18\x01 \x01(\x0e\x32&.temporal.api.enums.v1.StreamOwnerKind\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\r\n\x05topic\x18\x04 \x01(\t"\x9d\x03\n\x12StreamCallbackInfo\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x32\n\x08\x63\x61llback\x18\x02 \x01(\x0b\x32 .temporal.api.common.v1.Callback\x12\x33\n\x05state\x18\x03 \x01(\x0e\x32$.temporal.api.enums.v1.CallbackState\x12\x19\n\x11\x64\x65livered_counter\x18\x04 \x01(\x03\x12\x19\n\x11progress_disabled\x18\x05 \x01(\x08\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\x05\x12>\n\x1alast_attempt_complete_time\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12>\n\x14last_attempt_failure\x18\x08 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12\x43\n\x0fworkflow_target\x18\t \x01(\x0b\x32*.temporal.api.stream.v1.WorkflowWakeTarget"R\n\x12WorkflowWakeTarget\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12\x17\n\x0fsubscription_id\x18\x03 \x01(\t"\xe3\x02\n\nStreamWake\x12\x17\n\x0fsubscription_id\x18\x01 \x01(\t\x12\x10\n\x08position\x18\x02 \x01(\t\x12\x0f\n\x07\x63ounter\x18\x03 \x01(\x03\x12\x42\n\x08metadata\x18\x04 \x03(\x0b\x32\x30.temporal.api.stream.v1.StreamWake.MetadataEntry\x12\x0f\n\x07recheck\x18\x05 \x01(\x08\x12\x0e\n\x06\x63losed\x18\x06 \x01(\x08\x12\x35\n\x0c\x63lose_result\x18\x07 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x37\n\rclose_failure\x18\x08 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12\x13\n\x0bresubscribe\x18\t \x01(\x08\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"\xf1\x01\n\x12StreamNotification\x12;\n\nstream_ref\x18\x01 \x01(\x0b\x32\'.temporal.api.stream.v1.StreamReference\x12\x10\n\x08position\x18\x02 \x01(\t\x12\x0f\n\x07\x63ounter\x18\x03 \x01(\x03\x12J\n\x08metadata\x18\x04 \x03(\x0b\x32\x38.temporal.api.stream.v1.StreamNotification.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01"9\n\x18StreamNotificationResult\x12\x0c\n\x04\x63ode\x18\x01 \x01(\x05\x12\x0f\n\x07message\x18\x02 \x01(\tB\x89\x01\n\x19io.temporal.api.stream.v1B\x0cMessageProtoP\x01Z#go.temporal.io/api/stream/v1;stream\xaa\x02\x18Temporalio.Api.Stream.V1\xea\x02\x1bTemporalio::Api::Stream::V1b\x06proto3'
 )
 
 
@@ -39,6 +39,11 @@ _STREAMCALLBACKINFO = DESCRIPTOR.message_types_by_name["StreamCallbackInfo"]
 _WORKFLOWWAKETARGET = DESCRIPTOR.message_types_by_name["WorkflowWakeTarget"]
 _STREAMWAKE = DESCRIPTOR.message_types_by_name["StreamWake"]
 _STREAMWAKE_METADATAENTRY = _STREAMWAKE.nested_types_by_name["MetadataEntry"]
+_STREAMNOTIFICATION = DESCRIPTOR.message_types_by_name["StreamNotification"]
+_STREAMNOTIFICATION_METADATAENTRY = _STREAMNOTIFICATION.nested_types_by_name[
+    "MetadataEntry"
+]
+_STREAMNOTIFICATIONRESULT = DESCRIPTOR.message_types_by_name["StreamNotificationResult"]
 StreamReference = _reflection.GeneratedProtocolMessageType(
     "StreamReference",
     (_message.Message,),
@@ -93,11 +98,45 @@ StreamWake = _reflection.GeneratedProtocolMessageType(
 _sym_db.RegisterMessage(StreamWake)
 _sym_db.RegisterMessage(StreamWake.MetadataEntry)
 
+StreamNotification = _reflection.GeneratedProtocolMessageType(
+    "StreamNotification",
+    (_message.Message,),
+    {
+        "MetadataEntry": _reflection.GeneratedProtocolMessageType(
+            "MetadataEntry",
+            (_message.Message,),
+            {
+                "DESCRIPTOR": _STREAMNOTIFICATION_METADATAENTRY,
+                "__module__": "temporalio.api.stream.v1.message_pb2",
+                # @@protoc_insertion_point(class_scope:temporal.api.stream.v1.StreamNotification.MetadataEntry)
+            },
+        ),
+        "DESCRIPTOR": _STREAMNOTIFICATION,
+        "__module__": "temporalio.api.stream.v1.message_pb2",
+        # @@protoc_insertion_point(class_scope:temporal.api.stream.v1.StreamNotification)
+    },
+)
+_sym_db.RegisterMessage(StreamNotification)
+_sym_db.RegisterMessage(StreamNotification.MetadataEntry)
+
+StreamNotificationResult = _reflection.GeneratedProtocolMessageType(
+    "StreamNotificationResult",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _STREAMNOTIFICATIONRESULT,
+        "__module__": "temporalio.api.stream.v1.message_pb2",
+        # @@protoc_insertion_point(class_scope:temporal.api.stream.v1.StreamNotificationResult)
+    },
+)
+_sym_db.RegisterMessage(StreamNotificationResult)
+
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = b"\n\031io.temporal.api.stream.v1B\014MessageProtoP\001Z#go.temporal.io/api/stream/v1;stream\252\002\030Temporalio.Api.Stream.V1\352\002\033Temporalio::Api::Stream::V1"
     _STREAMWAKE_METADATAENTRY._options = None
     _STREAMWAKE_METADATAENTRY._serialized_options = b"8\001"
+    _STREAMNOTIFICATION_METADATAENTRY._options = None
+    _STREAMNOTIFICATION_METADATAENTRY._serialized_options = b"8\001"
     _STREAMREFERENCE._serialized_start = 247
     _STREAMREFERENCE._serialized_end = 376
     _STREAMCALLBACKINFO._serialized_start = 379
@@ -108,4 +147,10 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _STREAMWAKE._serialized_end = 1234
     _STREAMWAKE_METADATAENTRY._serialized_start = 1187
     _STREAMWAKE_METADATAENTRY._serialized_end = 1234
+    _STREAMNOTIFICATION._serialized_start = 1237
+    _STREAMNOTIFICATION._serialized_end = 1478
+    _STREAMNOTIFICATION_METADATAENTRY._serialized_start = 1187
+    _STREAMNOTIFICATION_METADATAENTRY._serialized_end = 1234
+    _STREAMNOTIFICATIONRESULT._serialized_start = 1480
+    _STREAMNOTIFICATIONRESULT._serialized_end = 1537
 # @@protoc_insertion_point(module_scope)

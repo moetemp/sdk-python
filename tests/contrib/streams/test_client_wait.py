@@ -1,8 +1,9 @@
 """A client reader that sleeps on the stream's notifier while the stream is idle.
 
-With notifications on, a read waits its idle time in the store, and a read
-that finds nothing arms the stream. The reader then waits on the notifier
-with ``WaitForNotification`` and reads again with ``arm`` after every answer.
+With notifications on, a read waits its idle time in the store. After a read
+that finds nothing, the reader waits on the notifier with
+``WaitForNotification`` past the read's ``wake_after``, and reads again after
+every answer.
 The fakes here script Core's answers. The live cases need a server with the
 stream notifier and run in the Jetty lane.
 """
@@ -92,7 +93,7 @@ def summary(calls: list[Any]) -> list[tuple]:
     out: list[tuple] = []
     for call in calls:
         if isinstance(call, ReadRequest):
-            out.append(("read", call.after, call.arm, call.wait.ToTimedelta()))
+            out.append(("read", call.after, call.wait.ToTimedelta()))
         else:
             out.append(("wait", call.after_counter))
     return out
@@ -106,7 +107,7 @@ async def test_an_idle_read_waits_on_the_notifier_then_reads_again(client: Clien
     service = FakeService(
         reads=[
             ReadResponse(records=[record("c1", "a")], cursor="c1"),
-            ReadResponse(cursor="c1", armed=True, wake_after=41),
+            ReadResponse(cursor="c1", wake_after=41),
             ReadResponse(records=[record("c2", "b")], cursor="c2", done=True),
         ],
         waits=[WaitForNotificationResponse(counter=42, position="p42")],
@@ -115,19 +116,19 @@ async def test_an_idle_read_waits_on_the_notifier_then_reads_again(client: Clien
     records = await read_all(handle.read())
     assert [r.value for r in records] == ["a", "b"]
     assert summary(service.calls) == [
-        ("read", "", True, IDLE),
-        ("read", "c1", True, IDLE),
+        ("read", "", IDLE),
+        ("read", "c1", IDLE),
         ("wait", 41),
-        ("read", "c1", True, IDLE),
+        ("read", "c1", IDLE),
     ]
 
 
-async def test_a_wait_at_the_poll_limit_reads_again_with_arm(client: Client):
+async def test_a_wait_at_the_poll_limit_reads_again(client: Client):
     # The read after the limit is what finds a record whose notification was lost.
     service = FakeService(
         reads=[
-            ReadResponse(cursor="c0", armed=True, wake_after=7),
-            ReadResponse(cursor="c0", armed=True, wake_after=7),
+            ReadResponse(cursor="c0", wake_after=7),
+            ReadResponse(cursor="c0", wake_after=7),
             ReadResponse(records=[record("c1", "late")], cursor="c1", done=True),
         ],
         waits=[
@@ -139,18 +140,18 @@ async def test_a_wait_at_the_poll_limit_reads_again_with_arm(client: Client):
     records = await read_all(handle.read())
     assert [r.value for r in records] == ["late"]
     assert summary(service.calls) == [
-        ("read", "", True, IDLE),
+        ("read", "", IDLE),
         ("wait", 7),
-        ("read", "c0", True, IDLE),
+        ("read", "c0", IDLE),
         ("wait", 7),
-        ("read", "c0", True, IDLE),
+        ("read", "c0", IDLE),
     ]
 
 
 async def test_a_closed_stream_is_read_to_its_end(client: Client):
     service = FakeService(
         reads=[
-            ReadResponse(cursor="c0", armed=True, wake_after=3),
+            ReadResponse(cursor="c0", wake_after=3),
             ReadResponse(records=[record("c1", "last")], cursor="c1", done=True),
         ],
         waits=[WaitForNotificationResponse(counter=4, closed=True)],
@@ -163,7 +164,7 @@ async def test_without_a_notifier_a_read_waits_in_the_store(client: Client):
     store = MemoryStreams().notify_on_append()
     service = FakeService(
         reads=[
-            ReadResponse(cursor="c0", armed=True, wake_after=0),
+            ReadResponse(cursor="c0", wake_after=0),
             ReadResponse(records=[record("c1", "a")], cursor="c1", done=True),
             ReadResponse(cursor="", done=True),
         ],
@@ -171,24 +172,27 @@ async def test_without_a_notifier_a_read_waits_in_the_store(client: Client):
     )
     handle = fake_handle(client, store, service)
     assert [r.value for r in await read_all(handle.read())] == ["a"]
-    # The process's later reads don't arm either.
+    # The process's later reads wait in the store too.
     await read_all(handle.read())
     assert summary(service.calls) == [
-        ("read", "", True, IDLE),
+        ("read", "", IDLE),
         ("wait", 0),
-        ("read", "c0", False, BLOCKING),
-        ("read", "", False, BLOCKING),
+        ("read", "c0", BLOCKING),
+        ("read", "", BLOCKING),
     ]
 
 
-async def test_without_notifications_a_read_never_arms(client: Client):
+async def test_without_notifications_an_empty_read_never_sleeps(client: Client):
     service = FakeService(
-        reads=[ReadResponse(records=[record("c1", "a")], cursor="c1", done=True)],
+        reads=[
+            ReadResponse(cursor="c0", wake_after=3),
+            ReadResponse(records=[record("c1", "a")], cursor="c1", done=True),
+        ],
         waits=[],
     )
     handle = fake_handle(client, MemoryStreams(), service)
     assert [r.value for r in await read_all(handle.read())] == ["a"]
-    assert summary(service.calls) == [("read", "", False, BLOCKING)]
+    assert summary(service.calls) == [("read", "", BLOCKING), ("read", "c0", BLOCKING)]
 
 
 async def test_an_idle_read_on_a_server_without_a_notifier_still_gets_records(

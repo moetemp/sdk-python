@@ -14087,7 +14087,7 @@ class PollStreamNotifierRequest(google.protobuf.message.Message):
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamReference: ...
     after_counter: builtins.int
     """The poll returns when the notifier's counter is above this value, or when the stream is
-    closed. A reader passes the counter of the position where it armed its read, so a
+    closed. A reader passes the counter of the position its last read reached, so a
     notification that landed before the poll makes it return at once.
 
     (-- api-linter: core::0140::prepositions=disabled
@@ -14203,3 +14203,72 @@ class PollStreamNotifierResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___PollStreamNotifierResponse = PollStreamNotifierResponse
+
+class NotifyStreamsRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NAMESPACE_FIELD_NUMBER: builtins.int
+    NOTIFICATIONS_FIELD_NUMBER: builtins.int
+    IDENTITY_FIELD_NUMBER: builtins.int
+    namespace: builtins.str
+    @property
+    def notifications(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamNotification
+    ]:
+        """One entry per stream. The server rejects a request with more than
+        `streamnotifier.maxNotifyBatch` entries, or with two entries for one stream.
+        """
+    identity: builtins.str
+    """The identity of the caller, such as a stream driver."""
+    def __init__(
+        self,
+        *,
+        namespace: builtins.str = ...,
+        notifications: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamNotification
+        ]
+        | None = ...,
+        identity: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "identity",
+            b"identity",
+            "namespace",
+            b"namespace",
+            "notifications",
+            b"notifications",
+        ],
+    ) -> None: ...
+
+global___NotifyStreamsRequest = NotifyStreamsRequest
+
+class NotifyStreamsResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RESULTS_FIELD_NUMBER: builtins.int
+    @property
+    def results(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamNotificationResult
+    ]:
+        """One result per entry of the request, in the same order. Empty only from a server that
+        fails the whole call on a bad entry, so an empty list on success means every entry applied.
+        """
+    def __init__(
+        self,
+        *,
+        results: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamNotificationResult
+        ]
+        | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["results", b"results"]
+    ) -> None: ...
+
+global___NotifyStreamsResponse = NotifyStreamsResponse

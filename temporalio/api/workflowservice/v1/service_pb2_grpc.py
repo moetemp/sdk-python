@@ -668,6 +668,11 @@ class WorkflowServiceStub(object):
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
         )
+        self.NotifyStreams = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStreams",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.FromString,
+        )
 
 
 class WorkflowServiceServicer(object):
@@ -1948,7 +1953,8 @@ class WorkflowServiceServicer(object):
     def AttachStreamCallback(self, request, context):
         """AttachStreamCallback attaches a callback to the notifier of a stream. The callback receives the
         stream's progress while it is open and one completion when it closes. A Nexus handler whose
-        operation returns a stream calls it with the caller's callback when the operation starts.
+        operation returns a stream calls it with the caller's callback when the operation starts. It
+        starts the notifier when the stream has none.
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
@@ -1974,6 +1980,10 @@ class WorkflowServiceServicer(object):
         notifier passes the latest notification on to every attached callback as progress, and on close
         completes them. Producers fold their notifications and keep at most one call in flight.
 
+        A notification that does not close the stream starts nothing. When the stream has no
+        notifier, nobody waits on it, and the server drops the notification. A close starts a notifier
+        when the stream has none, so a callback that attaches later still gets the close outcome.
+
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
         """
@@ -1996,7 +2006,25 @@ class WorkflowServiceServicer(object):
         """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
         or the stream is closed. It returns with no change after a wait limit set by the server
         (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-        found nothing and armed the topic, in place of another blocking read on the store.
+        found nothing, in place of another blocking read on the store. It starts the notifier when the
+        stream has none. The client reads the stream once more after the poll starts, since a
+        notification that came before the notifier existed was dropped.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def NotifyStreams(self, request, context):
+        """NotifyStreams tells the notifiers of many streams in one namespace that they moved. It acts as
+        one NotifyStream without close per entry. A stream with no notifier drops its entry, as
+        NotifyStream does. A driver that reads the store's notification log calls it with the newest
+        counter of each stream in a batch. The server checks and applies each entry on its own and
+        answers each in `results`, so a bad entry doesn't hold up the others. The call fails only for
+        the request as a whole, such as an empty batch or one that is too large. Sending an entry
+        again is safe, since a notifier ignores a counter at or below the one it holds.
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
@@ -2647,6 +2675,11 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             servicer.PollStreamNotifier,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.SerializeToString,
+        ),
+        "NotifyStreams": grpc.unary_unary_rpc_method_handler(
+            servicer.NotifyStreams,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -6372,6 +6405,35 @@ class WorkflowService(object):
             "/temporal.api.workflowservice.v1.WorkflowService/PollStreamNotifier",
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def NotifyStreams(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStreams",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.FromString,
             options,
             channel_credentials,
             insecure,

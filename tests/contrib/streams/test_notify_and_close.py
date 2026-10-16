@@ -38,13 +38,11 @@ def test_notifications_are_off_until_turned_on() -> None:
     assert not store._config.notify_on_append
     assert store.notify_on_append() is store
     assert store._config.notify_on_append
-    assert not store._config.notify_every_append
     assert store._config.max_notifiers == 0
 
 
-def test_notify_on_append_takes_every_append_and_a_cap() -> None:
-    store = MemoryStreams().notify_on_append(max_notifiers=5, every_append=True)
-    assert store._config.notify_every_append
+def test_notify_on_append_takes_a_cap() -> None:
+    store = MemoryStreams().notify_on_append(max_notifiers=5)
     assert store._config.max_notifiers == 5
     with pytest.raises(ValueError, match="at least 1"):
         MemoryStreams().notify_on_append(max_notifiers=0)

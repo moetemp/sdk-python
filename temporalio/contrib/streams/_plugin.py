@@ -181,17 +181,15 @@ class StreamStorePlugin(SimplePlugin):
             await self.flush_notifications()
 
     def notify_on_append(
-        self, *, max_notifiers: int | None = None, every_append: bool = False
+        self, *, max_notifiers: int | None = None, notification_log: bool = False
     ) -> Self:
         """Tell each stream's notifier on the server when the stream moves.
 
         That is what wakes a reader that sleeps on the stream: a client
         reader that waits on the notifier, or a Workflow reader. Core tells
-        the notifier after an append, but only while a reader sleeps on the
-        stream. Such a reader arms the stream with a read that waited and
-        found nothing. A busy stream, whose readers find records on each
-        read, costs no notification. Off by default, since most streams have
-        no sleeping reader. It needs a server with the stream notifier. Turn
+        the notifier after every append, and folds the notifications of one
+        stream into one call in flight. Off by default, since most streams
+        have no sleeping reader. It needs a server with the stream notifier. Turn
         it on before a client connects the store, in every process that
         appends or reads, since a client reader sleeps on the notifier only
         with it on.
@@ -199,9 +197,12 @@ class StreamStorePlugin(SimplePlugin):
         Args:
             max_notifiers: How many streams Core keeps a notifier for,
                 dropping the least recently used. Core's default when unset.
-            every_append: Tell the notifier after every append, whether or
-                not a reader armed the stream. For readers that can't arm,
-                such as a hand-written reader over HTTP.
+            notification_log: Write a log entry with each append, in the
+                same store step, in place of the producer's notification. A
+                :class:`temporalio.contrib.streams.StreamDriver` reads the
+                log and notifies the server. Producers then make no call to
+                Temporal. Turn it on in every process that appends, and run
+                at least one driver.
 
         Raises:
             ValueError: A client already connected this store, or
@@ -217,7 +218,7 @@ class StreamStorePlugin(SimplePlugin):
         if max_notifiers is not None and max_notifiers < 1:
             raise ValueError(f"max_notifiers must be at least 1, got {max_notifiers}")
         self._config.notify_on_append = True
-        self._config.notify_every_append = every_append
+        self._config.notification_log = notification_log
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self

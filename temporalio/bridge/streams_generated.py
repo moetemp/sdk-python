@@ -102,6 +102,16 @@ class StreamService:
             temporalio.bridge.proto.streams.RetireProducerResponse,
         )
 
+    async def run_stream_driver(
+        self, req: temporalio.bridge.proto.streams.RunStreamDriverRequest
+    ) -> temporalio.bridge.proto.streams.RunStreamDriverResponse:
+        """Invokes the StreamService.run_stream_driver call."""
+        return await self._store.call(
+            "RunStreamDriver",
+            req,
+            temporalio.bridge.proto.streams.RunStreamDriverResponse,
+        )
+
     async def subscribe(
         self, req: temporalio.bridge.proto.streams.SubscribeRequest
     ) -> temporalio.bridge.proto.streams.SubscribeResponse:

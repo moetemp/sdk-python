@@ -101,7 +101,6 @@ async def read_positions(
             topic=TOKENS.name,
             after=after,
             state=base64.b64encode(state).decode(),
-            arm=False,
             wait_ms=wait_ms,
             max_records=10,
             positions_only=True,
