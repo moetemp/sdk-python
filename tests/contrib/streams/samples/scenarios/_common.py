@@ -100,6 +100,7 @@ def label(record: StreamRecord[Any]) -> str:
     """A short label for a record, for a demo's result.
 
     A producer's record carries its attempt, and the owner's carries none.
+    An Activity's attempt keeps its Temporal attempt in the low 11 bits.
     """
     if record.kind is RecordKind.SUPERSEDED:
         return "SUPERSEDED"
@@ -107,7 +108,7 @@ def label(record: StreamRecord[Any]) -> str:
         return "FINISH"
     text = str(record.value)
     if record.producer_id:
-        text = f"{text}@{record.attempt}"
+        text = f"{text}@{record.attempt & 0x7FF}"
     return f"{text} stale" if record.stale else text
 
 

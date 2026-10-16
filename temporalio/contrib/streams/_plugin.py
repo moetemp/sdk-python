@@ -346,6 +346,29 @@ class StreamStorePlugin(SimplePlugin):
         )
         return (await call(self._service.delete_owner(request))).deleted
 
+    async def delete_activity_streams(self, namespace: str, activity_id: str) -> int:
+        """Delete every stream of standalone Activity ``activity_id`` in ``namespace``.
+
+        The same admin helper as :meth:`delete_workflow_streams`, for the
+        streams of every run of the Activity id.
+
+        Returns:
+            How many store keys were deleted.
+
+        Raises:
+            ValueError: No client connected this store yet.
+            temporalio.contrib.streams.StreamStorageError: The store failed;
+                some keys may be deleted.
+        """
+        if self._service is None:
+            raise ValueError(f"no client has connected stream store {self.name()!r}")
+        request = DeleteOwnerRequest(
+            namespace=namespace,
+            owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+            activity_id=activity_id,
+        )
+        return (await call(self._service.delete_owner(request))).deleted
+
     async def _service_for(self, client: Client) -> StreamService:
         """The stream service, connecting the store if no client did yet.
 

@@ -13,6 +13,7 @@ import google.protobuf.duration_pb2
 import google.protobuf.internal.containers
 import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
+import google.protobuf.timestamp_pb2
 
 import temporalio.api.common.v1.message_pb2
 import temporalio.api.failure.v1.message_pb2
@@ -38,12 +39,16 @@ class _StreamOwnerKindEnumTypeWrapper(
     DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
     STREAM_OWNER_KIND_UNSPECIFIED: _StreamOwnerKind.ValueType  # 0
     STREAM_OWNER_KIND_WORKFLOW: _StreamOwnerKind.ValueType  # 1
+    STREAM_OWNER_KIND_ACTIVITY: _StreamOwnerKind.ValueType  # 2
+    """A standalone Activity run. It is a chain of one run, so its streams end with the run."""
 
 class StreamOwnerKind(_StreamOwnerKind, metaclass=_StreamOwnerKindEnumTypeWrapper):
     """What owns a stream. The owner decides when the stream closes."""
 
 STREAM_OWNER_KIND_UNSPECIFIED: StreamOwnerKind.ValueType  # 0
 STREAM_OWNER_KIND_WORKFLOW: StreamOwnerKind.ValueType  # 1
+STREAM_OWNER_KIND_ACTIVITY: StreamOwnerKind.ValueType  # 2
+"""A standalone Activity run. It is a chain of one run, so its streams end with the run."""
 global___StreamOwnerKind = StreamOwnerKind
 
 class _StreamFailureKind:
@@ -370,14 +375,19 @@ class StreamAddress(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     TOPIC_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
+    """The owning Workflow. Empty for an Activity owner."""
     run_id: builtins.str
     """Pins the stream to the run chain that holds this run. Empty follows the chain that holds the
-    Workflow id when the call starts.
+    Workflow id when the call starts. For an Activity owner, the Activity run, and empty names
+    the newest run of the Activity id when the call starts.
     """
     topic: builtins.str
+    activity_id: builtins.str
+    """The owning standalone Activity. Empty for a Workflow owner."""
     def __init__(
         self,
         *,
@@ -386,10 +396,13 @@ class StreamAddress(google.protobuf.message.Message):
         workflow_id: builtins.str = ...,
         run_id: builtins.str = ...,
         topic: builtins.str = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "namespace",
             b"namespace",
             "owner_kind",
@@ -407,7 +420,8 @@ global___StreamAddress = StreamAddress
 
 class ChainId(google.protobuf.message.Message):
     """A Workflow's run chain. Its streams are keyed by its first run, so they follow
-    Continue-as-New, and a new chain on the same Workflow id gets streams of its own.
+    Continue-as-New, and a new chain on the same Workflow id gets streams of its own. A standalone
+    Activity run is a chain of one run, with the run as `first_run_id`.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -415,23 +429,36 @@ class ChainId(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     FIRST_RUN_ID_FIELD_NUMBER: builtins.int
+    OWNER_KIND_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     workflow_id: builtins.str
+    """Empty for an Activity owner."""
     first_run_id: builtins.str
+    owner_kind: global___StreamOwnerKind.ValueType
+    """`UNSPECIFIED` is a Workflow owner, so a chain from before the Activity kind stays valid."""
+    activity_id: builtins.str
+    """Empty for a Workflow owner."""
     def __init__(
         self,
         *,
         namespace: builtins.str = ...,
         workflow_id: builtins.str = ...,
         first_run_id: builtins.str = ...,
+        owner_kind: global___StreamOwnerKind.ValueType = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "first_run_id",
             b"first_run_id",
             "namespace",
             b"namespace",
+            "owner_kind",
+            b"owner_kind",
             "workflow_id",
             b"workflow_id",
         ],
@@ -477,10 +504,17 @@ class ActivityProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     ACTIVITY_ID_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
+    ATTEMPT_STARTED_TIME_FIELD_NUMBER: builtins.int
     workflow_id: builtins.str
     run_id: builtins.str
     activity_id: builtins.str
     attempt: builtins.int
+    @property
+    def attempt_started_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
+        """When the attempt started, as the Activity task gives it. With it, Core writes the attempt as
+        `started_unix_ms << 11 | min(attempt, 2047)`, so a later attempt and a reset attempt both
+        supersede an earlier one. Unset writes `attempt` as it is.
+        """
     def __init__(
         self,
         *,
@@ -488,7 +522,14 @@ class ActivityProducer(google.protobuf.message.Message):
         run_id: builtins.str = ...,
         activity_id: builtins.str = ...,
         attempt: builtins.int = ...,
+        attempt_started_time: google.protobuf.timestamp_pb2.Timestamp | None = ...,
     ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "attempt_started_time", b"attempt_started_time"
+        ],
+    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
@@ -496,6 +537,8 @@ class ActivityProducer(google.protobuf.message.Message):
             b"activity_id",
             "attempt",
             b"attempt",
+            "attempt_started_time",
+            b"attempt_started_time",
             "run_id",
             b"run_id",
             "workflow_id",
@@ -1488,19 +1531,26 @@ class DeleteOwnerRequest(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     OWNER_KIND_FIELD_NUMBER: builtins.int
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     owner_kind: global___StreamOwnerKind.ValueType
     workflow_id: builtins.str
+    """The Workflow whose streams go, for a Workflow owner."""
+    activity_id: builtins.str
+    """The standalone Activity whose streams go, across all its runs, for an Activity owner."""
     def __init__(
         self,
         *,
         namespace: builtins.str = ...,
         owner_kind: global___StreamOwnerKind.ValueType = ...,
         workflow_id: builtins.str = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "namespace",
             b"namespace",
             "owner_kind",

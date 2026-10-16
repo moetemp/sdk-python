@@ -1,9 +1,10 @@
-"""Streams: an ordered log a Workflow owns, written from many places.
+"""Streams: an ordered log a Workflow or a standalone Activity owns, written from many places.
 
 .. warning::
     This package is experimental and may change in future versions.
 
-A Workflow owns a stream. Producers outside Workflow code, such as the
+A Workflow or a standalone Activity owns a stream. Producers outside
+Workflow code, such as the
 Workflow's Activities and clients, append to it, and outside readers consume
 it from a cursor. Records live in a store the application runs, which
 Core reaches for every SDK. Record bodies never reach the server.
@@ -46,19 +47,23 @@ context then reaches a stream the same way:
   and nothing goes to History.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt. A Local Activity writes as
-  its call number in the run, with an attempt that grows across its reruns.
-- Any process holding a client reaches a Workflow's stream with
+  scheduling run id, and an attempt from its start time and its Temporal
+  attempt. A Local Activity writes as its call number in the run, with an
+  attempt that grows across its reruns. In a standalone Activity,
+  :func:`activity_handle` is the Activity's own stream, and the Activity
+  writes as its id with its run id.
+- Any process holding a client reaches a stream with
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.
 
-Every read follows the Workflow's run chain across Continue-as-New and ends
-when the chain closes. A reader can't pin one run.
+Every read of a Workflow's stream follows the Workflow's run chain across
+Continue-as-New and ends when the chain closes. A reader can't pin one run.
+A read of a standalone Activity's stream ends when the Activity run ends.
 
 Workflow code reads a stream with :func:`workflow_reader`, one Local
 Activity per batch, and sleeps on the stream's notifier while the stream is
-idle. In this release only a Workflow owns a stream. The other owner kinds
-raise :class:`StreamUnsupportedError`.
+idle. Only a Workflow or a standalone Activity owns a stream. The other
+owner kinds raise :class:`StreamUnsupportedError`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``

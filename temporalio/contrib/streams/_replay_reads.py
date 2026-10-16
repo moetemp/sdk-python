@@ -28,13 +28,13 @@ from temporalio.contrib.streams._errors import (
     StreamReplayMismatchError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._ref import owner_context
 from temporalio.contrib.streams._wire import decode_or_mark
 from temporalio.converter import (
     DataConverter,
     PayloadCodec,
     SerializationContext,
     WithSerializationContext,
-    WorkflowSerializationContext,
 )
 
 if TYPE_CHECKING:
@@ -315,10 +315,9 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
             raise temporalio.workflow.NondeterminismError(
                 f"a positions-only stream read replayed other records: {error}"
             ) from error
+        stream = range.stream
         converter = self._body_converter.with_context(
-            WorkflowSerializationContext(
-                namespace=range.stream.namespace, workflow_id=range.stream.workflow_id
-            )
+            owner_context(stream.namespace, stream.workflow_id, stream.activity_id)
         )
         for record in response.records:
             # Marked the same way the read Activity marks it, so a body that

@@ -41,7 +41,12 @@ from temporalio.converter import DataConverter
 from temporalio.testing import ActivityEnvironment
 from temporalio.workflow import NondeterminismError
 from tests.contrib.streams._support import connect_with
-from tests.contrib.streams.test_outside_handles import Waits, running_owner
+from tests.contrib.streams.test_outside_handles import (
+    ActivityKeyedCodec,
+    Waits,
+    owns_a_stream,
+    running_owner,
+)
 from tests.helpers import new_worker
 
 TOKENS = topic("tokens", str)
@@ -384,3 +389,46 @@ async def test_the_codec_passes_other_payloads_through(client: Client):
     [payload] = DataConverter.default.payload_converter.to_payloads(["plain"])
     assert await codec_of(streams).decode([payload]) == [payload]
     assert await codec_of(streams).encode([payload]) == [payload]
+
+
+async def test_replay_reads_an_activity_stream_with_the_activitys_context(
+    client: Client,
+):
+    keyed = await connect_with(
+        client, MemoryStreams(), DataConverter(payload_codec=ActivityKeyedCodec())
+    )
+    activity_id = f"replay-reads-{uuid.uuid4().hex}"
+    async with new_worker(keyed, activities=[owns_a_stream]) as worker:
+        owner = await keyed.start_activity(
+            owns_a_stream,
+            ["a", "b"],
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        run_id = await owner.result()
+    env = ActivityEnvironment(client=keyed)
+    env.info = dataclasses.replace(
+        env.info, workflow_run_id=f"reader-{uuid.uuid4()}", is_local=True
+    )
+    raw = await env.run(
+        read_activity,
+        _ReadInput(
+            workflow_id="",
+            owner_kind="activity",
+            activity_id=activity_id,
+            chain_run_id=run_id,
+            topic=TOKENS.name,
+            after="",
+            state="",
+            wait_ms=100,
+            max_records=10,
+            positions_only=True,
+            reader_id="1",
+        ),
+    )
+    plugin_of(keyed)._batches.clear()
+    # The codec keys each body by the Activity, so only the Activity's context
+    # decodes what the replay reads again.
+    [replayed] = await codec_of(keyed).decode([raw.payload])
+    assert values(replayed) == ["a", "b"]

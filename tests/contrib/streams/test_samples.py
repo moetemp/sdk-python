@@ -10,7 +10,10 @@ import pytest
 from temporalio.client import Client
 from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
-from tests.contrib.streams.samples import path_b_activity_publish
+from tests.contrib.streams.samples import (
+    activity_owned_stream,
+    path_b_activity_publish,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("STREAMS_REDIS_URL"),
@@ -26,5 +29,17 @@ async def test_path_b_a_reader_drops_what_a_failed_attempt_wrote(client: Client)
         await connect_with(client, store),
         f"sample-b-{uuid.uuid4().hex}",
         workflow_id=f"answer-{uuid.uuid4().hex}",
+    )
+    assert text == "an answer to streams"
+
+
+async def test_a_standalone_activity_streams_to_a_stream_of_its_own(client: Client):
+    store = RedisStreams(
+        os.environ["STREAMS_REDIS_URL"], key_prefix=f"sample-{uuid.uuid4().hex}"
+    )
+    text = await activity_owned_stream.main(
+        await connect_with(client, store),
+        f"sample-saa-{uuid.uuid4().hex}",
+        activity_id=f"gen-{uuid.uuid4().hex}",
     )
     assert text == "an answer to streams"

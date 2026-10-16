@@ -33,16 +33,21 @@ class StreamReference(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     TOPIC_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     owner_kind: temporalio.api.enums.v1.stream_pb2.StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`."""
+    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`. Empty for other kinds."""
     run_id: builtins.str
-    """The id of the first run in the owning Workflow's run chain. The stream notifier is keyed by
-    it, so one notifier serves the stream across the chain's runs, and a stream that reuses the
-    Workflow id in a new chain gets a notifier of its own. An empty run id is refused.
+    """For `STREAM_OWNER_KIND_WORKFLOW`, the id of the first run in the owning Workflow's run
+    chain. The stream notifier is keyed by it, so one notifier serves the stream across the
+    chain's runs, and a stream that reuses the Workflow id in a new chain gets a notifier of its
+    own. For `STREAM_OWNER_KIND_ACTIVITY`, the id of the owning Activity run. An empty run id is
+    refused.
     """
     topic: builtins.str
     """The stream's topic within its owner."""
+    activity_id: builtins.str
+    """The owning standalone Activity, for `STREAM_OWNER_KIND_ACTIVITY`. Empty for other kinds."""
     def __init__(
         self,
         *,
@@ -50,10 +55,13 @@ class StreamReference(google.protobuf.message.Message):
         workflow_id: builtins.str = ...,
         run_id: builtins.str = ...,
         topic: builtins.str = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "owner_kind",
             b"owner_kind",
             "run_id",

@@ -133,7 +133,14 @@ class StreamRecord(Generic[T]):
     producer_id: str = ""
     """Who wrote it, or empty when the owning Workflow wrote it."""
     attempt: int = 0
-    """The producer's attempt, or 0 when the producer declared none."""
+    """The producer's attempt, or 0 when the producer declared none.
+
+    An Activity writes ``started_ms << 11 | min(temporal_attempt, 2047)``,
+    where ``started_ms`` is the Unix time in milliseconds at which the
+    server started the attempt. A retry, and an attempt after a reset that
+    set the Temporal attempt back to one, start later, so they write a
+    higher attempt.
+    """
     sequence: int = 0
     """The producer's position within its attempt, or 0 when it does not number."""
     run_id: str = ""
