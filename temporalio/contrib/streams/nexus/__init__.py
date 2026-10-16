@@ -38,6 +38,10 @@ operation progress.
 :meth:`temporalio.contrib.streams.StreamStorePlugin.close_stream` completes
 the operation, or :func:`temporalio.contrib.streams.close_workflow_stream`
 from the owning Workflow.
+
+A caller Workflow reads such a stream with :class:`StreamReader`: it waits on
+the operation's progress and reads through this service as Nexus operations
+of the Workflow, so a replay hands over the same batches.
 """
 
 from temporalio.contrib.streams import StreamRef
@@ -62,6 +66,13 @@ from temporalio.contrib.streams.nexus._operation import (
     StreamOperationHandler,
     stream_ref_from_token,
 )
+from temporalio.contrib.streams.nexus._reader import (
+    ReadPosition,
+    ReadStaleRecord,
+    ReadSupersession,
+    StreamIncompleteError,
+    StreamReader,
+)
 
 __all__ = [
     "AppendInput",
@@ -69,10 +80,15 @@ __all__ = [
     "HTTPStatusError",
     "ReadInput",
     "ReadOutput",
+    "ReadStaleRecord",
+    "ReadPosition",
+    "ReadSupersession",
     "RecordWire",
     "StreamAccess",
     "StreamCursor",
+    "StreamIncompleteError",
     "StreamOperationHandler",
+    "StreamReader",
     "StreamRef",
     "TemporalStreams",
     "TemporalStreamsHandler",
