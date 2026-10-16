@@ -33,6 +33,7 @@ from temporalio.contrib.streams.nexus._generated import (
     AppendOutput,
     ReadInput,
     ReadOutput,
+    ReadRangeInput,
     TemporalStreams,
 )
 from temporalio.contrib.streams.nexus._generated.forwarder import (
@@ -55,8 +56,9 @@ class StreamAccess:
         This API is experimental.
     """
 
-    operation: Literal["append", "read"]
-    """What the caller asks to do."""
+    operation: Literal["append", "read", "read_range"]
+    """What the caller asks to do. A ``read_range`` reads again the records of
+    an earlier read that named a floor holder, for a Workflow that replays it."""
 
     stream: StreamRef
     """The stream the call names."""
@@ -69,6 +71,12 @@ class StreamAccess:
 
     attempt: int | None = None
     """The producer attempt an append writes. ``None`` for a read."""
+
+    floor_holder: str | None = None
+    """The holder a read or a ``read_range`` names, so the store keeps the
+    records it read for the caller's replay. ``None`` when the call names none.
+    A Bridge reader names ``<caller namespace>/<run id>/<reader id>``, but the
+    caller chooses it, so treat it as a claim."""
 
 
 @nexusrpc.handler.service_handler(service=TemporalStreams)
@@ -99,6 +107,11 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     record whose body the codec can't decode each cross as an error at their
     cursor, which a reader goes on past. Sizes count what crosses: the record
     bytes as base64, about 4/3 of them.
+
+    A read that names a floor holder holds its records in the store and
+    answers ``replay``, the range of the records that crossed. A
+    ``read_range`` with that range answers the same records again, with no
+    byte budget, for a caller Workflow that replays the read.
 
     The handler writes and reads with its Worker's client and that client's
     store, whatever caller sent the call. So every caller that may reach the
@@ -160,8 +173,22 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         self, ctx: nexusrpc.handler.StartOperationContext, input: ReadInput
     ) -> ReadOutput:
         """Answer with the records after the caller's cursor, waiting for some."""
-        await self._check(StreamAccess("read", input.stream, ctx))
+        await self._check(
+            StreamAccess("read", input.stream, ctx, floor_holder=input.floor_holder)
+        )
         return await super().read(ctx, input)
+
+    @nexusrpc.handler.sync_operation
+    async def read_range(
+        self, ctx: nexusrpc.handler.StartOperationContext, input: ReadRangeInput
+    ) -> ReadOutput:
+        """Answer again the records of an earlier read, for a Workflow that replays it."""
+        await self._check(
+            StreamAccess(
+                "read_range", input.stream, ctx, floor_holder=input.floor_holder
+            )
+        )
+        return await super().read_range(ctx, input)
 
     async def forward(
         self,
@@ -180,7 +207,7 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
 
     async def _check(self, access: StreamAccess) -> None:
         if self._authorize is None:
-            if access.operation == "read":
+            if access.operation != "append":
                 return
             raise nexusrpc.HandlerError(
                 "this stream service refuses appends, since its handler has no "
@@ -237,6 +264,8 @@ async def serve_in_core(
         request.deadline.FromDatetime(deadline)
     if operation == "append":
         step = await call(service.nexus_append(request))
+    elif operation == "read_range":
+        step = await call(service.nexus_read_range(request))
     else:
         step = await call(service.nexus_read(request))
     while step.HasField("codec"):

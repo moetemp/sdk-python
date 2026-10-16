@@ -53,6 +53,11 @@ the operation as a standalone operation with a callback to the Worker, and
 """
 
 from temporalio.contrib.streams import StreamRef
+from temporalio.contrib.streams.nexus._direct import (
+    HttpTransport,
+    StreamDirectReads,
+    StreamDirectTransport,
+)
 from temporalio.contrib.streams.nexus._follower import (
     FollowBatch,
     FollowOutcome,
@@ -97,6 +102,7 @@ __all__ = [
     "FollowBatch",
     "FollowOutcome",
     "HTTPStatusError",
+    "HttpTransport",
     "ReadInput",
     "ReadOutput",
     "ReadStaleRecord",
@@ -106,6 +112,8 @@ __all__ = [
     "StoreTransport",
     "StreamAccess",
     "StreamCursor",
+    "StreamDirectReads",
+    "StreamDirectTransport",
     "StreamFollower",
     "StreamFollowerService",
     "StreamIncompleteError",

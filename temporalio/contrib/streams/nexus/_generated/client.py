@@ -5,21 +5,27 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import ssl
 import time
 import typing
 import urllib.error
 import urllib.request
+
+import temporalio.api.common.v1
+import temporalio.converter
 
 from .models import (
     AppendInput,
     AppendOutput,
     ReadInput,
     ReadOutput,
+    ReadRangeInput,
     StreamRef,
     _AppendInputTransferTypeConverter,
     _AppendOutputTransferTypeConverter,
     _ReadInputTransferTypeConverter,
     _ReadOutputTransferTypeConverter,
+    _ReadRangeInputTransferTypeConverter,
 )
 
 
@@ -40,6 +46,11 @@ class HTTPStatusError(RuntimeError):
         self.status: int = status
         self.detail: str = detail
         self._retryable: bool | None = retryable
+        failure_type, failure_message = _application_failure(detail)
+        # The application failure type the handler raised, such as a stream error
+        # class, and its message. Both are None when the body names none.
+        self.failure_type: str | None = failure_type
+        self.failure_message: str | None = failure_message
 
     @property
     def retryable(self) -> bool:
@@ -55,6 +66,34 @@ class HTTPStatusError(RuntimeError):
         return self.status == 429 or self.status >= 500
 
 
+def _application_failure(detail: str) -> tuple[str | None, str | None]:
+    """The type and message of the first application failure a body holds.
+
+    A Temporal handler's failure crosses as a Nexus failure whose ``details`` is
+    the Temporal failure in proto JSON, with its message left on the Nexus
+    failure. The application failure can sit in a ``cause`` at either level, so
+    both are searched, outermost first.
+    """
+    try:
+        pending: list[tuple[object, object]] = [(json.loads(detail), None)]
+    except ValueError:
+        return None, None
+    while pending:
+        failure, outer_message = pending.pop(0)
+        if not isinstance(failure, dict):
+            continue
+        fields = typing.cast("dict[str, object]", failure)
+        message = fields.get("message", outer_message)
+        info = fields.get("applicationFailureInfo")
+        if isinstance(info, dict):
+            failure_type = typing.cast("dict[str, object]", info).get("type")
+            if isinstance(failure_type, str):
+                return failure_type, message if isinstance(message, str) else None
+        pending.append((fields.get("details"), message))
+        pending.append((fields.get("cause"), None))
+    return None, None
+
+
 def _retryable_header(headers: typing.Any) -> bool | None:
     value = headers.get("Nexus-Request-Retryable") if headers is not None else None
     if value is None:
@@ -62,12 +101,22 @@ def _retryable_header(headers: typing.Any) -> bool | None:
     return str(value).strip().lower() == "true"
 
 
-def _post(url: str, body: bytes, headers: dict[str, str], timeout: float) -> bytes:
+_PAYLOAD_CONTENT_TYPE = "application/x-temporal-payload"
+
+
+def _post(
+    url: str,
+    body: bytes,
+    headers: dict[str, str],
+    timeout: float,
+    content_type: str = "application/json",
+    ssl_context: ssl.SSLContext | None = None,
+) -> tuple[bytes, str]:
     request = urllib.request.Request(
         url,
         data=body,
         headers={
-            "Content-Type": "application/json",
+            "Content-Type": content_type,
             # Tells the handler how long this caller waits, so it can cut a
             # long poll short instead of being cut off.
             "Request-Timeout": f"{int(timeout * 1000)}ms",
@@ -76,10 +125,13 @@ def _post(url: str, body: bytes, headers: dict[str, str], timeout: float) -> byt
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(
+            request, timeout=timeout, context=ssl_context
+        ) as response:
             status = typing.cast("int", response.status)
             answer = typing.cast("bytes", response.read())
             retryable = _retryable_header(response.headers)
+            answer_type = str(response.headers.get("Content-Type") or "")
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")
         raise HTTPStatusError(
@@ -89,7 +141,63 @@ def _post(url: str, body: bytes, headers: dict[str, str], timeout: float) -> byt
     # with a token, which this caller cannot read as the operation's result.
     if status not in (200, 204):
         raise HTTPStatusError(url, status, answer.decode(errors="replace"), retryable)
-    return answer
+    return answer, answer_type
+
+
+def _single_payload(
+    url: str, payloads: list[temporalio.api.common.v1.Payload]
+) -> temporalio.api.common.v1.Payload:
+    if len(payloads) != 1:
+        raise ValueError(
+            f"{url}: the payload codec gave {len(payloads)} payloads for one"
+        )
+    return payloads[0]
+
+
+async def _exchange(
+    url: str,
+    body: bytes,
+    headers: dict[str, str],
+    timeout: float,
+    ssl_context: ssl.SSLContext | None,
+    payload_codec: temporalio.converter.PayloadCodec | None,
+) -> bytes:
+    """Posts a JSON body and answers with the JSON the endpoint sent back.
+
+    With a codec, the body crosses as an encoded Temporal payload, which the
+    handler's own codec decodes. The ingress sends a result that the handler's
+    codec encoded as a payload, and this caller decodes it before it parses.
+    """
+    content_type = "application/json"
+    if payload_codec is not None:
+        plain = temporalio.api.common.v1.Payload(
+            metadata={"encoding": b"json/plain"}, data=body
+        )
+        encoded = _single_payload(url, await payload_codec.encode([plain]))
+        body = encoded.SerializeToString()
+        content_type = _PAYLOAD_CONTENT_TYPE
+    answer, answer_type = await asyncio.to_thread(
+        _post,
+        url,
+        body,
+        headers,
+        timeout,
+        content_type=content_type,
+        ssl_context=ssl_context,
+    )
+    if answer_type.split(";")[0].strip().lower() != _PAYLOAD_CONTENT_TYPE:
+        return answer
+    payload = temporalio.api.common.v1.Payload.FromString(answer)
+    if payload_codec is not None:
+        payload = _single_payload(url, await payload_codec.decode([payload]))
+    encoding = payload.metadata.get("encoding", b"").decode(errors="replace")
+    # A void result crosses as a null payload, which has no JSON to parse.
+    if encoding == "binary/null":
+        return b""
+    if not encoding.startswith("json/"):
+        hint = ", so pass payload_codec= to decode it" if payload_codec is None else ""
+        raise ValueError(f"{url} answered with a {encoding!r} payload{hint}")
+    return payload.data
 
 
 _LONG_POLL_MIN_BACKOFF = 0.05
@@ -122,6 +230,13 @@ class TemporalStreamsHttpClient:
     Every method posts to ``{base_url}/{operation}``, so ``base_url`` is the
     service's address on the Nexus HTTP ingress, up to but not including the
     operation name.
+
+    ``ssl_context`` sets the TLS for an ``https`` ``base_url``, for example a
+    private certificate authority or a client certificate for mTLS.
+
+    Give ``payload_codec`` the codec of the namespace that runs the handler. The
+    input then crosses as an encoded payload, and an encoded result is decoded
+    before it is parsed.
     """
 
     def __init__(
@@ -130,10 +245,14 @@ class TemporalStreamsHttpClient:
         *,
         headers: dict[str, str] | None = None,
         timeout: float = 30.0,
+        ssl_context: ssl.SSLContext | None = None,
+        payload_codec: temporalio.converter.PayloadCodec | None = None,
     ) -> None:
         self._base_url: str = base_url.rstrip("/")
         self._headers: dict[str, str] = dict(headers or {})
         self._timeout: float = timeout
+        self._ssl_context: ssl.SSLContext | None = ssl_context
+        self._payload_codec: temporalio.converter.PayloadCodec | None = payload_codec
 
     def _poll_budget(self, remaining: float) -> float:
         """How long one attempt may ask the endpoint to park, in seconds.
@@ -158,12 +277,13 @@ class TemporalStreamsHttpClient:
         """
         wire: typing.Any = _AppendInputTransferTypeConverter().to_transfer_type(request)
         body = json.dumps(wire).encode()
-        raw = await asyncio.to_thread(
-            _post,
+        raw = await _exchange(
             f"{self._base_url}/append",
             body,
             self._headers,
             self._timeout,
+            self._ssl_context,
+            self._payload_codec,
         )
         if not raw:
             raise ValueError("append answered with an empty body")
@@ -183,12 +303,13 @@ class TemporalStreamsHttpClient:
         """
         wire: typing.Any = _ReadInputTransferTypeConverter().to_transfer_type(request)
         body = json.dumps(wire).encode()
-        raw = await asyncio.to_thread(
-            _post,
+        raw = await _exchange(
             f"{self._base_url}/read",
             body,
             self._headers,
             self._timeout,
+            self._ssl_context,
+            self._payload_codec,
         )
         if not raw:
             raise ValueError("read answered with an empty body")
@@ -245,6 +366,37 @@ class TemporalStreamsHttpClient:
                 backoff = _long_poll_next_backoff(backoff)
             else:
                 backoff = _LONG_POLL_MIN_BACKOFF
+
+    async def read_range(
+        self,
+        request: ReadRangeInput,
+    ) -> ReadOutput:
+        """Answer again the records of an earlier read that named a floor_holder, for
+        a Workflow that replays that read. The call reads the range its replay
+        names with the read's input state, so the superseded and stale marks come
+        out the same, and checks the records against the read's digest. It waits
+        for nothing, asks nothing of the owner and has no byte budget, since it
+        must answer exactly what the read answered. Records with other content are
+        refused as StreamReplayMismatchError, and records the store no longer
+        holds as StreamReplayRangeLostError. The answer holds the records and
+        next_token only, since the caller keeps the read's state, done and replay.
+        """
+        wire: typing.Any = _ReadRangeInputTransferTypeConverter().to_transfer_type(
+            request
+        )
+        body = json.dumps(wire).encode()
+        raw = await _exchange(
+            f"{self._base_url}/read_range",
+            body,
+            self._headers,
+            self._timeout,
+            self._ssl_context,
+            self._payload_codec,
+        )
+        if not raw:
+            raise ValueError("read_range answered with an empty body")
+        answer: typing.Any = json.loads(raw)
+        return _ReadOutputTransferTypeConverter().from_transfer_type(answer, ReadOutput)
 
     def stream(
         self,
@@ -330,6 +482,7 @@ class StreamHandle:
         latest_only: bool | None = None,
         state: bytes | None = None,
         arm: bool | None = None,
+        floor_holder: str | None = None,
     ) -> ReadOutput:
         """Answer with the records after the caller's cursor. The call waits until it
         has max_records records or wait_ms passes, whichever comes first, and
@@ -348,6 +501,7 @@ class StreamHandle:
                 latest_only=latest_only,
                 state=state,
                 arm=arm,
+                floor_holder=floor_holder,
             ),
         )
 
@@ -359,6 +513,7 @@ class StreamHandle:
         latest_only: bool | None = None,
         state: bytes | None = None,
         arm: bool | None = None,
+        floor_holder: str | None = None,
         deadline: float,
     ) -> ReadOutput:
         """Calls ``read`` until it answers with something, or until ``deadline``.
@@ -386,8 +541,46 @@ class StreamHandle:
                 latest_only=latest_only,
                 state=state,
                 arm=arm,
+                floor_holder=floor_holder,
             ),
             deadline=deadline,
+        )
+
+    async def read_range(
+        self,
+        *,
+        chain_first_run_id: str,
+        after_token: str,
+        to_token: str,
+        stored_records: int,
+        state: bytes | None = None,
+        records_digest: bytes,
+        floor_holder: str | None = None,
+    ) -> ReadOutput:
+        """Answer again the records of an earlier read that named a floor_holder, for
+        a Workflow that replays that read. The call reads the range its replay
+        names with the read's input state, so the superseded and stale marks come
+        out the same, and checks the records against the read's digest. It waits
+        for nothing, asks nothing of the owner and has no byte budget, since it
+        must answer exactly what the read answered. Records with other content are
+        refused as StreamReplayMismatchError, and records the store no longer
+        holds as StreamReplayRangeLostError. The answer holds the records and
+        next_token only, since the caller keeps the read's state, done and replay.
+
+        This handle supplies ``stream``; the flat caller's ``read_range`` takes it
+        spelled out.
+        """
+        return await self._client.read_range(
+            ReadRangeInput(
+                stream=self._stream,
+                chain_first_run_id=chain_first_run_id,
+                after_token=after_token,
+                to_token=to_token,
+                stored_records=stored_records,
+                state=state,
+                records_digest=records_digest,
+                floor_holder=floor_holder,
+            ),
         )
 
     def producer(
