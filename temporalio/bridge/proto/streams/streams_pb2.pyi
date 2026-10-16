@@ -244,6 +244,7 @@ class RedisStoreConfig(google.protobuf.message.Message):
     FLOOR_LEASE_FIELD_NUMBER: builtins.int
     FLOOR_RELEASE_GRACE_FIELD_NUMBER: builtins.int
     NOTIFY_DOORBELLS_FIELD_NUMBER: builtins.int
+    PLAIN_FIELD_NUMBER: builtins.int
     @property
     def urls(
         self,
@@ -278,6 +279,10 @@ class RedisStoreConfig(google.protobuf.message.Message):
     """With `StreamStoreConfig.notification_log`, how many doorbell streams the log rings, each one
     a driver blocks on. Zero uses 16.
     """
+    plain: builtins.bool
+    """Runs with no Lua, so the store keeps no producer state and no last position, and Core takes
+    their fallbacks. For tests of the fallbacks on a real store.
+    """
     def __init__(
         self,
         *,
@@ -290,6 +295,7 @@ class RedisStoreConfig(google.protobuf.message.Message):
         floor_lease: google.protobuf.duration_pb2.Duration | None = ...,
         floor_release_grace: google.protobuf.duration_pb2.Duration | None = ...,
         notify_doorbells: builtins.int = ...,
+        plain: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -319,6 +325,8 @@ class RedisStoreConfig(google.protobuf.message.Message):
             b"key_prefix",
             "notify_doorbells",
             b"notify_doorbells",
+            "plain",
+            b"plain",
             "response_timeout",
             b"response_timeout",
             "retention",
@@ -337,8 +345,22 @@ class MemoryStoreConfig(google.protobuf.message.Message):
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    CAPABILITIES_FIELD_NUMBER: builtins.int
+    @property
+    def capabilities(self) -> global___StoreCapabilities:
+        """A mask. Only the capabilities it sets stay, and its nonzero limits replace the store's.
+        Unset keeps every capability, so tests and users can try the weaker guarantees.
+        """
     def __init__(
         self,
+        *,
+        capabilities: global___StoreCapabilities | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["capabilities", b"capabilities"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["capabilities", b"capabilities"]
     ) -> None: ...
 
 global___MemoryStoreConfig = MemoryStoreConfig
@@ -1620,6 +1642,149 @@ class RetireProducerResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___RetireProducerResponse = RetireProducerResponse
+
+class DescribeStoreRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___DescribeStoreRequest = DescribeStoreRequest
+
+class DescribeStoreResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NAME_FIELD_NUMBER: builtins.int
+    CAPABILITIES_FIELD_NUMBER: builtins.int
+    name: builtins.str
+    """The short name the store mints into its cursors, such as `redis` or `memory`."""
+    @property
+    def capabilities(self) -> global___StoreCapabilities: ...
+    def __init__(
+        self,
+        *,
+        name: builtins.str = ...,
+        capabilities: global___StoreCapabilities | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["capabilities", b"capabilities"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "capabilities", b"capabilities", "name", b"name"
+        ],
+    ) -> None: ...
+
+global___DescribeStoreResponse = DescribeStoreResponse
+
+class StoreCapabilities(google.protobuf.message.Message):
+    """What a store can do beyond the log every store gives. Core takes a fallback for each
+    capability the store lacks, with the weaker guarantee the fallback names.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PRODUCER_STATE_FIELD_NUMBER: builtins.int
+    CONDITIONAL_TAIL_FIELD_NUMBER: builtins.int
+    CONDITIONAL_FENCE_FIELD_NUMBER: builtins.int
+    KEPT_LAST_FIELD_NUMBER: builtins.int
+    HOLDS_FIELD_NUMBER: builtins.int
+    CHANGE_FEED_FIELD_NUMBER: builtins.int
+    CHEAP_LOGS_FIELD_NUMBER: builtins.int
+    DELETE_OWNER_FIELD_NUMBER: builtins.int
+    TOPIC_LISTING_FIELD_NUMBER: builtins.int
+    LONG_POLL_FIELD_NUMBER: builtins.int
+    DENSE_POSITIONS_FIELD_NUMBER: builtins.int
+    REPLAY_HORIZON_FIELD_NUMBER: builtins.int
+    MAX_RECORD_BYTES_FIELD_NUMBER: builtins.int
+    MAX_BATCH_BYTES_FIELD_NUMBER: builtins.int
+    producer_state: builtins.bool
+    """The append checks the producer attempt's dedupe entry and the close flags in the same step."""
+    conditional_tail: builtins.bool
+    """The append can fail unless the log's next position is the expected one."""
+    conditional_fence: builtins.bool
+    """The append can fail unless the stream's fence token is the expected one."""
+    kept_last: builtins.bool
+    """The store knows a topic's newest position after retention dropped every record."""
+    holds: builtins.bool
+    """A holder can keep records from retention."""
+    change_feed: builtins.bool
+    """One consumer can read every append in order."""
+    cheap_logs: builtins.bool
+    """A log per topic of each chain costs nothing much."""
+    delete_owner: builtins.bool
+    """The store deletes every stream of one owner."""
+    topic_listing: builtins.bool
+    """The store lists the topics of one chain."""
+    long_poll: builtins.bool
+    """A read can wait for the next record."""
+    dense_positions: builtins.bool
+    """The next record's position is always the last one plus one."""
+    @property
+    def replay_horizon(self) -> google.protobuf.duration_pb2.Duration:
+        """How long the store keeps records with no hold, when a positions-only reader can count on it."""
+    max_record_bytes: builtins.int
+    """The largest record the store takes, with its envelope."""
+    max_batch_bytes: builtins.int
+    """The most record bytes one append takes."""
+    def __init__(
+        self,
+        *,
+        producer_state: builtins.bool = ...,
+        conditional_tail: builtins.bool = ...,
+        conditional_fence: builtins.bool = ...,
+        kept_last: builtins.bool = ...,
+        holds: builtins.bool = ...,
+        change_feed: builtins.bool = ...,
+        cheap_logs: builtins.bool = ...,
+        delete_owner: builtins.bool = ...,
+        topic_listing: builtins.bool = ...,
+        long_poll: builtins.bool = ...,
+        dense_positions: builtins.bool = ...,
+        replay_horizon: google.protobuf.duration_pb2.Duration | None = ...,
+        max_record_bytes: builtins.int = ...,
+        max_batch_bytes: builtins.int = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["replay_horizon", b"replay_horizon"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "change_feed",
+            b"change_feed",
+            "cheap_logs",
+            b"cheap_logs",
+            "conditional_fence",
+            b"conditional_fence",
+            "conditional_tail",
+            b"conditional_tail",
+            "delete_owner",
+            b"delete_owner",
+            "dense_positions",
+            b"dense_positions",
+            "holds",
+            b"holds",
+            "kept_last",
+            b"kept_last",
+            "long_poll",
+            b"long_poll",
+            "max_batch_bytes",
+            b"max_batch_bytes",
+            "max_record_bytes",
+            b"max_record_bytes",
+            "producer_state",
+            b"producer_state",
+            "replay_horizon",
+            b"replay_horizon",
+            "topic_listing",
+            b"topic_listing",
+        ],
+    ) -> None: ...
+
+global___StoreCapabilities = StoreCapabilities
 
 class StreamFailure(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
