@@ -95,6 +95,8 @@ class StreamRecord(google.protobuf.message.Message):
     PRODUCER_ID_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
     SEQUENCE_FIELD_NUMBER: builtins.int
+    TASK_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    COMPLETED_TASKS_FIELD_NUMBER: builtins.int
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The value the producer published. Lang runs it through the payload
@@ -122,6 +124,20 @@ class StreamRecord(google.protobuf.message.Message):
     """The producer's position within its attempt, starting at one, or zero
     when it does not number its records.
     """
+    task_started_event_id: builtins.int
+    """Set by a Workflow run's own producer only: the WorkflowTaskStarted
+    event id of the task attempt that wrote the record.
+    """
+    @property
+    def completed_tasks(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """Set by a Workflow run's own producer, on the first record of each
+        batch: the WorkflowTaskStarted event ids of the run's last completed
+        tasks, newest first, at most eight. The first is the attempt's prefix.
+        A trailing zero means the list goes back to the run's start. A reader
+        learns from it whether an earlier attempt it delivered completed.
+        """
     def __init__(
         self,
         *,
@@ -135,6 +151,8 @@ class StreamRecord(google.protobuf.message.Message):
         producer_id: builtins.str = ...,
         attempt: builtins.int = ...,
         sequence: builtins.int = ...,
+        task_started_event_id: builtins.int = ...,
+        completed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["body", b"body"]
@@ -146,6 +164,8 @@ class StreamRecord(google.protobuf.message.Message):
             b"attempt",
             "body",
             b"body",
+            "completed_tasks",
+            b"completed_tasks",
             "kind",
             b"kind",
             "metadata",
@@ -154,6 +174,8 @@ class StreamRecord(google.protobuf.message.Message):
             b"producer_id",
             "sequence",
             b"sequence",
+            "task_started_event_id",
+            b"task_started_event_id",
             "topic",
             b"topic",
         ],
