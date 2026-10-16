@@ -3,7 +3,9 @@
 A Workflow follower is the Workflow reader's shape over Core's ``Follow``.
 Each step runs one ``Follow`` in a Local Activity. With the running Workflow
 as the subscriber, Core attaches each source that goes idle, and an empty
-step answers the wake counter of each idle source. The follower then waits,
+step asks each idle source's notifier for one wake past its counter and
+answers those counters. A step that finds items asks for nothing, so a busy
+follower gets no wakes. The follower then waits,
 with no Local Activity and no timer, until a wake of any of its sources
 moves past its counter, asks for a recheck, closes, or asks to attach again.
 
