@@ -11,12 +11,15 @@ Core reaches for every SDK. Record bodies never reach the server.
 The contract:
 
 1. **Producers write with an identity.** A producer has an id, an attempt
-   and a sequence that starts at one for each attempt. A retry of the
-   newest batch with the same content is written once and returns the
-   original position. A retry with different content, or with a lower
-   sequence, is refused with :class:`StreamProducerError`. Content is
-   compared over the payloads the converter produced, before the codec, so
-   a codec with a fresh nonce per call still deduplicates a retry.
+   and a sequence that starts at one for each attempt. Every reader drops a
+   second copy of a record by that identity, and ends at the first
+   :attr:`RecordKind.CLOSE`. On a store with producer state (see
+   :class:`StoreCapabilities`), a retry of the newest batch with the same
+   content is written once and returns the original position. A retry with
+   different content, or with a lower sequence, is refused with
+   :class:`StreamProducerError`. Content is compared over the payloads the
+   converter produced, before the codec, so a codec with a fresh nonce per
+   call still deduplicates a retry.
 2. **A new attempt supersedes the old one.** When a reader sees the first
    record of a producer's newer attempt, it yields a
    :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
@@ -61,6 +64,7 @@ The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 as an ordinary payload.
 """
 
+from temporalio.contrib.streams._capabilities import StoreCapabilities
 from temporalio.contrib.streams._cursor import BEGINNING, END
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -108,6 +112,7 @@ __all__ = [
     "DEFAULT_TOPIC",
     "END",
     "RecordKind",
+    "StoreCapabilities",
     "StreamClosedError",
     "StreamCursorError",
     "StreamError",
