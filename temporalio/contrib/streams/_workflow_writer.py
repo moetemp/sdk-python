@@ -13,78 +13,30 @@ higher attempt, and readers see ``SUPERSEDED`` for the records of the failed
 task only. Records of tasks that completed stay.
 
 Replay sends no commit, since the records are in the store already.
-
-The built-in publish Activity stays registered under its name. No writer
-schedules it.
 """
 
 from __future__ import annotations
 
-import asyncio
-import time
-from collections import OrderedDict
 from typing import Any, Generic, TypeVar, overload
 
-import temporalio.activity
 from temporalio import workflow
-from temporalio.api.common.v1 import Payloads
-from temporalio.bridge.proto.streams import NamedProducer, RetireProducerRequest
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
-from temporalio.bridge.proto.workflow_commands import (
-    OutputRecord,
-    WorkflowOutputStreamCommit,
-)
-from temporalio.common import RawValue
+from temporalio.bridge.proto.workflow_commands import OutputRecord
 from temporalio.contrib.streams._body import content_hash
-from temporalio.contrib.streams._cursor import BEGINNING
-from temporalio.contrib.streams._errors import (
-    StreamClosedError,
-    StreamError,
-    StreamNotFoundError,
-    StreamOutcomeUnknownError,
-    StreamProducerError,
-    StreamUnsupportedError,
-)
-from temporalio.contrib.streams._handles import StreamProducer, activity_handle
+from temporalio.contrib.streams._errors import StreamError, StreamUnsupportedError
 from temporalio.contrib.streams._local_activity import _WorkflowInbound
-from temporalio.contrib.streams._plugin import call
-from temporalio.contrib.streams._record import Cursor
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
-from temporalio.exceptions import ApplicationError
 
 __all__ = [
-    "PUBLISH_ACTIVITY",
     "WorkflowStreamWriter",
-    "publish_activity",
     "workflow_writer",
 ]
 
 T = TypeVar("T")
 
-PUBLISH_ACTIVITY = "__temporal_streams_publish"
-"""The name the built-in publish Activity is registered under."""
-
-# How many runs' topics a Worker process remembers the last flush start of.
-_GATE_CAPACITY = 10_000
 # The same per-record limit the stream service keeps, checked in the Workflow
 # so an oversized value fails at the call.
 _MAX_RECORD_BYTES = 3 << 19
-# The most body bytes one activation may publish. Core appends them when the
-# activation completes, and a commit too large would fail every retry.
-_MAX_ACTIVATION_BYTES = 16 << 20
-_PAYLOADS_ENCODING = b"binary/protobuf"
-_PAYLOADS_TYPE = Payloads.DESCRIPTOR.full_name.encode()
-# Repeats of one batch on the same producer that the store answers with the
-# original position, before the Activity gives up and its retry runs.
-_OUTCOME_UNKNOWN_REPEATS = 3
-# Errors that the same append raises again on every attempt.
-_FINAL_ERRORS = (
-    ValueError,
-    StreamClosedError,
-    StreamNotFoundError,
-    StreamProducerError,
-    StreamUnsupportedError,
-)
 
 
 class _RunWriters:
@@ -93,33 +45,18 @@ class _RunWriters:
     def __init__(self) -> None:
         # FINISH is a statement about the topic, not about a writer object.
         self.finished: set[str] = set()
-        self.commit: WorkflowOutputStreamCommit | None = None
-        self.activation_bytes = 0
 
     def add(self, record: OutputRecord) -> None:
         """Add ``record`` to this activation's commit.
 
         Replay adds nothing, since Core stored the record when the
-        activation first ran.
-
-        Raises:
-            StreamError: The record would take this activation's bodies past
-                their budget. Nothing is added.
+        activation first ran. No limit on the activation's bytes is checked
+        here, since replay can't check it the same way, and a caught error
+        would then give other commands on replay.
         """
         if workflow.unsafe.is_replaying():
             return
-        commit = workflow._Runtime.current().workflow_stream_commit()
-        if commit is not self.commit:
-            self.commit, self.activation_bytes = commit, 0
-        size = record.body.ByteSize()
-        if self.activation_bytes + size > _MAX_ACTIVATION_BYTES:
-            raise StreamError(
-                f"publishing {size} more bytes on {record.topic!r} would take this "
-                f"activation past {_MAX_ACTIVATION_BYTES} bytes of records; publish "
-                "the rest after the Workflow next waits"
-            )
-        self.activation_bytes += size
-        commit.records.append(record)
+        workflow._Runtime.current().workflow_stream_commit().records.append(record)
 
 
 # Held on the run's runtime, so the state goes with the run at eviction and is
@@ -188,8 +125,7 @@ class WorkflowStreamWriter(Generic[T]):
         Raises:
             ValueError: The topic was already finished in this run.
             temporalio.contrib.streams.StreamError: The value's payload is
-                over 1.5 MiB, or it would take this activation's records past
-                16 MiB. Nothing is published.
+                over 1.5 MiB. Nothing is published.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator.
         """
@@ -282,108 +218,3 @@ def workflow_writer(
     writers = _run_writers(create=True)
     assert writers is not None
     return WorkflowStreamWriter(writers, name)
-
-
-class _FlushGate:
-    """When each run's topic last started a flush in this Worker process.
-
-    Kept in memory rather than in History, so a flush interval costs no
-    events. A run that moves to another Worker starts with no wait there.
-    """
-
-    def __init__(self, capacity: int) -> None:
-        self._capacity = capacity
-        self._started: OrderedDict[tuple[str, str, str], float] = OrderedDict()
-
-    async def wait(self, key: tuple[str, str, str], interval_ms: int) -> None:
-        """Wait until ``interval_ms`` passed since the last flush start for ``key``."""
-        last = self._started.get(key)
-        if interval_ms > 0 and last is not None:
-            delay = last + interval_ms / 1000 - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(min(delay, interval_ms / 1000))
-        self._started[key] = time.monotonic()
-        self._started.move_to_end(key)
-        while len(self._started) > self._capacity:
-            self._started.popitem(last=False)
-
-
-_gate = _FlushGate(_GATE_CAPACITY)
-
-
-@temporalio.activity.defn(name=PUBLISH_ACTIVITY)
-async def publish_activity(
-    topic: str, finish: bool, values: RawValue, min_interval_ms: int = 0
-) -> str:
-    """Append a Workflow's batch to its own stream, as this Activity attempt.
-
-    A flush runs it as a Local Activity, so it writes as a Local Activity
-    producer. The store plugin registers it on every Worker built from a
-    client that carries a store. Returns the cursor token of the last record
-    written.
-
-    Before it appends, it waits until ``min_interval_ms`` passed since the
-    previous flush of the same topic and run started in this process. It
-    waits before the append, so a cancel during the wait has written nothing.
-
-    After its last append returned, it retires its own producer attempt, so
-    the store drops that attempt's dedupe state rather than keep it for the
-    stream's retention.
-    """
-    if values.payload.metadata.get("encoding") != _PAYLOADS_ENCODING:
-        raise ApplicationError(
-            "the stream publish input is not a Payloads message", non_retryable=True
-        )
-    batch = [RawValue(p) for p in Payloads.FromString(values.payload.data).payloads]
-    info = temporalio.activity.info()
-    await _gate.wait(
-        (info.workflow_id or "", info.workflow_run_id or "", topic), min_interval_ms
-    )
-    producer = activity_handle().producer(topic=topic)
-    try:
-        cursor = await _append(producer, batch) if batch else BEGINNING
-        if finish:
-            cursor = await producer.finish()
-    except _FINAL_ERRORS as error:
-        raise ApplicationError(
-            str(error), type=type(error).__name__, non_retryable=True
-        ) from error
-    if batch or finish:
-        await _retire(producer)
-    return cursor.token
-
-
-async def _retire(producer: StreamProducer[Any]) -> None:
-    # Each flush is a producer that never writes again once its attempt
-    # returned, so its dedupe state is dead weight. A rerun writes a higher
-    # attempt, and readers find it from the records, so losing this call
-    # costs only store memory until retention.
-    request = RetireProducerRequest(stream=producer._handle._address(producer._topic))
-    if producer._activity is not None:
-        request.activity.CopyFrom(producer._activity)
-    else:
-        request.named.CopyFrom(
-            NamedProducer(producer_id=producer.producer_id, attempt=producer.attempt)
-        )
-    try:
-        service = await producer._handle._plugin._service_for(producer._handle._client)
-        await call(service.retire_producer(request))
-    except Exception:
-        temporalio.activity.logger.warning(
-            "Could not retire stream producer %s attempt %s; the store keeps its "
-            "dedupe state until retention",
-            producer.producer_id,
-            producer.attempt,
-            exc_info=True,
-        )
-
-
-async def _append(producer: StreamProducer[Any], batch: list[RawValue]) -> Cursor:
-    for repeat in range(1, _OUTCOME_UNKNOWN_REPEATS):
-        try:
-            return await producer.append(*batch)
-        except StreamOutcomeUnknownError:
-            # The producer kept its sequence, so the same batch again is
-            # written once.
-            await asyncio.sleep(0.1 * 2**repeat)
-    return await producer.append(*batch)
