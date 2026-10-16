@@ -150,8 +150,8 @@ one stream are safe.
 
 The archive's progress lives in each stream's keys, and each slot keeps a
 set of the streams with records to archive. So with an archive, add
-`~temporal-streams:{*}:a +zadd` to the ACL below for applications, and
-also `+zrangebyscore +zrem` for drivers.
+`~temporal-streams:{*}:a +zadd +hexists` to the ACL below for applications,
+and also `+zrange +zrem` for drivers.
 
 ## When a Workflow closes
 
