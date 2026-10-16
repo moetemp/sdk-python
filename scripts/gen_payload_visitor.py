@@ -2,7 +2,7 @@ import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from typing import cast, get_args, get_origin, get_type_hints
+from typing import Any, cast, get_args, get_origin, get_type_hints
 
 import google.protobuf.message
 import nexusrpc
@@ -22,10 +22,10 @@ from temporalio.bridge.proto.workflow_completion.workflow_completion_pb2 import 
 from temporalio.converter._payload_converter import _get_transfer_type_converter
 
 
-def discover_system_nexus_roots() -> list[Descriptor]:
-    module_path = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
+def load_system_package(name: str) -> Any:
+    module_path = base_dir / "temporalio" / "nexus" / "system" / name
     spec = spec_from_file_location(
-        "temporalio_nexus_system_workflow_service",
+        f"temporalio_nexus_system_{name}",
         module_path / "__init__.py",
         submodule_search_locations=[str(module_path)],
     )
@@ -34,9 +34,23 @@ def discover_system_nexus_roots() -> list[Descriptor]:
     module = module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    return module
 
+
+def discover_system_nexus_roots() -> list[Descriptor]:
+    # A Worker calls the workflow service, and the server calls the
+    # notification service on a Worker. Both carry system payloads.
+    services = [
+        load_system_package("workflow_service")._services.WorkflowService,
+        load_system_package("notification_service").NotificationService,
+    ]
     roots: list[Descriptor] = []
-    for annotation in get_type_hints(module._services.WorkflowService).values():
+    annotations = [
+        annotation
+        for service in services
+        for annotation in get_type_hints(service).values()
+    ]
+    for annotation in annotations:
         if get_origin(annotation) is not nexusrpc.Operation:
             continue
         for operation_type in get_args(annotation):
