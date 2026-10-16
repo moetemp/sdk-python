@@ -51,7 +51,7 @@ use it:
 | `body` | 1 | The published value as a `temporal.api.common.v1.Payload`, after the payload codec |
 | `metadata` | 2 | Map of string to `Payload`, see below |
 | `topic` | 3 | The topic name |
-| `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1) or `STREAM_RECORD_KIND_FINISH` (2). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it |
+| `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1), `STREAM_RECORD_KIND_FINISH` (2), `STREAM_RECORD_KIND_CLOSE` (5) or `STREAM_RECORD_KIND_TOPIC` (6). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it, and 4 is kept for links between streams |
 | `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, a Local Activity as `__temporal_local_<call number>@<scheduling run id>`, and a Workflow as `@<run id>` |
 | `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53. A Workflow's is `prefix << 16 \| retry`: `prefix` is the WorkflowTaskStarted event id of the run's last completed Workflow Task (0 before one), and `retry` counts the reruns of the task since then, from 1 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
@@ -78,6 +78,19 @@ attempt's `task_started_event_id` is not in the new record's
 entry. That is the case when a rerun of the earlier task completed and
 wrote nothing to the topic. Core's vectors in
 `crates/streams/testdata/workflow_attempts.json` are the reference.
+
+A reader applies two more rules on every store, so a store without the
+dedupe script below still gives each reader each record once:
+
+- It keeps, per producer, the newest attempt it delivered and the highest
+  sequence of that attempt. A record of that attempt with a sequence at or
+  below the highest is a copy, and the reader drops it. A record with
+  sequence 0 is never a copy. Core's vectors in
+  `crates/streams/testdata/reader_rules.json` are the reference.
+- The first `CLOSE` record of the topic, or one with an empty `topic` in
+  the chain, ends the read. The reader drops every record after it. A
+  `TOPIC` record names a topic of the chain, in the chain's control log
+  `_chain`, and topic readers skip it.
 
 ## Appending a batch
 
@@ -152,9 +165,11 @@ expired when `meta.trimmed` is newer than it, or, if the log is gone, when
 
 ## Closing
 
-Any party that sees the Workflow's run chain end (complete, fail, cancel,
+A writer that sees the Workflow's run chain end (complete, fail, cancel,
 terminate or time out, but not Continue-as-New) sets `HSET chain closed 1`
-and `PEXPIRE chain <retention + 30 days>`.
+and `PEXPIRE chain <retention + 30 days>`. The owner's Core does it after the
+server accepts the run's last Workflow Task. A producer does it when its
+owner check sees the end. Readers write nothing.
 
 A close of one topic before its chain ends, such as the owner closing a
 stream, sets `HSET meta closed 1` and `PEXPIRE meta <retention + 30 days>`

@@ -231,12 +231,16 @@ Known limits:
 
 - **Retries deduplicate.** An append that fails with
   `StreamOutcomeUnknownError` can be repeated on the same producer. The store
-  returns the original position and writes nothing twice.
+  returns the original position and writes nothing twice. On a store without
+  producer state, such as `RedisStreams(plain=True)`, the copy lands and
+  every reader drops it. `StreamStorePlugin.capabilities` says which.
 - **Retention.** A stream keeps records for `retention` (7 days by default,
   set on `RedisStreams`) and dies that long after its last write. A cursor
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
-  `StreamClosedError`, after a short closing window.
+  `StreamClosedError`, after a short closing window. On a store without
+  producer state, a late append can still answer success, and no reader
+  delivers it, since every read ends at the first `CLOSE` record.
 - **Readers before the owner.** A read of a Workflow that Temporal doesn't
   know yet waits for `owner_start_grace` (60 seconds by default, set on
   `RedisStreams` or `MemoryStreams`), counted from the read's first owner
@@ -251,6 +255,7 @@ Known limits:
 
 ## Further reading
 
+- [Store capabilities and guarantees](docs/store-capabilities.md)
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
 - [Moving from Workflow Streams](docs/migration.md)
