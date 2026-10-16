@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import temporalio
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
+from temporalio.contrib.streams.postgres import PostgresStreams
 from temporalio.converter import DataConverter
 
 
@@ -29,6 +33,23 @@ async def connect_with(
         data_converter=converter or client.data_converter,
         plugins=[store] if store is not None else [],
     )
+
+
+def postgres_streams(schema: str | None = None, **settings: Any) -> PostgresStreams:
+    """A store on ``STREAMS_POSTGRES_URL``, in a schema of its own unless ``schema`` names one.
+
+    Skips the test when the variable is unset.
+    """
+    url = os.environ.get("STREAMS_POSTGRES_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_POSTGRES_URL to run on PostgreSQL")
+    # The test process keeps every store it connects, so each pool stays small.
+    settings.setdefault("max_connections", 4)
+    return PostgresStreams(url, schema=schema or new_schema(), **settings)
+
+
+def new_schema() -> str:
+    return f"streams_{uuid.uuid4().hex}"
 
 
 def new_workflow_id() -> str:
