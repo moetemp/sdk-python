@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
-from temporalio.bridge.proto.streams import StoreCapabilities as StoreCapabilitiesProto
+import temporalio.bridge.proto.streams
+from temporalio.bridge.proto.streams import StreamFailureKind
+from temporalio.bridge.streams import StreamCallFailure, StreamStore
 
 __all__ = ["StoreCapabilities"]
 
@@ -68,7 +71,7 @@ class StoreCapabilities:
     """The most record bytes one append takes."""
 
     @staticmethod
-    def _from_proto(proto: StoreCapabilitiesProto) -> StoreCapabilities:
+    def _from_proto(proto: Any) -> StoreCapabilities:
         return StoreCapabilities(
             producer_state=proto.producer_state,
             conditional_tail=proto.conditional_tail,
@@ -88,8 +91,16 @@ class StoreCapabilities:
             max_batch_bytes=proto.max_batch_bytes,
         )
 
-    def _to_proto(self) -> StoreCapabilitiesProto:
-        proto = StoreCapabilitiesProto(
+    def _to_proto(self) -> Any:
+        """The mask as Core takes it.
+
+        Raises:
+            ValueError: The Core in this SDK can't mask a store.
+        """
+        proto_type = getattr(temporalio.bridge.proto.streams, "StoreCapabilities", None)
+        if proto_type is None:
+            raise ValueError("this SDK's Core can't mask a store's capabilities")
+        proto = proto_type(
             producer_state=self.producer_state,
             conditional_tail=self.conditional_tail,
             conditional_fence=self.conditional_fence,
@@ -107,3 +118,28 @@ class StoreCapabilities:
         if self.replay_horizon is not None:
             proto.replay_horizon.FromTimedelta(self.replay_horizon)
         return proto
+
+
+# What a Core from before DescribeStore serves. Its Redis and memory stores have
+# every capability that Core knew of, and none had a conditional append.
+_BEFORE_DESCRIBE = StoreCapabilities(conditional_tail=False, conditional_fence=False)
+
+
+async def describe(store: StreamStore) -> StoreCapabilities:
+    """What Core reports for ``store``.
+
+    Raises:
+        StreamCallFailure: Core failed the call.
+    """
+    proto = temporalio.bridge.proto.streams
+    request = getattr(proto, "DescribeStoreRequest", None)
+    response = getattr(proto, "DescribeStoreResponse", None)
+    if request is None or response is None:
+        return _BEFORE_DESCRIBE
+    try:
+        described = await store.call("DescribeStore", request(), response)
+    except StreamCallFailure as failure:
+        if failure.failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED:
+            return _BEFORE_DESCRIBE
+        raise
+    return StoreCapabilities._from_proto(described.capabilities)

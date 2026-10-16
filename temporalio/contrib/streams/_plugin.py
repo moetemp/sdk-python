@@ -23,13 +23,12 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import temporalio.bridge.client
 from temporalio.bridge.proto.streams import (
     DeleteOwnerRequest,
-    DescribeStoreRequest,
     StreamOwnerKind,
     StreamStoreConfig,
 )
 from temporalio.bridge.streams import StreamCallFailure, StreamStore
 from temporalio.bridge.streams_generated import StreamService
-from temporalio.contrib.streams._capabilities import StoreCapabilities
+from temporalio.contrib.streams._capabilities import StoreCapabilities, describe
 from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.plugin import SimplePlugin
 
@@ -224,10 +223,8 @@ class StreamStorePlugin(SimplePlugin):
                 Any, service_client
             )._connected_client()
             store = await call(StreamStore.connect(bridge, self._config))
-            service = StreamService(store)
-            described = await call(service.describe_store(DescribeStoreRequest()))
-            self._capabilities = StoreCapabilities._from_proto(described.capabilities)
-            self._store, self._service = store, service
+            self._capabilities = await call(describe(store))
+            self._store, self._service = store, StreamService(store)
             self._service_client = service_client
 
 

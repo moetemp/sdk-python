@@ -42,18 +42,13 @@ class MemoryStreams(StreamStorePlugin):
                 the weaker guarantees. Every capability when unset.
 
         Raises:
-            ValueError: ``owner_start_grace`` is negative.
+            ValueError: ``owner_start_grace`` is negative, or a mask was
+                given to an SDK whose Core can't mask a store.
         """
+        memory = MemoryStoreConfig()
+        if capabilities is not None:
+            memory.capabilities.CopyFrom(capabilities._to_proto())
         super().__init__(
             "temporalio.contrib.streams.MemoryStreams",
-            with_owner_start_grace(
-                StreamStoreConfig(
-                    memory=MemoryStoreConfig(
-                        capabilities=capabilities._to_proto()
-                        if capabilities is not None
-                        else None
-                    )
-                ),
-                owner_start_grace,
-            ),
+            with_owner_start_grace(StreamStoreConfig(memory=memory), owner_start_grace),
         )
