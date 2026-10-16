@@ -286,7 +286,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_recheck_finds_a_record_whose_notification_was_lost \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
-  test_live_a_replay_of_a_lost_range_fails_the_task
+  test_live_a_replay_of_a_lost_range_fails_the_task \
+  test_live_a_read_after_a_timed_out_read_replays_from_the_store
 gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_both_readers_follow_a_standalone_activity_across_its_retry \
   test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
