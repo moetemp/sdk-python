@@ -1113,6 +1113,14 @@ class ReadsAToolStream:
         async with workflow_reader(ref, replay_from_store=False) as reader:
             async for batch in reader:
                 seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
 
 
 @workflow.defn
