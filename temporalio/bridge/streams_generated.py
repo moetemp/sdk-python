@@ -42,6 +42,14 @@ class StreamService:
             "DeleteOwner", req, temporalio.bridge.proto.streams.DeleteOwnerResponse
         )
 
+    async def describe_store(
+        self, req: temporalio.bridge.proto.streams.DescribeStoreRequest
+    ) -> temporalio.bridge.proto.streams.DescribeStoreResponse:
+        """Invokes the StreamService.describe_store call."""
+        return await self._store.call(
+            "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
+        )
+
     async def latest(
         self, req: temporalio.bridge.proto.streams.LatestRequest
     ) -> temporalio.bridge.proto.streams.LatestResponse:

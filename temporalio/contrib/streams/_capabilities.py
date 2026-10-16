@@ -24,9 +24,8 @@ class StoreCapabilities:
 
     As a mask for :class:`temporalio.contrib.streams.memory.MemoryStreams`,
     a field set to ``False`` turns that capability off. A mask can't turn
-    on what the store doesn't have. The store keeps its own positions,
-    horizon and limits, so a mask's ``dense_positions``,
-    ``replay_horizon`` and limits count for nothing.
+    on what the store doesn't have. A nonzero limit in a mask replaces the
+    store's own, so a test can split batches early.
     """
 
     producer_state: bool = True
@@ -66,7 +65,10 @@ class StoreCapabilities:
     replay_horizon: timedelta | None = None
     """How long the store keeps every record for sure, or ``None`` if it doesn't say."""
     max_record_bytes: int = 0
-    """The largest record the store takes, with its envelope."""
+    """The largest record the store takes, with its envelope.
+
+    A larger record fails the append with ``ValueError``.
+    """
     max_batch_bytes: int = 0
     """The most record bytes one append takes."""
 

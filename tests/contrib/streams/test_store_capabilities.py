@@ -122,7 +122,7 @@ class _CoreWithoutDescribe:
     def __init__(self, kind: StreamFailureKind.ValueType) -> None:
         self.kind = kind
 
-    async def call(self, rpc: str, req: object, resp_type: type) -> object:
+    async def call(self, rpc: str, _req: object, _resp_type: type) -> object:
         raise StreamCallFailure(StreamFailure(kind=self.kind, message=f"no {rpc}"))
 
 

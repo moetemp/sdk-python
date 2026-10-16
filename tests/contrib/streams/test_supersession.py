@@ -296,7 +296,7 @@ _READER_RULES = _VECTORS.with_name("reader_rules.json")
     ids=lambda case: case["label"],
 )
 def test_the_tracker_drops_what_cores_reader_rules_drop(case: dict[str, Any]):
-    records = [
+    records: list[StreamRecord[str]] = [
         StreamRecord(
             kind=RecordKind(stored.get("kind", 1)),
             cursor=Cursor(str(index)),
