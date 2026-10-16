@@ -1,10 +1,11 @@
-"""An archive behind the Redis store keeps records that Redis trimmed readable.
+"""An archive behind a Redis or Postgres store keeps the records it trimmed readable.
 
 A StreamDriver fills the archive, and it runs only on a server with the
 stream notifier, so the live cases run in the Jetty lane. Each live case
 runs on a local directory and on the S3 server that
 ``STREAMS_ARCHIVE_S3_URL`` names, with the ``AWS_*`` settings Core reads.
-The lane starts MinIO in Docker for it.
+The lane starts MinIO in Docker for it. The Postgres cases need
+``STREAMS_POSTGRES_URL``.
 """
 
 from __future__ import annotations
@@ -29,12 +30,17 @@ from temporalio.contrib.streams import (
     StreamDriver,
     StreamExpiredError,
     StreamProducer,
+    StreamStorePlugin,
     get_stream_handle,
 )
 from temporalio.contrib.streams.archive import StreamArchive
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with
+from tests.contrib.streams._support import (
+    connect_with,
+    new_schema,
+    postgres_streams,
+)
 from tests.contrib.streams.test_live_notifications import (
     TOKENS,
     Reads,
@@ -43,7 +49,7 @@ from tests.contrib.streams.test_live_notifications import (
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
-# Redis trims a record this long after it was written, once nothing holds it.
+# The store trims a record this long after it was written, once nothing holds it.
 RETENTION = timedelta(milliseconds=500)
 
 
@@ -89,8 +95,8 @@ class Tiers:
 
     archived: Client
     hot_only: Client
-    store: RedisStreams
-    plain: RedisStreams
+    store: StreamStorePlugin
+    plain: StreamStorePlugin
     directory: Path | None
 
 
@@ -108,27 +114,46 @@ def archive_for(kind: str, tmp_path: Path) -> StreamArchive:
     return StreamArchive(f"{url}/{uuid.uuid4().hex}", **settings)
 
 
-@pytest.fixture(params=["local", "s3"])
+@pytest.fixture(
+    params=[
+        ("redis", "local"),
+        ("redis", "s3"),
+        ("postgres", "local"),
+        ("postgres", "s3"),
+    ],
+    ids=lambda p: "-".join(p),
+)
 async def tiers(
     request: pytest.FixtureRequest, client: Client, tmp_path: Path
 ) -> AsyncIterator[Tiers]:
-    url = os.environ.get("STREAMS_REDIS_URL", "")
-    if not url:
-        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
-    await skip_without_notifier(client)
-    archive = archive_for(request.param, tmp_path)
-    prefix = f"archive-{uuid.uuid4().hex}"
+    kind, where = request.param
     # A Workflow reader's hold lapses at once, so only the archive holds records.
     settings: dict[str, Any] = {
-        "key_prefix": prefix,
         "retention": RETENTION,
         "floor_lease": timedelta(milliseconds=100),
         "floor_release_grace": timedelta(milliseconds=100),
     }
-    store = RedisStreams(url, archive=archive, **settings).notify_on_append(
-        notification_log=True
-    )
-    plain = RedisStreams(url, **settings).notify_on_append(notification_log=True)
+    if kind == "postgres":
+        # The janitor trims, so it runs often here.
+        settings["janitor_interval"] = timedelta(milliseconds=100)
+        schema = new_schema()
+
+        def hot(archive: StreamArchive | None) -> StreamStorePlugin:
+            return postgres_streams(schema, archive=archive, **settings)
+
+    else:
+        url = os.environ.get("STREAMS_REDIS_URL", "")
+        if not url:
+            pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+        settings["key_prefix"] = f"archive-{uuid.uuid4().hex}"
+
+        def hot(archive: StreamArchive | None) -> StreamStorePlugin:
+            return RedisStreams(url, archive=archive, **settings)
+
+    await skip_without_notifier(client)
+    archive = archive_for(where, tmp_path)
+    store = hot(archive).notify_on_append(notification_log=True)
+    plain = hot(None).notify_on_append(notification_log=True)
     archived = await connect_with(client, store)
     hot_only = await connect_with(client, plain)
     driver = asyncio.create_task(
@@ -140,7 +165,7 @@ async def tiers(
             hot_only,
             store,
             plain,
-            tmp_path / "archive" if request.param == "local" else None,
+            tmp_path / "archive" if where == "local" else None,
         )
     finally:
         driver.cancel()
@@ -149,7 +174,7 @@ async def tiers(
 
 
 async def trim_past(tiers: Tiers, owner: str, after: Cursor, producer: StreamProducer):
-    """Append until Redis alone no longer holds the record after ``after``."""
+    """Append until the hot store alone no longer holds the record after ``after``."""
     deadline = time.monotonic() + 60
     filler = 0
     while True:
@@ -163,8 +188,8 @@ async def trim_past(tiers: Tiers, owner: str, after: Cursor, producer: StreamPro
         finally:
             await records.aclose()
         if time.monotonic() > deadline:
-            raise AssertionError("Redis did not trim the archived records")
-        # Trims run on appends, past the retention.
+            raise AssertionError("the store did not trim the archived records")
+        # Redis trims on appends past the retention, and Postgres in its janitor.
         await asyncio.sleep(RETENTION.total_seconds())
         filler += 1
         await producer.append(f"filler-{filler}")
@@ -182,7 +207,7 @@ async def test_live_a_cursor_below_the_hot_floor_reads_the_archive(tiers: Tiers)
         await records.aclose()
         assert first.value == "a"
         await trim_past(tiers, owner, first.cursor, producer)
-        # The same read, with no change, reads on from the archive into Redis.
+        # The same read, with no change, reads on from the archive into the store.
         seen = []
         records = handle.read(after=first.cursor)
         async for record in records:
@@ -221,7 +246,7 @@ async def test_live_a_positions_only_replay_reads_a_trimmed_range_from_the_archi
         first = await records.__anext__()
         await records.aclose()
         await trim_past(tiers, owner, first.cursor, producer)
-        # Redis alone lost the range the reader recorded.
+        # The hot store alone lost the range the reader recorded.
         tiers.plain._batches.clear()
         with pytest.raises(Exception) as raised:
             await Replayer(workflows=[Reads], plugins=[tiers.plain]).replay_workflow(

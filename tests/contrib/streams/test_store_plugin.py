@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -22,7 +23,9 @@ from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamError, StreamNotFoundError
 from temporalio.contrib.streams._plugin import call
+from temporalio.contrib.streams.archive import StreamArchive
 from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.contrib.streams.postgres import PostgresStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.worker import Worker
 from tests.contrib.streams._support import connect_with
@@ -118,6 +121,87 @@ def test_redis_setting_mistakes_are_value_errors():
         RedisStreams("redis://a", key_prefix="")
     with pytest.raises(ValueError, match="retention"):
         RedisStreams("redis://a", retention=timedelta(microseconds=10))
+
+
+def test_postgres_settings_go_into_the_store_config():
+    archive = StreamArchive("s3://bucket/streams", segment_bytes=1024)
+    store = PostgresStreams(
+        "postgresql://app@db:5432/streams",
+        schema="team_a",
+        retention=timedelta(days=90),
+        max_connections=32,
+        response_timeout=timedelta(seconds=3),
+        floor_lease=timedelta(hours=1),
+        floor_release_grace=timedelta(minutes=10),
+        owner_start_grace=timedelta(seconds=20),
+        notify_doorbells=8,
+        listen_url="postgres://app@db-direct:5432/streams",
+        poll_interval=timedelta(milliseconds=50),
+        notify_reads=True,
+        skip_migrations=True,
+        janitor_interval=timedelta(seconds=30),
+        archive=archive,
+    )
+    assert store._config.WhichOneof("store") == "postgres"
+    config = store._config.postgres
+    assert config.url == "postgresql://app@db:5432/streams"
+    assert config.schema == "team_a"
+    assert config.retention.ToTimedelta() == timedelta(days=90)
+    assert config.max_connections == 32
+    assert config.response_timeout.ToTimedelta() == timedelta(seconds=3)
+    assert config.floor_lease.ToTimedelta() == timedelta(hours=1)
+    assert config.floor_release_grace.ToTimedelta() == timedelta(minutes=10)
+    assert config.notify_doorbells == 8
+    assert config.listen_url == "postgres://app@db-direct:5432/streams"
+    assert config.poll_interval.ToTimedelta() == timedelta(milliseconds=50)
+    assert config.notify_reads and config.skip_migrations
+    assert config.janitor_interval.ToTimedelta() == timedelta(seconds=30)
+    assert store._config.owner_start_grace.ToTimedelta() == timedelta(seconds=20)
+    assert store._config.archive == archive._config
+    # Unset settings leave Core's defaults.
+    defaults = PostgresStreams("postgres://db/streams")._config
+    config = defaults.postgres
+    assert config.schema == "temporal_streams"
+    assert config.retention.ToTimedelta() == timedelta(days=7)
+    assert (config.max_connections, config.notify_doorbells) == (0, 0)
+    assert config.listen_url == ""
+    assert not (config.notify_reads or config.skip_migrations)
+    for name in (
+        "response_timeout",
+        "floor_lease",
+        "floor_release_grace",
+        "poll_interval",
+        "janitor_interval",
+    ):
+        assert not config.HasField(name), name
+    assert not defaults.HasField("owner_start_grace")
+    assert not defaults.HasField("archive")
+
+
+@pytest.mark.parametrize(
+    "settings, message",
+    [
+        ({"url": ""}, "postgres:// URL"),
+        ({"url": "redis://db"}, "postgres:// URL"),
+        ({"listen_url": "db:5432"}, "listen_url"),
+        ({"schema": ""}, "schema"),
+        ({"retention": timedelta(microseconds=10)}, "retention"),
+        ({"notify_doorbells": 0}, "notify_doorbells"),
+        ({"notify_doorbells": 65}, "notify_doorbells"),
+        ({"response_timeout": timedelta(0)}, "response_timeout"),
+        ({"floor_lease": timedelta(seconds=-1)}, "floor_lease"),
+        ({"floor_release_grace": timedelta(0)}, "floor_release_grace"),
+        ({"poll_interval": timedelta(0)}, "poll_interval"),
+        ({"janitor_interval": timedelta(seconds=-1)}, "janitor_interval"),
+        ({"owner_start_grace": timedelta(seconds=-1)}, "owner_start_grace"),
+    ],
+)
+def test_postgres_setting_mistakes_are_value_errors(
+    settings: dict[str, Any], message: str
+):
+    settings = {"url": "postgres://db/streams", **settings}
+    with pytest.raises(ValueError, match=message):
+        PostgresStreams(**settings)
 
 
 async def test_deleting_removes_what_a_workflow_stream_holds(client: Client):
