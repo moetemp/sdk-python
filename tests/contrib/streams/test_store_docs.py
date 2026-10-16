@@ -18,8 +18,7 @@ from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with
 
 _DOC = (
-    Path(__file__).parents[3]
-    / "temporalio/contrib/streams/docs/store-capabilities.md"
+    Path(__file__).parents[3] / "temporalio/contrib/streams/docs/store-capabilities.md"
 )
 
 
@@ -29,8 +28,7 @@ def _table() -> dict[str, dict[str, str]]:
     header = next(line for line in lines if line.startswith("| Store"))
     columns = [c.strip() for c in header.strip("|").split("|")][1:]
     return {
-        row[0].strip(): dict(zip(columns, (c.strip() for c in row[1:])))
-        for row in rows
+        row[0].strip(): dict(zip(columns, (c.strip() for c in row[1:]))) for row in rows
     }
 
 
