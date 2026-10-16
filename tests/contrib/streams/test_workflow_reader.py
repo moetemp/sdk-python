@@ -45,7 +45,9 @@ from temporalio.contrib.streams import (
     StreamRef,
     StreamUnsupportedError,
     _workflow,
+    activity_handle,
     get_stream_handle,
+    start_activity_with_stream,
     topic,
     workflow_reader,
 )
@@ -954,6 +956,110 @@ async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
     assert [i.subscription_id for i in _fake.inputs] == ["", "1"]
 
 
+async def test_a_reader_names_a_workflow_activity_owner_in_each_read(client: Client):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")], cursor="c1", done=True, closed_by="act@run"
+            )
+        ]
+    )
+    ref = StreamRef.for_workflow_activity(
+        "agent", run_id="run", activity_id="act", topic=TOKENS
+    )
+    async with new_worker(client, ReadsAStream, activities=[fake_read]) as worker:
+        seen = await client.execute_workflow(
+            ReadsAStream.run,
+            args=[ref, True],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert seen == ["data a"]
+    [input] = _fake.inputs
+    assert (input.owner_kind, input.activity_id, input.workflow_id) == (
+        "workflow_activity",
+        "act",
+        "agent",
+    )
+    assert input.chain_run_id == "run"
+
+
+@activity.defn
+async def streams_a_tool_call(tokens: list[str]) -> str:
+    await activity_handle().producer(topic=TOKENS).append(*tokens)
+    return "ok"
+
+
+@workflow.defn
+class RunsAToolAndReadsIt:
+    @workflow.run
+    async def run(self, record_batches: bool) -> list[str]:
+        handle, ref = start_activity_with_stream(
+            streams_a_tool_call,
+            ["a", "b"],
+            start_to_close_timeout=timedelta(seconds=10),
+            topic=TOKENS,
+        )
+        await handle
+        seen: list[str] = []
+        async with workflow_reader(ref, replay_from_store=not record_batches) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+
+@pytest.mark.parametrize("record_batches", [True, False])
+async def test_a_workflow_reads_the_stream_of_its_own_activity(
+    client: Client, record_batches: bool
+):
+    # The Worker closes the tool's stream when the run sees the tool end, so
+    # the reader reads to that close and never sleeps on the notifier.
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(
+        streams, RunsAToolAndReadsIt, activities=[streams_a_tool_call]
+    ) as worker:
+        handle = await streams.start_workflow(
+            RunsAToolAndReadsIt.run,
+            record_batches,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        assert await asyncio.wait_for(handle.result(), 30) == ["data a", "data b"]
+    history = await handle.fetch_history()
+    if record_batches:
+        await Replayer(
+            workflows=[RunsAToolAndReadsIt], plugins=[MemoryStreams()]
+        ).replay_workflow(history)
+    else:
+        store = store_for_client(streams)
+        store._batches.clear()
+        await Replayer(
+            workflows=[RunsAToolAndReadsIt], plugins=[store]
+        ).replay_workflow(history)
+
+
+@workflow.defn
+class ReadsAToolStream:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_workflow_activity(
+            "agent", run_id="run", activity_id="tool-1", topic=TOKENS
+        )
+        async with workflow_reader(ref, replay_from_store=False) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
 @workflow.defn
 class SaysWhatAnActivityRunHad:
     @workflow.run
@@ -974,6 +1080,39 @@ class SaysWhatAnActivityRunHad:
         runtime._stream_wakes.append(
             ResolveStreamWake.FromString(wake.SerializeToString())
         )
+
+
+async def test_a_reader_of_a_tool_stream_ends_at_the_notifiers_backstop_close(
+    client: Client,
+):
+    # The store never closes a tool stream whose agent missed the close, and
+    # Core ends the read only after its grace. The notifier's close is the end.
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1"),
+            empty("c1", 1),
+            empty("c1", 1),
+            empty("c1", 1),
+        ]
+    )
+    failure = Failure(
+        message="the owner Activity ended without closing the stream",
+        application_failure_info=ApplicationFailureInfo(),
+    )
+    async with new_worker(client, ReadsAToolStream, activities=[fake_read]) as worker:
+        handle = await client.start_workflow(
+            ReadsAToolStream.run, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+        await _fake.until(3)
+        await handle.signal(
+            ReadsAToolStream.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        with pytest.raises(WorkflowFailureError) as raised:
+            await asyncio.wait_for(handle.result(), 20)
+    assert "without closing the stream" in str(raised.value.cause)
+    assert len(_fake.inputs) == 4
 
 
 async def test_the_last_records_of_an_ended_activity_run_are_delivered(

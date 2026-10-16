@@ -49,7 +49,10 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handles import StreamHandle
-from temporalio.contrib.streams._local_activity import require_local_activity
+from temporalio.contrib.streams._local_activity import (
+    require_local_activity,
+    start_owning_activity,
+)
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     call,
@@ -187,7 +190,7 @@ class _ReadInput:
     owner_kind: str = "workflow"
     """The owner kind of the stream, as :attr:`StreamRef.kind`."""
     activity_id: str = ""
-    """The owning standalone Activity, for an ``"activity"`` owner."""
+    """The owning Activity, for an ``"activity"`` or ``"workflow_activity"`` owner."""
     max_bytes: int = 0
     """The most stored bytes of the records past the first, 0 for no bound."""
 
@@ -392,7 +395,7 @@ class WorkflowStreamReader(Generic[T]):
             records = self._convert(list(response.records), response.cursor)
             state.state = response.state
             if response.done:
-                owner_ended = self._ref.kind == "activity" and not (
+                owner_ended = self._ref.kind != "workflow" and not (
                     response.closed_by
                     or response.HasField("close_result")
                     or response.HasField("close_failure")
@@ -411,6 +414,12 @@ class WorkflowStreamReader(Generic[T]):
                     if response.HasField("close_failure"):
                         state.close_failure = response.close_failure
             elif not response.records:
+                if self._ref.kind == "workflow_activity" and self._closed():
+                    # The notifier closed the stream since the Activity is gone
+                    # and no close came. The store keeps it open, and the
+                    # Activity can no longer append, so the read is over.
+                    state.done = True
+                    continue
                 if state.attach and not self._closed():
                     # Attach only when the stream goes idle, then read once
                     # more, since an append between the empty read and the
@@ -462,9 +471,9 @@ class WorkflowStreamReader(Generic[T]):
         return StreamBatch(records, self.position)
 
     async def _wait_for_owner_close(self) -> None:
-        """Wait for the notifier's close after a standalone Activity's run ended.
+        """Wait for the notifier's close after an Activity owner ended with no close.
 
-        Core ends the read once the run ended, with no outcome. The
+        Core ends the read once the owner ended, with no outcome. The
         notifier's owner check closes the stream with the run's failure a
         little later, and wakes the readers attached to it, so a reader that
         never attached attaches first. Only a reader of an Activity's stream
@@ -715,7 +724,10 @@ def workflow_reader(
     Activity run, and ends when that run closes the stream or ends. When
     the run ends with no close, the stream's notifier closes it with the
     run's outcome, and the reader raises the run's failure after its last
-    batch. To go on in the next run of the reading Workflow, pass
+    batch. On the stream of an Activity that a Workflow scheduled it ends
+    when the scheduling run sees the Activity end, and raises the
+    Activity's failure after its last batch when the Activity failed, timed
+    out or was canceled. To go on in the next run of the reading Workflow, pass
     :attr:`WorkflowStreamReader.position` as ``after``. The notifier wakes
     the run that attached, so after a reset, the new run reads once more
     to attach itself before it sleeps.
@@ -796,6 +808,64 @@ def workflow_reader(
         replay_from_store,
         max_bytes=max_bytes,
     )
+
+
+def start_activity_with_stream(
+    activity: Any,
+    *args: Any,
+    topic: str | StreamTopic[Any] | None = None,
+    **kwargs: Any,
+) -> tuple[workflow.ActivityHandle[Any], StreamRef]:
+    """Start an Activity that owns a stream, and return its handle and the stream's ref.
+
+    It calls :func:`temporalio.workflow.start_activity` with ``activity``,
+    ``args`` and the keyword arguments, and marks the Activity in a header.
+    In the Activity, :func:`temporalio.contrib.streams.activity_handle` is
+    then the Activity's own stream. Every attempt writes to it. When this
+    run sees the Activity end, the Worker closes each topic the Activity
+    wrote: with a null result when it completed, else with the failure
+    that History holds. A reader can open the ref at once, before the
+    Activity starts.
+
+    The ref names this Workflow, this run and the Activity's id, which is
+    ``activity_id`` when given, else the id the SDK gave the call. An
+    Activity id names one stream per run. A second Activity with the same
+    id in the same run writes to a closed stream, so its first append raises
+    :class:`temporalio.contrib.streams.StreamClosedError`.
+
+    Args:
+        activity: The Activity, as for
+            :func:`temporalio.workflow.start_activity`.
+        args: The Activity's arguments.
+        topic: The topic of the ref. Without one,
+            :data:`temporalio.contrib.streams.DEFAULT_TOPIC`. The Activity
+            may write other topics too.
+        kwargs: The other arguments of
+            :func:`temporalio.workflow.start_activity`.
+
+    Raises:
+        StreamUnsupportedError: The Worker has no stream store interceptor,
+            so the header can't be set.
+        temporalio.workflow.ReadOnlyContextError: Called from a query or an
+            update validator.
+
+    .. warning::
+        This API is experimental.
+    """
+    if workflow.unsafe.is_read_only():
+        raise workflow.ReadOnlyContextError(
+            "cannot start an Activity in a query or an update validator"
+        )
+    if args:
+        kwargs["args"] = list(args)
+    handle, activity_id = start_owning_activity(
+        lambda: workflow.start_activity(activity, **kwargs)
+    )
+    info = workflow.info()
+    ref = StreamRef.for_workflow_activity(
+        info.workflow_id, run_id=info.run_id, activity_id=activity_id, topic=topic
+    )
+    return handle, ref
 
 
 @temporalio.activity.defn(name=READ_ACTIVITY)
