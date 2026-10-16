@@ -5,6 +5,9 @@ A configuration class is registered once, on the client:
 Core for the store it names. Core serves that one store to the client's
 handles and to the Activities of every Worker built from the client, so an
 Activity's append and an outside read meet in the same place.
+
+On a Worker the plugin registers the interceptor that gives a Local Activity
+a producer identity.
 """
 
 from __future__ import annotations
@@ -90,6 +93,9 @@ class StreamStorePlugin(SimplePlugin):
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
         """Check that the Worker's client carries this store.
 
+        Also adds the interceptor that stamps each Local Activity call, so a
+        Local Activity can publish.
+
         Raises:
             ValueError: The plugin is not registered on the Worker's client,
                 or that client was not made with ``Client.connect``. A
@@ -107,6 +113,14 @@ class StreamStorePlugin(SimplePlugin):
                 f"stream store {self.name()!r} must be registered on the Worker's "
                 "client, as Client.connect(..., plugins=[store])"
             )
+        from temporalio.contrib.streams._local_activity import StreamsInterceptor
+
+        interceptors = list(config.get("interceptors") or [])
+        # Two would number each Local Activity call twice. The same plugin on
+        # the client and the Worker configures the Worker twice.
+        if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
+            interceptors.append(StreamsInterceptor())
+        config["interceptors"] = interceptors
         return config
 
     async def delete_workflow_streams(self, namespace: str, workflow_id: str) -> int:

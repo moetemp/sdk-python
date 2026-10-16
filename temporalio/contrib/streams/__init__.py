@@ -39,7 +39,8 @@ context then reaches a stream the same way:
 
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt.
+  scheduling run id, and its Temporal attempt. A Local Activity writes as
+  its call number in the run, with an attempt that grows across its reruns.
 - Any process holding a client reaches a Workflow's stream with
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.

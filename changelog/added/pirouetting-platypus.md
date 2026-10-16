@@ -1,1 +1,1 @@
-Add experimental `temporalio.contrib.streams` so Activities and clients can append ordered records to a Workflow's stream in Redis, and outside readers can follow it from a cursor.
+Add experimental `temporalio.contrib.streams` so Activities and clients can append ordered records to a Workflow's stream in Redis, and outside readers can follow it from a cursor. A Local Activity publishes to its Workflow's stream with `activity_handle`, under a producer identity that survives its reruns.

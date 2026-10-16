@@ -8,7 +8,6 @@ reaches a Workflow's stream by Workflow id through its store.
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import uuid
 from collections.abc import Sequence
 from datetime import timedelta
@@ -27,7 +26,6 @@ from temporalio.contrib.streams import (
     StreamNotFoundError,
     StreamProducerError,
     StreamRef,
-    StreamUnsupportedError,
     Supersession,
     activity_handle,
     get_stream_handle,
@@ -538,14 +536,3 @@ async def test_an_activity_gets_one_producer_per_topic(client: Client):
         get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
     assert [r.value for r in records] == ["started", "started"]
-
-
-async def test_a_local_activity_has_no_stream_producer():
-    env = ActivityEnvironment()
-    env.info = dataclasses.replace(ActivityEnvironment.default_info(), is_local=True)
-
-    async def local() -> None:
-        activity_handle()
-
-    with pytest.raises(StreamUnsupportedError, match="Local Activity"):
-        await env.run(local)
