@@ -511,7 +511,8 @@ never arms, so the call also stops when half the request timeout passed.
 Then it answers `behind`, and the server sends the same progress again after
 `callback.nexusHandler.progressBehindInterval` (1 second by default), so a
 long backlog is read in pages without a busy loop. `OnComplete` reads the rest of the stream,
-then calls `on_close`.
+then calls `on_close`. A canceled or failed operation can leave the stream
+open, so its `OnComplete` reads only up to the first empty read.
 
 **Delivery is at least once.** A batch repeats after a lost answer or a
 timeout, and a completion can overtake a progress call in flight, so a batch
