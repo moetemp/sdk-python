@@ -42,6 +42,14 @@ class StreamService:
             "DeleteOwner", req, temporalio.bridge.proto.streams.DeleteOwnerResponse
         )
 
+    async def describe_store(
+        self, req: temporalio.bridge.proto.streams.DescribeStoreRequest
+    ) -> temporalio.bridge.proto.streams.DescribeStoreResponse:
+        """Invokes the StreamService.describe_store call."""
+        return await self._store.call(
+            "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
+        )
+
     async def flush_notifications(
         self, req: temporalio.bridge.proto.streams.FlushNotificationsRequest
     ) -> temporalio.bridge.proto.streams.FlushNotificationsResponse:
