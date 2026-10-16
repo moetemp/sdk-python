@@ -10,8 +10,10 @@ On a Worker the plugin hands Core the store, which appends what
 :func:`temporalio.contrib.streams.workflow_writer` publishes when the
 activation completes. It adds the interceptor that gives a Local Activity a
 producer identity and tells Workflow code the Worker has a store, and it
-registers the read Activity that
-:func:`temporalio.contrib.streams.workflow_reader` runs as a Local Activity.
+registers the built-in Activities that
+:func:`temporalio.contrib.streams.workflow_reader` and
+:func:`temporalio.contrib.streams.close_workflow_stream` run as Local
+Activities.
 On a Replayer it adds the interceptor only, since a replay stores nothing.
 When a Worker stops, the plugin waits for the notifications Core still has
 out.
@@ -108,7 +110,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Check that the Worker's client carries this store, and add the read Activity.
+        """Check that the Worker's client carries this store, and add the built-in Activities.
 
         Also adds the interceptor that stamps each Local Activity call, so a
         Local Activity can publish.
@@ -133,11 +135,13 @@ class StreamStorePlugin(SimplePlugin):
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow import read_activity
+        from temporalio.contrib.streams._workflow_writer import close_activity
 
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures the Worker twice.
-        if read_activity not in activities:
-            activities.append(read_activity)
+        for builtin in (read_activity, close_activity):
+            if builtin not in activities:
+                activities.append(builtin)
         config["activities"] = activities
         interceptors = list(config.get("interceptors") or [])
         # Two would number each Local Activity call twice.

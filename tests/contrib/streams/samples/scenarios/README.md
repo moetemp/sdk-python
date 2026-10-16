@@ -51,18 +51,42 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
   the publishes, and the replay sends nothing to the store. Left out: a Workflow that reads a
   stream.
 
+## Readers that sleep
+
+These demos need a server with the stream notifier and the Workflow wake target. Run them with
+the live lane, `scripts/streams_live_lane.sh`, or against such a server on `TEMPORAL_ADDRESS`.
+They turn on `notify_on_append()` themselves.
+
+- **`j1_sleeping_client`.** The owner publishes three bursts with gaps longer than the idle wait,
+  then closes its stream. A client reader sleeps on the notifier in each gap and wakes on the next
+  burst.
+- **1b, `j1b_parent_relay`.** `Order` starts its `Delivery` child, reads the child's stages with
+  `workflow_reader`, and publishes each one again on its own topic with `workflow_writer`. The app
+  reads only the parent's stream. Left out: a child in another namespace (1c).
+- **`j2_slack_connector`.** A connector Workflow follows a channel's stream in the same namespace
+  and posts each message through an Activity. Between messages it sleeps with no task. Left out:
+  Slack itself, and a channel in another namespace, which needs Nexus.
+- **`j3_ci_tail`.** A build's steps each append one log line after a long step, and the build
+  closes its stream with its status. A client tail sleeps between lines.
+- **5b, `j5b_dashboard_and_relay`.** `Order` relays its child's stream as in `j1b_parent_relay`.
+  After the first relayed stage, a dashboard opens late on the child's stream and reads it from
+  `BEGINNING`. Both get every stage. Left out: a child in another namespace.
+- **7a, `j7a_close_with_error`.** `Delivery` publishes two stages, then closes its stream with a
+  `CourierLost` error and runs on. A client read and a `Dispatcher` Workflow's `workflow_reader`
+  both get the two stages, then raise `CourierLost`. Left out: an owner that fails with no close.
+
 This release publishes from Workflow code with `workflow_writer`, and Core appends each
-activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a
-client or an Activity. 5b
-has no demo of its own: its dashboard half is 5a, and its relay half needs a Workflow reader.
+activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a client or an Activity. The
+dashboard half of 5b is 5a, and `j5b_dashboard_and_relay` runs both halves.
 
 ## Scenarios with no demo in this release
 
-This release has no Nexus and no Workflow reader, so these scenarios can't run in any version.
+This release has no Nexus. A Workflow reader in the same namespace covers part of 1b and 4, as
+`j1b_parent_relay` and `j2_slack_connector` show, but not across namespaces.
 
 | Scenario | Why |
 |---|---|
-| 1b | A parent Workflow must read the child's stream to relay it. |
+| 1b | The relay's caller sees the stream as a Nexus operation's progress. |
 | 1c | The relay goes through Nexus to a stream in another namespace. |
 | 3d | The inner loop runs behind Nexus in another namespace. |
 | 3e | As 3d, with the inner loop's deltas in Redis. |
@@ -74,6 +98,4 @@ This release has no Nexus and no Workflow reader, so these scenarios can't run i
 - A Worker Callback per record, or a push to an app's backend (1a, 4, 5c). Not built.
 - The native stream, server fencing and server retraction (3a as written, 3c, 7b). Out of scope.
 - Live video and storage that Temporal manages (2). Out of scope.
-- A close that carries a failure (7a). The read ends at the close, and `s7a_failed_delivery` gets
-  the outcome from the Workflow.
 - A reset that retracts the old run's records (8). Each record carries its run id instead.

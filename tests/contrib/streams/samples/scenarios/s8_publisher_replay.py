@@ -8,8 +8,7 @@ adds the interceptor that ``workflow_writer`` replays with. The plugin
 connects nothing, so the demo gives the Replayer a Redis store at a port
 where nothing listens. The replay sends nothing to the store and passes.
 
-Left out: a Workflow that reads a stream, which Workflow code can't do in
-this release.
+Left out: a Workflow that reads a stream.
 
 Run with ``python -m tests.contrib.streams.samples.scenarios.s8_publisher_replay``.
 """

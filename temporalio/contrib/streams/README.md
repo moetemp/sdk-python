@@ -227,6 +227,29 @@ Known limits:
   have a marker per flush, and they fail replay on this version with a
   nondeterminism error.
 
+## A reader sleeps while the stream is idle
+
+With `notify_on_append()` on the store and a server with the stream
+notifier, an idle reader sleeps instead of holding a store read open. A
+client's `StreamHandle.read()` waits on the notifier with a long poll.
+Workflow code reads with `workflow_reader()`, one Local Activity per batch,
+and wakes on a Workflow Task when a producer appends:
+
+```python
+@workflow.defn
+class Follows:
+    @workflow.run
+    async def run(self, owner: str) -> None:
+        async with workflow_reader(owner, topic=EVENTS) as reader:
+            async for batch in reader:
+                for record in batch.records:
+                    ...
+```
+
+A Workflow closes its own stream with `close_workflow_stream(topic,
+result=..., error=...)`, and each sleeping reader sees the outcome. See
+[Readers that sleep](docs/notifications.md).
+
 ## What to know
 
 - **Retries deduplicate.** An append that fails with
@@ -238,9 +261,13 @@ Known limits:
   set on `RedisStreams`) and dies that long after its last write. A cursor
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
-  `StreamClosedError`, after a short closing window. On a store without
-  producer state, a late append can still answer success, and no reader
-  delivers it, since every read ends at the first `CLOSE` record.
+  `StreamClosedError`, after a short closing window. Close earlier with
+  `close_workflow_stream` in the Workflow or `close()` on a handle. A
+  Workflow doesn't see a close from outside through its writer: Core drops
+  its later records on that topic, and the run goes on. So close a topic
+  from the Workflow that owns it, or have readers check how it closed. On a
+  store without producer state, a late append can still answer success, and
+  no reader delivers it, since every read ends at the first `CLOSE` record.
 - **Readers before the owner.** A read of a Workflow that Temporal doesn't
   know yet waits for `owner_start_grace` (60 seconds by default, set on
   `RedisStreams` or `MemoryStreams`), counted from the read's first owner
@@ -250,11 +277,12 @@ Known limits:
   grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
-- **Not in this release.** Reading a stream inside a Workflow, and streams
-  owned by an Activity or by no one, raise `StreamUnsupportedError`.
+- **Not in this release.** Streams owned by an Activity or by no one raise
+  `StreamUnsupportedError`.
 
 ## Further reading
 
+- [Readers that sleep](docs/notifications.md)
 - [Store capabilities and guarantees](docs/store-capabilities.md)
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
