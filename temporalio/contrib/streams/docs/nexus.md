@@ -464,7 +464,8 @@ A replay that misses the cache needs the endpoint and the records:
 
 A live read whose credential the endpoint refuses, 401 or 403, retries its
 Local Activity with backoff and logs an error, so a key that expired fails no
-caller Workflow. A live read on a Worker with no transport for the endpoint
+caller Workflow. A refusal the handler marks final, such as its authorizer's,
+still fails the read for good. A live read on a Worker with no transport for the endpoint
 fails its Local Activity. The reader raises that again from `next()` as
 `StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
 is retried once the Worker is fixed. Workflow code that catches every
