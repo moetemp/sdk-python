@@ -8,14 +8,17 @@ when ``STREAMS_REDIS_URL`` is set.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import json
 import os
 import shutil
+import socket
 import subprocess
-import urllib.parse
+import time
 import uuid
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -69,11 +72,36 @@ def redis_store() -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=f"workflow-writer-{uuid.uuid4().hex}")
 
 
-def redis_cli(*args: str) -> str:
-    url = urllib.parse.urlparse(os.environ.get("STREAMS_REDIS_URL", ""))
-    command = ["redis-cli", "-h", url.hostname or "localhost"]
-    command += ["-p", str(url.port or 6379), *args]
-    return subprocess.run(command, capture_output=True, text=True, check=True).stdout
+@contextlib.contextmanager
+def private_redis() -> Iterator[int]:
+    """A Redis of the test's own, for a case that changes the server's config.
+
+    A shared Redis would refuse the writes of every other suite that uses it.
+    """
+    if not (shutil.which("redis-server") and shutil.which("redis-cli")):
+        pytest.skip("needs redis-server and redis-cli for a private Redis")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = subprocess.Popen(
+        ["redis-server", "--port", str(port), "--bind", "127.0.0.1", "--save", ""]
+        + ["--appendonly", "no", "--maxmemory-policy", "noeviction"],
+        stdout=subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(100):
+            if redis_cli(port, "ping").strip() == "PONG":
+                break
+            time.sleep(0.05)
+        yield port
+    finally:
+        server.terminate()
+        server.wait()
+
+
+def redis_cli(port: int, *args: str) -> str:
+    command = ["redis-cli", "-h", "127.0.0.1", "-p", str(port), *args]
+    return subprocess.run(command, capture_output=True, text=True).stdout
 
 
 @pytest.fixture(params=["memory", "redis"])
@@ -398,23 +426,18 @@ class PublishesWhenAsked:
 
 
 async def test_a_store_that_refuses_the_append_fails_the_task(client: Client):
-    if not shutil.which("redis-cli"):
-        pytest.skip("needs redis-cli to make the store refuse writes")
-    streams = await connect_with(client, redis_store())
-    workflow_id = new_workflow_id()
-    async with new_worker(streams, PublishesWhenAsked) as worker:
-        handle = await streams.start_workflow(
-            PublishesWhenAsked.run, id=workflow_id, task_queue=worker.task_queue
-        )
-        _, limit = redis_cli("config", "get", "maxmemory").split()
-        # With no room left, Redis refuses every write.
-        redis_cli("config", "set", "maxmemory", "1")
-        try:
+    with private_redis() as port:
+        streams = await connect_with(client, RedisStreams(f"redis://127.0.0.1:{port}"))
+        workflow_id = new_workflow_id()
+        async with new_worker(streams, PublishesWhenAsked) as worker:
+            handle = await streams.start_workflow(
+                PublishesWhenAsked.run, id=workflow_id, task_queue=worker.task_queue
+            )
+            # With no room left, Redis refuses every write.
+            redis_cli(port, "config", "set", "maxmemory", "1")
             await handle.signal(PublishesWhenAsked.publish)
             message = await asyncio.wait_for(_first_task_failure(handle), 20)
-        finally:
-            redis_cli("config", "set", "maxmemory", limit)
-        await handle.terminate()
+            await handle.terminate()
     assert "StreamOutputNotAppended" in message
 
 
