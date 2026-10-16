@@ -782,6 +782,10 @@ async def test_live_a_replay_of_a_lost_range_fails_the_task(notifying: Client):
     assert "NonDeterministicError" not in str(raised.value)
 
 
+def _values(batch: Any) -> list[str]:
+    return [str(r.value) for r in batch.records if r.kind is RecordKind.DATA]
+
+
 @workflow.defn
 class ReadsThroughATimeout:
     """Reads one batch, times out a read on the idle stream, then reads again."""
@@ -793,12 +797,12 @@ class ReadsThroughATimeout:
     async def run(self, owner: str) -> list[str]:
         reader = workflow_reader(owner, topic=TOKENS, idle_wait=timedelta(seconds=5))
         async with reader:
-            self.seen.extend(str(r.value) for r in (await anext(reader)).records)
+            self.seen.extend(_values(await anext(reader)))
             try:
                 await asyncio.wait_for(anext(reader), 1)
             except (asyncio.TimeoutError, ActivityError):
                 self.seen.append("timed out")
-            self.seen.extend(str(r.value) for r in (await anext(reader)).records)
+            self.seen.extend(_values(await anext(reader)))
         return self.seen
 
     @workflow.query
@@ -824,6 +828,7 @@ async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
             return "timed out" in await reader.query(ReadsThroughATimeout.progress)
 
         await until(timed_out)
+        # A new attempt reads as a SUPERSEDED and then "b".
         await stream.producer(producer_id="p", attempt=2).append("b")
         assert await asyncio.wait_for(reader.result(), 30) == ["a", "timed out", "b"]
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
