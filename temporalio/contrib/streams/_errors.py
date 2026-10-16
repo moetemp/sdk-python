@@ -130,7 +130,9 @@ class StreamRecordError(StreamError):
 
     Its body did not convert to the topic's type, or the codec or the store
     could not decode it. Reading on from :attr:`cursor` skips it, which is a
-    choice the caller makes, since skipping loses the record.
+    choice the caller makes, since skipping loses the record. A Workflow
+    reader raises it once, after the records before it, and its next
+    iteration goes on past it.
     """
 
     def __init__(self, message: str, cursor: Cursor) -> None:

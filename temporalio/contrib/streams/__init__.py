@@ -55,9 +55,10 @@ context then reaches a stream the same way:
 Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't pin one run.
 
-In this release only a Workflow owns a stream, and only Activities and
-clients read one. Reading inside a Workflow (:func:`workflow_reader`) and
-the other owner kinds raise :class:`StreamUnsupportedError`.
+Workflow code reads a stream with :func:`workflow_reader`, one Local
+Activity per batch, and sleeps on the stream's notifier while the stream is
+idle. In this release only a Workflow owns a stream. The other owner kinds
+raise :class:`StreamUnsupportedError`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
@@ -99,7 +100,13 @@ from temporalio.contrib.streams._supersession import (
     track_supersession,
 )
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
-from temporalio.contrib.streams._workflow import workflow_reader
+from temporalio.contrib.streams._workflow import (
+    StreamBatch,
+    StreamPosition,
+    TaskCutoff,
+    WorkflowStreamReader,
+    workflow_reader,
+)
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     workflow_writer,
@@ -113,6 +120,7 @@ __all__ = [
     "END",
     "RecordKind",
     "StoreCapabilities",
+    "StreamBatch",
     "StreamClosedError",
     "StreamCursorError",
     "StreamError",
@@ -121,6 +129,7 @@ __all__ = [
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
+    "StreamPosition",
     "StreamProducer",
     "StreamProducerError",
     "StreamRecord",
@@ -133,6 +142,8 @@ __all__ = [
     "StreamUnsupportedError",
     "Supersession",
     "SupersessionTracker",
+    "TaskCutoff",
+    "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",

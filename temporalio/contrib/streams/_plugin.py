@@ -9,9 +9,12 @@ an Activity's append and an outside read meet in the same place.
 On a Worker the plugin hands Core the store, which appends what
 :func:`temporalio.contrib.streams.workflow_writer` publishes when the
 activation completes. It adds the interceptor that gives a Local Activity a
-producer identity and tells Workflow code the Worker has a store. On a
-Replayer it adds the interceptor only, since a replay stores nothing. When a
-Worker stops, the plugin waits for the notifications Core still has out.
+producer identity and tells Workflow code the Worker has a store, and it
+registers the read Activity that
+:func:`temporalio.contrib.streams.workflow_reader` runs as a Local Activity.
+On a Replayer it adds the interceptor only, since a replay stores nothing.
+When a Worker stops, the plugin waits for the notifications Core still has
+out.
 """
 
 from __future__ import annotations
@@ -105,7 +108,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Check that the Worker's client carries this store.
+        """Check that the Worker's client carries this store, and add the read Activity.
 
         Also adds the interceptor that stamps each Local Activity call, so a
         Local Activity can publish.
@@ -129,7 +132,13 @@ class StreamStorePlugin(SimplePlugin):
             )
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
+        from temporalio.contrib.streams._workflow import read_activity
 
+        activities = list(config.get("activities") or [])
+        # The same plugin on the client and the Worker configures the Worker twice.
+        if read_activity not in activities:
+            activities.append(read_activity)
+        config["activities"] = activities
         interceptors = list(config.get("interceptors") or [])
         # Two would number each Local Activity call twice.
         if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
