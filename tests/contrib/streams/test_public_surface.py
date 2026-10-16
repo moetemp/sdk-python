@@ -14,7 +14,6 @@ _PRIVATE = {
     "encode_bodies",
     "error_from_failure",
     "owner_context",
-    "publish_activity",
     "read_activity",
     "resolve_topic",
     "stream_address",

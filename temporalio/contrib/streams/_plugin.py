@@ -10,8 +10,10 @@ On a Worker the plugin hands Core the store, which appends what
 :func:`temporalio.contrib.streams.workflow_writer` publishes when the
 activation completes. It adds the interceptor that gives a Local Activity a
 producer identity and tells Workflow code the Worker has a store, and it
-registers the built-in Activities: the publish Activity, and the one that
-:func:`temporalio.contrib.streams.workflow_reader` runs as a Local Activity.
+registers the built-in Activities that
+:func:`temporalio.contrib.streams.workflow_reader` and
+:func:`temporalio.contrib.streams.close_workflow_stream` run as Local
+Activities.
 On a Replayer it adds the interceptor only, since a replay stores nothing.
 When a Worker stops, the plugin waits for the notifications Core still has
 out.
@@ -151,19 +153,11 @@ class StreamStorePlugin(SimplePlugin):
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow import read_activity
         from temporalio.contrib.streams._workflow_follow import follow_activity
-        from temporalio.contrib.streams._workflow_writer import (
-            close_activity,
-            publish_activity,
-        )
+        from temporalio.contrib.streams._workflow_writer import close_activity
 
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures the Worker twice.
-        for builtin in (
-            publish_activity,
-            read_activity,
-            close_activity,
-            follow_activity,
-        ):
+        for builtin in (read_activity, close_activity, follow_activity):
             if builtin not in activities:
                 activities.append(builtin)
         config["activities"] = activities
