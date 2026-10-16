@@ -1167,8 +1167,7 @@ class WorkflowServiceStub:
     ]
     """AttachStreamCallback attaches a callback to the notifier of a stream. The callback receives the
     stream's progress while it is open and one completion when it closes. A Nexus handler whose
-    operation returns a stream calls it with the caller's callback when the operation starts. It
-    starts the notifier when the stream has none.
+    operation returns a stream calls it with the caller's callback when the operation starts.
 
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -1184,20 +1183,6 @@ class WorkflowServiceStub:
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
-    WaitStreamCallback: grpc.UnaryUnaryMultiCallable[
-        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
-    ]
-    """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
-    notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
-    After the delivery the callback is idle again. A reader calls it when a read finds nothing.
-    The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
-    for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
-    nothing. Waiting on a callback that is not idle changes nothing.
-
-    (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
-    """
     NotifyStream: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
         temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse,
@@ -1205,10 +1190,6 @@ class WorkflowServiceStub:
     """NotifyStream tells the notifier of a stream that the stream moved, or that it closed. The
     notifier passes the latest notification on to every attached callback as progress, and on close
     completes them. Producers fold their notifications and keep at most one call in flight.
-
-    A notification that does not close the stream starts nothing. When the stream has no
-    notifier, nobody waits on it, and the server drops the notification. A close starts a notifier
-    when the stream has none, so a callback that attaches later still gets the close outcome.
 
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -1230,26 +1211,11 @@ class WorkflowServiceStub:
     """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
     or the stream is closed. It returns with no change after a wait limit set by the server
     (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-    found nothing, in place of another blocking read on the store. It starts the notifier when the
-    stream has none. The client reads the stream once more after the poll starts, since a
-    notification that came before the notifier existed was dropped. It is a long poll, so it is
-    not exposed through System Nexus.
+    found nothing and armed the topic, in place of another blocking read on the store. It is a
+    long poll, so it is not exposed through System Nexus.
 
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
-    """
-    NotifyStreams: grpc.UnaryUnaryMultiCallable[
-        temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamsRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamsResponse,
-    ]
-    """NotifyStreams tells the notifiers of many streams in one namespace that they moved. It acts as
-    one NotifyStream without close per entry. A stream with no notifier drops its entry, as
-    NotifyStream does. A driver that reads the store's notification log calls it with the newest
-    counter of each stream in a batch. A call that fails may have applied some entries. Sending
-    the batch again is safe, since a notifier ignores a counter at or below the one it holds.
-
-    (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
     """
 
 class WorkflowServiceServicer(metaclass=abc.ABCMeta):
@@ -2669,8 +2635,7 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
     ) -> temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse:
         """AttachStreamCallback attaches a callback to the notifier of a stream. The callback receives the
         stream's progress while it is open and one completion when it closes. A Nexus handler whose
-        operation returns a stream calls it with the caller's callback when the operation starts. It
-        starts the notifier when the stream has none.
+        operation returns a stream calls it with the caller's callback when the operation starts.
 
         (-- api-linter: core::0127::http-annotation=disabled
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -2689,22 +2654,6 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
     @abc.abstractmethod
-    def WaitStreamCallback(
-        self,
-        request: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
-        context: grpc.ServicerContext,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse:
-        """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
-        notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
-        After the delivery the callback is idle again. A reader calls it when a read finds nothing.
-        The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
-        for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
-        nothing. Waiting on a callback that is not idle changes nothing.
-
-        (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
-        """
-    @abc.abstractmethod
     def NotifyStream(
         self,
         request: temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
@@ -2713,10 +2662,6 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         """NotifyStream tells the notifier of a stream that the stream moved, or that it closed. The
         notifier passes the latest notification on to every attached callback as progress, and on close
         completes them. Producers fold their notifications and keep at most one call in flight.
-
-        A notification that does not close the stream starts nothing. When the stream has no
-        notifier, nobody waits on it, and the server drops the notification. A close starts a notifier
-        when the stream has none, so a callback that attaches later still gets the close outcome.
 
         (-- api-linter: core::0127::http-annotation=disabled
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -2742,28 +2687,11 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
         or the stream is closed. It returns with no change after a wait limit set by the server
         (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-        found nothing, in place of another blocking read on the store. It starts the notifier when the
-        stream has none. The client reads the stream once more after the poll starts, since a
-        notification that came before the notifier existed was dropped. It is a long poll, so it is
-        not exposed through System Nexus.
+        found nothing and armed the topic, in place of another blocking read on the store. It is a
+        long poll, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
-        """
-    @abc.abstractmethod
-    def NotifyStreams(
-        self,
-        request: temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamsRequest,
-        context: grpc.ServicerContext,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamsResponse:
-        """NotifyStreams tells the notifiers of many streams in one namespace that they moved. It acts as
-        one NotifyStream without close per entry. A stream with no notifier drops its entry, as
-        NotifyStream does. A driver that reads the store's notification log calls it with the newest
-        counter of each stream in a batch. A call that fails may have applied some entries. Sending
-        the batch again is safe, since a notifier ignores a counter at or below the one it holds.
-
-        (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
         """
 
 def add_WorkflowServiceServicer_to_server(
