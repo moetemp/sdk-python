@@ -13,6 +13,9 @@ import uuid
 
 import pytest
 
+import temporalio.bridge.proto.streams
+from temporalio.bridge.proto.streams import StreamFailure, StreamFailureKind
+from temporalio.bridge.streams import StreamCallFailure
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StoreCapabilities,
@@ -22,6 +25,7 @@ from temporalio.contrib.streams import (
     get_stream_handle,
     topic,
 )
+from temporalio.contrib.streams._capabilities import describe
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from tests.contrib.streams._support import connect_with, read_all
@@ -110,3 +114,33 @@ async def test_a_store_that_cannot_delete_by_owner_says_so(client: Client):
     assert not masked.capabilities.delete_owner
     with pytest.raises(StreamUnsupportedError):
         await masked.delete_workflow_streams(client.namespace, "any")
+
+
+class _CoreWithoutDescribe:
+    """A store of a Core that knows no DescribeStore call."""
+
+    def __init__(self, kind: StreamFailureKind.ValueType) -> None:
+        self.kind = kind
+
+    async def call(self, rpc: str, req: object, resp_type: type) -> object:
+        raise StreamCallFailure(StreamFailure(kind=self.kind, message=f"no {rpc}"))
+
+
+async def test_a_core_without_describe_serves_every_capability():
+    unknown = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED)
+    capabilities = await describe(unknown)  # type: ignore[arg-type]
+    assert capabilities.producer_state and capabilities.kept_last
+    assert capabilities.delete_owner and capabilities.topic_listing
+    assert not (capabilities.conditional_tail or capabilities.conditional_fence)
+    # Any other failure is the store's, not a missing call.
+    failing = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
+    with pytest.raises(StreamCallFailure):
+        await describe(failing)  # type: ignore[arg-type]
+
+
+async def test_an_sdk_without_the_describe_protos_serves_every_capability(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delattr(temporalio.bridge.proto.streams, "DescribeStoreRequest")
+    store = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
+    assert (await describe(store)).producer_state  # type: ignore[arg-type]
