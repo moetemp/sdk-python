@@ -13,7 +13,6 @@ import json
 import os
 import shutil
 import subprocess
-import time
 import urllib.parse
 import uuid
 from collections import defaultdict
@@ -24,7 +23,6 @@ from typing import Any
 import pytest
 
 from temporalio import activity, workflow
-from temporalio.api.common.v1 import Payload
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -32,7 +30,6 @@ from temporalio.client import (
     WorkflowQueryFailedError,
     WorkflowUpdateFailedError,
 )
-from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     Cursor,
     LinkEvent,
@@ -48,19 +45,13 @@ from temporalio.contrib.streams import (
     topic,
     workflow_writer,
 )
+from temporalio.contrib.streams._local_activity import StreamsInterceptor
 from temporalio.contrib.streams._workflow import read_activity
 from temporalio.contrib.streams._workflow_follow import follow_activity
-from temporalio.contrib.streams._workflow_writer import (
-    PUBLISH_ACTIVITY,
-    _FlushGate,
-    _RunWriters,
-    close_activity,
-    publish_activity,
-)
+from temporalio.contrib.streams._workflow_writer import _RunWriters, close_activity
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
@@ -510,12 +501,11 @@ class FlushesOnce:
         await steps.flush()
 
 
-async def test_a_worker_registers_the_builtin_activities_once(client: Client):
+async def test_a_worker_registers_the_read_activity_once(client: Client):
     store = MemoryStreams()
     streams = await connect_with(client, store)
     worker = Worker(streams, task_queue=str(uuid.uuid4()), workflows=[FlushesOnce])
     assert worker.config(active_config=True).get("activities") == [
-        publish_activity,
         read_activity,
         close_activity,
         follow_activity,
@@ -527,38 +517,37 @@ async def test_a_worker_registers_the_builtin_activities_once(client: Client):
             workflows=[FlushesOnce],
             plugins=[store],
         )
-    assert worker.config(active_config=True).get("activities") == [
-        publish_activity,
-        read_activity,
-        close_activity,
-        follow_activity,
-    ]
-    assert PUBLISH_ACTIVITY == "__temporal_streams_publish"
+    config = worker.config(active_config=True)
+    assert config.get("activities") == [read_activity, close_activity, follow_activity]
+    interceptors = config.get("interceptors") or []
+    assert sum(isinstance(i, StreamsInterceptor) for i in interceptors) == 1
 
 
-async def test_the_activity_refuses_input_that_is_not_a_payloads_message():
-    with pytest.raises(ApplicationError, match="not a Payloads message") as raised:
-        await ActivityEnvironment().run(
-            publish_activity, "steps", False, RawValue(Payload(data=b"x"))
+@workflow.defn
+class PublishesPastSixteenMiB:
+    @workflow.run
+    async def run(self) -> None:
+        steps = workflow_writer("big")
+        try:
+            for _ in range(12):
+                steps.publish("x" * (1400 << 10))
+        except StreamError:
+            await workflow.sleep(timedelta(milliseconds=1))
+
+
+async def test_an_activation_past_sixteen_mib_replays_the_same(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, PublishesPastSixteenMiB) as worker:
+        handle = await streams.start_workflow(
+            PublishesPastSixteenMiB.run, id=workflow_id, task_queue=worker.task_queue
         )
-    assert raised.value.non_retryable
-
-
-async def test_the_flush_gate_spaces_flush_starts_per_run_and_topic():
-    gate = _FlushGate(capacity=2)
-    key = ("wf", "run", "steps")
-    await gate.wait(key, 200)
-    started = time.monotonic()
-    await gate.wait(key, 200)
-    assert time.monotonic() - started >= 0.18
-    # Another topic of the run, or no interval, does not wait.
-    started = time.monotonic()
-    await gate.wait(("wf", "run", "other"), 200)
-    await gate.wait(key, 0)
-    assert time.monotonic() - started < 0.1
-    # The gate forgets the least recent key past its capacity.
-    await gate.wait(("wf", "run", "third"), 200)
-    assert list(gate._started) == [key, ("wf", "run", "third")]
+        await handle.result()
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic="big"))
+    assert len(records) == 12
+    await Replayer(
+        workflows=[PublishesPastSixteenMiB], plugins=[MemoryStreams()]
+    ).replay_workflow(await handle.fetch_history())
 
 
 _HISTORIES = Path(__file__).parent / "histories"
