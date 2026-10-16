@@ -206,9 +206,9 @@ class Agent:
   `ReadOnlyContextError`.
 - **Codec.** The values are converted in the Workflow. The payload codec
   runs on each record body when the Worker encodes the completion.
-- **Size.** A record holds at most 1.5 MiB, and one activation's records at
-  most 16 MiB. The publish that crosses either raises `StreamError` and
-  publishes nothing.
+- **Size.** A record holds at most 1.5 MiB. A larger publish raises
+  `StreamError` and publishes nothing. One activation's records have no
+  limit in the Workflow, since replay can't check one the same way.
 
 Known limits:
 
