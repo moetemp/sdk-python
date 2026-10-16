@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import timedelta
+from typing import Any
 
 from temporalio.bridge.proto.streams import RedisStoreConfig, StreamStoreConfig
 from temporalio.contrib.streams._plugin import (
@@ -88,14 +89,15 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"retention must be at least a millisecond, got {retention}"
             )
+        # Set only when asked for, so the config also fits a Core without it.
+        extra: dict[str, Any] = {"plain": True} if plain else {}
         config = RedisStoreConfig(
             urls=urls,
             cluster=cluster,
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
+            **extra,
         )
-        if plain:
-            config.plain = True
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
