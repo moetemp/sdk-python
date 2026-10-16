@@ -503,6 +503,11 @@ class ReadsThenWorks:
         return seen
 
 
+class _History:
+    def __init__(self, events: list[Any]) -> None:
+        self.events = events
+
+
 def _wake_tasks(history: Any) -> list[list[Any]]:
     """The wakes of each Workflow Task scheduled event that carries any."""
     return [
@@ -523,7 +528,7 @@ async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_wo
         reader_id = new_workflow_id()
         reader = await notifying.start_workflow(
             ReadsThenWorks.run,
-            args=[owner, 4, 5.0],
+            args=[owner, 4, 3.0],
             id=reader_id,
             task_queue=worker.task_queue,
         )
@@ -546,10 +551,17 @@ async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_wo
             await asyncio.sleep(0.3)
         assert await asyncio.wait_for(reader.result(), 30) == ["first", "a", "b", "c"]
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
-    # Only the wake for "first". A standing subscription would also wake the
-    # reader for the appends while it worked.
-    tasks = _wake_tasks(await reader.fetch_history())
-    assert len(tasks) == 1 and len(tasks[0]) == 1, tasks
+    # No wake after the reader started to work. A standing subscription would
+    # wake it for the appends while it worked. The lane's recheck is 3 seconds
+    # after the last notification, so it does not fall in the work either.
+    events = list((await reader.fetch_history()).events)
+    started = next(
+        i
+        for i, e in enumerate(events)
+        if e.event_type == EventType.EVENT_TYPE_TIMER_STARTED
+    )
+    assert _wake_tasks(_History(events[:started])), "the reader never slept"
+    assert not _wake_tasks(_History(events[started:])), events[started:]
 
 
 async def test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived(
