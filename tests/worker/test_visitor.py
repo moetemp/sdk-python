@@ -17,11 +17,13 @@ from temporalio.api.common.v1.message_pb2 import (
     Priority,
     SearchAttributes,
 )
+from temporalio.api.failure.v1.message_pb2 import Failure
 from temporalio.api.sdk.v1.user_metadata_pb2 import UserMetadata
 from temporalio.bridge._visitor import PayloadVisitor
 from temporalio.bridge._visitor_functions import VisitorFunctions
 from temporalio.bridge.proto.workflow_activation.workflow_activation_pb2 import (
     InitializeWorkflow,
+    ResolveStreamWake,
     WorkflowActivation,
     WorkflowActivationJob,
 )
@@ -141,6 +143,31 @@ async def test_workflow_activation():
     act = original.__deepcopy__()
     await PayloadVisitor(skip_headers=True).visit(Visitor(), act)
     assert not act.jobs[0].initialize_workflow.headers["header"].metadata["visited"]
+
+
+async def test_a_stream_wake_close_outcome_is_visited():
+    # A stream's close outcome goes through the codec on its way to the reader.
+    act = WorkflowActivation(
+        jobs=[
+            WorkflowActivationJob(
+                resolve_stream_wake=ResolveStreamWake(
+                    subscription_id="1",
+                    closed=True,
+                    close_result=Payload(data=b"r"),
+                    close_failure=Failure(
+                        message="Encoded failure",
+                        encoded_attributes=Payload(data=b"f"),
+                    ),
+                )
+            )
+        ]
+    )
+
+    await PayloadVisitor().visit(Visitor(), act)
+
+    wake = act.jobs[0].resolve_stream_wake
+    assert wake.close_result.metadata["visited"]
+    assert wake.close_failure.encoded_attributes.metadata["visited"]
 
 
 async def test_visit_payloads_on_other_commands():

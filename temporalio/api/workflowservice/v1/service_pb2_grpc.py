@@ -643,6 +643,31 @@ class WorkflowServiceStub(object):
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingResponse.FromString,
         )
+        self.AttachStreamCallback = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/AttachStreamCallback",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackResponse.FromString,
+        )
+        self.DetachStreamCallback = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/DetachStreamCallback",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.FromString,
+        )
+        self.NotifyStream = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStream",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamResponse.FromString,
+        )
+        self.DescribeStreamNotifier = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/DescribeStreamNotifier",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierResponse.FromString,
+        )
+        self.PollStreamNotifier = channel.unary_unary(
+            "/temporal.api.workflowservice.v1.WorkflowService/PollStreamNotifier",
+            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
+            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
+        )
 
 
 class WorkflowServiceServicer(object):
@@ -1920,6 +1945,66 @@ class WorkflowServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def AttachStreamCallback(self, request, context):
+        """AttachStreamCallback attaches a callback to the notifier of a stream. The callback receives the
+        stream's progress while it is open and one completion when it closes. A Nexus handler whose
+        operation returns a stream calls it with the caller's callback when the operation starts.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def DetachStreamCallback(self, request, context):
+        """DetachStreamCallback removes a callback from the notifier of a stream. The notifier completes
+        the callback's operation as canceled and sends it no more progress. A Nexus handler calls it
+        when the caller cancels the operation.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def NotifyStream(self, request, context):
+        """NotifyStream tells the notifier of a stream that the stream moved, or that it closed. The
+        notifier passes the latest notification on to every attached callback as progress, and on close
+        completes them. Producers fold their notifications and keep at most one call in flight.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def DescribeStreamNotifier(self, request, context):
+        """DescribeStreamNotifier returns the state of the notifier of a stream and its callbacks. It is
+        for operators and tools.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def PollStreamNotifier(self, request, context):
+        """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
+        or the stream is closed. It returns with no change after a wait limit set by the server
+        (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
+        found nothing and armed the topic, in place of another blocking read on the store.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_WorkflowServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -2537,6 +2622,31 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             servicer.PollWorkflowExecutionTimeSkipping,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingResponse.SerializeToString,
+        ),
+        "AttachStreamCallback": grpc.unary_unary_rpc_method_handler(
+            servicer.AttachStreamCallback,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackResponse.SerializeToString,
+        ),
+        "DetachStreamCallback": grpc.unary_unary_rpc_method_handler(
+            servicer.DetachStreamCallback,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.SerializeToString,
+        ),
+        "NotifyStream": grpc.unary_unary_rpc_method_handler(
+            servicer.NotifyStream,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamResponse.SerializeToString,
+        ),
+        "DescribeStreamNotifier": grpc.unary_unary_rpc_method_handler(
+            servicer.DescribeStreamNotifier,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierResponse.SerializeToString,
+        ),
+        "PollStreamNotifier": grpc.unary_unary_rpc_method_handler(
+            servicer.PollStreamNotifier,
+            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.FromString,
+            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -6117,6 +6227,151 @@ class WorkflowService(object):
             "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowExecutionTimeSkipping",
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingRequest.SerializeToString,
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollWorkflowExecutionTimeSkippingResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def AttachStreamCallback(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/AttachStreamCallback",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.AttachStreamCallbackResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def DetachStreamCallback(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/DetachStreamCallback",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def NotifyStream(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStream",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def DescribeStreamNotifier(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/DescribeStreamNotifier",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DescribeStreamNotifierResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+        )
+
+    @staticmethod
+    def PollStreamNotifier(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/temporal.api.workflowservice.v1.WorkflowService/PollStreamNotifier",
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierRequest.SerializeToString,
+            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.PollStreamNotifierResponse.FromString,
             options,
             channel_credentials,
             insecure,

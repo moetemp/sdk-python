@@ -23,6 +23,7 @@ import temporalio.api.failure.v1.message_pb2
 import temporalio.api.sdk.v1.event_group_marker_pb2
 import temporalio.api.sdk.v1.task_complete_metadata_pb2
 import temporalio.api.sdk.v1.user_metadata_pb2
+import temporalio.api.stream.v1.message_pb2
 import temporalio.api.taskqueue.v1.message_pb2
 import temporalio.api.update.v1.message_pb2
 import temporalio.api.workflow.v1.message_pb2
@@ -852,6 +853,7 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
     TASK_QUEUE_FIELD_NUMBER: builtins.int
     START_TO_CLOSE_TIMEOUT_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
+    STREAM_WAKES_FIELD_NUMBER: builtins.int
     @property
     def task_queue(self) -> temporalio.api.taskqueue.v1.message_pb2.TaskQueue:
         """The task queue this workflow task was enqueued in, which could be a normal or sticky queue"""
@@ -864,12 +866,28 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
         """
     attempt: builtins.int
     """Starting at 1, how many attempts there have been to complete this task"""
+    @property
+    def stream_wakes(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamWake
+    ]:
+        """Wakes for the Workflow's stream readers that arrived since the previous Workflow Task was
+        scheduled, at most one entry per reader: the latest one. Recorded here rather than as
+        events of their own, so a burst of wakes costs one task and replay sees the same wakes the
+        Workflow saw. Bounded by `history.maximumStreamWakeSources` readers per execution, and it
+        counts toward the History size limit.
+        """
     def __init__(
         self,
         *,
         task_queue: temporalio.api.taskqueue.v1.message_pb2.TaskQueue | None = ...,
         start_to_close_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         attempt: builtins.int = ...,
+        stream_wakes: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamWake
+        ]
+        | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -887,6 +905,8 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
             b"attempt",
             "start_to_close_timeout",
             b"start_to_close_timeout",
+            "stream_wakes",
+            b"stream_wakes",
             "task_queue",
             b"task_queue",
         ],

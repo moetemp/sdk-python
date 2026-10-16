@@ -111,6 +111,7 @@ class Success(google.protobuf.message.Message):
     COMMANDS_FIELD_NUMBER: builtins.int
     USED_INTERNAL_FLAGS_FIELD_NUMBER: builtins.int
     VERSIONING_BEHAVIOR_FIELD_NUMBER: builtins.int
+    HEARTBEAT_TASK_FIELD_NUMBER: builtins.int
     @property
     def commands(
         self,
@@ -127,6 +128,13 @@ class Success(google.protobuf.message.Message):
         temporalio.api.enums.v1.workflow_pb2.VersioningBehavior.ValueType
     )
     """The versioning behavior this workflow is currently using"""
+    heartbeat_task: builtins.bool
+    """Asks Core to complete the workflow task now if local activities are still running, as it
+    does at a local activity heartbeat. The completion carries the commands and markers so far
+    and asks the server for a new task, and the local activities run on. Lang sets it from a
+    count or a clock, so Core ignores it while replaying. Without running local activities,
+    the task completes as it would anyway.
+    """
     def __init__(
         self,
         *,
@@ -136,12 +144,15 @@ class Success(google.protobuf.message.Message):
         | None = ...,
         used_internal_flags: collections.abc.Iterable[builtins.int] | None = ...,
         versioning_behavior: temporalio.api.enums.v1.workflow_pb2.VersioningBehavior.ValueType = ...,
+        heartbeat_task: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
             "commands",
             b"commands",
+            "heartbeat_task",
+            b"heartbeat_task",
             "used_internal_flags",
             b"used_internal_flags",
             "versioning_behavior",
