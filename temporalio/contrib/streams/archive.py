@@ -15,7 +15,8 @@ class StreamArchive:
     """An archive tier for a store, in S3 or in a local directory.
 
     Pass it as ``archive=`` to
-    :class:`temporalio.contrib.streams.redis.RedisStreams`. A
+    :class:`temporalio.contrib.streams.redis.RedisStreams` or
+    :class:`temporalio.contrib.streams.postgres.PostgresStreams`. A
     :class:`temporalio.contrib.streams.StreamDriver` copies each stream's
     records to the archive in segments, with the positions the hot store
     gave them. The hot store keeps a record until the archive holds it. A
