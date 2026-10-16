@@ -845,15 +845,19 @@ async def test_a_floor_holder_outside_the_callers_namespace_is_refused():
 async def test_a_refused_credential_retries_the_follow():
     class Refuses:
         async def read(self, request: ReadInput) -> ReadOutput:
+            del request
             raise AssertionError("a follow never reads")
 
         async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
             raise AssertionError("a follow never reads a range")
 
         async def follow(self, request: FollowInput) -> FollowOutput:
+            del request
             raise generated_client.HTTPStatusError("http://stub", 403, "lost a role")
 
         async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+            del request
             raise AssertionError("a live follow never follows a range")
 
     plugin = StreamDirectReads({"e": Refuses()})
