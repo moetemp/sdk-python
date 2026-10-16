@@ -131,26 +131,49 @@ class StreamStoreConfig(google.protobuf.message.Message):
 
     REDIS_FIELD_NUMBER: builtins.int
     MEMORY_FIELD_NUMBER: builtins.int
+    OWNER_START_GRACE_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
     def memory(self) -> global___MemoryStoreConfig: ...
+    @property
+    def owner_start_grace(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a read waits for a Workflow that Temporal doesn't know yet, counted from the read's
+        first owner check. Until then the read answers empty, so a reader can start before its
+        owner does. After it the read fails as NOT_FOUND. Unset waits 60 seconds, and zero fails at
+        once.
+        """
     def __init__(
         self,
         *,
         redis: global___RedisStoreConfig | None = ...,
         memory: global___MemoryStoreConfig | None = ...,
+        owner_start_grace: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "memory", b"memory", "redis", b"redis", "store", b"store"
+            "memory",
+            b"memory",
+            "owner_start_grace",
+            b"owner_start_grace",
+            "redis",
+            b"redis",
+            "store",
+            b"store",
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "memory", b"memory", "redis", b"redis", "store", b"store"
+            "memory",
+            b"memory",
+            "owner_start_grace",
+            b"owner_start_grace",
+            "redis",
+            b"redis",
+            "store",
+            b"store",
         ],
     ) -> None: ...
     def WhichOneof(

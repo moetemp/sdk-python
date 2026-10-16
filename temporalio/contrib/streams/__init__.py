@@ -22,7 +22,8 @@ The contract:
    :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
    producer wrote in its earlier attempts, not the whole stream and not the
    records of other producers. No store holds that record, so every store
-   reports a retry the same way.
+   reports a retry the same way. :class:`SupersessionTracker` names the
+   records each one withdraws.
 3. **A cursor belongs to one stream.** Hand it back to resume strictly after
    the record it names. A cursor from another store or another stream is
    refused with :class:`StreamCursorError`, and one whose record
@@ -37,6 +38,9 @@ A store is configured as a plugin:
 client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
+- Workflow code publishes to its own stream with :func:`workflow_writer`.
+  Core appends each activation's records when the activation completes,
+  and nothing goes to History.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
   scheduling run id, and its Temporal attempt. A Local Activity writes as
@@ -86,8 +90,16 @@ from temporalio.contrib.streams._record import (
     Supersession,
 )
 from temporalio.contrib.streams._ref import StreamOwnerKind, StreamRef
+from temporalio.contrib.streams._supersession import (
+    SupersessionTracker,
+    track_supersession,
+)
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
 from temporalio.contrib.streams._workflow import workflow_reader
+from temporalio.contrib.streams._workflow_writer import (
+    WorkflowStreamWriter,
+    workflow_writer,
+)
 
 __all__ = [
     "ActivityStreamHandle",
@@ -115,8 +127,12 @@ __all__ = [
     "StreamTopic",
     "StreamUnsupportedError",
     "Supersession",
+    "SupersessionTracker",
+    "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
+    "track_supersession",
     "workflow_reader",
+    "workflow_writer",
 ]

@@ -2,17 +2,18 @@
 
 > This package is experimental and may change in future versions.
 
-A stream is an ordered log that a Workflow owns. Its Activities and any
-client append to it. Outside readers follow it from a cursor. Records live
-in the application's Redis and never pass through Temporal or its History.
-Core runs the store for every SDK, so Python reads what any other SDK
-writes. Appends add nothing to History.
+A stream is an ordered log that a Workflow owns. The Workflow publishes to
+it from Workflow code, and its Activities and any client append to it.
+Outside readers follow it from a cursor. Records live in the application's
+Redis and never pass through Temporal or its History. Core runs the store
+for every SDK, so Python reads what any other SDK writes. Publishes and
+appends add nothing to History.
 
 ## Register
 
 Register the store once, on the client, with `Client.connect`. Connecting
-the client connects the store, and the Activities of every Worker built
-from that client append through it. There's nothing extra to install.
+the client connects the store, and every Worker built from that client
+publishes and appends through it. There's nothing extra to install.
 
 ```python
 from temporalio.client import Client
@@ -62,6 +63,39 @@ the stream, and the records of other producers stay valid. This topic has
 one producer, so clearing everything is right. With several producers on a
 topic, keep the text per `record.producer_id` and clear only that
 producer's.
+
+`SupersessionTracker` does that bookkeeping. It holds the records of a read
+under their producer and returns the ones each `SUPERSEDED` withdraws, in
+stream order. `track_supersession` wraps a read with it:
+
+```python
+async for record, withdrawn in track_supersession(handle.read(topic=TOKENS)):
+    for old in withdrawn:
+        undo(old)
+    if record.kind is RecordKind.DATA and not record.stale:
+        show(record)
+```
+
+A record marked `stale` comes back withdrawn as it arrives, since an older
+attempt wrote it after the read delivered a newer one. The tracker keeps
+every record it may still withdraw in memory, for the producers it saw
+most recently. It keeps at most `max_producers` of them (1,000 by default),
+and no more than fit in 16 KiB at each id's length plus 20 bytes. Past that
+it drops the producer it saw least recently. The read's state in Core
+forgets producers by the same rule, so a dropped producer gets no
+`SUPERSEDED` either. Each Local Activity call is a producer, about 57 bytes
+of id each, so on a stream that many calls write the tracker holds about 200
+of them and its memory stays steady. For a Workflow's producer, `@<run id>`,
+it holds only the records of the newest Workflow Task, since a
+`SUPERSEDED` withdraws only the records of one task: the rerun's own, or an
+earlier one whose rerun wrote nothing to the topic. Of one producer it keeps the
+newest `max_records_per_producer` records (10,000 by default), so a long
+attempt can't grow it either. A `SUPERSEDED` past that withdraws only the
+records still held. Call `forget(producer_id)` once a producer can't retry,
+to drop it sooner.
+
+A future Workflow reader can't drop superseded records silently, because
+replay must see the same records, so it will deliver `SUPERSEDED` too.
 
 Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't stop at one run. A Workflow id can
@@ -115,6 +149,84 @@ Known limits:
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
 
+## A Workflow publishes to its own stream
+
+Workflow code can't do I/O, so `workflow_writer` hands its records to Core
+with the activation that published them. Core appends them to the store when
+the activation completes, before it reports the Workflow Task to the server.
+
+```python
+STEPS = topic("steps", str)
+
+@workflow.defn
+class Agent:
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        steps = workflow_writer(STEPS)
+        steps.publish("planning")
+        answer = await workflow.execute_local_activity(
+            call_model, prompt, start_to_close_timeout=timedelta(minutes=5)
+        )
+        steps.publish("answered")
+        return answer
+```
+
+- **Publish.** `publish(value)` is a plain call. It converts the value with
+  the Workflow's payload converter and adds the record to the activation.
+- **Visibility.** A record is visible when the activation that published it
+  completes. That is before the Workflow Task completes, and before the
+  server accepts it. In the example, readers see `planning` while the model
+  call runs as a Local Activity in the same Workflow Task.
+- **Order.** Records land in the order the run published them, across all
+  writers and topics of the run.
+- **No History.** Publishing adds no event and no marker to History, and
+  costs no Action.
+- **Identity.** The run writes as the producer `@<run id>`. Each Workflow
+  Task has its own producer attempt, and the sequence restarts at 1 for
+  each attempt.
+- **Failed tasks.** If a Workflow Task fails or times out after some of its
+  activations completed, their records stay in the store. The task's rerun
+  publishes again under a higher attempt, and readers see `SUPERSEDED` for
+  the failed task's records, then the rerun's. Records of tasks that
+  completed are never withdrawn. `SupersessionTracker` applies this rule for
+  a reader.
+- **Store outage.** If the store fails the append, the Workflow Task fails
+  with `StreamOutputNotAppended` and retries, as for any task failure. The
+  run makes no progress until the store takes the records.
+- **Closed topic.** If the store reports the topic closed, a retry could
+  never land, so Core drops that topic's records with a warning and the task
+  goes on. A Workflow can't see this through its writer.
+- **Run end.** The records of the activation that completes, fails, cancels
+  or continues the run as new land with that completion. `finish()` writes
+  `FINISH` with the activation. `flush()` returns at once, since nothing
+  waits in the Workflow.
+- **Replay.** Replay sends no records, since the store has them. A
+  `Replayer` needs the store plugin in `plugins=`, which adds the
+  interceptor and connects nothing.
+- **Queries and validators.** Opening a writer or publishing there raises
+  `ReadOnlyContextError`.
+- **Codec.** The values are converted in the Workflow. The payload codec
+  runs on each record body when the Worker encodes the completion.
+- **Size.** A record holds at most 1.5 MiB. A larger publish raises
+  `StreamError` and publishes nothing. One activation's records have no
+  limit in the Workflow, since replay can't check one the same way.
+
+Known limits:
+
+- **One output stream per agent.** A Workflow publishes only to its own
+  stream. Use one topic per kind of output, for example `steps` and
+  `tokens`, and write to another Workflow's stream from an Activity.
+- **The Worker needs the store.** Core on the Workflow's Worker does the
+  append, so every Worker that runs the Workflow needs the store plugin on
+  its client.
+- **No check on replay.** Replay doesn't compare the records the run
+  publishes with the store, so a Workflow change that publishes other
+  records replays without an error.
+- **Histories of the Local Activity writer.** An earlier version of
+  `workflow_writer` sent records through Local Activities. Its Histories
+  have a marker per flush, and they fail replay on this version with a
+  nondeterminism error.
+
 ## What to know
 
 - **Retries deduplicate.** An append that fails with
@@ -125,6 +237,13 @@ Known limits:
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window.
+- **Readers before the owner.** A read of a Workflow that Temporal doesn't
+  know yet waits for `owner_start_grace` (60 seconds by default, set on
+  `RedisStreams` or `MemoryStreams`), counted from the read's first owner
+  check. So a reader can start before the Workflow does. After the grace,
+  the read raises `StreamNotFoundError`, so a wrong Workflow id fails after
+  the grace, not at once. Appends and `latest()` don't wait. Zero turns the
+  grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
 - **Not in this release.** Reading a stream inside a Workflow, and streams

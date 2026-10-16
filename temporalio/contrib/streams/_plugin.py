@@ -3,17 +3,21 @@
 A configuration class is registered once, on the client:
 ``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks
 Core for the store it names. Core serves that one store to the client's
-handles and to the Activities of every Worker built from the client, so an
-Activity's append and an outside read meet in the same place.
+handles and to every Worker built from the client, so a Workflow's publish,
+an Activity's append and an outside read meet in the same place.
 
-On a Worker the plugin registers the interceptor that gives a Local Activity
-a producer identity.
+On a Worker the plugin hands Core the store, which appends what
+:func:`temporalio.contrib.streams.workflow_writer` publishes when the
+activation completes. It adds the interceptor that gives a Local Activity a
+producer identity and tells Workflow code the Worker has a store. On a
+Replayer it adds the interceptor only, since a replay stores nothing.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import temporalio.bridge.client
@@ -28,9 +32,10 @@ from temporalio.contrib.streams._errors import error_from_failure
 from temporalio.plugin import SimplePlugin
 
 if TYPE_CHECKING:
+    from temporalio.bridge.temporal_sdk_bridge import StreamStoreRef
     from temporalio.client import Client, ClientConfig
     from temporalio.service import ConnectConfig, ServiceClient
-    from temporalio.worker import WorkerConfig
+    from temporalio.worker import ReplayerConfig, WorkerConfig
 
 __all__ = ["StreamStorePlugin"]
 
@@ -113,15 +118,36 @@ class StreamStorePlugin(SimplePlugin):
                 f"stream store {self.name()!r} must be registered on the Worker's "
                 "client, as Client.connect(..., plugins=[store])"
             )
+        # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
 
         interceptors = list(config.get("interceptors") or [])
-        # Two would number each Local Activity call twice. The same plugin on
-        # the client and the Worker configures the Worker twice.
+        # Two would number each Local Activity call twice.
         if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
             interceptors.append(StreamsInterceptor())
         config["interceptors"] = interceptors
         return config
+
+    def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
+        """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.
+
+        The Replayer needs no store, since a replay sends no records to Core.
+        Without the interceptor, ``workflow_writer`` raises
+        :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
+        """
+        config = super().configure_replayer(config)
+        from temporalio.contrib.streams._local_activity import StreamsInterceptor
+
+        interceptors = list(config.get("interceptors") or [])
+        if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
+            interceptors.append(StreamsInterceptor())
+        config["interceptors"] = interceptors
+        return config
+
+    @property
+    def _temporal_stream_store(self) -> StreamStoreRef | None:
+        # The Worker looks for this name on its plugins and gives the store to Core.
+        return self._store.ref if self._store is not None else None
 
     async def delete_workflow_streams(self, namespace: str, workflow_id: str) -> int:
         """Delete every stream of ``workflow_id`` in ``namespace``.
@@ -198,6 +224,21 @@ def _two_stores(held: StreamStorePlugin, new: StreamStorePlugin) -> str:
         f"stream store {held.name()!r} is already registered, so {new.name()!r} "
         "cannot be; register one store per client"
     )
+
+
+def with_owner_start_grace(
+    config: StreamStoreConfig, grace: timedelta | None
+) -> StreamStoreConfig:
+    """Set ``owner_start_grace`` on ``config`` when ``grace`` is given.
+
+    Raises:
+        ValueError: ``grace`` is negative.
+    """
+    if grace is not None:
+        if grace < timedelta(0):
+            raise ValueError(f"owner_start_grace must not be negative, got {grace}")
+        config.owner_start_grace.FromTimedelta(grace)
+    return config
 
 
 def store_for_client(client: Client) -> StreamStorePlugin:

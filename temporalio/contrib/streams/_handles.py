@@ -309,7 +309,9 @@ class StreamHandle:
                 retains, or the read fell behind retention while it ran.
             StreamRecordError: A record did not decode. Read on from its
                 cursor to skip it.
-            StreamNotFoundError: The owner doesn't exist.
+            StreamNotFoundError: The owner doesn't exist, and didn't start
+                within the store's ``owner_start_grace``. Until then the
+                read waits.
             StreamStorageError: The store failed or couldn't be reached, as
                 a Redis blip during a long read does.
 
