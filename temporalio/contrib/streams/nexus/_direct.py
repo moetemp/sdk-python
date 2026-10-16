@@ -112,6 +112,8 @@ BATCH_TYPE = b"temporal.io/stream-nexus-read-batch"
 
 _ENDPOINT_KEY = "temporal.io/stream-nexus-endpoint"
 _CHAIN_KEY = "temporal.io/stream-read-chain"
+# The cursor token of a stream's end, as a reader names it.
+_END = "$end"
 # HTTP answers to a credential the endpoint refused.
 _AUTH_STATUSES = {401, 403}
 # What an HTTP call may take outside an Activity, where no Activity's time
@@ -515,9 +517,14 @@ async def _read(
     info = temporalio.activity.info()
     plugin = _plugin_of(temporalio.activity.client())
     holder = f"{info.workflow_namespace}/{info.workflow_run_id}/{reader_id}"
-    answer = await plugin.transport(endpoint).read(
-        dataclasses.replace(input, floor_holder=holder)
-    )
+    transport = plugin.transport(endpoint)
+    if input.after_token == _END:
+        # A holding read must name a cursor, so the read finds the end first.
+        latest = await transport.read(
+            dataclasses.replace(input, latest_only=True, wait_ms=0, floor_holder=None)
+        )
+        input = dataclasses.replace(input, after_token=latest.next_token or None)
+    answer = await transport.read(dataclasses.replace(input, floor_holder=holder))
     if answer.replay is None:
         raise StreamUnsupportedError(
             f"the stream service on endpoint {endpoint!r} answered no replay range, "
