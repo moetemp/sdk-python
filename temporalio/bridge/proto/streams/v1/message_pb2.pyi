@@ -14,7 +14,6 @@ import google.protobuf.internal.enum_type_wrapper
 import google.protobuf.message
 
 import temporalio.api.common.v1.message_pb2
-import temporalio.api.stream.v1.message_pb2
 
 if sys.version_info >= (3, 10):
     import typing as typing_extensions
@@ -42,10 +41,6 @@ class _StreamRecordKindEnumTypeWrapper(
     """The producer named by `producer_id` writes nothing more on `topic`.
     Says nothing about that producer's outcome and does not end the stream.
     """
-    STREAM_RECORD_KIND_LINK: _StreamRecordKind.ValueType  # 4
-    """A reference to another stream. `link` carries it. `body` may carry a
-    value, after the payload codec.
-    """
 
 class StreamRecordKind(_StreamRecordKind, metaclass=_StreamRecordKindEnumTypeWrapper):
     """What a record means to a reader."""
@@ -57,10 +52,6 @@ STREAM_RECORD_KIND_DATA: StreamRecordKind.ValueType  # 1
 STREAM_RECORD_KIND_FINISH: StreamRecordKind.ValueType  # 2
 """The producer named by `producer_id` writes nothing more on `topic`.
 Says nothing about that producer's outcome and does not end the stream.
-"""
-STREAM_RECORD_KIND_LINK: StreamRecordKind.ValueType  # 4
-"""A reference to another stream. `link` carries it. `body` may carry a
-value, after the payload codec.
 """
 global___StreamRecordKind = StreamRecordKind
 
@@ -104,9 +95,6 @@ class StreamRecord(google.protobuf.message.Message):
     PRODUCER_ID_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
     SEQUENCE_FIELD_NUMBER: builtins.int
-    LINK_FIELD_NUMBER: builtins.int
-    TASK_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
-    COMPLETED_TASKS_FIELD_NUMBER: builtins.int
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The value the producer published. Lang runs it through the payload
@@ -134,25 +122,6 @@ class StreamRecord(google.protobuf.message.Message):
     """The producer's position within its attempt, starting at one, or zero
     when it does not number its records.
     """
-    @property
-    def link(self) -> global___StreamLink:
-        """Set on LINK only. It stays out of the payload codec, as ids in History
-        do, so Core can follow it.
-        """
-    task_started_event_id: builtins.int
-    """Set by a Workflow run's own producer only: the WorkflowTaskStarted
-    event id of the task attempt that wrote the record.
-    """
-    @property
-    def completed_tasks(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
-        """Set by a Workflow run's own producer, on the first record of each
-        batch: the WorkflowTaskStarted event ids of the run's last completed
-        tasks, newest first, at most eight. The first is the attempt's prefix.
-        A trailing zero means the list goes back to the run's start. A reader
-        learns from it whether an earlier attempt it delivered completed.
-        """
     def __init__(
         self,
         *,
@@ -166,12 +135,9 @@ class StreamRecord(google.protobuf.message.Message):
         producer_id: builtins.str = ...,
         attempt: builtins.int = ...,
         sequence: builtins.int = ...,
-        link: global___StreamLink | None = ...,
-        task_started_event_id: builtins.int = ...,
-        completed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
+        self, field_name: typing_extensions.Literal["body", b"body"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -180,123 +146,17 @@ class StreamRecord(google.protobuf.message.Message):
             b"attempt",
             "body",
             b"body",
-            "completed_tasks",
-            b"completed_tasks",
             "kind",
             b"kind",
-            "link",
-            b"link",
             "metadata",
             b"metadata",
             "producer_id",
             b"producer_id",
             "sequence",
             b"sequence",
-            "task_started_event_id",
-            b"task_started_event_id",
             "topic",
             b"topic",
         ],
     ) -> None: ...
 
 global___StreamRecord = StreamRecord
-
-class StreamLink(google.protobuf.message.Message):
-    """A reference from one stream to another, for followers."""
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    class _Event:
-        ValueType = typing.NewType("ValueType", builtins.int)
-        V: typing_extensions.TypeAlias = ValueType
-
-    class _EventEnumTypeWrapper(
-        google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
-            StreamLink._Event.ValueType
-        ],
-        builtins.type,
-    ):  # noqa: F821
-        DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
-        EVENT_UNSPECIFIED: StreamLink._Event.ValueType  # 0
-        EVENT_OPEN: StreamLink._Event.ValueType  # 1
-        """A follower starts reading `stream` strictly after `after`."""
-        EVENT_JOIN: StreamLink._Event.ValueType  # 2
-        """The writer waited for the link named `name` up to `until`, or to
-        its end when `until` is empty.
-        """
-
-    class Event(_Event, metaclass=_EventEnumTypeWrapper): ...
-    EVENT_UNSPECIFIED: StreamLink.Event.ValueType  # 0
-    EVENT_OPEN: StreamLink.Event.ValueType  # 1
-    """A follower starts reading `stream` strictly after `after`."""
-    EVENT_JOIN: StreamLink.Event.ValueType  # 2
-    """The writer waited for the link named `name` up to `until`, or to
-    its end when `until` is empty.
-    """
-
-    EVENT_FIELD_NUMBER: builtins.int
-    STREAM_FIELD_NUMBER: builtins.int
-    NAME_FIELD_NUMBER: builtins.int
-    AFTER_FIELD_NUMBER: builtins.int
-    UNTIL_FIELD_NUMBER: builtins.int
-    NAMESPACE_FIELD_NUMBER: builtins.int
-    ENDPOINT_FIELD_NUMBER: builtins.int
-    event: global___StreamLink.Event.ValueType
-    @property
-    def stream(self) -> temporalio.api.stream.v1.message_pb2.StreamReference:
-        """The linked stream. Required on OPEN. Empty on JOIN."""
-    name: builtins.str
-    """Names the link within its producer. A JOIN matches the OPEN with the
-    same name. At most 256 bytes. Required.
-    """
-    after: builtins.str
-    """A cursor of the linked stream. Empty starts at the oldest retained
-    record.
-    """
-    until: builtins.str
-    """On JOIN, a cursor of the linked stream where the segment ends. Empty is
-    the stream's end.
-    """
-    namespace: builtins.str
-    """The linked stream's namespace. Empty is the namespace of the stream
-    that holds the link.
-    """
-    endpoint: builtins.str
-    """The Nexus endpoint that serves the linked stream. Empty is the endpoint
-    that served the stream that holds the link.
-    """
-    def __init__(
-        self,
-        *,
-        event: global___StreamLink.Event.ValueType = ...,
-        stream: temporalio.api.stream.v1.message_pb2.StreamReference | None = ...,
-        name: builtins.str = ...,
-        after: builtins.str = ...,
-        until: builtins.str = ...,
-        namespace: builtins.str = ...,
-        endpoint: builtins.str = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["stream", b"stream"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "after",
-            b"after",
-            "endpoint",
-            b"endpoint",
-            "event",
-            b"event",
-            "name",
-            b"name",
-            "namespace",
-            b"namespace",
-            "stream",
-            b"stream",
-            "until",
-            b"until",
-        ],
-    ) -> None: ...
-
-global___StreamLink = StreamLink
