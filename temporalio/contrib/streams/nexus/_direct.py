@@ -92,6 +92,8 @@ BATCH_TYPE = b"temporal.io/stream-nexus-read-batch"
 
 _ENDPOINT_KEY = "temporal.io/stream-nexus-endpoint"
 _CHAIN_KEY = "temporal.io/stream-read-chain"
+# HTTP answers to a credential the endpoint refused.
+_AUTH_STATUSES = {401, 403}
 # What an HTTP call may take outside an Activity, where no Activity's time
 # bounds it.
 _DEFAULT_HTTP_TIMEOUT = 30.0
@@ -309,6 +311,17 @@ async def direct_read_activity(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
     except HTTPStatusError as error:
+        if error.status in _AUTH_STATUSES:
+            # A credential that expired or lost a role is a deployment fault
+            # that an operator fixes, so the read retries with backoff and
+            # the caller Workflow does not fail for good.
+            temporalio.activity.logger.error(
+                "A direct stream read on endpoint %r was refused for its "
+                "credential; the read retries until the credential works",
+                endpoint,
+                exc_info=True,
+            )
+            raise
         if error.retryable:
             raise
         raise ApplicationError(

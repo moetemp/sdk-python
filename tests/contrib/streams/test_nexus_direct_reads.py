@@ -435,3 +435,30 @@ async def test_the_http_transport_waits_no_longer_than_the_activity_has_left(
         with pytest.raises(generated_client.HTTPStatusError):
             await run
     assert 0 < timeouts[0] <= 5 and timeouts[1] == 30
+
+
+async def test_a_refused_credential_retries_the_read(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class RefusesOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def read(self, request: ReadInput) -> ReadOutput:
+            self.calls += 1
+            if self.calls == 1:
+                raise generated_client.HTTPStatusError("http://stub", 401, "expired")
+            return live(record("c1", "a"))[1]
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a live read never reads a range")
+
+    transport = RefusesOnce()
+    plugin = StreamDirectReads({"e": transport})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # The Activity's own failure is retryable, so its next attempt reads.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    raw = await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    assert json.loads(raw.payload.data)["range"]["to_token"] == "c1"
