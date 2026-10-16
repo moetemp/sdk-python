@@ -7,6 +7,9 @@ from nexusrpc import Operation, service
 from .models import (
     AppendInput,
     AppendOutput,
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadInput,
     ReadOutput,
     ReadRangeInput,
@@ -59,4 +62,29 @@ class TemporalStreams:
     Records with other content are refused as StreamReplayMismatchError, and records the
     store no longer holds as StreamReplayRangeLostError. The answer holds the records
     and next_token only, since the caller keeps the read's state, done and replay.
+    """
+
+    follow: Operation[
+        FollowInput,
+        FollowOutput,
+    ] = Operation(name="follow")
+    """Answer with the records after the caller's position on a stream and on every stream
+    its link records open, in one order. Order within each stream is kept. A linked
+    stream's records come after its OPEN link, and the linking stream's records after a
+    JOIN come after the linked stream reached the JOIN's point. Each item names its
+    source, and a linked stream's state comes as a link_state item. A linked stream that
+    can't be read or that ends never fails the call. Links to another namespace or
+    endpoint are not followed. The call waits like read, and the state resumes every
+    open stream.
+    """
+
+    follow_range: Operation[
+        FollowRangeInput,
+        FollowOutput,
+    ] = Operation(name="follow_range")
+    """Answer again the records of an earlier follow that named a floor_holder, for a
+    Workflow that replays that follow. The call reads each range again with the follow's
+    input state, checks each against its digest and the order against the follow's
+    digest, and answers the same records in the same order. Other records or another
+    order are refused as StreamReplayMismatchError.
     """

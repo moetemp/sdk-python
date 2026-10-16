@@ -31,6 +31,9 @@ from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams.nexus._generated import (
     AppendInput,
     AppendOutput,
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadInput,
     ReadOutput,
     ReadRangeInput,
@@ -59,9 +62,12 @@ class StreamAccess:
         This API is experimental.
     """
 
-    operation: Literal["append", "read", "read_range"]
+    operation: Literal["append", "read", "read_range", "follow", "follow_range"]
     """What the caller asks to do. A ``read_range`` reads again the records of
-    an earlier read that named a floor holder, for a Workflow that replays it."""
+    an earlier read that named a floor holder, for a Workflow that replays it.
+    A ``follow`` reads the stream and every stream its links open in this
+    namespace, so an authorizer that allows it allows those streams too. A
+    ``follow_range`` reads an earlier follow again."""
 
     stream: StreamRef
     """The stream the call names.
@@ -207,6 +213,28 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         )
         return await super().read_range(ctx, input)
 
+    @nexusrpc.handler.sync_operation
+    async def follow(
+        self, ctx: nexusrpc.handler.StartOperationContext, input: FollowInput
+    ) -> FollowOutput:
+        """Answer with the items of a stream and of the streams its links open."""
+        await self._check(
+            StreamAccess("follow", input.stream, ctx, floor_holder=input.floor_holder)
+        )
+        return await super().follow(ctx, input)
+
+    @nexusrpc.handler.sync_operation
+    async def follow_range(
+        self, ctx: nexusrpc.handler.StartOperationContext, input: FollowRangeInput
+    ) -> FollowOutput:
+        """Answer again the items of an earlier follow, for a Workflow that replays it."""
+        await self._check(
+            StreamAccess(
+                "follow_range", input.stream, ctx, floor_holder=input.floor_holder
+            )
+        )
+        return await super().follow_range(ctx, input)
+
     async def forward(
         self,
         operation: str,
@@ -308,6 +336,10 @@ async def serve_in_core(
         step = await call(service.nexus_append(request))
     elif operation == "read_range":
         step = await call(service.nexus_read_range(request))
+    elif operation == "follow":
+        step = await call(service.nexus_follow(request))
+    elif operation == "follow_range":
+        step = await call(service.nexus_follow_range(request))
     else:
         step = await call(service.nexus_read(request))
     while step.HasField("codec"):

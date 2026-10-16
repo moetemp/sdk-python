@@ -64,6 +64,7 @@ from temporalio.contrib.streams.nexus._direct import (
     HttpTransport,
     StreamDirectReads,
     StreamDirectTransport,
+    StreamFollowTransport,
     StreamServiceCallError,
 )
 from temporalio.contrib.streams.nexus._follower import (
@@ -123,6 +124,7 @@ __all__ = [
     "StreamCursor",
     "StreamDirectReads",
     "StreamDirectTransport",
+    "StreamFollowTransport",
     "StreamFollower",
     "StreamFollowerService",
     "StreamIncompleteError",

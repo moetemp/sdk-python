@@ -15,7 +15,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import nexusrpc
@@ -25,10 +25,12 @@ import pytest
 import temporalio.api.workflowservice.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.proto.streams.v1 import StreamLink as StreamLinkProto
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamRef, get_stream_handle
+from temporalio.contrib.streams._ref import to_reference
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
@@ -43,7 +45,15 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHandler,
     follow_stream,
 )
-from temporalio.contrib.streams.nexus._generated import StreamOperationToken
+from temporalio.contrib.streams.nexus._generated import (
+    FollowedWire,
+    FollowedWireLinkState,
+    FollowedWireRecord,
+    FollowInput,
+    FollowOutput,
+    FollowSourceWire,
+    StreamOperationToken,
+)
 from temporalio.contrib.streams.nexus._generated.models import RecordWireSuperseded
 from temporalio.exceptions import ApplicationError
 from temporalio.nexus.system.notification_service import (
@@ -59,11 +69,14 @@ from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
+from tests.contrib.streams._support import connect_with
 from tests.contrib.streams.test_nexus_stream_operation import (
     OwnerUntilDone,
     _skip_without_notifier,
     connect,
 )
+from tests.contrib.streams.test_outside_handles import Waits, running_owner
+from tests.helpers import new_worker
 from tests.helpers.nexus import end_standalone_operation, make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
@@ -966,3 +979,150 @@ async def test_a_follower_decodes_a_tool_stream_with_the_activity_and_its_workfl
             is_local=False,
         )
     }
+
+
+class _FakeFollowTransport:
+    """A stream service that answers follow with two scripted pages."""
+
+    def __init__(self) -> None:
+        self.requests: list[FollowInput] = []
+        child = StreamRef.for_workflow_activity(
+            "agent", run_id="run-1", activity_id="tool-1", topic="tokens"
+        )
+        link = StreamLinkProto(
+            event=StreamLinkProto.Event.EVENT_OPEN,
+            name="tool-1",
+            stream=to_reference(child),
+        ).SerializeToString()
+        self.pages = [
+            FollowOutput(
+                records=[
+                    FollowedWire(
+                        source=0,
+                        record=FollowedWireRecord(token="r1", record=_wire("d1")),
+                    ),
+                    FollowedWire(
+                        source=1,
+                        link_state=FollowedWireLinkState(kind="opened", link=link),
+                    ),
+                    FollowedWire(
+                        source=1,
+                        record=FollowedWireRecord(token="t1", record=_wire("a1")),
+                    ),
+                ],
+                done=False,
+                state=b"follow-state-1",
+                sources=[
+                    FollowSourceWire(
+                        number=1, parent=0, depth=1, stream=child, name="tool-1"
+                    )
+                ],
+            ),
+            FollowOutput(records=[], done=False, state=b"follow-state-2", sources=[]),
+        ]
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        raise AssertionError(f"a follower with follow_links follows, not {request}")
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        self.requests.append(request)
+        return self.pages.pop(0)
+
+
+class _LinkCollector(_Collector):
+    follow_links = True
+
+
+async def test_a_follower_that_asks_for_links_gets_every_source_in_order() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    answer = await service.on_progress(_context(), _progress("c1"))
+
+    [batch] = collector.batches
+    assert [r.value for r in batch.records] == ["d1", "a1"]
+    assert [
+        (
+            i.depth,
+            i.link_state.kind.name if i.link_state else i.record and i.record.value,
+        )
+        for i in batch.items
+    ] == [(0, "d1"), (1, "OPENED"), (1, "a1")]
+    assert batch.items[1].source.activity_id == "tool-1"
+    assert batch.items[-1].position is not None
+    assert batch.cursor.token == "r1"
+    state = CONVERTER.payload_converter.from_payload(
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
+        FollowInput,
+    )
+    # The follow state holds every open link, so it carries the position.
+    assert state.state == b"follow-state-2"
+    assert transport.requests[1].state == b"follow-state-1"
+
+
+async def test_a_canceled_follow_of_links_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                FollowInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    # Both scripted pages are read, the second one empty, and none is done.
+    assert [r.value for b in collector.batches for r in b.records] == ["d1", "a1"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
+
+
+async def test_the_store_transport_follows_links_through_core(client: Client) -> None:
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(streams, Waits) as worker:
+        agent = await running_owner(streams, worker.task_queue)
+        child = await running_owner(streams, worker.task_queue)
+        child_ref = StreamRef.for_workflow(child, topic="tokens")
+        await (
+            get_stream_handle(streams, child_ref)
+            .producer(producer_id="tool", attempt=1)
+            .append("a1", "a2")
+        )
+        parent = get_stream_handle(streams, agent, topic="tokens").producer(
+            producer_id="agent", attempt=1
+        )
+        await parent.append("d1")
+        await parent.link(child_ref, name="sub")
+        answer = await StoreTransport(streams).follow(
+            FollowInput(stream=StreamRef.for_workflow(agent, topic="tokens"), wait_ms=0)
+        )
+        for owner in (agent, child):
+            await streams.get_workflow_handle(owner).signal(Waits.finish)
+    sources = {s.number: s.stream for s in answer.sources}
+    seen = [
+        (f.source, f.link_state.kind if f.link_state else f.record and f.record.token)
+        for f in answer.records
+    ]
+    assert seen[0][0] == 0 and seen[1][0] == 0
+    assert [s for s, _ in seen].count(0) == 2
+    child_items = [f for f in answer.records if f.source != 0]
+    assert child_items[0].link_state is not None
+    assert child_items[0].link_state.kind == "opened"
+    assert [f.record is not None for f in child_items[1:]] == [True, True]
+    assert sources[child_items[0].source].workflow_id == child

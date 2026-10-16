@@ -48,14 +48,24 @@ from temporalio.contrib.streams.nexus import (
     TemporalStreamsHandler,
 )
 from temporalio.contrib.streams.nexus._direct import (
+    FOLLOW_POSITIONS_TYPE,
     _DirectReadCodec,
+    _put_follow,
     _transfer,
     answer_of,
+    direct_follow_activity,
     direct_read_activity,
+    follow_answer_of,
     innermost_codec,
     positions_payload,
 )
 from temporalio.contrib.streams.nexus._generated import (
+    FollowedWire,
+    FollowedWireRecord,
+    FollowInput,
+    FollowOutput,
+    FollowOutputReplay,
+    FollowRangeInput,
     ReadOutputReplay,
     ReadRangeInput,
 )
@@ -573,6 +583,129 @@ def test_authorize_sees_the_caller_namespace_the_server_set():
     assert _caller_namespace(ctx({"other": "a"})) is None
 
 
+class FakeFollowTransport:
+    """Answers each follow_range from a list, and keeps what it was asked."""
+
+    def __init__(self, *answers: FollowOutput | Exception) -> None:
+        self.answers = list(answers)
+        self.asked: list[FollowRangeInput] = []
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        raise AssertionError(f"a replay never reads, but read {request}")
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        raise AssertionError(f"a follow replay never reads a range, but got {request}")
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        raise AssertionError(f"a replay never follows, but followed {request}")
+
+    async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+        self.asked.append(request)
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def followed(*tokens: str) -> FollowOutput:
+    return FollowOutput(
+        records=[
+            FollowedWire(source=0, record=FollowedWireRecord(token=t, record=b""))
+            for t in tokens
+        ],
+        done=False,
+        state=b"\x07live",
+        sources=[],
+        replay=FollowOutputReplay(ranges=[b"r1", b"r2"], follow_digest=b"digest"),
+    )
+
+
+def follow_marker(answer: FollowOutput) -> tuple[FollowRangeInput, Payload]:
+    """A live follow's range and the result its Activity records."""
+    range = FollowRangeInput(
+        stream=_STREAM,
+        state=b"\x01",
+        ranges=[b"r1", b"r2"],
+        follow_digest=b"digest",
+        max_depth=4,
+        max_open=16,
+        floor_holder="ns/run/1",
+    )
+    document = {
+        "range": _transfer(range),
+        "answer": _transfer(dataclasses.replace(answer, records=[])),
+    }
+    payload = Payload(
+        metadata={
+            "encoding": b"json/plain",
+            "messageType": FOLLOW_POSITIONS_TYPE,
+            "temporal.io/stream-nexus-endpoint": b"e",
+        },
+        data=json.dumps(document, sort_keys=True).encode(),
+    )
+    return range, payload
+
+
+async def turned_back_follow(codec: PayloadCodec, payload: Payload) -> FollowOutput:
+    [decoded] = await codec.decode(await codec.encode([payload]))
+    return follow_answer_of(decoded)
+
+
+async def test_a_follow_turns_back_from_the_cache_on_the_live_task():
+    transport = FakeFollowTransport()
+    plugin = StreamDirectReads({"e": transport})
+    answer = followed("c1", "c2")
+    range, payload = follow_marker(answer)
+    _put_follow(plugin, range, answer)
+    assert await turned_back_follow(codec_of(plugin, Base64Codec()), payload) == answer
+    assert transport.asked == []
+
+
+async def test_a_follow_replays_its_ranges_and_keeps_the_live_state():
+    answer = followed("c1", "c2")
+    replayed = dataclasses.replace(answer, state=b"\x07replay")
+    transport = FakeFollowTransport(replayed)
+    plugin = StreamDirectReads({"e": transport})
+    range, payload = follow_marker(answer)
+    batch = await turned_back_follow(codec_of(plugin), payload)
+    assert transport.asked == [range]
+    assert batch.records == answer.records
+    # A replay's state differs in its clock fields, so the marker's stays.
+    assert batch.state == b"\x07live"
+
+
+async def test_a_follow_that_replays_other_items_is_nondeterminism():
+    transport = FakeFollowTransport(StreamReplayMismatchError("digest"))
+    plugin = StreamDirectReads({"e": transport})
+    _, payload = follow_marker(followed("c1"))
+    with pytest.raises(NondeterminismError):
+        await turned_back_follow(codec_of(plugin), payload)
+
+
+def test_a_follow_result_no_codec_turned_back_names_the_opt_out():
+    _, payload = follow_marker(followed("c1"))
+    with pytest.raises(StreamUnsupportedError, match="replay_from_store=False"):
+        follow_answer_of(payload)
+
+
+async def test_the_client_transport_follows_through_execute_sync():
+    answer = followed("c1")
+    service = FakeWorkflowService(
+        ExecuteSyncNexusOperationResponse(
+            result=Payload(
+                metadata={"encoding": b"json/plain"},
+                data=json.dumps(_transfer(answer)).encode(),
+            )
+        )
+    )
+    got = await ClientTransport(fake_client(service), "e").follow(
+        FollowInput(stream=_STREAM)
+    )
+    assert got == answer
+    [request] = service.requests
+    assert request.operation == "follow"
+
+
 class LiveTransport:
     """Answers each live read with one record, and keeps the timeout it got."""
 
@@ -708,6 +841,32 @@ async def test_a_floor_holder_outside_the_callers_namespace_is_refused():
     with pytest.raises(nexusrpc.HandlerError) as refused:
         await handler._check(read("other-ns/run/1"))
     assert refused.value.type is nexusrpc.HandlerErrorType.UNAUTHORIZED
+
+
+async def test_a_refused_credential_retries_the_follow():
+    class Refuses:
+        async def read(self, request: ReadInput) -> ReadOutput:
+            del request
+            raise AssertionError("a follow never reads")
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
+            raise AssertionError("a follow never reads a range")
+
+        async def follow(self, request: FollowInput) -> FollowOutput:
+            del request
+            raise generated_client.HTTPStatusError("http://stub", 403, "lost a role")
+
+        async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+            del request
+            raise AssertionError("a live follow never follows a range")
+
+    plugin = StreamDirectReads({"e": Refuses()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # Raised as is, so the Activity's retry runs, not as a final failure.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_follow_activity, "e", "1", FollowInput(stream=_STREAM))
 
 
 async def test_a_refusal_the_handler_marks_final_fails_the_read():

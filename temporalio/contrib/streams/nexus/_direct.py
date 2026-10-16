@@ -27,7 +27,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from ssl import SSLContext
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import temporalio.activity
 import temporalio.workflow
@@ -55,6 +55,9 @@ from temporalio.contrib.streams._replay_reads import (
 )
 from temporalio.contrib.streams.nexus._follower import StreamReadTransport
 from temporalio.contrib.streams.nexus._generated import (
+    FollowInput,
+    FollowOutput,
+    FollowRangeInput,
     ReadInput,
     ReadOutput,
     ReadOutputReplay,
@@ -85,11 +88,21 @@ __all__ = [
     "HttpTransport",
     "StreamDirectReads",
     "StreamDirectTransport",
+    "StreamFollowTransport",
     "StreamServiceCallError",
 ]
 
 DIRECT_READ_ACTIVITY = "__temporal_streams_nexus_direct_read"
 """The Local Activity a direct reader reads in."""
+
+DIRECT_FOLLOW_ACTIVITY = "__temporal_streams_nexus_direct_follow"
+"""The Local Activity a direct reader that follows links follows in."""
+
+FOLLOW_POSITIONS_TYPE = b"temporal.io/stream-nexus-follow-positions"
+"""The ``messageType`` of a direct follow's result, before the codec step."""
+
+FOLLOW_BATCH_TYPE = b"temporal.io/stream-nexus-follow-batch"
+"""The ``messageType`` of a direct follow's result once the codec step turned it back."""
 
 POSITIONS_TYPE = b"temporal.io/stream-nexus-read-positions"
 """The ``messageType`` of a direct read's result, before the codec step."""
@@ -168,6 +181,24 @@ class StreamDirectTransport(StreamReadTransport, Protocol):
         ...
 
 
+class StreamFollowTransport(Protocol):
+    """A transport that also follows links, which a reader with ``follow_links`` needs.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    :class:`HttpTransport` and :class:`ClientTransport` follow.
+    """
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links."""
+        ...
+
+    async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+        """Answer again the items of an earlier follow that named a floor holder."""
+        ...
+
+
 class HttpTransport:
     """Reads through a Nexus endpoint's HTTP ingress.
 
@@ -225,6 +256,20 @@ class HttpTransport:
         """Answer again the records of an earlier read that named a floor holder."""
         try:
             return await self._call_client().read_range(request)
+        except HTTPStatusError as error:
+            raise _named(error) from error
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links."""
+        try:
+            return await self._call_client().follow(request)
+        except HTTPStatusError as error:
+            raise _named(error) from error
+
+    async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+        """Answer again the items of an earlier follow that named a floor holder."""
+        try:
+            return await self._call_client().follow_range(request)
         except HTTPStatusError as error:
             raise _named(error) from error
 
@@ -287,6 +332,14 @@ class ClientTransport:
     async def read_range(self, request: ReadRangeInput) -> ReadOutput:
         """Answer again the records of an earlier read that named a floor holder."""
         return _from_json(await self._call("read_range", request), ReadOutput)
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links."""
+        return _from_json(await self._call("follow", request), FollowOutput)
+
+    async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+        """Answer again the items of an earlier follow that named a floor holder."""
+        return _from_json(await self._call("follow_range", request), FollowOutput)
 
     async def _call(self, operation: str, request: Any) -> bytes:
         codec = innermost_codec(self._client.data_converter.payload_codec)
@@ -363,6 +416,7 @@ class StreamDirectReads(SimplePlugin):
         )
         self._transports = dict(transports)
         self._batches = _BatchCache()
+        self._follows: OrderedDict[bytes, bytes] = OrderedDict()
         self._read_states = ReadStates()
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
@@ -381,8 +435,9 @@ class StreamDirectReads(SimplePlugin):
             )
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures it twice.
-        if direct_read_activity not in activities:
-            activities.append(direct_read_activity)
+        for builtin in (direct_read_activity, direct_follow_activity):
+            if builtin not in activities:
+                activities.append(builtin)
         config["activities"] = activities
         return config
 
@@ -436,15 +491,7 @@ async def direct_read_activity(
         ) from error
     except (HTTPStatusError, StreamServiceCallError) as error:
         if _refused_credential(error):
-            # A credential that expired or lost a role is a deployment fault
-            # that an operator fixes, so the read retries with backoff and
-            # the caller Workflow does not fail for good.
-            temporalio.activity.logger.error(
-                "A direct stream read on endpoint %r was refused for its "
-                "credential; the read retries until the credential works",
-                endpoint,
-                exc_info=True,
-            )
+            _log_refused_credential(endpoint)
             raise
         if error.retryable:
             raise
@@ -455,12 +502,7 @@ async def direct_read_activity(
         ) from error
     except RPCError as error:
         if _refused_credential(error):
-            temporalio.activity.logger.error(
-                "A direct stream read on endpoint %r was refused for its "
-                "credential; the read retries until the credential works",
-                endpoint,
-                exc_info=True,
-            )
+            _log_refused_credential(endpoint)
             raise
         if error.status not in _FINAL_STATUSES:
             raise
@@ -513,6 +555,131 @@ async def _read(
     return RawValue(
         positions_payload(endpoint, range, answer, chain, state_elided=elided)
     )
+
+
+@temporalio.activity.defn(name=DIRECT_FOLLOW_ACTIVITY)
+async def direct_follow_activity(
+    endpoint: str, reader_id: str, input: FollowInput
+) -> RawValue:
+    """Follow one step for a direct reader, holding its records for the run's replay.
+
+    A :class:`StreamReader` with ``follow_links=True`` and
+    ``replay_from_store=True`` runs it as a Local Activity.
+    :class:`StreamDirectReads` registers it on every Worker built from its
+    client.
+    """
+    try:
+        return await _follow(endpoint, reader_id, input)
+    except _FINAL_ERRORS as error:
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
+    except (HTTPStatusError, StreamServiceCallError) as error:
+        if _refused_credential(error):
+            _log_refused_credential(endpoint)
+            raise
+        if error.retryable:
+            raise
+        raise ApplicationError(
+            str(error),
+            type=error.failure_type or type(error).__name__,
+            non_retryable=True,
+        ) from error
+    except RPCError as error:
+        if _refused_credential(error):
+            _log_refused_credential(endpoint)
+            raise
+        if error.status not in _FINAL_STATUSES:
+            raise
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
+
+
+async def _follow(endpoint: str, reader_id: str, input: FollowInput) -> RawValue:
+    info = temporalio.activity.info()
+    plugin = _plugin_of(temporalio.activity.client())
+    holder = f"{info.workflow_namespace}/{info.workflow_run_id}/{reader_id}"
+    answer = await _following(plugin.transport(endpoint), endpoint).follow(
+        dataclasses.replace(input, floor_holder=holder)
+    )
+    if answer.replay is None:
+        raise StreamUnsupportedError(
+            f"the stream service on endpoint {endpoint!r} answered no follow replay, "
+            f"so it can't replay a follow; upgrade its Worker, or {_OPT_OUT}"
+        )
+    range = FollowRangeInput(
+        stream=input.stream,
+        state=input.state,
+        ranges=answer.replay.ranges,
+        follow_digest=answer.replay.follow_digest,
+        max_depth=input.max_depth,
+        max_open=input.max_open,
+        floor_holder=holder,
+    )
+    # The Worker turns the result back into this batch before Workflow code
+    # sees it, from here while the run stays in this process.
+    _put_follow(plugin, range, answer)
+    without_records = dataclasses.replace(answer, records=[])
+    document = {"range": _transfer(range), "answer": _transfer(without_records)}
+    return RawValue(
+        Payload(
+            metadata={
+                "encoding": b"json/plain",
+                "messageType": FOLLOW_POSITIONS_TYPE,
+                _ENDPOINT_KEY: endpoint.encode(),
+            },
+            data=json.dumps(document, separators=(",", ":"), sort_keys=True).encode(),
+        )
+    )
+
+
+def _following(transport: Any, endpoint: str) -> StreamFollowTransport:
+    if not hasattr(transport, "follow") or not hasattr(transport, "follow_range"):
+        raise StreamUnsupportedError(
+            f"the transport of endpoint {endpoint!r} can't follow links; use "
+            "HttpTransport or ClientTransport, or pass follow_links=False"
+        )
+    return cast(StreamFollowTransport, transport)
+
+
+def _follow_key(range: FollowRangeInput) -> bytes:
+    return b"\0".join(
+        [(range.floor_holder or "").encode(), range.state or b"", range.follow_digest]
+    )
+
+
+def _put_follow(
+    plugin: StreamDirectReads, range: FollowRangeInput, answer: FollowOutput
+) -> None:
+    key = _follow_key(range)
+    plugin._follows[key] = _CONTRACT.to_payload(answer).data
+    plugin._follows.move_to_end(key)
+    while len(plugin._follows) > _CACHE_SIZE:
+        plugin._follows.popitem(last=False)
+
+
+def follow_batch_payload(answer: FollowOutput) -> Payload:
+    """The result a direct follow turns back into, with its items."""
+    payload = _CONTRACT.to_payload(answer)
+    payload.metadata["messageType"] = FOLLOW_BATCH_TYPE
+    return payload
+
+
+def follow_answer_of(payload: Payload) -> FollowOutput:
+    """The answer a direct follow's turned-back result holds.
+
+    Raises:
+        StreamUnsupportedError: No :class:`StreamDirectReads` on this Worker
+            or Replayer turned the result back.
+    """
+    if payload.metadata.get("messageType") == FOLLOW_POSITIONS_TYPE:
+        raise StreamUnsupportedError(
+            "a stream follow with replay_from_store=True recorded only its ranges, "
+            "and only the StreamDirectReads plugin on the Worker's client or the "
+            f"Replayer turns them back into items; add the plugin, or {_OPT_OUT}"
+        )
+    return _CONTRACT.from_payload(payload, FollowOutput)
 
 
 def positions_payload(
@@ -685,7 +852,33 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
             if self._inner is None
             else await self._inner.decode(payloads)
         )
-        return [await self._batch(p) if is_positions(p) else p for p in decoded]
+        out: list[Payload] = []
+        for payload in decoded:
+            if is_positions(payload):
+                payload = await self._batch(payload)
+            elif payload.metadata.get("messageType") == FOLLOW_POSITIONS_TYPE:
+                payload = await self._follow_batch(payload)
+            out.append(payload)
+        return out
+
+    async def _follow_batch(self, payload: Payload) -> Payload:
+        document = json.loads(payload.data)
+        range = _from_transfer(document["range"], FollowRangeInput)
+        answer = _from_transfer(document["answer"], FollowOutput)
+        cached = self._plugin._follows.get(_follow_key(range))
+        if cached is not None:
+            return follow_batch_payload(_from_json(cached, FollowOutput))
+        endpoint = payload.metadata.get(_ENDPOINT_KEY, b"").decode()
+        try:
+            transport = _following(self._plugin.transport(endpoint), endpoint)
+            again = await transport.follow_range(range)
+        except StreamReplayMismatchError as error:
+            raise temporalio.workflow.NondeterminismError(
+                f"a direct stream follow from endpoint {endpoint!r} replayed other "
+                f"items: {error}"
+            ) from error
+        # The live answer's state stays, since a replay's differs in clock fields.
+        return follow_batch_payload(dataclasses.replace(answer, records=again.records))
 
     async def _batch(self, payload: Payload) -> Payload:
         document = json.loads(payload.data)
@@ -803,6 +996,18 @@ def _failed(failure: Failure, call: str) -> Exception:
         f"{call} failed: {failure.message}",
         failure_type=handler_type,
         retryable=True if retryable is None else retryable,
+    )
+
+
+def _log_refused_credential(endpoint: str) -> None:
+    # A credential that expired or lost a role is a deployment fault that an
+    # operator fixes, so the Activity retries with backoff and the caller
+    # Workflow doesn't fail for good.
+    temporalio.activity.logger.error(
+        "A direct stream read on endpoint %r was refused for its credential; "
+        "the read retries until the credential works",
+        endpoint,
+        exc_info=True,
     )
 
 

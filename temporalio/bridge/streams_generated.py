@@ -186,6 +186,22 @@ class StreamNexusService:
             "NexusAppend", req, temporalio.bridge.proto.streams.NexusStep
         )
 
+    async def nexus_follow(
+        self, req: temporalio.bridge.proto.streams.NexusCall
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_follow call."""
+        return await self._store.call(
+            "NexusFollow", req, temporalio.bridge.proto.streams.NexusStep
+        )
+
+    async def nexus_follow_range(
+        self, req: temporalio.bridge.proto.streams.NexusCall
+    ) -> temporalio.bridge.proto.streams.NexusStep:
+        """Invokes the StreamNexusService.nexus_follow_range call."""
+        return await self._store.call(
+            "NexusFollowRange", req, temporalio.bridge.proto.streams.NexusStep
+        )
+
     async def nexus_read(
         self, req: temporalio.bridge.proto.streams.NexusCall
     ) -> temporalio.bridge.proto.streams.NexusStep:
