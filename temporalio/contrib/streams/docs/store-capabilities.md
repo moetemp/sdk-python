@@ -55,7 +55,8 @@ application kept.
 `dense_positions` says that the next position is always the last one plus
 one. `replay_horizon` is how long the store keeps every record for sure, if
 the store says. `max_record_bytes` and `max_batch_bytes` are the store's
-limits. A record above the record limit fails with `StreamError`.
+limits. A record or a batch above a limit fails the append with
+`ValueError`, which names the limit.
 
 ## When the owner ends
 
@@ -87,5 +88,5 @@ refuses scripts. It also runs the fallbacks on a real network store.
 
 `MemoryStreams(capabilities=StoreCapabilities(...))` turns off each
 capability that the mask sets to `False`, so a test can run a fallback in
-one process. A mask can't add a capability that the store doesn't have, and
-the store keeps its own limits.
+one process. A mask can't add a capability that the store doesn't have. A
+nonzero limit in the mask replaces the store's own.
