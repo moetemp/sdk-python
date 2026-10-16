@@ -405,21 +405,17 @@ class OutputRecord(google.protobuf.message.Message):
     KIND_FIELD_NUMBER: builtins.int
     BODY_FIELD_NUMBER: builtins.int
     CONTENT_HASH_FIELD_NUMBER: builtins.int
-    LINK_FIELD_NUMBER: builtins.int
     topic: builtins.str
     kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
-    """DATA, FINISH or LINK."""
+    """DATA or FINISH."""
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """The value on DATA, after lang's payload codec. Absent on FINISH. Optional on LINK."""
+        """The value on DATA, after lang's payload codec. Absent on FINISH."""
     content_hash: builtins.bytes
-    """The SHA-256 of the body as the payload converter made it, before the codec. Set with a
-    body. Core builds each topic's batch digest from these, so a repeat of a batch matches
-    whatever the codec made of the bodies.
+    """The SHA-256 of the body as the payload converter made it, before the codec. Set on DATA.
+    Core builds each topic's batch digest from these, so a repeat of a batch matches whatever
+    the codec made of the bodies.
     """
-    @property
-    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink:
-        """Set on LINK only."""
     def __init__(
         self,
         *,
@@ -427,10 +423,9 @@ class OutputRecord(google.protobuf.message.Message):
         kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType = ...,
         body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         content_hash: builtins.bytes = ...,
-        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
+        self, field_name: typing_extensions.Literal["body", b"body"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -441,8 +436,6 @@ class OutputRecord(google.protobuf.message.Message):
             b"content_hash",
             "kind",
             b"kind",
-            "link",
-            b"link",
             "topic",
             b"topic",
         ],
