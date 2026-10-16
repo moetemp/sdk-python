@@ -1170,7 +1170,7 @@ class WorkflowServiceStub:
     operation returns a stream calls it with the caller's callback when the operation starts.
 
     (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
     DetachStreamCallback: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest,
@@ -1181,7 +1181,7 @@ class WorkflowServiceStub:
     when the caller cancels the operation.
 
     (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
     NotifyStream: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
@@ -1192,17 +1192,17 @@ class WorkflowServiceStub:
     completes them. Producers fold their notifications and keep at most one call in flight.
 
     (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
     DescribeStreamNotifier: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.DescribeStreamNotifierRequest,
         temporalio.api.workflowservice.v1.request_response_pb2.DescribeStreamNotifierResponse,
     ]
     """DescribeStreamNotifier returns the state of the notifier of a stream and its callbacks. It is
-    for operators and tools.
+    for operators and tools, so it is not exposed through System Nexus.
 
     (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
     PollStreamNotifier: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.PollStreamNotifierRequest,
@@ -1211,10 +1211,11 @@ class WorkflowServiceStub:
     """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
     or the stream is closed. It returns with no change after a wait limit set by the server
     (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-    found nothing and armed the topic, in place of another blocking read on the store.
+    found nothing and armed the topic, in place of another blocking read on the store. It is a
+    long poll, so it is not exposed through System Nexus.
 
     (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
 
 class WorkflowServiceServicer(metaclass=abc.ABCMeta):
@@ -2637,7 +2638,7 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         operation returns a stream calls it with the caller's callback when the operation starts.
 
         (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
     @abc.abstractmethod
     def DetachStreamCallback(
@@ -2650,7 +2651,7 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         when the caller cancels the operation.
 
         (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
     @abc.abstractmethod
     def NotifyStream(
@@ -2663,7 +2664,7 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         completes them. Producers fold their notifications and keep at most one call in flight.
 
         (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
     @abc.abstractmethod
     def DescribeStreamNotifier(
@@ -2672,10 +2673,10 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> temporalio.api.workflowservice.v1.request_response_pb2.DescribeStreamNotifierResponse:
         """DescribeStreamNotifier returns the state of the notifier of a stream and its callbacks. It is
-        for operators and tools.
+        for operators and tools, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
     @abc.abstractmethod
     def PollStreamNotifier(
@@ -2686,10 +2687,11 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
         or the stream is closed. It returns with no change after a wait limit set by the server
         (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-        found nothing and armed the topic, in place of another blocking read on the store.
+        found nothing and armed the topic, in place of another blocking read on the store. It is a
+        long poll, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
-            aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
         """
 
 def add_WorkflowServiceServicer_to_server(
