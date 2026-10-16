@@ -31,15 +31,28 @@ from tests.contrib.streams.test_workflow_writer import (
 from tests.helpers import new_worker
 
 
-def data(producer: str, attempt: int, value: str, stale: bool = False) -> StreamRecord:
+def data(
+    producer: str, attempt: int, value: str, stale: bool = False, sequence: int = 0
+) -> StreamRecord:
     return StreamRecord(
         kind=RecordKind.DATA,
         cursor=Cursor(value),
         topic="t",
         producer_id=producer,
         attempt=attempt,
+        sequence=sequence,
         value=value,
         stale=stale,
+    )
+
+
+def close(producer: str) -> StreamRecord:
+    return StreamRecord(
+        kind=RecordKind.CLOSE,
+        cursor=Cursor(f"close-{producer}"),
+        topic="t",
+        producer_id=producer,
+        attempt=1,
     )
 
 
@@ -143,6 +156,75 @@ async def test_track_supersession_pairs_records_and_closes_the_read():
     assert first[1] == []
     assert [r.value for r in second[1]] == ["a1"]
     assert closed == [True]
+
+
+def test_a_second_copy_of_a_batch_is_dropped():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    first = [data("a", 1, "a1", sequence=1), data("a", 1, "a2", sequence=2)]
+    for record in [*first, data("b", 1, "b1", sequence=1)]:
+        assert not tracker.drops(record)
+        tracker.observe(record)
+    # A retry after a lost answer landed both records again.
+    copies = [data("a", 1, "a1", sequence=1), data("a", 1, "a2", sequence=2)]
+    assert all(tracker.drops(copy) for copy in copies)
+    assert all(tracker.observe(copy) == [] for copy in copies)
+    assert not tracker.drops(data("a", 1, "a3", sequence=3))
+    # Unnumbered records are never copies.
+    assert not tracker.drops(data("c", 1, "c", sequence=0))
+    tracker.observe(data("c", 1, "c", sequence=0))
+    assert not tracker.drops(data("c", 1, "c", sequence=0))
+    assert [r.value for r in tracker.standing()] == ["a1", "a2", "b1", "c"]
+
+
+def test_a_copy_from_an_older_attempt_stays_stale():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    tracker.observe(data("a", 1, "a1", sequence=1))
+    tracker.observe(superseded("a", 1, 2))
+    tracker.observe(data("a", 2, "b1", sequence=1))
+    late = data("a", 1, "a1", stale=True, sequence=1)
+    assert not tracker.drops(late)
+    assert tracker.observe(late) == [late]
+    assert tracker.drops(data("a", 2, "b1", sequence=1))
+
+
+def test_the_first_close_ends_the_stream():
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    tracker.observe(data("a", 1, "a1", sequence=1))
+    assert not tracker.drops(close("a"))
+    assert tracker.observe(close("a")) == []
+    assert tracker.closed
+    # An append that raced the close, and a second closer.
+    for late in (data("b", 1, "b1", sequence=1), close("b")):
+        assert tracker.drops(late)
+        assert tracker.observe(late) == []
+    assert [r.value for r in tracker.standing()] == ["a1"]
+
+
+async def test_track_supersession_skips_copies_and_stops_at_the_close():
+    closed = []
+
+    async def records() -> AsyncIterator[StreamRecord[str]]:
+        try:
+            yield data("a", 1, "a1", sequence=1)
+            yield data("a", 1, "a1", sequence=1)
+            yield data("a", 1, "a2", sequence=2)
+            yield close("a")
+            yield data("a", 1, "never read", sequence=3)
+        finally:
+            closed.append(True)
+
+    seen = [record async for record, _ in track_supersession(records())]
+    assert [r.value for r in seen] == ["a1", "a2", None]
+    assert seen[-1].kind is RecordKind.CLOSE
+    assert closed == [True]
+
+
+def test_the_tracker_forgets_the_copies_of_producers_it_saw_least_recently():
+    tracker: SupersessionTracker[str] = SupersessionTracker(max_producers=2)
+    for producer in ("a", "b", "c"):
+        tracker.observe(data(producer, 1, producer, sequence=1))
+    assert not tracker.drops(data("a", 1, "a", sequence=1))
+    assert tracker.drops(data("c", 1, "c", sequence=1))
 
 
 def test_a_workflow_rerun_withdraws_only_its_own_tasks_records():
