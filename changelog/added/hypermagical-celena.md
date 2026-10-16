@@ -1,0 +1,2 @@
+Core: Experimental: behind the new `streams` feature, `streams::connect_stream_service` builds one stream store from a `StreamStoreConfig` (Redis or memory) and serves lang's stream calls in process: append, read, latest, close and owner delete, as serialized `coresdk.streams` requests.
+Core: Experimental: the C bridge has `temporal_core_stream_store_new`, `_call` and `_free` for the stream service, built with the Redis store.

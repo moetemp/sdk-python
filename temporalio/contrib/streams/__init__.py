@@ -1,0 +1,69 @@
+"""Streams: an ordered log a Workflow owns, written from many places.
+
+.. warning::
+    This package is experimental and may change in future versions.
+
+A Workflow owns a stream. Producers outside Workflow code, such as the
+Workflow's Activities and clients, append to it, and outside readers consume
+it from a cursor. Records live in a store the application runs, which
+Core reaches for every SDK. Record bodies never reach the server.
+
+The contract:
+
+1. **A new attempt supersedes the old one.** When a reader sees the first
+   record of a producer's newer attempt, it yields a
+   :attr:`RecordKind.SUPERSEDED` record first. It withdraws only what that
+   producer wrote in its earlier attempts, not the whole stream and not the
+   records of other producers. No store holds that record, so every store
+   reports a retry the same way.
+2. **A cursor belongs to one stream.** Hand it back to resume strictly after
+   the record it names. A cursor from another store or another stream is
+   refused with :class:`StreamCursorError`, and one whose record
+   retention dropped with :class:`StreamExpiredError`. A read with no cursor
+   starts at :data:`BEGINNING` or :data:`END`.
+
+The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
+:mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
+as an ordinary payload.
+"""
+
+from temporalio.contrib.streams._cursor import BEGINNING, END
+from temporalio.contrib.streams._errors import (
+    StreamClosedError,
+    StreamCursorError,
+    StreamError,
+    StreamExpiredError,
+    StreamNotFoundError,
+    StreamOutcomeUnknownError,
+    StreamProducerError,
+    StreamRecordError,
+    StreamRefusedError,
+    StreamStorageError,
+    StreamUnsupportedError,
+)
+from temporalio.contrib.streams._record import (
+    Cursor,
+    RecordKind,
+    StreamRecord,
+    Supersession,
+)
+
+__all__ = [
+    "BEGINNING",
+    "Cursor",
+    "END",
+    "RecordKind",
+    "StreamClosedError",
+    "StreamCursorError",
+    "StreamError",
+    "StreamExpiredError",
+    "StreamNotFoundError",
+    "StreamOutcomeUnknownError",
+    "StreamProducerError",
+    "StreamRecord",
+    "StreamRecordError",
+    "StreamRefusedError",
+    "StreamStorageError",
+    "StreamUnsupportedError",
+    "Supersession",
+]
