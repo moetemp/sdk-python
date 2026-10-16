@@ -13760,9 +13760,10 @@ class AttachStreamCallbackRequest(google.protobuf.message.Message):
         one of `callback` and `workflow_target` is set.
         """
     idle: builtins.bool
-    """Attaches the Nexus callback idle. An idle callback gets no progress until
-    WaitStreamCallback asks for one wake, and it goes back to idle after that delivery. It still
-    gets the completion when the stream closes. Not allowed with `workflow_target`.
+    """Attaches the callback idle. An idle callback gets no progress until WaitStreamCallback asks
+    for one wake, and it goes back to idle after that delivery. It still gets the completion
+    when the stream closes. A Workflow reader attaches its `workflow_target` idle, so a busy
+    reader gets no wake.
     """
     def __init__(
         self,
