@@ -673,6 +673,7 @@ async def test_a_credential_the_server_refuses_retries_the_read():
             self.calls = 0
 
         async def read(self, request: ReadInput) -> ReadOutput:
+            del request
             self.calls += 1
             if self.calls == 1:
                 raise StreamServiceCallError(
@@ -683,6 +684,7 @@ async def test_a_credential_the_server_refuses_retries_the_read():
             return live(record("c1", "a"))[1]
 
         async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
             raise AssertionError("a live read never reads a range")
 
     plugin = StreamDirectReads({"e": RefusesOnce()})
