@@ -136,7 +136,9 @@ client or an Activity. The dashboard half of 5b is 5a, and `j5b_dashboard_and_re
   `replay_from_store=True` over `HttpTransport`. Its History keeps a range and a digest per read.
   Its Worker stops and a new one replays the run, reading each range again through the endpoint.
   On Redis, a long floor lease keeps the range past a trim, and a lapsed one fails the replay
-  with `StreamReplayRangeLostError`. Left out: credentials, since the live lane takes no auth.
+  with `StreamReplayRangeLostError`. Each case runs over `HttpTransport` and over `ClientTransport`,
+  and with the latter `authorize` keys on the caller namespace the server vouches for. Left out:
+  credentials, since the live lane takes no auth.
 
 Bridge adds demos of 1b, 1c, 3d, 3e, 4 and 5c, which need Nexus, and Nexus versions of 2, 5b, 6,
 7a, 7b and 8.

@@ -46,6 +46,9 @@ __all__ = ["StreamAccess", "TemporalStreamsHandler"]
 # The Nexus failure metadata type under which the details are a
 # temporal.api.failure.v1.Failure, which the failure converter reads back as is.
 _TEMPORAL_FAILURE_TYPE = "temporal.api.failure.v1.Failure"
+# The server sets it on ExecuteSyncNexusOperation from the authenticated
+# namespace, and refuses it from the client.
+_CALLER_NAMESPACE_HEADER = "temporal-caller-namespace"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -76,7 +79,14 @@ class StreamAccess:
     """The holder a read or a ``read_range`` names, so the store keeps the
     records it read for the caller's replay. ``None`` when the call names none.
     A Bridge reader names ``<caller namespace>/<run id>/<reader id>``, but the
-    caller chooses it, so treat it as a claim."""
+    caller chooses it, so treat it as a claim. With :attr:`caller_namespace`
+    set, the handler refuses a holder outside that namespace before it asks
+    the authorizer."""
+
+    caller_namespace: str | None = None
+    """The caller's namespace, as the server vouches for it. Only
+    ``ExecuteSyncNexusOperation``, which ``ClientTransport`` calls, sets
+    it. ``None`` on the HTTP ingress and on a Workflow's Nexus call."""
 
 
 @nexusrpc.handler.service_handler(service=TemporalStreams)
@@ -206,6 +216,23 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         )
 
     async def _check(self, access: StreamAccess) -> None:
+        access = dataclasses.replace(
+            access, caller_namespace=_caller_namespace(access.context)
+        )
+        holder = access.floor_holder
+        if (
+            access.caller_namespace is not None
+            and holder is not None
+            and not holder.startswith(f"{access.caller_namespace}/")
+        ):
+            # A holder pins records against retention, so a caller may hold
+            # them only under its own namespace.
+            raise nexusrpc.HandlerError(
+                f"floor holder {holder!r} is not under the caller's namespace "
+                f"{access.caller_namespace!r}",
+                type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+                retryable_override=False,
+            )
         if self._authorize is None:
             if access.operation != "append":
                 return
@@ -316,6 +343,13 @@ async def _run_codec(converter: DataConverter, work: CodecWork) -> list[CodecRes
         else:
             results.append(CodecResult(payload=decoded))
     return results
+
+
+def _caller_namespace(ctx: nexusrpc.handler.StartOperationContext) -> str | None:
+    for key, value in ctx.headers.items():
+        if key.lower() == _CALLER_NAMESPACE_HEADER:
+            return value
+    return None
 
 
 def _internal(error: Exception) -> NexusFailure:

@@ -78,6 +78,10 @@ callback.allowedAddresses:
         AllowInsecure: true
 streamnotifier.enabled:
   - value: true
+# Direct reads with ClientTransport call ExecuteSyncNexusOperation. A server
+# without it ignores the setting.
+frontend.enableExecuteSyncNexusOperation:
+  - value: true
 # The owner check closes a stopped owner's stream by its close status, so the
 # cases where an owner ends without a close finish in seconds, not minutes.
 streamnotifier.ownerCheckInterval:
@@ -324,6 +328,7 @@ gate tests/nexus/test_standalone_callbacks.py \
   test_live_a_worker_gets_the_completion_of_a_standalone_operation
 gate tests/contrib/streams/test_nexus_follower.py \
   test_live_a_follower_gets_each_batch_then_the_close \
+  test_live_a_follower_reads_through_the_client_transport \
   test_live_a_follower_resumes_on_another_worker \
   test_live_a_late_follower_reads_the_backlog_in_pages \
   test_live_a_failed_owner_reaches_on_close_as_a_failure
@@ -353,7 +358,8 @@ gate tests/contrib/streams/test_nexus_scenario_demos.py \
   test_n9_a_direct_reader_records_ranges_and_replays_from_the_endpoint \
   test_n9_a_shared_encryption_codec_crosses_both_ways \
   test_n9_a_trim_below_the_floor_keeps_the_range \
-  test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task
+  test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task \
+  test_n9_authorize_refuses_a_caller_namespace_the_server_vouched_for
 gate tests/contrib/streams/test_nexus_scenario_demos.py \
   test_u1a_the_app_worker_gets_each_stage_pushed_then_the_close \
   test_u4_a_standalone_connector_posts_each_message_once \

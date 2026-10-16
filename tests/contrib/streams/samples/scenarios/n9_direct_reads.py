@@ -19,8 +19,14 @@ Both namespaces can share an encryption codec. The handler decodes each body
 with B's codec and B's Worker encodes the read's answer, so the transport
 takes the same codec as ``payload_codec``.
 
+With ``transport="client"`` the reads go through ``ClientTransport``, the
+``ExecuteSyncNexusOperation`` RPC with the bookkeeper's own client. The server
+then tells the handler the caller's namespace, and ``authorize`` sees it as
+``StreamAccess.caller_namespace``. Over HTTP it is ``None``.
+
 Left out: credentials. The live lane's server takes no auth. A real
-deployment gives ``HttpTransport`` a write credential on ``streams-b``.
+deployment gives ``HttpTransport`` a write credential on ``streams-b``, and
+``ClientTransport`` the bookkeeper's own.
 
 Run against the live lane's server with ``TEMPORAL_ADDRESS=127.0.0.1:7961
 python -m tests.contrib.streams.samples.scenarios.n9_direct_reads``.
@@ -33,7 +39,7 @@ import dataclasses
 import json
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 import nexusrpc
 import nexusrpc.handler
@@ -41,7 +47,7 @@ import nexusrpc.handler
 import temporalio.nexus
 from temporalio import workflow
 from temporalio.api.enums.v1 import EventType
-from temporalio.client import Client, WorkflowHistory
+from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.streams import (
     StreamRef,
@@ -50,7 +56,9 @@ from temporalio.contrib.streams import (
     workflow_writer,
 )
 from temporalio.contrib.streams.nexus import (
+    ClientTransport,
     HttpTransport,
+    StreamAccess,
     StreamDirectReads,
     StreamOperationHandler,
     StreamReader,
@@ -159,6 +167,10 @@ class Outcome:
     """The size of each read's result in the bookkeeper's History."""
     recorded_reads: int = 0
     """How many reads the bookkeeper's History holds as Nexus operations."""
+    caller_namespaces: set[str | None] = field(default_factory=set)
+    """The caller namespaces ``authorize`` saw on reads and ``read_range`` calls."""
+    workflow_failure: str | None = None
+    """Why the bookkeeper failed, when ``authorize`` refused its reads."""
 
 
 async def main(
@@ -169,12 +181,17 @@ async def main(
     new_store: NewStore,
     codec: PayloadCodec | None = None,
     gap: timedelta = timedelta(0),
+    transport: Literal["http", "client"] = "http",
+    refuse_caller: str | None = None,
 ) -> Outcome:
     """Read a ledger directly across namespaces, with a Worker restart in the middle.
 
     ``client`` is a client of the ``default`` namespace of a server with the
     stream notifier and the namespace ``streams-b``. While the bookkeeper's
     Worker is down, the ledger posts an entry every half second for ``gap``.
+    ``transport`` picks ``HttpTransport`` or ``ClientTransport``. The
+    handler's ``authorize`` refuses reads from ``refuse_caller``, the caller
+    namespace the server vouches for, which only ``ClientTransport`` has.
     """
     converter = dataclasses.replace(DataConverter.default, payload_codec=codec)
     base = await Client.connect(
@@ -197,14 +214,29 @@ async def main(
         )
 
     def reads() -> StreamDirectReads:
+        if transport == "client":
+            # The caller's own client and credential. Any client of the
+            # caller's namespace does, so a Replayer can use it too.
+            return StreamDirectReads({name: ClientTransport(base, name)})
         return StreamDirectReads({name: HttpTransport(url, payload_codec=codec)})
+
+    callers: set[str | None] = set()
+
+    async def authorize(access: StreamAccess) -> bool:
+        if access.operation == "append":
+            return True
+        callers.add(access.caller_namespace)
+        return refuse_caller is None or access.caller_namespace != refuse_caller
 
     ledger_id = f"{workflow_id}-ledger"
     async with Worker(
         b,
         task_queue=b_queue,
         workflows=[Ledger],
-        nexus_service_handlers=[LedgerHandler(), TemporalStreamsHandler()],
+        nexus_service_handlers=[
+            LedgerHandler(),
+            TemporalStreamsHandler(authorize=authorize),
+        ],
     ):
         ledger = await b.start_workflow(Ledger.run, id=ledger_id, task_queue=b_queue)
         a = await caller()
@@ -216,6 +248,18 @@ async def main(
                 task_queue=task_queue,
             )
             await ledger.signal(Ledger.post, ["a", "b"])
+            if refuse_caller is not None:
+                try:
+                    await asyncio.wait_for(bookkeeper.result(), 30)
+                except WorkflowFailureError as error:
+                    await ledger.signal(Ledger.close)
+                    return Outcome(
+                        entries=None,
+                        replay_failure=None,
+                        caller_namespaces=callers,
+                        workflow_failure=_causes(error),
+                    )
+                raise RuntimeError("the bookkeeper read although authorize refused it")
 
             async def read_two() -> bool:
                 return await bookkeeper.query(Bookkeeper.count) >= 2
@@ -237,7 +281,9 @@ async def main(
             failure = await _first_task_failure_or_result(a, workflow_id)
         if failure is not None:
             await a.get_workflow_handle(workflow_id).terminate("the replay failed")
-            return Outcome(entries=None, replay_failure=failure)
+            return Outcome(
+                entries=None, replay_failure=failure, caller_namespaces=callers
+            )
         entries = await a.get_workflow_handle(workflow_id).result()
         history = await a.get_workflow_handle(workflow_id).fetch_history()
         # A Replayer in yet another process reads every range again.
@@ -247,6 +293,7 @@ async def main(
         return Outcome(
             entries=entries,
             replay_failure=None,
+            caller_namespaces=callers,
             marker_bytes=_marker_bytes(history),
             recorded_reads=sum(
                 1
@@ -273,6 +320,16 @@ async def _first_task_failure_or_result(client: Client, workflow_id: str) -> str
         raise TimeoutError("the bookkeeper neither ended nor failed a task")
     finally:
         result.cancel()
+
+
+def _causes(error: BaseException) -> str:
+    """The messages of ``error`` and its causes, outermost first."""
+    found: BaseException | None = error
+    messages: list[str] = []
+    while found is not None:
+        messages.append(str(found))
+        found = found.__cause__ or getattr(found, "cause", None)
+    return " <- ".join(messages)
 
 
 def _marker_bytes(history: WorkflowHistory) -> list[int]:

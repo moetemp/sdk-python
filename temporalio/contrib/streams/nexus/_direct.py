@@ -22,15 +22,19 @@ from __future__ import annotations
 import base64
 import dataclasses
 import json
+import uuid
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Protocol
 
 import temporalio.activity
 import temporalio.workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.api.enums.v1 import NexusHandlerErrorRetryBehavior
+from temporalio.api.failure.v1 import Failure
+from temporalio.api.workflowservice.v1 import ExecuteSyncNexusOperationRequest
 from temporalio.common import RawValue
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -70,15 +74,18 @@ from temporalio.converter import (
 )
 from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
+from temporalio.service import RPCError, RPCStatusCode
 
 if TYPE_CHECKING:
     from temporalio.client import Client
     from temporalio.worker import WorkerConfig
 
 __all__ = [
+    "ClientTransport",
     "HttpTransport",
     "StreamDirectReads",
     "StreamDirectTransport",
+    "StreamServiceCallError",
 ]
 
 DIRECT_READ_ACTIVITY = "__temporal_streams_nexus_direct_read"
@@ -122,6 +129,23 @@ _NAMED_ERRORS: dict[str, type[StreamError]] = {
         StreamStorageError,
     )
 }
+_SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
+# Nexus handler errors that a repeat of the same call gets again.
+_FINAL_HANDLER_ERRORS = {
+    "BAD_REQUEST",
+    "NOT_FOUND",
+    "NOT_IMPLEMENTED",
+}
+# Answers to the RPC that a repeat of the same call gets again.
+_FINAL_STATUSES = {
+    RPCStatusCode.INVALID_ARGUMENT,
+    RPCStatusCode.FAILED_PRECONDITION,
+    RPCStatusCode.NOT_FOUND,
+    RPCStatusCode.UNIMPLEMENTED,
+}
+# Refusals of the caller's credential, by the handler and by the server.
+_AUTH_HANDLER_ERRORS = {"UNAUTHENTICATED", "UNAUTHORIZED"}
+_AUTH_RPC_STATUSES = {RPCStatusCode.PERMISSION_DENIED, RPCStatusCode.UNAUTHENTICATED}
 _OPT_OUT = (
     "pass replay_from_store=False to the StreamReader to record each batch in "
     "History instead"
@@ -214,6 +238,104 @@ class HttpTransport:
             ssl_context=self._ssl_context,
             payload_codec=self._payload_codec,
         )
+
+
+class ClientTransport:
+    """Reads through ``ExecuteSyncNexusOperation`` with a Temporal client.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    The call carries the client's own credential and namespace. The server
+    checks them against the caller's namespace, finds the endpoint as that
+    namespace sees it, and tells the handler the caller's namespace, which
+    ``authorize`` gets as :attr:`StreamAccess.caller_namespace`. It needs a
+    server with ``ExecuteSyncNexusOperation`` turned on
+    (``frontend.enableExecuteSyncNexusOperation``).
+
+    The input and the answer cross through the client's payload codec, which
+    must be the codec of the handler's namespace too. It uses the codec under
+    the wrappers of :class:`StreamDirectReads` and of the stream store, since
+    the replay step runs inside those wrappers.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        endpoint: str,
+        *,
+        timeout: timedelta = timedelta(seconds=10),
+    ) -> None:
+        """Read through ``endpoint`` as a caller in ``client``'s namespace.
+
+        Args:
+            client: The caller's client. A Replayer has none, so pass one
+                here for the transport a Replayer's plugin uses.
+            endpoint: The Nexus endpoint's name.
+            timeout: How long one call may take. The server cuts the
+                handler's deadline to its Nexus request timeout, 10 seconds
+                by default.
+        """
+        self._client = client
+        self._endpoint = endpoint
+        self._timeout = timeout
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        """Answer with the records after ``request``'s cursor."""
+        return _from_json(await self._call("read", request), ReadOutput)
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        """Answer again the records of an earlier read that named a floor holder."""
+        return _from_json(await self._call("read_range", request), ReadOutput)
+
+    async def _call(self, operation: str, request: Any) -> bytes:
+        codec = innermost_codec(self._client.data_converter.payload_codec)
+        payload = Payload(
+            metadata={"encoding": b"json/plain"},
+            data=json.dumps(_transfer(request)).encode(),
+        )
+        if codec is not None:
+            [payload] = await codec.encode([payload])
+        response = await self._client.workflow_service.execute_sync_nexus_operation(
+            ExecuteSyncNexusOperationRequest(
+                namespace=self._client.namespace,
+                identity=self._client.identity,
+                request_id=str(uuid.uuid4()),
+                endpoint=self._endpoint,
+                service=_SERVICE,
+                operation=operation,
+                input=payload,
+            ),
+            timeout=self._timeout,
+        )
+        if response.HasField("failure"):
+            raise _failed(response.failure, f"{self._endpoint}/{operation}")
+        result = response.result
+        if codec is not None:
+            [result] = await codec.decode([result])
+        encoding = result.metadata.get("encoding", b"")
+        if not encoding.startswith(b"json/"):
+            raise ValueError(
+                f"{self._endpoint}/{operation} answered with a {encoding!r} payload, "
+                "so the client's codec isn't the handler namespace's"
+            )
+        return result.data
+
+
+class StreamServiceCallError(RuntimeError):
+    """A call to the stream service failed with no stream error class named.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+    """
+
+    def __init__(self, message: str, *, failure_type: str | None, retryable: bool):
+        """Keep the handler's failure type and whether a repeat could answer otherwise."""
+        super().__init__(message)
+        self.failure_type = failure_type
+        """The handler error or application failure type, if the failure had one."""
+        self.retryable = retryable
+        """Whether the same call could answer otherwise."""
 
 
 class StreamDirectReads(SimplePlugin):
@@ -312,7 +434,7 @@ async def direct_read_activity(
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
-    except HTTPStatusError as error:
+    except (HTTPStatusError, StreamServiceCallError) as error:
         if _refused_credential(error):
             # A credential that expired or lost a role is a deployment fault
             # that an operator fixes, so the read retries with backoff and
@@ -330,6 +452,20 @@ async def direct_read_activity(
             str(error),
             type=error.failure_type or type(error).__name__,
             non_retryable=True,
+        ) from error
+    except RPCError as error:
+        if _refused_credential(error):
+            temporalio.activity.logger.error(
+                "A direct stream read on endpoint %r was refused for its "
+                "credential; the read retries until the credential works",
+                endpoint,
+                exc_info=True,
+            )
+            raise
+        if error.status not in _FINAL_STATUSES:
+            raise
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
         ) from error
 
 
@@ -634,11 +770,56 @@ def _named(error: HTTPStatusError) -> Exception:
     return named(error.failure_message or error.detail)
 
 
-def _refused_credential(error: HTTPStatusError) -> bool:
-    # The handler's own refusal, such as its authorizer's, says it is final.
-    # A refusal with no such word came from the way to the handler.
-    explicit = getattr(error, "_retryable", None)
-    return error.status in _AUTH_STATUSES and explicit is None
+def _failed(failure: Failure, call: str) -> Exception:
+    """The error a transport raises for the failure ``ExecuteSyncNexusOperation`` answered."""
+    handler_type: str | None = None
+    retryable: bool | None = None
+    found: Failure | None = failure
+    while found is not None:
+        if found.HasField("application_failure_info"):
+            named = _NAMED_ERRORS.get(found.application_failure_info.type)
+            if named is not None:
+                return named(found.message)
+            if retryable is None and found.application_failure_info.non_retryable:
+                retryable = False
+            handler_type = handler_type or found.application_failure_info.type or None
+        if found.HasField("nexus_handler_failure_info"):
+            info = found.nexus_handler_failure_info
+            handler_type = info.type
+            behavior = info.retry_behavior
+            if (
+                behavior
+                == NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_RETRYABLE
+            ):
+                retryable = True
+            elif (
+                behavior
+                == NexusHandlerErrorRetryBehavior.NEXUS_HANDLER_ERROR_RETRY_BEHAVIOR_NON_RETRYABLE
+            ):
+                retryable = False
+            else:
+                retryable = info.type not in _FINAL_HANDLER_ERRORS
+        if found.HasField("canceled_failure_info"):
+            retryable = False
+        found = found.cause if found.HasField("cause") else None
+    return StreamServiceCallError(
+        f"{call} failed: {failure.message}",
+        failure_type=handler_type,
+        retryable=True if retryable is None else retryable,
+    )
+
+
+def _refused_credential(error: Exception) -> bool:
+    if isinstance(error, HTTPStatusError):
+        # The handler's own refusal, such as its authorizer's, says it is
+        # final. A refusal with no such word came from the way to the handler.
+        explicit = getattr(error, "_retryable", None)
+        return error.status in _AUTH_STATUSES and explicit is None
+    if isinstance(error, StreamServiceCallError):
+        return error.failure_type in _AUTH_HANDLER_ERRORS and error.retryable
+    if isinstance(error, RPCError):
+        return error.status in _AUTH_RPC_STATUSES
+    return False
 
 
 def _time_left() -> float:

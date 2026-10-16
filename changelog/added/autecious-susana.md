@@ -1,0 +1,1 @@
+Core: Experimental: the API protos carry `WorkflowService.ExecuteSyncNexusOperation`, which runs one synchronous Nexus operation for a caller namespace and persists nothing. The client and the C bridge call it, and its `input` counts against the blob size limit.

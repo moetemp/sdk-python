@@ -317,6 +317,15 @@ impl ClientRef {
                         execute_multi_operation
                     )
                 }
+                "execute_sync_nexus_operation" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        execute_sync_nexus_operation
+                    )
+                }
                 "fetch_worker_config" => {
                     rpc_call!(
                         connection,
