@@ -10,6 +10,7 @@ from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     with_owner_start_grace,
 )
+from temporalio.contrib.streams.archive import StreamArchive
 
 __all__ = ["RedisStreams"]
 
@@ -36,6 +37,7 @@ class RedisStreams(StreamStorePlugin):
         floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
         notify_doorbells: int | None = None,
+        archive: StreamArchive | None = None,
     ) -> None:
         """Create the store's configuration.
 
@@ -72,6 +74,13 @@ class RedisStreams(StreamStorePlugin):
             notify_doorbells: With a notification log, how many doorbell
                 streams an append rings when its slot's log takes a first
                 entry. A driver blocks on each one. Core's 16 when unset.
+            archive: Object storage that keeps records after ``retention``
+                trims them, so streams stay readable longer than Redis
+                memory allows. A running
+                :class:`temporalio.contrib.streams.StreamDriver` fills it,
+                and the store needs
+                ``notify_on_append(notification_log=True)``. Core refuses
+                to connect the store without the log.
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
@@ -106,7 +115,10 @@ class RedisStreams(StreamStorePlugin):
             config.floor_lease.FromTimedelta(floor_lease)
         if floor_release_grace is not None:
             config.floor_release_grace.FromTimedelta(floor_release_grace)
+        store = StreamStoreConfig(redis=config)
+        if archive is not None:
+            store.archive.CopyFrom(archive._config)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
-            with_owner_start_grace(StreamStoreConfig(redis=config), owner_start_grace),
+            with_owner_start_grace(store, owner_start_grace),
         )
