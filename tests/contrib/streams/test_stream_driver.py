@@ -14,12 +14,14 @@ import pytest
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamDriver,
+    StreamStorePlugin,
     StreamUnsupportedError,
     get_stream_handle,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.contrib.streams.postgres import PostgresStreams
 from temporalio.contrib.streams.redis import RedisStreams
-from tests.contrib.streams._support import connect_with
+from tests.contrib.streams._support import connect_with, postgres_streams
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
@@ -32,6 +34,8 @@ def test_the_log_rides_the_store_config():
     assert redis._config.redis.notify_doorbells == 4
     with pytest.raises(ValueError, match="notify_doorbells"):
         RedisStreams("redis://x", notify_doorbells=0)
+    postgres = PostgresStreams("postgres://x/db", notify_doorbells=64)
+    assert postgres._config.postgres.notify_doorbells == 64
 
 
 async def test_a_driver_needs_a_store_with_a_log(client: Client):
@@ -60,10 +64,14 @@ async def test_a_driver_takes_its_settings(client: Client):
         StreamDriver(streams, batch=0)
 
 
-async def test_a_driver_on_a_server_without_notifiers_fails(client: Client):
-    streams = await connect_with(
-        client, MemoryStreams().notify_on_append(notification_log=True)
-    )
+def log_store(kind: str) -> StreamStorePlugin:
+    store = postgres_streams() if kind == "postgres" else MemoryStreams()
+    return store.notify_on_append(notification_log=True)
+
+
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+async def test_a_driver_on_a_server_without_notifiers_fails(client: Client, kind: str):
+    streams = await connect_with(client, log_store(kind))
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         # An entry in the log, so the driver has a notification to send.
