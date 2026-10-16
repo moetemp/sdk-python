@@ -294,6 +294,8 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_workflow_reader_wakes_through_the_driver \
   test_live_streams_on_many_slots_all_wake_through_the_driver \
   test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window \
+  test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works \
+  test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
   test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
