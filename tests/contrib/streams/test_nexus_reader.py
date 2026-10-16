@@ -1082,6 +1082,49 @@ async def test_a_bad_last_record_still_takes_the_answers_state(
     assert sent[1] == ("cursor-9", b"s1")
 
 
+async def test_a_direct_read_chains_only_after_a_read_of_the_same_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporalio.common import RawValue
+    from temporalio.contrib.streams._replay_reads import ReadChain
+    from temporalio.contrib.streams.nexus._direct import batch_payload
+
+    answers = [
+        ReadOutput(records=[record(1, text="a")], next_token="cursor-1", done=False),
+        ReadOutput(records=[record(2, text="b")], next_token="cursor-2", done=False),
+        ReadOutput(records=[], next_token="cursor-2", done=True),
+    ]
+    # The first read's marker is another run's, as a reset run replays it.
+    runs = ["old-run", "this-run", "this-run"]
+    chained: list[bool] = []
+
+    async def execute_local_activity(_name: str, *, args: Any, **_: Any) -> Any:
+        chained.append(args[4])
+        seq = args[3]
+        return RawValue(
+            batch_payload(answers.pop(0), ReadChain(f"{runs[seq - 1]}/1", seq))
+        )
+
+    fake_workflow = types.SimpleNamespace(
+        execute_local_activity=execute_local_activity,
+        info=lambda: types.SimpleNamespace(run_id="this-run"),
+        _Runtime=types.SimpleNamespace(current=lambda: types.SimpleNamespace()),
+        payload_converter=lambda: converter,
+        now=lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(reader_module, "workflow", fake_workflow)
+    reader = StreamReader(
+        _CompletedHandle(),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        replay_from_store=True,
+    )
+    assert await reader.next() == [Token("a")]
+    assert await reader.next() == [Token("b")]
+    assert await reader.next() is None
+    assert chained == [False, False, True]
+
+
 async def test_bodies_reach_the_workflow_decoded_by_the_callers_codec() -> None:
     """A read's answer is one Nexus operation result, encoded by the handler
     Worker's codec with the bodies inside it in the clear. The caller Worker's

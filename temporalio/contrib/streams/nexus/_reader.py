@@ -349,6 +349,8 @@ class StreamReader(Generic[T]):
         self._replay_from_store = replay_from_store
         self._reader_id = str(_next_reader()) if replay_from_store else ""
         self._direct_reads = 0
+        # The run that made the last direct read.
+        self._chain_run = ""
 
     @property
     def cursor(self) -> Cursor:
@@ -581,18 +583,28 @@ class StreamReader(Generic[T]):
         from temporalio.contrib.streams.nexus._direct import (
             DIRECT_READ_ACTIVITY,
             answer_of,
+            chain_run_of,
         )
 
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
                 DIRECT_READ_ACTIVITY,
-                args=[self._endpoint, self._reader_id, input, self._direct_reads + 1],
+                args=[
+                    self._endpoint,
+                    self._reader_id,
+                    input,
+                    self._direct_reads + 1,
+                    # A reset run replays the old run's reads, whose markers
+                    # chain under that run, so its first read keeps its state.
+                    self._chain_run == workflow.info().run_id,
+                ],
                 result_type=RawValue,
                 start_to_close_timeout=wait + _DIRECT_READ_SLACK,
                 summary=f"stream read {input.stream.topic}",
             )
             self._direct_reads += 1
+            self._chain_run = chain_run_of(raw.payload)
         except (ActivityError, ApplicationError) as error:
             unsupported = _unsupported(error)
             if unsupported is None:
