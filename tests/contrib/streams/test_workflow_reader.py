@@ -1395,3 +1395,36 @@ async def test_a_read_before_the_owner_starts_reads_again_on_a_timer(client: Cli
     )
     assert batches == [["data a"]]
     assert len(fake.inputs) == 2
+
+
+async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Client):
+    # Two large records in one recorded answer would pass the server's blob
+    # limit, so the read hands over the first one and the next read the other.
+    streams_client = await connect_with(client, MemoryStreams())
+    async with new_worker(streams_client, Waits) as worker:
+        owner = await running_owner(streams_client, worker.task_queue)
+        stream = get_stream_handle(streams_client, owner, topic=TOKENS)
+        big = "x" * (1200 << 10)
+        await stream.producer(producer_id="w", attempt=1).append(big, big)
+        env = ActivityEnvironment(client=streams_client)
+        env.info = dataclasses.replace(env.info, is_local=True)
+        read = _ReadInput(
+            workflow_id=owner,
+            chain_run_id="",
+            topic="tokens",
+            after="",
+            state="",
+            wait_ms=0,
+            max_records=10,
+            max_bytes=1 << 20,
+        )
+        first = ReadResponse.FromString(
+            (await env.run(read_activity, read)).payload.data
+        )
+        assert len(first.records) == 1
+        read.after = first.cursor
+        second = ReadResponse.FromString(
+            (await env.run(read_activity, read)).payload.data
+        )
+        assert len(second.records) == 1
+        await streams_client.get_workflow_handle(owner).signal(Waits.finish)
