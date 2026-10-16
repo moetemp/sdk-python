@@ -9,6 +9,7 @@ Jetty lane.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import uuid
@@ -180,7 +181,10 @@ def superseded(cursor: str, producer: str, attempt: int) -> ReadRecord:
 
 
 def empty(cursor: str, wake_after: int) -> ReadResponse:
-    return ReadResponse(cursor=cursor, wake_after=wake_after)
+    # Core names the chain on every read of an owner that started.
+    return ReadResponse(
+        cursor=cursor, wake_after=wake_after, chain_first_run_id="chain"
+    )
 
 
 @workflow.defn
@@ -1329,7 +1333,8 @@ async def test_an_attach_without_notifications_warns_once(
     )
     with caplog.at_level(logging.WARNING):
         for _ in range(2):
-            with pytest.raises(Exception):
+            # The read itself may fail here, with no owner and no notifier.
+            with contextlib.suppress(Exception):
                 await env.run(read_activity, input)
     warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
     assert len(warned) == 1
@@ -1375,3 +1380,18 @@ async def test_a_failed_read_leaves_no_gap_in_the_read_chain(client: Client):
     await Replayer(workflows=[ReadsPastAFailedRead]).replay_workflow(
         await handle.fetch_history()
     )
+
+
+async def test_a_read_before_the_owner_starts_reads_again_on_a_timer(client: Client):
+    # Core answers an idle read inside the owner start grace with no chain
+    # and attaches nothing, so no wake would come.
+    batches, fake, _ = await _run_reader(
+        client,
+        [
+            ReadResponse(cursor=""),
+            ReadResponse(records=[data("c1", "a")], cursor="c1", done=True),
+        ],
+        _no_drive,
+    )
+    assert batches == [["data a"]]
+    assert len(fake.inputs) == 2

@@ -60,6 +60,8 @@ use it:
 | `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, a Local Activity as `__temporal_local_<call number>@<scheduling run id>`, and a Workflow as `@<run id>` |
 | `attempt` | 6 | The producer's attempt. A Local Activity's is `(History length * 100000 + Workflow Task attempt) * 10000 + Local Activity attempt`, below 2^53. A Workflow's is `prefix << 16 \| retry`: `prefix` is the WorkflowTaskStarted event id of the run's last completed Workflow Task (0 before one), and `retry` counts the reruns of the task since then, from 1 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
+| `task_started_event_id` | 9 | On a Workflow's records, the WorkflowTaskStarted event id of the task that wrote it |
+| `completed_tasks` | 10 | On the first record of each Workflow batch, the WorkflowTaskStarted ids of the run's last completed tasks, newest first, at most 8, with a trailing 0 when the list reaches back to the run's start |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:
 
@@ -73,9 +75,14 @@ see a `SUPERSEDED` record in the log: a reader synthesizes one when a
 producer's newer attempt first appears. It withdraws only the records with
 the same `producer_id` and a lower `attempt`. It names no position, so the
 records of other producers on the topic stay valid, wherever they are. For
-a Workflow producer, `@<run id>`, a newer attempt is a supersession only
-when its `attempt >> 16` stays the same and its low 16 bits rise. A higher
-`attempt >> 16` is the run's next Workflow Task, which withdraws nothing.
+a Workflow producer, `@<run id>`, a newer attempt with the same
+`attempt >> 16` is a rerun, which withdraws. A higher `attempt >> 16` is a
+later Workflow Task. It withdraws the earlier attempt only when that
+attempt's `task_started_event_id` is not in the new record's
+`completed_tasks`, and the earlier prefix is in that list past its first
+entry. That is the case when a rerun of the earlier task completed and
+wrote nothing to the topic. Core's vectors in
+`crates/streams/testdata/workflow_attempts.json` are the reference.
 
 ## Appending a batch
 
