@@ -60,6 +60,22 @@ class StreamService:
             temporalio.bridge.proto.streams.FlushNotificationsResponse,
         )
 
+    async def follow(
+        self, req: temporalio.bridge.proto.streams.FollowRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow call."""
+        return await self._store.call(
+            "Follow", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
+    async def follow_range(
+        self, req: temporalio.bridge.proto.streams.FollowRangeRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow_range call."""
+        return await self._store.call(
+            "FollowRange", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
     async def latest(
         self, req: temporalio.bridge.proto.streams.LatestRequest
     ) -> temporalio.bridge.proto.streams.LatestResponse:

@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from temporalio.contrib.streams._ref import StreamRef
 
 __all__ = [
     "Cursor",
+    "LinkEvent",
     "RecordKind",
+    "StreamLink",
     "StreamRecord",
     "Supersession",
 ]
@@ -64,7 +69,14 @@ class RecordKind(enum.IntEnum):
     earlier attempt's records twice is harmless and missing it is not.
     """
 
-    # 4 is kept for a kind a later release stores.
+    LINK = 4
+    """A reference to another stream, in :attr:`StreamRecord.link`.
+
+    A follower reads the linked stream in place, in one order with this
+    stream. ``value`` is an optional value the writer put on the link, such
+    as a label. A reader that follows nothing sees it as a record of its
+    own.
+    """
 
     CLOSE = 5
     """The topic in ``topic`` is closed, or every topic of the run chain when empty.
@@ -82,6 +94,23 @@ class RecordKind(enum.IntEnum):
     It sits in the run chain's control log, on a store that can't list a
     chain's topics, so a closer finds every topic to close. A read never
     delivers it.
+    """
+
+
+@enum.unique
+class LinkEvent(enum.IntEnum):
+    """What a :attr:`RecordKind.LINK` record says about its linked stream.
+
+    The values match ``temporal.sdk.streams.v1.StreamLink.Event``.
+    """
+
+    OPEN = 1
+    """A follower starts reading the linked stream strictly after ``after``."""
+
+    JOIN = 2
+    """The writer waited for the link named ``name`` up to ``until``.
+
+    With no ``until``, it waited for the linked stream's end.
     """
 
 
@@ -119,12 +148,36 @@ class Supersession:
 
 
 @dataclass(frozen=True)
+class StreamLink:
+    """The reference a :attr:`RecordKind.LINK` record holds.
+
+    It is stored as plaintext, outside the payload codec, as Workflow and
+    Activity ids are in History. Put secrets in the record's value.
+    """
+
+    event: LinkEvent
+    ref: StreamRef | None
+    """The linked stream. Set on ``OPEN``, ``None`` on ``JOIN``."""
+    name: str
+    """Names the link within its producer. A ``JOIN`` matches the ``OPEN`` with this name."""
+    after: Cursor | None = None
+    """On ``OPEN``, a cursor of the linked stream. ``None`` starts at its oldest record."""
+    until: Cursor | None = None
+    """On ``JOIN``, a cursor of the linked stream. ``None`` is the stream's end."""
+    namespace: str = ""
+    """The linked stream's namespace. Empty is the namespace of this stream."""
+    endpoint: str = ""
+    """The Nexus endpoint of the linked stream. Empty is the one that served this stream."""
+
+
+@dataclass(frozen=True)
 class StreamRecord(Generic[T]):
     """One record as a reader sees it.
 
-    ``value`` is set on a :attr:`RecordKind.DATA` record and
-    ``supersession`` on a :attr:`RecordKind.SUPERSEDED` one. Other kinds
-    carry neither, so a consumer narrows on ``kind`` first.
+    ``value`` is set on a :attr:`RecordKind.DATA` record,
+    ``supersession`` on a :attr:`RecordKind.SUPERSEDED` one, and ``link`` on
+    a :attr:`RecordKind.LINK` one, whose ``value`` is optional. Other kinds
+    carry none, so a consumer narrows on ``kind`` first.
     """
 
     kind: RecordKind
@@ -151,9 +204,11 @@ class StreamRecord(Generic[T]):
     scheduling run is in its ``producer_id``, as ``<Activity id>@<run id>``.
     """
     value: T | None = None
-    """The published value. Set on ``DATA`` only."""
+    """The published value. Set on ``DATA``, and on ``LINK`` when the writer gave one."""
     supersession: Supersession | None = None
     """The attempt change being reported. Set on ``SUPERSEDED`` only."""
+    link: StreamLink | None = None
+    """The reference to another stream. Set on ``LINK`` only."""
     stale: bool = False
     """An older attempt wrote it after this read delivered a newer attempt.
 

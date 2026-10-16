@@ -13,6 +13,8 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from temporalio.api.enums.v1 import StreamOwnerKind as _ApiOwnerKind
+from temporalio.api.stream.v1 import StreamReference
 from temporalio.bridge.proto.streams import StreamAddress
 from temporalio.bridge.proto.streams import StreamOwnerKind as _OwnerKind
 from temporalio.contrib.streams._errors import StreamUnsupportedError
@@ -242,3 +244,45 @@ def owner_context(
             is_local=False,
         )
     return WorkflowSerializationContext(namespace=namespace, workflow_id=workflow_id)
+
+
+_API_KINDS = {
+    "workflow": _ApiOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
+    "activity": _ApiOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+    "workflow_activity": _ApiOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+}
+
+
+def to_reference(ref: StreamRef) -> StreamReference:
+    """``ref`` as the API's stream reference, which a link record stores."""
+    if ref.kind not in _API_KINDS:
+        ref._require_supported()
+    return StreamReference(
+        owner_kind=_API_KINDS[ref.kind],
+        workflow_id=ref.workflow_id,
+        run_id=ref.chain_run_id or "",
+        topic=ref.topic,
+        activity_id=ref.activity_id or "",
+    )
+
+
+def from_reference(reference: StreamReference) -> StreamRef:
+    """The ref an API stream reference names.
+
+    An owner kind this release lacks decodes as ``"kind_<number>"``, which a
+    handle refuses where it opens.
+
+    Raises:
+        ValueError: The reference names no stream.
+    """
+    kind = next(
+        (k for k, v in _API_KINDS.items() if v == reference.owner_kind),
+        f"kind_{int(reference.owner_kind)}",
+    )
+    return StreamRef(
+        kind,
+        reference.workflow_id,
+        topic=reference.topic,
+        chain_run_id=reference.run_id or None,
+        activity_id=reference.activity_id or None,
+    )
