@@ -79,7 +79,9 @@ class StreamAccess:
     """The holder a read or a ``read_range`` names, so the store keeps the
     records it read for the caller's replay. ``None`` when the call names none.
     A Bridge reader names ``<caller namespace>/<run id>/<reader id>``, but the
-    caller chooses it, so treat it as a claim."""
+    caller chooses it, so treat it as a claim. With :attr:`caller_namespace`
+    set, the handler refuses a holder outside that namespace before it asks
+    the authorizer."""
 
     caller_namespace: str | None = None
     """The caller's namespace, as the server vouches for it. Only
@@ -126,7 +128,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     endpoint gets the Worker's store rights, for every stream in the
     namespace and as any producer. Pass ``authorize`` to check each call: it
     gets a :class:`StreamAccess` and answers whether to serve it, and a
-    refused call fails as unauthorized. A ``nexusrpc.HandlerError`` it raises
+    refused call fails as unauthorized. Without ``authorize``, the handler
+    serves reads to any caller and refuses every append as unauthorized,
+    since an append could write as any producer. A ``nexusrpc.HandlerError`` it raises
     crosses as it is, so it can give the caller a reason. Any other exception
     crosses as a retryable ``INTERNAL`` error.
 
@@ -212,11 +216,33 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         )
 
     async def _check(self, access: StreamAccess) -> None:
-        if self._authorize is None:
-            return
         access = dataclasses.replace(
             access, caller_namespace=_caller_namespace(access.context)
         )
+        holder = access.floor_holder
+        if (
+            access.caller_namespace is not None
+            and holder is not None
+            and not holder.startswith(f"{access.caller_namespace}/")
+        ):
+            # A holder pins records against retention, so a caller may hold
+            # them only under its own namespace.
+            raise nexusrpc.HandlerError(
+                f"floor holder {holder!r} is not under the caller's namespace "
+                f"{access.caller_namespace!r}",
+                type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+                retryable_override=False,
+            )
+        if self._authorize is None:
+            if access.operation != "append":
+                return
+            raise nexusrpc.HandlerError(
+                "this stream service refuses appends, since its handler has no "
+                "authorize check; pass authorize= to TemporalStreamsHandler to "
+                "serve them",
+                type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+                retryable_override=False,
+            )
         try:
             allowed = await self._authorize(access)
         except nexusrpc.HandlerError:
