@@ -19,8 +19,8 @@ These hold on every store, whatever its capabilities.
   and attempt of a delivered record, and a sequence at or below the highest
   one the read delivered for that attempt. A record with sequence 0 is never
   a copy.
-- A read ends at the first `CLOSE` record of its topic or of its run chain,
-  and drops what comes after it.
+- A read ends at the first `CLOSE` record of its topic or of its run chain.
+  It doesn't deliver the `CLOSE`, and it drops what comes after it.
 - `SUPERSEDED` works the same on every store. Core makes it from the records
   the read saw, and no store holds it.
 - A read never skips records in silence. If retention dropped records after

@@ -88,7 +88,8 @@ dedupe script below still gives each reader each record once:
   sequence 0 is never a copy. Core's vectors in
   `crates/streams/testdata/reader_rules.json` are the reference.
 - The first `CLOSE` record of the topic, or one with an empty `topic` in
-  the chain, ends the read. The reader drops every record after it. A
+  the chain, ends the read. The reader doesn't deliver it, and drops every
+  record after it. A
   `TOPIC` record names a topic of the chain, in the chain's control log
   `_chain`, and topic readers skip it.
 
