@@ -1077,6 +1077,7 @@ async def test_a_bad_last_record_still_takes_the_answers_state(
         _CompletedHandle(),  # type: ignore[arg-type]
         item_type=Token,
         endpoint=ENDPOINT,
+        replay_from_store=False,
     )
     assert await reader.next() == [Token("a")]
     with pytest.raises(StreamRecordError):
