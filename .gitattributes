@@ -1,1 +1,11 @@
 CHANGELOG.md merge=union
+# GitHub folds generated files in diffs.
+temporalio/api/** linguist-generated=true
+temporalio/bridge/proto/** linguist-generated=true
+*_pb2*.py linguist-generated=true
+*_pb2*.pyi linguist-generated=true
+*_generated.py linguist-generated=true
+*_generated.rs linguist-generated=true
+**/_generated/** linguist-generated=true
+**/testdata/** linguist-generated=true
+*_vectors.json linguist-generated=true
