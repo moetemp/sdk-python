@@ -524,11 +524,20 @@ class StreamReader(Generic[T]):
                     f"{error}",
                     cursor,
                 )
-                self._caught_up = False
+                if self._pending:
+                    self._caught_up = False
+                else:
+                    # The answer ends here, so its state and token go with
+                    # the cursor now, or the next read sends the old state.
+                    self._take_answer_end()
                 return batch
             if record is None:
                 continue
             batch.append(cast(T, record[2]))
+        self._take_answer_end()
+        return batch
+
+    def _take_answer_end(self) -> None:
         answer = self._answer
         assert answer is not None
         if answer.next_token:
@@ -537,7 +546,6 @@ class StreamReader(Generic[T]):
         self._state = answer.state
         self._caught_up = not answer.records
         self._stream_done = answer.done
-        return batch
 
     async def _fetch(self) -> None:
         if self._stream is None:
