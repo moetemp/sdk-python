@@ -542,7 +542,9 @@ self-hosted server only and takes a write credential on the handler's
 namespace. `ClientTransport` needs a server with
 `ExecuteSyncNexusOperation`, which Temporal Cloud doesn't serve yet.
 `StreamReader(..., replay_from_store=False)` keeps each read's answer in
-History, records included, so a replay needs nothing else. See
+History, records included, so a replay needs nothing else. On Temporal
+Cloud, pass `replay_from_store=False`. The default needs a direct-read
+transport, and none works on Cloud yet. See
 [Direct reads](docs/nexus.md#direct-reads).
 
 ## What to know
