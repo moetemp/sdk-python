@@ -275,6 +275,42 @@ def test_a_workflow_supersession_withdraws_what_cores_vectors_say(
     assert [r.value for r in withdrawn] == (["previous"] if case["superseded"] else [])
 
 
+_READER_RULES = _VECTORS.with_name("reader_rules.json")
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(_READER_RULES.read_text())["cases"],
+    ids=lambda case: case["label"],
+)
+def test_the_tracker_drops_what_cores_reader_rules_drop(case: dict[str, Any]):
+    records = [
+        StreamRecord(
+            kind=RecordKind(stored.get("kind", 1)),
+            cursor=Cursor(str(index)),
+            topic=stored.get("topic", "out"),
+            producer_id=stored["producer"],
+            attempt=stored["attempt"],
+            sequence=stored["sequence"],
+            stale=index in case.get("stale", []),
+        )
+        for index, stored in enumerate(case["records"])
+    ]
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    start = case.get("resume_after")
+    if start is not None:
+        # A resumed read knows only the record at its cursor.
+        tracker.observe(records[start])
+    delivered = []
+    for index, record in enumerate(records):
+        if start is not None and index <= start:
+            continue
+        if not tracker.drops(record):
+            tracker.observe(record)
+            delivered.append(index)
+    assert delivered == case["delivered"]
+
+
 def test_a_workflow_producer_holds_only_its_newest_tasks_records():
     tracker: SupersessionTracker[str] = SupersessionTracker()
     tracker.observe(data("@run", 1 << 16 | 1, "x"))
