@@ -35,6 +35,10 @@ from tests.helpers import new_worker
 TOKENS = topic("tokens", str)
 # What a store without producer state looks like, on the memory store.
 NO_PRODUCER_STATE = StoreCapabilities(producer_state=False, kept_last=False)
+# A Core from before DescribeStore can't mask a store or run Redis plain.
+HAS_DESCRIBE = hasattr(temporalio.bridge.proto.streams, "DescribeStoreRequest")
+NO_DESCRIBE = "this Core can't describe or mask a store"
+needs_describe = pytest.mark.skipif(not HAS_DESCRIBE, reason=NO_DESCRIBE)
 
 
 def redis_url() -> str:
@@ -45,6 +49,8 @@ def redis_url() -> str:
 
 
 def store(kind: str) -> StreamStorePlugin:
+    if kind in ("masked", "plain") and not HAS_DESCRIBE:
+        pytest.skip(NO_DESCRIBE)
     if kind == "memory":
         return MemoryStreams()
     if kind == "masked":
@@ -69,6 +75,7 @@ def test_capabilities_need_a_connected_store():
         MemoryStreams().capabilities
 
 
+@needs_describe
 async def test_a_mask_turns_off_only_what_it_names(client: Client):
     full = capabilities_of(await connect_with(client, MemoryStreams()))
     assert full.producer_state and full.kept_last and full.delete_owner
@@ -76,6 +83,7 @@ async def test_a_mask_turns_off_only_what_it_names(client: Client):
     assert masked == dataclasses.replace(full, producer_state=False, kept_last=False)
 
 
+@needs_describe
 async def test_plain_redis_has_no_store_side_state(client: Client):
     plain = capabilities_of(await connect_with(client, store("plain")))
     assert not (plain.producer_state or plain.kept_last)
@@ -108,6 +116,7 @@ async def test_a_reader_sees_one_copy_of_each_batch(streams: Client):
     assert [r.value for r in records] == ["a", "b", "c"]
 
 
+@needs_describe
 async def test_a_store_that_cannot_delete_by_owner_says_so(client: Client):
     masked = MemoryStreams(capabilities=StoreCapabilities(delete_owner=False))
     await connect_with(client, masked)

@@ -292,7 +292,8 @@ _READER_RULES = _VECTORS.with_name("reader_rules.json")
 
 @pytest.mark.parametrize(
     "case",
-    json.loads(_READER_RULES.read_text())["cases"],
+    # A Core from before the reader rules has no vectors for them.
+    json.loads(_READER_RULES.read_text())["cases"] if _READER_RULES.exists() else [],
     ids=lambda case: case["label"],
 )
 def test_the_tracker_drops_what_cores_reader_rules_drop(case: dict[str, Any]):
