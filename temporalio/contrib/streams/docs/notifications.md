@@ -53,29 +53,85 @@ client waits for the notifications still out when it stops. A process that
 holds only a client calls `await store.flush_notifications()` before it
 exits.
 
-A reader that can't arm, such as a hand-written reader over HTTP, waits for
-a notification that never comes. For such readers, use
-`notify_on_append(every_append=True)`. Then every append notifies.
-
 ## When Core notifies
 
-A producer sends nothing to Temporal while no reader sleeps.
-
-1. A reader reads with `arm` and waits up to its idle time, 2 seconds by
-   default. A read that finds records returns them at once.
-2. A read that waits its whole idle time and finds nothing arms the stream
-   in the store, in the same step. It answers `wake_after`, the counter of
-   its position.
+1. A reader reads and waits up to its idle time, 2 seconds by default. A
+   read that finds records returns them at once.
+2. A read that waits its whole idle time and finds nothing answers
+   `wake_after`, the counter of its position.
 3. The reader sleeps until the notifier's counter is above `wake_after`, the
-   stream closes, or a time limit passes.
-4. The next append finds the arm and notifies the notifier once. Core clears
-   the arm after the notification lands. A failed notification keeps the
-   arm, so the next append notifies again.
-5. The notifier wakes every sleeping reader with one notification.
+   stream closes, or a time limit passes. A Workflow reader asks the
+   notifier for this one wake in the same Local Activity as the empty read.
+   A client reader holds a long poll.
+4. Every append notifies the notifier, from the producer's process or, with
+   a notification log, from a StreamDriver (see below). Notifications for
+   one stream fold into one call in flight, and a failed last notification
+   is tried twice more.
+5. The notifier wakes every sleeping reader with one notification. A reader
+   that reads records asks for nothing, so it gets no wake while it works.
 
-So a busy stream, with no gap longer than the idle time, costs no
-notification. A busy stream sends its last counter again once a day, so its
-notifier does not reach its idle timeout.
+The server drops a notification for a stream with no notifier, and a
+reader's attach or wait starts the notifier. So a reader reads first, and
+attaches only when a read comes back empty, then reads once more before it
+sleeps, which catches an append that landed before the notifier existed.
+
+A Workflow reader attaches as an idle target, which gets no wake until it
+waits. Each wait gets at most one wake, and uses it up. A wait whose counter
+the stream passed already wakes the reader at once. So a Workflow reader
+gets one wake per idle stretch, whatever the append rate, and the records
+that land while it reads cost no Workflow Task. Its next read finds them.
+
+The notifier delivers the first notification of a window at once and the
+newest one at the window's end (`streamnotifier.debounceWindow`, 1 second by
+default). A wait that the window holds back wakes the reader at the
+window's end.
+
+## Run a StreamDriver
+
+By default the producer's process tells the server after each append. With
+a notification log, the append writes a log entry in the same store step
+instead, and a StreamDriver forwards it. The producer then makes no call to
+Temporal, and an append's notification can't be lost to a producer that
+stops right after its append.
+
+```python
+store = RedisStreams("redis://localhost:6379").notify_on_append(
+    notification_log=True
+)
+client = await Client.connect("localhost:7233", plugins=[store])
+
+# In a process of its own, one or more per store.
+await StreamDriver(client).run()
+```
+
+- Turn the log on in every process that appends. A store that keeps no log
+  refuses the setting, and `StreamDriver` raises `ValueError` without it.
+- Run at least one driver. Each needs its own `consumer` name, which it gets
+  from the host, the process id and a random suffix unless you pass one.
+  Drivers share the log's entries as a consumer group (`streams-driver`).
+- A driver blocks on the log's doorbells and drains each slot that rings. It
+  folds each drain to the newest counter per stream, sends one
+  `NotifyStreams` call per namespace, and acks the entries only after the
+  call landed. Delivery is at least once. A repeat carries an old counter
+  and wakes nobody.
+- A doorbell is not written with the append, so it can be lost. Every
+  `sweep_interval` (30 seconds) the driver looks at every slot that holds
+  entries, which bounds that delay. The Workflow reader's recheck and the
+  client's poll limit bound the rest.
+- A driver takes the entries another driver left unacked for `claim_idle`
+  (60 seconds), so a dead driver's work moves on.
+- The client needs the right to call `NotifyStreams` in its namespace. It
+  sends one call per namespace.
+
+On Redis the log is one stream per Redis Cluster slot,
+`<prefix>:{<slot tag>}:n`, in the same slot as the stream's own keys, so one
+script writes both and a reshard moves them together. A standalone Redis
+uses the same keys. `RedisStreams(notify_doorbells=...)` sets how many
+doorbell streams there are, `<prefix>:{<doorbell tag>}:bell` (16 by
+default). With the log on, the application's ACL user also needs
+`~<prefix>:{*}:n` and `%W~<prefix>:{*}:bell`, and the driver's user needs
+read and write on those keys and `+xreadgroup +xautoclaim +xack +xdel
++xgroup|create +xlen +xadd +cluster|slots`.
 
 ## A client reader
 
@@ -89,8 +145,8 @@ async for record in handle.read():
 ```
 
 The sleep holds one gRPC long poll, not a store connection. At the poll
-limit the reader reads again with `arm`. That read finds records whose
-notification was lost, or arms again. On a server without the notifier, the
+limit the reader reads again. That read finds records whose notification
+was lost, or comes back empty and sleeps again. On a server without the notifier, the
 reader waits in the store instead, as without notifications.
 
 ## A Workflow reader
@@ -114,10 +170,17 @@ class Connector:
 - Each read is one Local Activity, which adds one marker event when its
   Workflow Task completes. By default the marker holds the read's range, and
   replay reads the range from the store again (see below).
-- The first read attaches the run to the stream's notifier. While the stream
-  is idle, the reader waits with no Local Activity and no timer. The server
-  records each wake on the next Workflow Task's scheduled event, so a wake
-  adds no event of its own.
+- Each read names the run as the subscriber. Only a read that comes back
+  empty attaches the run to the stream's notifier, in the same Local
+  Activity, and Core reads once more after the attach, so it finds a record
+  that landed before the attach. A reader that never goes idle never
+  attaches. While the stream is idle, the reader waits with no Local
+  Activity and no timer. The server records each wake on the next Workflow
+  Task's scheduled event, so a wake adds no event of its own.
+- The reader gets one wake per idle stretch. Each empty read asks the
+  notifier for the next wake, and a read that finds records asks for none.
+  So a reader that works on a batch, for example in an Activity, gets no
+  Workflow Task from the appends that land meanwhile.
 - A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
   replay must give your code the same records. `SupersessionTracker` names
   the records each `SUPERSEDED` withdraws.
@@ -251,9 +314,9 @@ ended, and a client reader ends at its next read.
 
 ## A lost notification
 
-A producer can stop after its append and before its notification lands. The
-arm stays in the store, so the next append by any producer notifies. For
-the last append before a quiet period, a time-based check finds the record:
+A producer can stop after its append and before its notification lands.
+The next append by any producer notifies again. For the last append before
+a quiet period, a time-based check finds the record:
 
 - A client reader reads again at the poll limit (60 seconds).
 - The notifier asks an idle Workflow reader to read again after 1 minute,
@@ -264,7 +327,9 @@ the last append before a quiet period, a time-based check finds the record:
 
 `scripts/streams_live_lane.sh` starts a server with the notifier and the
 settings above, with short poll and recheck limits, and runs the stream
-tests against it. It fails when a live test skips or when a gated test did
+tests against it. It also starts a Redis Cluster of three primaries
+with one replica each, unless `STREAMS_REDIS_CLUSTER_URL` names one, and the
+driver cases run on memory, Redis and the cluster. It fails when a live test skips or when a gated test did
 not pass.
 
 ```bash

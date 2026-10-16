@@ -13,8 +13,10 @@ _PRIVATE = {
     "decode_body",
     "encode_bodies",
     "error_from_failure",
+    "owner_context",
     "read_activity",
     "resolve_topic",
+    "stream_address",
 }
 
 

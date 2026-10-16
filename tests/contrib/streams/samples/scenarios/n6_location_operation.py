@@ -49,6 +49,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     NewStore,
     connect,
     endpoint,
+    endpoint_name,
     run,
     two_namespaces,
 )
@@ -159,7 +160,8 @@ class Tracker:
 @dataclass
 class Outcome:
     tracked: Tracked
-    #: How many stream service reads the tracker's History holds.
+    #: How many stream service reads the tracker's History holds: direct-read
+    #: markers by default, or Nexus read operations with replay_from_store=False.
     reads: int
 
 
@@ -176,8 +178,8 @@ async def main(
     stream notifier and the namespace ``streams-b``.
     """
     b = await two_namespaces(client, new_store().notify_on_append())
-    a = await connect(client, None)
     b_queue = f"{task_queue}-b"
+    a = await connect(client, None, reads=endpoint_name(b_queue))
     name = await endpoint(client, b_queue, namespace=NAMESPACE_B)
     delivery_id = f"{workflow_id}-delivery"
     async with (
@@ -218,8 +220,11 @@ async def main(
         reads = sum(
             1
             for event in (await handle.fetch_history()).events
-            if event.event_type == EventType.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED
-            and event.nexus_operation_scheduled_event_attributes.operation == "read"
+            if (
+                event.event_type == EventType.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED
+                and event.nexus_operation_scheduled_event_attributes.operation == "read"
+            )
+            or event.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
         )
         print(f"[tracker] {len(tracked.positions)} positions in {reads} reads")
         return Outcome(tracked=tracked, reads=reads)

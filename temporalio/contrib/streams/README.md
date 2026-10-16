@@ -5,7 +5,7 @@
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
 it from Workflow code, and its Activities and any client append to it.
 Outside readers follow it from a cursor. Records live in the application's
-Redis and never pass through Temporal or its History. Core runs the store
+Redis or PostgreSQL and never pass through Temporal or its History. Core runs the store
 for every SDK, so Python reads what any other SDK writes. Publishes and
 appends add nothing to History.
 
@@ -30,14 +30,32 @@ a warning when it sees another policy. For tests and local development,
 `temporalio.contrib.streams.memory.MemoryStreams` keeps streams in the
 process.
 
+To keep streams in PostgreSQL 14 or later, register
+`temporalio.contrib.streams.postgres.PostgresStreams` instead. It makes its
+tables when it connects, and keeps records on disk, so a long retention
+costs disk, not memory. See
+[PostgreSQL store: guarantees and setup](docs/postgres-guarantees.md) for
+when to pick it over Redis.
+
+```python
+from temporalio.contrib.streams.postgres import PostgresStreams
+
+client = await Client.connect(
+    "localhost:7233",
+    plugins=[PostgresStreams("postgresql://app:secret@db:5432/app")],
+)
+```
+
 ## Path B: an Activity streams to its Workflow
 
 An Activity writes to the stream of the Workflow that scheduled it, as
-itself: its Activity id with the scheduling run id, and its Temporal
-attempt. The run id keeps two runs of a chain apart, since Activity ids
-restart in each run. When a retry starts writing, readers first see a
-`SUPERSEDED` record, so they can drop what this Activity's failed attempt
-wrote.
+itself: its Activity id with the scheduling run id. Its producer attempt is
+`started_ms << 11 | min(attempt, 2047)`, from the time the server started
+the attempt and its Temporal attempt, so a retry and an attempt after a
+reset write a higher one. The run id keeps two runs of a chain apart, since
+Activity ids restart in each run. When a retry starts writing, readers
+first see a `SUPERSEDED` record, so they can drop what this Activity's
+failed attempt wrote.
 
 ```python
 TOKENS = topic("tokens", str)
@@ -149,6 +167,256 @@ Known limits:
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
 
+## Streams owned by a standalone Activity
+
+A standalone Activity is one that a client starts with `start_activity`,
+with no Workflow. It owns streams of its own. In a standalone Activity,
+`activity_handle()` is the Activity's own stream, and the producer and
+close calls are the ones a Workflow Activity uses.
+
+```python
+@activity.defn
+async def generate(prompt: str) -> str:
+    stream = activity_handle()
+    out = stream.producer(topic=TOKENS)
+    async for token in model(prompt):
+        await out.append(token)
+    await stream.close(topic=TOKENS, result="done")
+    return "ok"
+
+handle = await client.start_activity(generate, "hi", id="gen-1", ...)
+ref = StreamRef.for_activity(handle.id, run_id=handle.run_id, topic=TOKENS)
+async for record in get_stream_handle(client, ref).read():
+    ...
+```
+
+- **Owner.** The stream belongs to one Activity run. The ref names the
+  Activity id and its run. A ref with no run names the newest run of the id
+  when a read starts, and the read stays on that run. A new run of the same
+  Activity id has new streams.
+- **Readers.** A client reads with `get_stream_handle(client, ref)`, and
+  Workflow code with `workflow_reader(ref)`, as for a Workflow's stream.
+- **Producer.** The Activity writes as `<Activity id>@<run id>`. Retries,
+  backoff, pause and reset keep the stream open.
+- **Attempt.** Each attempt writes the producer attempt
+  `started_ms << 11 | min(attempt, 2047)`, where `started_ms` is the Unix
+  time in milliseconds at which the server started the attempt. A retry and
+  an attempt after a reset start later, so readers see `SUPERSEDED` before
+  their records. An attempt that timed out but still writes started
+  earlier, so its late records are `stale`. Workflow Activities use the same
+  rule.
+- **Close.** The Activity closes its stream with `close(result=)` or
+  `close(error=)`. The SDK closes nothing when the Activity returns, so make
+  the close the last step. When the run ends with no close, the stream's
+  notifier on the server closes it within its owner check interval (30
+  seconds by default). A completed run gives a null result. A failed,
+  canceled, terminated or timed-out run gives the run's own failure, which a
+  Workflow reader raises after its last batch. A client reader that the
+  notifier did not wake ends with no outcome.
+- **Codec.** Records and closes go through the codec with an
+  `ActivitySerializationContext` that holds only the namespace and the
+  Activity id, since a reader can build no more from the ref.
+- **Server.** The server must run standalone Activities
+  (`activity.enableStandalone`) and the stream notifier.
+- **Deleting.** `delete_activity_streams(namespace, activity_id)` removes
+  the streams of every run of an Activity id.
+
+A standalone Activity reads and follows other streams as a client does. To
+go on after a retry, heartbeat the cursor of each record it handled, and
+read after the cursor in the heartbeat details:
+
+```python
+@activity.defn
+async def follow(workflow_id: str) -> int:
+    details = activity.info().heartbeat_details
+    after = Cursor(details[0]) if details else BEGINNING
+    seen = 0
+    async for record in get_stream_handle(activity.client(), workflow_id).read(
+        after=after
+    ):
+        seen += 1
+        activity.heartbeat(record.cursor.token)
+    return seen
+```
+
+Known limits:
+
+- **Not over Nexus.** The Nexus stream service serves only streams that a
+  Workflow owns.
+- **Clock skew.** The attempt uses the server's attempt start time. After a
+  failover to a cluster whose clock is behind by more than the retry
+  interval, a new attempt can look older, and its records are `stale`.
+- **Workflow Activities.** A Workflow Activity writes to its Workflow's
+  stream unless the Workflow started it to own one. See the next section.
+
+The sample runs in full in `tests/contrib/streams/samples/activity_owned_stream.py`.
+
+## Streams owned by a Workflow Activity
+
+An Activity that a Workflow schedules can own a stream too, for example a
+tool call of an agent. The Workflow starts it with
+`start_activity_with_stream`, which takes the arguments of
+`workflow.start_activity` and a `topic`, and returns the handle and the
+stream's ref. In that Activity, `activity_handle()` is the Activity's own
+stream.
+
+```python
+@workflow.defn
+class Agent:
+    @workflow.run
+    async def run(self, call: ToolCall) -> str:
+        handle, ref = start_activity_with_stream(
+            run_tool, call, activity_id=f"tool-{call.id}",
+            start_to_close_timeout=timedelta(minutes=5), topic=TOKENS,
+        )
+        return await handle
+
+@activity.defn
+async def run_tool(call: ToolCall) -> str:
+    out = activity_handle().producer(topic=TOKENS)
+    async for token in tool(call):
+        await out.append(token)
+    return "ok"
+
+ref = StreamRef.for_workflow_activity(
+    agent_id, run_id=run_id, activity_id="tool-42", topic=TOKENS
+)
+async for record in get_stream_handle(client, ref).read():
+    ...
+```
+
+- **Owner.** The stream belongs to one Activity in one Workflow run. The ref
+  names the Workflow id, the run that scheduled the Activity and the
+  Activity id. The run is required, since Activity ids such as `"1"` repeat
+  in each run of a chain.
+- **Picking the stream.** `start_activity_with_stream` marks the Activity
+  with the header `__temporal_stream_owner`. With the mark,
+  `activity_handle()` is the Activity's own stream. Without it, it is the
+  Workflow's stream. `activity_handle(scope="activity")` and
+  `activity_handle(scope="workflow")` pick one. A Local Activity can't own a
+  stream, and `scope="activity"` raises `StreamUnsupportedError` there.
+- **Producer.** The Activity writes as `<Activity id>@<run id>`, with the
+  attempt rule of a standalone Activity. A retry and an Activity reset
+  write to the same stream, and readers see `SUPERSEDED`.
+- **Close.** The Activity need not close its stream. When the Workflow sees
+  the Activity end, its Worker closes each topic the Activity wrote. A
+  completed Activity gives a null result. A failed, timed-out or canceled
+  Activity gives the failure that History holds, which a Workflow reader
+  raises after its last batch. The Activity may close a topic itself first,
+  with its own result.
+- **Backstop.** If the Workflow's Worker never closes the stream, for
+  example since it stopped right after the Activity ended, the stream's
+  notifier closes it with a generic failure. It does this once the
+  Activity is no longer pending, after `streamnotifier.ownerStartGrace`
+  from the notifier's start and `streamnotifier.ownerCloseGrace` from the
+  first check that found the Activity gone. A read that starts before the
+  Activity is scheduled waits for `owner_start_grace`.
+- **Runs.** Continue-as-New and a Workflow reset make a new run, so the
+  rerun Activity writes a new stream, and a cursor of the old stream is
+  refused on it. A second Activity with the same id in the same run writes
+  to a closed stream, and its first append raises `StreamClosedError`.
+- **Codec.** Records and closes go through the codec with an
+  `ActivitySerializationContext` that holds the namespace, the Activity id
+  and the Workflow id, and no other field.
+- **Deleting.** `delete_workflow_streams` removes the streams of the
+  Workflow's Activities too.
+
+Known limits:
+
+- **Cancel.** With cancellation types `TRY_CANCEL` and `ABANDON`, the
+  Workflow sees the cancel at once, while the Activity may still run. The
+  stream closes then with the canceled failure, and later appends raise
+  `StreamClosedError`.
+- **Owner check cost.** The owner check reads the run's pending
+  Activities. A run with thousands of them makes each check larger.
+- **Codec keys.** A codec that keys on the Activity type or task queue
+  can't decode the close outcome.
+- **Not over Nexus.** The Nexus stream service does not serve these
+  streams.
+
+The sample runs in full in `tests/contrib/streams/samples/tool_call_streams.py`.
+
+## Link records and followers
+
+A stream can hold a reference to another stream, as a `LINK` record. A
+follower reads the stream and each stream its links open in one order. So
+an agent writes a link per tool call or child agent in place of copying
+their records, and a reader still sees one ordered view.
+
+```python
+# Workflow code (agent). Links go out with the activation, as published values do.
+events = workflow_writer(EVENTS)
+handle, tool_ref = start_activity_with_stream(run_tool, call, topic=TOKENS, ...)
+events.link(tool_ref, name=call.id)                       # OPEN
+events.link(StreamRef.for_workflow(child_id), name="sub-3", after=child_cursor)
+await handle
+events.join(name=call.id)                                 # JOIN, the agent waited here
+
+# Client code. One ordered view of the agent and every stream it links.
+async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
+    if item.link_state is not None:      # OPENED, DONE, UNAVAILABLE or SKIPPED
+        ui.mark(item.source, item.link_state)
+    else:
+        ui.render(item.source, item.record)
+    if item.position is not None:
+        saved = item.position            # resumes every open link, not only the agent
+```
+
+- **Writing.** `StreamProducer.link(ref, *, name, after=None, value=None)`
+  and `WorkflowStreamWriter.link(...)` write an `OPEN`. The follower reads the
+  linked stream strictly after `after`, or from its oldest record. `join(*,
+  name, until=None)` writes a `JOIN`. It says the writer waited for the link
+  up to `until`, or to the linked stream's end. A tool stream needs no `JOIN`
+  for its segment to end, since its stream closes with the call.
+- **Order.** Each stream keeps its own order. A linked stream's records
+  never come before their `OPEN`. A record that comes after a `JOIN` waits
+  until the linked stream reached the join point or its end. Other records
+  come in the order they were read. No clock decides the order.
+- **Link reports.** Items with `link_state` say what happened to a link.
+  `OPENED` when a segment starts. `DONE` with the linked stream's close
+  outcome when it ends. `UNAVAILABLE` with the error when it can't be read,
+  for example a Workflow that never started, after `owner_start_grace`.
+  `SKIPPED` with a reason: `depth` past `max_depth` (4), `limit` past
+  `max_open` (16), `cycle` for a link back to a stream on the path, `open`
+  for a stream already open, and `endpoint` for a stream behind another
+  Nexus endpoint. A linked stream never fails the follow.
+- **Positions.** Each record keeps its own stream's cursor. The last item of
+  each batch carries a `FollowPosition`, which resumes the root and every
+  open segment with no loss and no repeat. To resume from an earlier item,
+  resume from the previous batch end.
+- **Workflow followers.** `workflow_follower(ref, topic=EVENTS)` gives the
+  same items in batches, one Local Activity per step, and sleeps on the
+  wakes of every open source. Each open source is one subscription of the
+  Workflow. By default each step's marker holds its ranges and a digest,
+  and replay reads them again through Core.
+- **Retries.** `SUPERSEDED` does not take back an expanded link. The link
+  record and the withdrawal both reach user code, and
+  `SupersessionTracker` withdraws the link.
+- **Plaintext.** A link's ref, name and cursors are stored as plaintext, as
+  Workflow and Activity ids are in History. A link's value goes through the
+  codec, so put secrets there.
+
+How the harness's subagent events map:
+
+| Harness event | Link records |
+|---------------|--------------|
+| `SUBAGENT_STARTED` with the child `workflow_id` | `link(StreamRef.for_workflow(child_id), name=...)` |
+| `SUBAGENT_MESSAGE_SENT` with `from_offset` | `link(..., after=<child cursor>)` for each turn |
+| `SUBAGENT_REPLY_RECEIVED` | `join(name=..., until=<child cursor at the turn end>)` |
+| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which Core reports |
+| A merge offset per child | `FollowPosition`, which holds every open segment |
+
+Known limits:
+
+- **Core and readers.** A Core before link records reads a `LINK` as an
+  invalid record, so every reader of a stream with links needs this release.
+- **Size.** The follow position grows with the open segments. With the
+  default bounds it stays below 64 KiB.
+- **Workflow followers.** A Workflow follower with more open sources than
+  its free wake sources gets `SKIPPED` with reason `limit` for the rest.
+
+The sample runs in full in `tests/contrib/streams/samples/agent_with_links.py`.
+
 ## A Workflow publishes to its own stream
 
 Workflow code can't do I/O, so `workflow_writer` hands its records to Core
@@ -254,6 +522,10 @@ so a run that goes longer than that should Continue-as-New.
 replays with no store. See
 [Positions or recorded](docs/notifications.md#positions-or-recorded) to choose.
 
+With `notify_on_append(notification_log=True)`, producers make no call to
+Temporal, and a `StreamDriver` you run forwards the notifications from the
+store. See [Run a StreamDriver](docs/notifications.md#run-a-streamdriver).
+
 A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See
 [Readers that sleep](docs/notifications.md).
@@ -262,13 +534,19 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 
 A caller Workflow in another namespace reads a stream through a Nexus
 endpoint with `temporalio.contrib.streams.nexus.StreamReader`. By default
-History keeps each read's answer, records included, so a replay needs
-nothing else. `StreamReader(..., replay_from_store=True)` keeps only each
-read's range and digest, as `workflow_reader` does, and a replay reads the
-range again through the endpoint. That needs `StreamDirectReads` on the
-caller Worker's client with a transport for the endpoint. `HttpTransport`
-works on a self-hosted server only and takes a write credential on the
-handler's namespace. See [Direct reads](docs/nexus.md#direct-reads).
+History keeps only each read's range and digest, as `workflow_reader` does,
+and a replay reads the range again through the endpoint. That needs
+`StreamDirectReads` on the caller Worker's client with a transport for the
+endpoint, and a read without one fails at once with a
+`StreamUnsupportedError` that names the opt-out. `HttpTransport` works on a
+self-hosted server only and takes a write credential on the handler's
+namespace. `ClientTransport` needs a server with
+`ExecuteSyncNexusOperation`, which Temporal Cloud doesn't serve yet.
+`StreamReader(..., replay_from_store=False)` keeps each read's answer in
+History, records included, so a replay needs nothing else. On Temporal
+Cloud, pass `replay_from_store=False`. The default needs a direct-read
+transport, and none works on Cloud yet. See
+[Direct reads](docs/nexus.md#direct-reads).
 
 ## What to know
 
@@ -278,7 +556,8 @@ handler's namespace. See [Direct reads](docs/nexus.md#direct-reads).
   producer state, such as `RedisStreams(plain=True)`, the copy lands and
   every reader drops it. `StreamStorePlugin.capabilities` says which.
 - **Retention.** A stream keeps records for `retention` (7 days by default,
-  set on `RedisStreams`) and dies that long after its last write. A cursor
+  set on `RedisStreams` or `PostgresStreams`) and dies that long after its
+  last write. A cursor
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window. Close earlier with
@@ -290,14 +569,15 @@ handler's namespace. See [Direct reads](docs/nexus.md#direct-reads).
   no reader delivers it, since every read ends at the first `CLOSE` record.
 - **Readers before the owner.** A read of a Workflow that Temporal doesn't
   know yet waits for `owner_start_grace` (60 seconds by default, set on
-  `RedisStreams` or `MemoryStreams`), counted from the read's first owner
+  `RedisStreams`, `PostgresStreams` or `MemoryStreams`), counted from the read's first owner
   check. So a reader can start before the Workflow does. After the grace,
   the read raises `StreamNotFoundError`, so a wrong Workflow id fails after
   the grace, not at once. Appends and `latest()` don't wait. Zero turns the
   grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
-  `RedisStreams.delete_workflow_streams` removes them at once.
-- **Not in this release.** Streams owned by an Activity or by no one raise
+  `delete_workflow_streams` on the store removes them at once, and
+  `delete_activity_streams` removes the streams of a standalone Activity.
+- **Not in this release.** Streams owned by no one raise
   `StreamUnsupportedError`.
 
 ## Further reading
@@ -305,6 +585,7 @@ handler's namespace. See [Direct reads](docs/nexus.md#direct-reads).
 - [Readers that sleep](docs/notifications.md)
 - [Store capabilities and guarantees](docs/store-capabilities.md)
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
+- [PostgreSQL store: guarantees and setup](docs/postgres-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
 - [Moving from Workflow Streams](docs/migration.md)
 - [Streams over Nexus](docs/nexus.md)

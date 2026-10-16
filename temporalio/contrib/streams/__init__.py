@@ -1,9 +1,10 @@
-"""Streams: an ordered log a Workflow owns, written from many places.
+"""Streams: an ordered log a Workflow or an Activity owns, written from many places.
 
 .. warning::
     This package is experimental and may change in future versions.
 
-A Workflow owns a stream. Producers outside Workflow code, such as the
+A Workflow or an Activity owns a stream. Producers outside
+Workflow code, such as the
 Workflow's Activities and clients, append to it, and outside readers consume
 it from a cursor. Records live in a store the application runs, which
 Core reaches for every SDK. Record bodies never reach the server.
@@ -46,18 +47,27 @@ context then reaches a stream the same way:
   and nothing goes to History.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt. A Local Activity writes as
-  its call number in the run, with an attempt that grows across its reruns.
-- Any process holding a client reaches a Workflow's stream with
+  scheduling run id, and an attempt from its start time and its Temporal
+  attempt. A Local Activity writes as its call number in the run, with an
+  attempt that grows across its reruns. In a standalone Activity,
+  :func:`activity_handle` is the Activity's own stream, and the Activity
+  writes as its id with its run id. An Activity that Workflow code started
+  with :func:`start_activity_with_stream` owns a stream too, which
+  :func:`activity_handle` gives it, and which closes when the Workflow sees
+  the Activity end.
+- Any process holding a client reaches a stream with
   :func:`get_stream_handle`, and writes with a producer id and an attempt of
   its own.
 
-Every read follows the Workflow's run chain across Continue-as-New and ends
-when the chain closes. A reader can't pin one run.
+Every read of a Workflow's stream follows the Workflow's run chain across
+Continue-as-New and ends when the chain closes. A reader can't pin one run.
+A read of a standalone Activity's stream ends when the Activity run ends. A
+read of the stream of an Activity that a Workflow scheduled ends when the
+scheduling run sees the Activity end.
 
 Workflow code reads a stream with :func:`workflow_reader`, one Local
 Activity per batch, and sleeps on the stream's notifier while the stream is
-idle. In this release only a Workflow owns a stream. The other owner kinds
+idle. Only a Workflow or an Activity owns a stream. The other owner kinds
 raise :class:`StreamUnsupportedError`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
@@ -67,6 +77,7 @@ as an ordinary payload.
 
 from temporalio.contrib.streams._capabilities import StoreCapabilities
 from temporalio.contrib.streams._cursor import BEGINNING, END
+from temporalio.contrib.streams._driver import StreamDriver
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
     StreamCursorError,
@@ -82,6 +93,12 @@ from temporalio.contrib.streams._errors import (
     StreamStorageError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._follow import (
+    FollowedItem,
+    FollowPosition,
+    LinkState,
+    LinkStateKind,
+)
 from temporalio.contrib.streams._handles import (
     ActivityStreamHandle,
     StreamHandle,
@@ -92,7 +109,9 @@ from temporalio.contrib.streams._handles import (
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
     Supersession,
 )
@@ -107,7 +126,13 @@ from temporalio.contrib.streams._workflow import (
     StreamPosition,
     TaskCutoff,
     WorkflowStreamReader,
+    start_activity_with_stream,
     workflow_reader,
+)
+from temporalio.contrib.streams._workflow_follow import (
+    FollowBatch,
+    WorkflowStreamFollower,
+    workflow_follower,
 )
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
@@ -121,14 +146,22 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "FollowBatch",
+    "FollowPosition",
+    "FollowedItem",
+    "LinkEvent",
+    "LinkState",
+    "LinkStateKind",
     "RecordKind",
     "StoreCapabilities",
     "StreamBatch",
     "StreamClosedError",
     "StreamCursorError",
+    "StreamDriver",
     "StreamError",
     "StreamExpiredError",
     "StreamHandle",
+    "StreamLink",
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
@@ -148,13 +181,16 @@ __all__ = [
     "Supersession",
     "SupersessionTracker",
     "TaskCutoff",
+    "WorkflowStreamFollower",
     "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
     "close_workflow_stream",
     "get_stream_handle",
+    "start_activity_with_stream",
     "topic",
     "track_supersession",
+    "workflow_follower",
     "workflow_reader",
     "workflow_writer",
 ]

@@ -569,6 +569,15 @@ impl ClientRef {
                         notify_stream
                     )
                 }
+                "notify_streams" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        notify_streams
+                    )
+                }
                 "patch_schedule" => {
                     rpc_call!(
                         connection,
@@ -1179,6 +1188,15 @@ impl ClientRef {
                         WorkflowService,
                         workflow_service,
                         validate_worker_deployment_version_compute_config
+                    )
+                }
+                "wait_stream_callback" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        wait_stream_callback
                     )
                 }
                 _ => {

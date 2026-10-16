@@ -9,10 +9,12 @@ Jetty lane.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import uuid
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -41,12 +43,17 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamPosition,
     StreamRecordError,
+    StreamRef,
+    StreamStorePlugin,
     StreamUnsupportedError,
     _workflow,
+    activity_handle,
     get_stream_handle,
+    start_activity_with_stream,
     topic,
     workflow_reader,
 )
+from temporalio.contrib.streams._plugin import store_for_client
 from temporalio.contrib.streams._replay_reads import (
     ReadChain,
     ReplayReadCodec,
@@ -56,6 +63,7 @@ from temporalio.contrib.streams._replay_reads import (
 from temporalio.contrib.streams._wire import decode_or_mark, to_record
 from temporalio.contrib.streams._workflow import (
     READ_ACTIVITY,
+    _read_summary,
     _ReadInput,
     _result,
     read_activity,
@@ -66,11 +74,23 @@ from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with, new_workflow_id
-from tests.contrib.streams.test_outside_handles import Waits, running_owner
+from tests.contrib.streams._support import (
+    connect_with,
+    new_workflow_id,
+    postgres_streams,
+)
+from tests.contrib.streams.test_outside_handles import (
+    Waits,
+    owns_a_stream,
+    running_owner,
+)
 from tests.helpers import new_worker
 
 TOKENS = topic("tokens", str)
+
+
+def new_store(kind: str) -> StreamStorePlugin:
+    return postgres_streams() if kind == "postgres" else MemoryStreams()
 
 
 class FakeReads:
@@ -160,8 +180,11 @@ def superseded(cursor: str, producer: str, attempt: int) -> ReadRecord:
     )
 
 
-def armed(cursor: str, wake_after: int) -> ReadResponse:
-    return ReadResponse(cursor=cursor, armed=True, wake_after=wake_after)
+def empty(cursor: str, wake_after: int) -> ReadResponse:
+    # Core names the chain on every read of an owner that started.
+    return ReadResponse(
+        cursor=cursor, wake_after=wake_after, chain_first_run_id="chain"
+    )
 
 
 @workflow.defn
@@ -240,12 +263,12 @@ async def _run_reader(
     return result, fake, handle
 
 
-async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
+async def test_a_reader_sleeps_after_an_empty_read_until_a_higher_counter(
     client: Client,
 ):
     async def drive(handle: Any, fake: FakeReads) -> None:
         await fake.until(2)
-        # A wake at the armed counter names no new record, so the reader sleeps on.
+        # A wake at the empty read's counter names no new record, so the reader sleeps on.
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=5)
         )
@@ -259,7 +282,7 @@ async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
         client,
         [
             ReadResponse(records=[data("c1", "a"), data("c2", "b")], cursor="c2"),
-            armed("c2", 5),
+            empty("c2", 5),
             ReadResponse(
                 records=[superseded("c2", "p", 2), data("c3", "c", attempt=2)],
                 cursor="c3",
@@ -272,10 +295,49 @@ async def test_a_reader_sleeps_after_an_armed_read_until_a_higher_counter(
         ["data a", "data b"],
         ["superseded p@2", "data c"],
     ]
-    # The first read attaches, and the later ones don't.
-    assert [i.subscription_id for i in fake.inputs] == ["1", "", ""]
+    # Each read names the subscriber, so Core attaches it and asks for a wake
+    # at the empty read. No read attaches first, and each waits in the store.
+    assert [(i.subscription_id, i.subscribe) for i in fake.inputs] == [
+        ("1", False),
+        ("1", False),
+        ("1", False),
+    ]
     assert [i.after for i in fake.inputs] == ["", "c2", "c2"]
-    assert all(i.arm for i in fake.inputs)
+    assert [i.wait_ms == 0 for i in fake.inputs] == [False, False, False]
+
+
+async def test_a_reader_gets_one_wake_per_idle_stretch(client: Client):
+    async def drive(handle: Any, fake: FakeReads) -> None:
+        await fake.until(1)
+        await handle.signal(
+            ReadsBatches.wake, StreamWake(subscription_id="1", counter=2)
+        )
+        await fake.until(4)
+        # The second idle stretch sleeps on its own empty read, with no read
+        # that attaches first.
+        await asyncio.sleep(1)
+        assert len(fake.inputs) == 4
+        await handle.signal(
+            ReadsBatches.wake, StreamWake(subscription_id="1", counter=4)
+        )
+
+    batches, fake, _ = await _run_reader(
+        client,
+        [
+            empty("c0", 1),
+            ReadResponse(records=[data("c1", "a")], cursor="c1"),
+            ReadResponse(records=[data("c2", "b")], cursor="c2"),
+            empty("c2", 3),
+            ReadResponse(records=[data("c3", "c")], cursor="c3", done=True),
+        ],
+        drive,
+    )
+    assert batches == [["data a"], ["data b"], ["data c"]]
+    assert [(i.subscription_id, i.subscribe) for i in fake.inputs] == [("1", False)] * 5
+    assert [i.wait_ms == 0 for i in fake.inputs] == [False] * 5
+    assert {_read_summary(i).split(" tokens")[0] for i in fake.inputs} == {
+        "stream read"
+    }
 
 
 async def test_a_recheck_reads_again_whatever_the_counter(client: Client):
@@ -292,8 +354,8 @@ async def test_a_recheck_reads_again_whatever_the_counter(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("", 0),
-            armed("", 0),
+            empty("", 0),
+            empty("", 0),
             ReadResponse(records=[data("c1", "lost")], cursor="c1", done=True),
         ],
         drive,
@@ -302,7 +364,7 @@ async def test_a_recheck_reads_again_whatever_the_counter(client: Client):
     assert len(fake.inputs) == 3
 
 
-async def test_a_close_is_read_to_the_end_without_arming(client: Client):
+async def test_a_close_is_read_to_the_end(client: Client):
     async def drive(handle: Any, fake: FakeReads) -> None:
         await fake.until(1)
         await handle.signal(
@@ -313,14 +375,16 @@ async def test_a_close_is_read_to_the_end_without_arming(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("c0", 3),
+            empty("c0", 3),
             ReadResponse(records=[data("c1", "x")], cursor="c1"),
             ReadResponse(records=[data("c2", "y")], cursor="c2", done=True),
         ],
         drive,
     )
     assert batches == [["data x"], ["data y"]]
-    assert [i.arm for i in fake.inputs] == [True, False, False]
+    # A closed stream needs no wake, so the reads after the close name no
+    # subscriber.
+    assert [i.subscription_id for i in fake.inputs] == ["1", "", ""]
 
 
 async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Client):
@@ -342,7 +406,7 @@ async def test_a_close_with_a_failure_raises_it_after_the_last_batch(client: Cli
         await _run_reader(
             client,
             [
-                armed("c0", 3),
+                empty("c0", 3),
                 ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
             ],
             drive,
@@ -391,24 +455,29 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
     batches, fake, _ = await _run_reader(
         client,
         [
-            armed("c0", 1),
-            armed("c0", 1),
+            empty("c0", 1),
+            empty("c0", 1),
             ReadResponse(records=[data("c1", "z")], cursor="c1", done=True),
         ],
         drive,
     )
     assert batches == [["data z"]]
+    # After a resubscribe each read names the new generation, so Core
+    # attaches again at the next empty read.
     assert [(i.subscription_id, i.generation) for i in fake.inputs] == [
         ("1", 0),
         ("1", 1),
-        ("", 1),
+        ("1", 1),
     ]
 
 
 async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
     global _fake
     _fake = fake = FakeReads(
-        [armed("c0", 5), ReadResponse(records=[data("c1", "x")], cursor="c1")]
+        [
+            empty("c0", 5),
+            ReadResponse(records=[data("c1", "x")], cursor="c1"),
+        ]
     )
     async with new_worker(client, ReadsBatches, activities=[fake_read]) as worker:
         handle = await client.start_workflow(
@@ -418,8 +487,8 @@ async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
             task_queue=worker.task_queue,
         )
         await fake.until(1)
-        # A wake below the armed counter wakes nothing, but ends one more task
-        # that the reset can go back to, past the armed read's marker.
+        # A wake below the empty read's counter wakes nothing, but ends one more task
+        # that the reset can go back to, past the empty read's marker.
         await handle.signal(
             ReadsBatches.wake, StreamWake(subscription_id="1", counter=1)
         )
@@ -454,21 +523,46 @@ async def test_a_reset_run_attaches_itself_before_it_sleeps(client: Client):
         new_run = client.get_workflow_handle(handle.id, run_id=reset.run_id)
         batches = await asyncio.wait_for(new_run.result(), 20)
     assert batches == [["data x"]]
-    # The reset run replayed the first read, then attached itself to read.
-    attach = fake.inputs[1]
-    assert attach.subscription_id == "1" and attach.arm and not attach.unsubscribe
+    # The reset run replayed the empty read and read once more, since the
+    # notifier wakes only the run that attached. Then it detached.
+    assert [(i.subscription_id, i.unsubscribe) for i in fake.inputs] == [
+        ("1", False),
+        ("1", False),
+        ("1", True),
+    ]
 
 
 async def test_a_reader_stopped_early_detaches(client: Client):
+    async def drive(handle: Any, fake: FakeReads) -> None:
+        await fake.until(1)
+        await handle.signal(
+            ReadsBatches.wake, StreamWake(subscription_id="1", counter=2)
+        )
+
     batches, fake, _ = await _run_reader(
         client,
-        [ReadResponse(records=[data("c1", "a")], cursor="c1", state=b"seen")],
-        _no_drive,
+        [
+            empty("c0", 1),
+            ReadResponse(records=[data("c1", "a")], cursor="c1", state=b"seen"),
+        ],
+        drive,
         stop_after=1,
     )
     assert batches == [["data a"]]
     last = fake.inputs[-1]
     assert last.unsubscribe and last.subscription_id == "1"
+
+
+async def test_a_reader_that_never_went_idle_has_nothing_to_detach(client: Client):
+    batches, fake, _ = await _run_reader(
+        client,
+        [ReadResponse(records=[data("c1", "a")], cursor="c1")],
+        _no_drive,
+        stop_after=1,
+    )
+    assert batches == [["data a"]]
+    # Core attaches only at an empty read, so this reader never attached.
+    assert [(i.subscription_id, i.unsubscribe) for i in fake.inputs] == [("1", False)]
 
 
 async def test_a_position_resumes_the_next_run(client: Client):
@@ -507,7 +601,7 @@ async def test_a_reader_replays_from_its_markers_and_wakes(client: Client):
         client,
         [
             ReadResponse(records=[data("c1", "a")], cursor="c1"),
-            armed("c1", 7),
+            empty("c1", 7),
             ReadResponse(records=[data("c2", "b")], cursor="c2", done=True),
         ],
         drive,
@@ -568,9 +662,12 @@ async def test_each_reader_of_a_run_has_its_own_subscription(client: Client):
     assert ids == ["1", "2"]
 
 
-async def test_the_read_activity_reads_and_decodes_through_core(client: Client):
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+async def test_the_read_activity_reads_and_decodes_through_core(
+    client: Client, kind: str
+):
     # Without the notifier the attach fails, so this drives the read alone.
-    streams_client = await connect_with(client, MemoryStreams())
+    streams_client = await connect_with(client, new_store(kind))
     async with new_worker(streams_client, Waits) as worker:
         owner = await running_owner(streams_client, worker.task_queue)
         handle = streams_client.get_workflow_handle(owner)
@@ -586,7 +683,6 @@ async def test_the_read_activity_reads_and_decodes_through_core(client: Client):
                 topic="tokens",
                 after="",
                 state="",
-                arm=False,
                 wait_ms=100,
                 max_records=10,
             ),
@@ -732,6 +828,390 @@ async def test_a_replay_with_no_connected_store_names_the_opt_out():
 
 
 @workflow.defn
+class ReadsAStream:
+    @workflow.run
+    async def run(self, ref: StreamRef, record_batches: bool) -> list[str]:
+        seen: list[str] = []
+        async with workflow_reader(ref, replay_from_store=not record_batches) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+
+async def test_a_reader_names_an_activity_owner_in_each_read(client: Client):
+    global _fake
+    # The Activity closed its stream, so the reader ends at once.
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")], cursor="c1", done=True, closed_by="act@run"
+            )
+        ]
+    )
+    ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
+    async with new_worker(client, ReadsAStream, activities=[fake_read]) as worker:
+        seen = await client.execute_workflow(
+            ReadsAStream.run,
+            args=[ref, True],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert seen == ["data a"]
+    [input] = _fake.inputs
+    assert (input.owner_kind, input.activity_id, input.workflow_id) == (
+        "activity",
+        "act",
+        "",
+    )
+    assert input.chain_run_id == "run"
+
+
+def test_a_read_input_from_before_activity_owners_names_a_workflow():
+    # A marker's input is plain data, and an older one has no owner fields.
+    converter = DataConverter.default.payload_converter
+    payload = converter.to_payloads(
+        [
+            {
+                "workflow_id": "owner",
+                "chain_run_id": "",
+                "topic": "tokens",
+                "after": "",
+                "state": "",
+                "wait_ms": 100,
+                "max_records": 10,
+            }
+        ]
+    )[0]
+    [input] = converter.from_payloads([payload], [_ReadInput])
+    assert (input.owner_kind, input.activity_id) == ("workflow", "")
+
+
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+@pytest.mark.parametrize("record_batches", [True, False])
+async def test_a_workflow_reads_the_stream_of_a_standalone_activity(
+    client: Client, record_batches: bool, kind: str
+):
+    # The Activity closes its stream before the reader starts, so the reader
+    # reads to the close and never sleeps on the notifier.
+    streams = await connect_with(client, new_store(kind))
+    activity_id = new_workflow_id()
+    async with new_worker(streams, ReadsAStream, activities=[owns_a_stream]) as worker:
+        owner = await streams.start_activity(
+            owns_a_stream,
+            ["a", "b"],
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        run_id = await owner.result()
+        ref = StreamRef.for_activity(activity_id, run_id=run_id, topic=TOKENS)
+        handle = await streams.start_workflow(
+            ReadsAStream.run,
+            args=[ref, record_batches],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == ["data a", "data b"]
+    history = await handle.fetch_history()
+    if record_batches:
+        # The markers hold the batches, so a replay needs no store and no server.
+        await Replayer(
+            workflows=[ReadsAStream], plugins=[MemoryStreams()]
+        ).replay_workflow(history)
+    else:
+        store = store_for_client(streams)
+        store._batches.clear()
+        await Replayer(workflows=[ReadsAStream], plugins=[store]).replay_workflow(
+            history
+        )
+
+
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+async def test_the_read_activity_reads_a_standalone_activitys_stream(
+    client: Client, kind: str
+):
+    streams = await connect_with(client, new_store(kind))
+    activity_id = new_workflow_id()
+    async with new_worker(streams, activities=[owns_a_stream]) as worker:
+        owner = await streams.start_activity(
+            owns_a_stream,
+            ["one"],
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        run_id = await owner.result()
+    env = ActivityEnvironment(client=streams)
+    env.info = dataclasses.replace(env.info, is_local=True)
+    raw = await env.run(
+        read_activity,
+        _ReadInput(
+            workflow_id="",
+            owner_kind="activity",
+            activity_id=activity_id,
+            chain_run_id=run_id,
+            topic="tokens",
+            after="",
+            state="",
+            wait_ms=100,
+            max_records=10,
+        ),
+    )
+    response = ReadResponse.FromString(raw.payload.data)
+    assert [
+        DataConverter.default.payload_converter.from_payloads([r.stored.body])[0]
+        for r in response.records
+        if r.HasField("stored")
+    ] == ["one"]
+    # One run is the Activity's chain, so the read names it with no describe.
+    assert raw.payload.metadata["temporal.io/stream-read-run-id"] == run_id.encode()
+
+
+@workflow.defn
+class ReadsAnActivityRun:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
+        async with workflow_reader(ref, replay_from_store=False) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
+async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
+    client: Client,
+):
+    # Core ends the read when the run ends, with no outcome. Only the notifier
+    # knows the run's failure, so the reader attaches and waits for its close.
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
+            ReadResponse(cursor="c1", done=True),
+        ]
+    )
+    failure = Failure(
+        message="boom", application_failure_info=ApplicationFailureInfo(type="Boom")
+    )
+    async with new_worker(client, ReadsAnActivityRun, activities=[fake_read]) as worker:
+        handle = await client.start_workflow(
+            ReadsAnActivityRun.run, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+        await _fake.until(2)
+        await handle.signal(
+            ReadsAnActivityRun.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        with pytest.raises(WorkflowFailureError) as raised:
+            await asyncio.wait_for(handle.result(), 20)
+    cause = raised.value.cause
+    assert isinstance(cause, ApplicationError) and cause.type == "Boom"
+    # The second read attaches first, since the read is done and only the
+    # notifier tells how the run ended.
+    assert [(i.subscription_id, i.subscribe) for i in _fake.inputs] == [
+        ("1", False),
+        ("1", True),
+    ]
+
+
+async def test_a_reader_names_a_workflow_activity_owner_in_each_read(client: Client):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[data("c1", "a")], cursor="c1", done=True, closed_by="act@run"
+            )
+        ]
+    )
+    ref = StreamRef.for_workflow_activity(
+        "agent", run_id="run", activity_id="act", topic=TOKENS
+    )
+    async with new_worker(client, ReadsAStream, activities=[fake_read]) as worker:
+        seen = await client.execute_workflow(
+            ReadsAStream.run,
+            args=[ref, True],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert seen == ["data a"]
+    [input] = _fake.inputs
+    assert (input.owner_kind, input.activity_id, input.workflow_id) == (
+        "workflow_activity",
+        "act",
+        "agent",
+    )
+    assert input.chain_run_id == "run"
+
+
+@activity.defn
+async def streams_a_tool_call(tokens: list[str]) -> str:
+    await activity_handle().producer(topic=TOKENS).append(*tokens)
+    return "ok"
+
+
+@workflow.defn
+class RunsAToolAndReadsIt:
+    @workflow.run
+    async def run(self, record_batches: bool) -> list[str]:
+        handle, ref = start_activity_with_stream(
+            streams_a_tool_call,
+            ["a", "b"],
+            start_to_close_timeout=timedelta(seconds=10),
+            topic=TOKENS,
+        )
+        await handle
+        seen: list[str] = []
+        async with workflow_reader(ref, replay_from_store=not record_batches) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+@pytest.mark.parametrize("record_batches", [True, False])
+async def test_a_workflow_reads_the_stream_of_its_own_activity(
+    client: Client, record_batches: bool, kind: str
+):
+    # The Worker closes the tool's stream when the run sees the tool end, so
+    # the reader reads to that close and never sleeps on the notifier.
+    streams = await connect_with(client, new_store(kind))
+    async with new_worker(
+        streams, RunsAToolAndReadsIt, activities=[streams_a_tool_call]
+    ) as worker:
+        handle = await streams.start_workflow(
+            RunsAToolAndReadsIt.run,
+            record_batches,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        assert await asyncio.wait_for(handle.result(), 30) == ["data a", "data b"]
+    history = await handle.fetch_history()
+    if record_batches:
+        await Replayer(
+            workflows=[RunsAToolAndReadsIt], plugins=[MemoryStreams()]
+        ).replay_workflow(history)
+    else:
+        store = store_for_client(streams)
+        store._batches.clear()
+        await Replayer(
+            workflows=[RunsAToolAndReadsIt], plugins=[store]
+        ).replay_workflow(history)
+
+
+@workflow.defn
+class ReadsAToolStream:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_workflow_activity(
+            "agent", run_id="run", activity_id="tool-1", topic=TOKENS
+        )
+        async with workflow_reader(ref, replay_from_store=False) as reader:
+            async for batch in reader:
+                seen.extend(_describe(r) for r in batch.records)
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
+@workflow.defn
+class SaysWhatAnActivityRunHad:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        ref = StreamRef.for_activity("act", run_id="run", topic=TOKENS)
+        try:
+            async with workflow_reader(ref, replay_from_store=False) as reader:
+                async for batch in reader:
+                    seen.extend(_describe(r) for r in batch.records)
+        except ApplicationError as error:
+            seen.append(f"failed {error.type}")
+        return seen
+
+    @workflow.signal
+    def wake(self, wake: StreamWake) -> None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._stream_wakes.append(
+            ResolveStreamWake.FromString(wake.SerializeToString())
+        )
+
+
+async def test_a_reader_of_a_tool_stream_ends_at_the_notifiers_backstop_close(
+    client: Client,
+):
+    # The store never closes a tool stream whose agent missed the close, and
+    # Core ends the read only after its grace. The notifier's close is the end.
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1"),
+            empty("c1", 1),
+            empty("c1", 1),
+        ]
+    )
+    failure = Failure(
+        message="the owner Activity ended without closing the stream",
+        application_failure_info=ApplicationFailureInfo(),
+    )
+    async with new_worker(client, ReadsAToolStream, activities=[fake_read]) as worker:
+        handle = await client.start_workflow(
+            ReadsAToolStream.run, id=new_workflow_id(), task_queue=worker.task_queue
+        )
+        await _fake.until(2)
+        await handle.signal(
+            ReadsAToolStream.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        with pytest.raises(WorkflowFailureError) as raised:
+            await asyncio.wait_for(handle.result(), 20)
+    assert "without closing the stream" in str(raised.value.cause)
+    assert len(_fake.inputs) == 3
+
+
+async def test_the_last_records_of_an_ended_activity_run_are_delivered(
+    client: Client,
+):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(records=[data("c1", "x")], cursor="c1", done=True),
+            ReadResponse(cursor="c1", done=True),
+        ]
+    )
+    failure = Failure(
+        message="boom", application_failure_info=ApplicationFailureInfo(type="Boom")
+    )
+    async with new_worker(
+        client, SaysWhatAnActivityRunHad, activities=[fake_read]
+    ) as worker:
+        handle = await client.start_workflow(
+            SaysWhatAnActivityRunHad.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await _fake.until(2)
+        await handle.signal(
+            SaysWhatAnActivityRunHad.wake,
+            StreamWake(subscription_id="1", closed=True, close_failure=failure),
+        )
+        seen = await asyncio.wait_for(handle.result(), 20)
+    assert seen == ["data x", "failed Boom"]
+
+
+@workflow.defn
 class ReadsPastBadRecords:
     @workflow.run
     async def run(self) -> list[str]:
@@ -819,6 +1299,7 @@ class CancelsTheAttachingRead:
 
 async def test_a_close_after_a_canceled_attach_detaches(client: Client):
     global _fake
+    # Each read of an open stream names the reader, so Core may attach it.
     _fake = FakeReads([HANG])
     async with new_worker(
         client, CancelsTheAttachingRead, activities=[fake_read]
@@ -846,14 +1327,14 @@ async def test_an_attach_without_notifications_warns_once(
         topic="tokens",
         after="",
         state="",
-        arm=True,
         wait_ms=0,
         max_records=10,
         subscription_id="1",
     )
     with caplog.at_level(logging.WARNING):
         for _ in range(2):
-            with pytest.raises(Exception):
+            # The read itself may fail here, with no owner and no notifier.
+            with contextlib.suppress(Exception):
                 await env.run(read_activity, input)
     warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
     assert len(warned) == 1
@@ -901,6 +1382,21 @@ async def test_a_failed_read_leaves_no_gap_in_the_read_chain(client: Client):
     )
 
 
+async def test_a_read_before_the_owner_starts_reads_again_on_a_timer(client: Client):
+    # Core answers an idle read inside the owner start grace with no chain
+    # and attaches nothing, so no wake would come.
+    batches, fake, _ = await _run_reader(
+        client,
+        [
+            ReadResponse(cursor=""),
+            ReadResponse(records=[data("c1", "a")], cursor="c1", done=True),
+        ],
+        _no_drive,
+    )
+    assert batches == [["data a"]]
+    assert len(fake.inputs) == 2
+
+
 async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Client):
     # Two large records in one recorded answer would pass the server's blob
     # limit, so the read hands over the first one and the next read the other.
@@ -918,7 +1414,6 @@ async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Cli
             topic="tokens",
             after="",
             state="",
-            arm=False,
             wait_ms=0,
             max_records=10,
             max_bytes=1 << 20,

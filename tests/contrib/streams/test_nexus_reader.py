@@ -13,6 +13,7 @@ import asyncio
 import base64
 import dataclasses
 import os
+import time
 import types
 import uuid
 from collections.abc import Sequence
@@ -129,6 +130,7 @@ class ChatReader:
             item_type=Token,
             endpoint=ENDPOINT,
             after=Cursor(after) if after else None,
+            replay_from_store=False,
         )
         observed = Seen()
         try:
@@ -873,6 +875,7 @@ async def test_each_read_sends_the_state_the_last_answer_gave(
         item_type=Token,
         endpoint=ENDPOINT,
         after=ReadPosition(cursor=Cursor(""), state=base64.b64encode(b"s0").decode()),
+        replay_from_store=False,
     )
     assert await reader.next() == [Token("a")]
     assert await reader.next() is None
@@ -911,7 +914,7 @@ def _fake_reads(
 ) -> None:
     class FakeClient:
         async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
-            calls.append(("read", input.arm, input.wait_ms))
+            calls.append(("read", input.wait_ms))
             return answers.pop(0)
 
     fake_workflow = types.SimpleNamespace(
@@ -922,20 +925,20 @@ def _fake_reads(
     monkeypatch.setattr(reader_module, "workflow", fake_workflow)
 
 
-async def test_each_read_asks_to_arm_and_waits_the_idle_wait(
+async def test_each_read_waits_the_idle_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A read with records answers at once, so only a gap longer than the idle
-    wait arms the stream and puts the reader to sleep on progress."""
+    wait puts the reader to sleep on progress."""
     calls: list[tuple[Any, ...]] = []
     _fake_reads(
         monkeypatch,
         [
             answer(record(1, text="a")),
-            ReadOutput(records=[], next_token="cursor-1", done=False, armed=True),
+            ReadOutput(records=[], next_token="cursor-1", done=False),
             answer(record(2, text="b")),
-            ReadOutput(records=[], next_token="cursor-2", done=False, armed=True),
-            # The drain after the completion waits, but never arms.
+            ReadOutput(records=[], next_token="cursor-2", done=False),
+            # The drain after the completion waits for the stream's end.
             answer(cursor="cursor-2", done=True),
         ],
         calls,
@@ -944,26 +947,26 @@ async def test_each_read_asks_to_arm_and_waits_the_idle_wait(
         _OpenHandle(calls, waits=1),  # type: ignore[arg-type]
         item_type=Token,
         endpoint=ENDPOINT,
+        replay_from_store=False,
     )
     assert await reader.next() == [Token("a")]
     assert await reader.next() == [Token("b")]
     assert await reader.next() is None
     assert calls == [
-        ("read", True, 2000),
-        ("read", True, 2000),
+        ("read", 2000),
+        ("read", 2000),
         ("progress", 0),
-        ("read", True, 2000),
-        ("read", True, 2000),
+        ("read", 2000),
+        ("read", 2000),
         ("progress", 1),
-        ("read", None, 2000),
+        ("read", 2000),
     ]
 
 
-async def test_an_empty_unarmed_answer_falls_back_to_the_progress_wait(
+async def test_a_zero_idle_wait_sleeps_on_the_first_empty_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A History from before readers armed holds empty answers without
-    ``armed``, and the reader must wait on progress after them as it did then."""
+    """An empty answer puts the reader to sleep on progress."""
     calls: list[tuple[Any, ...]] = []
     _fake_reads(
         monkeypatch,
@@ -978,10 +981,10 @@ async def test_an_empty_unarmed_answer_falls_back_to_the_progress_wait(
         item_type=Token,
         endpoint=ENDPOINT,
         idle_wait=timedelta(0),
+        replay_from_store=False,
     )
     assert await reader.next() == [Token("a")]
-    # An idle wait of zero arms on the first empty read.
-    assert calls == [("read", True, 0), ("progress", 0), ("read", True, 0)]
+    assert calls == [("read", 0), ("progress", 0), ("read", 0)]
 
 
 def test_the_idle_wait_is_not_negative() -> None:
@@ -991,6 +994,7 @@ def test_the_idle_wait_is_not_negative() -> None:
             item_type=Token,
             endpoint=ENDPOINT,
             idle_wait=timedelta(seconds=-1),
+            replay_from_store=False,
         )
 
 
@@ -1073,6 +1077,7 @@ async def test_a_bad_last_record_still_takes_the_answers_state(
         _CompletedHandle(),  # type: ignore[arg-type]
         item_type=Token,
         endpoint=ENDPOINT,
+        replay_from_store=False,
     )
     assert await reader.next() == [Token("a")]
     with pytest.raises(StreamRecordError):
@@ -1161,7 +1166,9 @@ class LiveChatReader:
     async def run(self, endpoint: str) -> LiveSeen:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
         batches: list[list[Token]] = []
         while (batch := await reader.next()) is not None:
             batches.append(batch)
@@ -1362,7 +1369,9 @@ class LiveEndingReader:
     async def run(self, endpoint: str) -> LiveEnding:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
         texts: list[str] = []
         try:
             while (batch := await reader.next()) is not None:
@@ -1481,7 +1490,9 @@ class LiveLabelReader:
     async def run(self, endpoint: str) -> list[str]:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
         labels: list[str] = []
         while (batch := await reader.next()) is not None:
             labels += [token.text.split(":", 1)[0] for token in batch]
@@ -1784,7 +1795,9 @@ class LiveTokenReader:
     async def run(self, endpoint: str) -> tuple[str, list[str], str]:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
         labels: list[str] = []
         while (batch := await reader.next()) is not None:
             labels += [token.text for token in batch]
@@ -1859,12 +1872,18 @@ class LiveResumingReader:
     async def run(self, endpoint: str) -> tuple[list[str], list[str]]:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        first = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        first = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
         batch = await first.next()
         assert batch is not None
         await workflow.wait_condition(lambda: self._resume)
         rest = StreamReader(
-            handle, item_type=Token, endpoint=endpoint, after=first.cursor
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=first.cursor,
+            replay_from_store=False,
         )
         later: list[str] = []
         while (more := await rest.next()) is not None:
@@ -1960,7 +1979,11 @@ class LivePositionReader:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
         reader = StreamReader(
-            handle, item_type=Token, endpoint=endpoint, after=position
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=position,
+            replay_from_store=False,
         )
         if position is None:
             items = 0
@@ -2059,6 +2082,7 @@ class LiveContinuingReader:
             item_type=Token,
             endpoint=endpoint,
             after=Cursor(after) if after else None,
+            replay_from_store=False,
         )
         if not after:
             batch = await reader.next()
@@ -2179,3 +2203,70 @@ async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> 
     await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
     assert seen[0].batches == [[Token("a")], [Token("c")]]
     assert seen[0].undecodable == ["cursor-2"]
+
+
+@workflow.defn(name="DefaultChatReader")
+class DefaultChatReader:
+    @workflow.run
+    async def run(self, endpoint: str) -> int:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        return len(await reader.next() or [])
+
+
+async def test_live_a_default_reader_without_a_transport_names_the_opt_out(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    owner_id = f"token-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    client = await connect(client, MemoryStreams().notify_on_append())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveTokenOwner.run, ["a"], id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    # The caller's Worker has no StreamDirectReads, so the default read has no
+    # way to reach the endpoint.
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[DefaultChatReader, LiveTokenOwner],
+        nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
+    ):
+        caller = await client.start_workflow(
+            DefaultChatReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+
+        async def task_failure() -> str:
+            while True:
+                for event in (await caller.fetch_history()).events:
+                    if event.HasField("workflow_task_failed_event_attributes"):
+                        return (
+                            event.workflow_task_failed_event_attributes.failure.message
+                        )
+                await asyncio.sleep(0.2)
+
+        started = time.monotonic()
+        message = await asyncio.wait_for(task_failure(), 30)
+        # The read Activity fails with no retry, so the task fails at once.
+        assert time.monotonic() - started < 15
+        await caller.terminate()
+        await client.get_workflow_handle(owner_id).signal(LiveTokenOwner.done)
+    assert "StreamDirectReads" in message
+    assert "replay_from_store=False" in message

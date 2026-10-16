@@ -39,6 +39,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     NewStore,
     connect,
     endpoint,
+    endpoint_name,
     run,
 )
 from tests.contrib.streams.samples.scenarios.s7b_retried_courier import (
@@ -104,7 +105,9 @@ class Watcher:
             watched.positions.extend(batch)
         watched.close_result = await handle
         watched.supersessions = [
-            f"{mark.supersession.previous_attempt} -> {mark.supersession.attempt}"
+            # An Activity's attempt keeps its Temporal attempt in the low 11 bits.
+            f"{mark.supersession.previous_attempt & 0x7FF}"
+            f" -> {mark.supersession.attempt & 0x7FF}"
             for mark in reader.supersessions
         ]
         watched.stale = [str(record.value) for record in reader.stale_records]
@@ -123,7 +126,9 @@ async def main(
     ``client`` is a client of a server with the stream notifier.
     """
     s7b_retried_courier._gate = s7b_retried_courier._Gate()
-    streams = await connect(client, new_store().notify_on_append())
+    streams = await connect(
+        client, new_store().notify_on_append(), reads=endpoint_name(task_queue)
+    )
     name = await endpoint(client, task_queue)
     async with Worker(
         streams,

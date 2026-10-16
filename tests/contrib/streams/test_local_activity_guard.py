@@ -23,6 +23,7 @@ from temporalio.client import Client, WorkflowHistory
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib.streams import close_workflow_stream, workflow_reader
 from temporalio.contrib.streams._workflow import READ_ACTIVITY, _ReadInput
+from temporalio.contrib.streams._workflow_follow import FOLLOW_ACTIVITY, _FollowInput
 from temporalio.contrib.streams._workflow_writer import CLOSE_ACTIVITY
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter
@@ -53,12 +54,24 @@ class CallsAsNormalActivity:
                     topic="tokens",
                     after="",
                     state="",
-                    arm=False,
                     wait_ms=100,
                     max_records=10,
                 )
             ]
             name = READ_ACTIVITY
+        elif which == "follow":
+            args = [
+                _FollowInput(
+                    workflow_id="owner",
+                    chain_run_id="",
+                    topic="tokens",
+                    after="",
+                    state="",
+                    max_depth=4,
+                    max_open=16,
+                )
+            ]
+            name = FOLLOW_ACTIVITY
         else:
             args = [TOKENS.name, False, RawValue(Payload())]
             name = CLOSE_ACTIVITY
@@ -76,7 +89,7 @@ class CallsAsNormalActivity:
         return ["ran"]
 
 
-@pytest.mark.parametrize("which", ["read", "close"])
+@pytest.mark.parametrize("which", ["read", "close", "follow"])
 async def test_a_normal_activity_call_fails_for_good(client: Client, which: str):
     streams = await connect_with(client, MemoryStreams())
     async with new_worker(streams, CallsAsNormalActivity) as worker:
@@ -134,8 +147,8 @@ async def _read_two_batches(client: Client) -> WorkflowHistory:
 
 async def test_each_read_marker_says_what_it_read(client: Client):
     history = await _read_two_batches(client)
-    assert _summaries(history)[:2] == [
-        "stream subscribe and read tokens after the start",
+    assert _summaries(history) == [
+        "stream read tokens after the start",
         "stream read tokens after c1",
     ]
 

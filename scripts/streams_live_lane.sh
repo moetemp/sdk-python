@@ -13,14 +13,22 @@
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
+#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with Core's
+#                      redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five more ports.
 #   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
+#   STREAMS_ARCHIVE_S3_URL  an `s3://bucket/prefix` the archive cases write to, with the `AWS_*`
+#                      settings Core reads. Without it, the script starts MinIO in Docker on a free
+#                      port and removes the container at the end.
+#   STREAMS_POSTGRES_URL  a PostgreSQL 14 or later database the Postgres cases use. Each case makes
+#                      a schema of its own. Without it, the script starts PostgreSQL 17 in Docker
+#                      on a free port and removes the container at the end.
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 #   PYTEST_TARGETS     the tests to run (default: the stream and Nexus tests). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-af03cc33024701b096392d58cd859e5cfff01626}
+SERVER_REF=${SERVER_REF:-da70516ed19e74c49ecddf0248c7e09a091fe26c}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,10 +37,14 @@ GRPC_PORT=$PORT_BASE
 HTTP_PORT=$((PORT_BASE + 1))
 REDIS_PORT=6428
 pids=()
+containers=()
 
 cleanup() {
   for pid in "${pids[@]}"; do
     kill "$pid" 2>/dev/null || true
+  done
+  for container in "${containers[@]}"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
   done
 }
 trap cleanup EXIT
@@ -82,12 +94,22 @@ streamnotifier.enabled:
 # without it ignores the setting.
 frontend.enableExecuteSyncNexusOperation:
   - value: true
+# Streams that a standalone Activity owns need standalone Activities.
+activity.enableStandalone:
+  - value: true
+# Resetting a standalone Activity is an operator command.
+history.enableStandaloneActivityOperatorCommands:
+  - value: true
 # The owner check closes a stopped owner's stream by its close status, so the
 # cases where an owner ends without a close finish in seconds, not minutes.
 streamnotifier.ownerCheckInterval:
   - value: 2s
 streamnotifier.ownerCloseGrace:
   - value: 10s
+# A Workflow Activity's stream with no close also waits this long from the
+# notifier's start. The default is 1 minute.
+streamnotifier.ownerStartGrace:
+  - value: 5s
 # A client reader reads again at the poll limit, which finds a record whose
 # notification was lost. The default is 60 seconds.
 streamnotifier.pollMaxWait:
@@ -190,6 +212,48 @@ if [[ -z "${STREAMS_REDIS_URL:-}" ]]; then
   export STREAMS_REDIS_URL="redis://127.0.0.1:$REDIS_PORT/0"
 fi
 
+if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
+  # Three primaries with one replica each, as the driver's cluster tests need.
+  eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
+    bash "$SDK_DIR/temporalio/bridge/sdk-core/crates/streams/scripts/redis-test-servers.sh" |
+    grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
+fi
+
+if [[ -z "${STREAMS_ARCHIVE_S3_URL:-}" ]]; then
+  s3_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  s3=streams-lane-s3-$$
+  # Docker Hub no longer carries MinIO's own image.
+  docker run -d --rm --name "$s3" -p "127.0.0.1:$s3_port:9000" \
+    -e MINIO_ROOT_USER=streams -e MINIO_ROOT_PASSWORD=streams-secret \
+    cgr.dev/chainguard/minio:latest server /tmp/data >/dev/null
+  containers+=("$s3")
+  for _ in $(seq 60); do
+    curl -sf "http://127.0.0.1:$s3_port/minio/health/ready" >/dev/null && break
+    sleep 1
+  done
+  export AWS_ENDPOINT_URL=http://127.0.0.1:$s3_port AWS_ALLOW_HTTP=true AWS_REGION=us-east-1
+  export AWS_ACCESS_KEY_ID=streams AWS_SECRET_ACCESS_KEY=streams-secret
+  export STREAMS_ARCHIVE_S3_URL=s3://streams-archive/lane
+  (cd "$SDK_DIR" && uv run --no-sync python -c \
+    "import boto3; boto3.client('s3').create_bucket(Bucket='streams-archive')")
+fi
+
+if [[ -z "${STREAMS_POSTGRES_URL:-}" ]]; then
+  pg_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  pg=streams-lane-pg-$$
+  # Many cases connect at once, each with a pool and a listener.
+  docker run -d --rm --name "$pg" -p "127.0.0.1:$pg_port:5432" \
+    -e POSTGRES_USER=streams -e POSTGRES_PASSWORD=streams -e POSTGRES_DB=streams \
+    postgres:17 -c max_connections=1000 >/dev/null
+  containers+=("$pg")
+  for _ in $(seq 60); do
+    docker exec "$pg" pg_isready -q -U streams -d streams -h 127.0.0.1 && break
+    sleep 1
+  done
+  export STREAMS_POSTGRES_URL="postgres://streams:streams@127.0.0.1:$pg_port/streams"
+  STREAMS_POSTGRES_URL+="?sslmode=disable"
+fi
+
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -250,8 +314,8 @@ uv run --no-sync pytest ${PYTEST_TARGETS:-${default_targets[*]}} \
   tee "$WORK_DIR/pytest.log" || status=$?
 
 # A live test that skips here proves nothing, so a skip for a missing notifier, missing Nexus
-# progress or missing Redis fails the lane.
-gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|no NexusHandler callbacks'
+# progress or a missing store fails the lane.
+gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|no NexusHandler callbacks|STREAMS_ARCHIVE_S3_URL|STREAMS_POSTGRES_URL'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -269,9 +333,14 @@ gate() {
 }
 gate tests/contrib/streams/test_live_notifications.py \
   test_live_an_idle_client_reader_wakes_on_the_next_append \
-  test_live_a_busy_stream_sends_no_notification \
+  test_live_a_sleeping_client_wakes_through_the_driver \
+  test_live_a_workflow_reader_wakes_through_the_driver \
+  test_live_streams_on_many_slots_all_wake_through_the_driver \
+  test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window \
+  test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works \
+  test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived \
   test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit \
-  test_live_every_append_mode_notifies_each_append \
+  test_live_every_append_notifies \
   test_live_a_close_with_an_outcome_reaches_the_notifier \
   test_live_a_workflow_reader_sleeps_and_wakes_on_an_append \
   test_live_a_workflow_reader_on_an_empty_stream_wakes_on_the_first_append \
@@ -282,7 +351,31 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store \
   test_live_a_replay_that_finds_other_records_is_nondeterminism \
   test_live_a_replay_of_a_lost_range_fails_the_task \
-  test_live_a_read_after_a_timed_out_read_replays_from_the_store
+  test_live_a_read_after_a_timed_out_read_replays_from_the_store \
+  test_live_a_workflow_reader_waits_for_an_owner_that_starts_later
+gate tests/contrib/streams/test_live_activity_owner.py \
+  test_live_both_readers_follow_a_standalone_activity_across_its_retry \
+  test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
+  test_live_an_activity_that_fails_with_no_close_fails_the_workflow_reader \
+  test_live_an_attempt_after_a_reset_supersedes_with_no_divergence \
+  test_live_a_terminated_activity_fails_the_workflow_reader
+gate tests/contrib/streams/test_live_wfa_streams.py \
+  test_live_both_readers_follow_a_tool_call_across_its_retry \
+  test_live_a_tool_that_fails_closes_its_stream_with_the_failure \
+  test_live_a_tool_that_times_out_closes_its_stream_with_the_timeout \
+  test_live_each_run_of_a_chain_gets_its_own_tool_stream \
+  test_live_a_reset_run_writes_a_new_tool_stream \
+  test_live_a_tool_whose_agent_never_closes_ends_by_the_owner_check
+gate tests/contrib/streams/test_live_links.py \
+  test_live_both_followers_keep_the_gates_of_an_agent \
+  test_live_a_failed_tool_a_missing_child_and_a_cycle_go_on \
+  test_live_a_follower_resumes_inside_a_segment
+gate tests/contrib/streams/test_stream_archive.py \
+  test_live_a_cursor_below_the_hot_floor_reads_the_archive \
+  test_live_a_positions_only_replay_reads_a_trimmed_range_from_the_archive
+gate tests/contrib/streams/test_samples.py \
+  test_a_tool_call_streams_to_a_stream_of_its_own \
+  test_a_client_follows_an_agent_and_its_tool_calls
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
@@ -294,7 +387,8 @@ gate tests/contrib/streams/test_sleeping_reader_demos.py \
   test_j3_a_tail_reads_every_line_of_a_sparse_log \
   test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage \
   test_j7a_both_readers_raise_the_close_error_after_the_last_record \
-  test_j8_only_a_reader_that_records_batches_replays_with_no_store
+  test_j8_only_a_reader_that_records_batches_replays_with_no_store \
+  test_j9_a_driver_wakes_the_client_on_each_burst
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed
@@ -316,6 +410,7 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_new_reader_resumes_after_a_cursor \
   test_live_a_start_on_a_closed_stream_still_names_it \
   test_live_a_workflow_reads_every_record_then_none \
+  test_live_a_default_reader_without_a_transport_names_the_opt_out \
   test_live_a_reader_after_continue_as_new_sees_a_later_attempt \
   test_live_each_read_carries_the_state_its_last_answer_gave \
   test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
@@ -332,15 +427,6 @@ gate tests/contrib/streams/test_nexus_follower.py \
   test_live_a_follower_resumes_on_another_worker \
   test_live_a_late_follower_reads_the_backlog_in_pages \
   test_live_a_failed_owner_reaches_on_close_as_a_failure
-gate tests/contrib/streams/test_nexus_adaptive.py \
-  test_live_a_busy_stream_sends_no_notification \
-  test_live_an_idle_reader_wakes_once_per_burst \
-  test_live_a_short_gap_costs_no_notification \
-  test_live_two_readers_wake_from_one_notification \
-  test_live_a_follower_arms_and_wakes \
-  test_live_a_follower_on_an_empty_stream_wakes_on_the_first_append \
-  test_live_a_close_reaches_an_unarmed_caller \
-  test_live_every_append_mode_notifies_each_append
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
 gate tests/contrib/streams/test_nexus_scenario_demos.py \

@@ -152,12 +152,12 @@ def test_a_reference_of_another_kind_decodes_for_the_handler_to_refuse():
     document = _to_json(ReadInput(stream=StreamRef.for_workflow("wf-1")))
     stream = document["stream"]
     assert isinstance(stream, dict)
-    stream["kind"] = "activity"
+    stream["kind"] = "nexus"
     decoded = _from_json(document, ReadInput)
     assert isinstance(decoded, ReadInput)
-    assert decoded.stream.kind == "activity"
+    assert decoded.stream.kind == "nexus"
     # Opening a handle on it is what refuses it.
-    with pytest.raises(StreamUnsupportedError, match="'activity'"):
+    with pytest.raises(StreamUnsupportedError, match="'nexus'"):
         decoded.stream._require_supported()  # type: ignore[reportPrivateUsage]
 
 
@@ -290,23 +290,13 @@ def test_the_operation_token_refuses_cores_refused_vectors(token: str):
         StreamOperationToken.from_token(token)
 
 
-def test_a_read_asks_to_arm_and_the_answer_says_it_armed():
-    # A reader that sleeps on progress asks the stream to arm, and only an
-    # armed answer lets it sleep.
-    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), wait_ms=2000, arm=True)
+def test_a_read_and_its_answer_carry_no_arm():
+    read = ReadInput(stream=StreamRef.for_workflow("chat-1"), wait_ms=2000)
     document = _to_json(read)
-    assert document["arm"] is True
+    assert "arm" not in document
     assert _from_json(document, ReadInput) == read
-    armed = _from_json(
+    # An answer recorded before the arm was removed still decodes.
+    old = _from_json(
         {"records": [], "next_token": "", "done": False, "armed": True}, ReadOutput
     )
-    assert armed.armed is True
-    # Core leaves `armed` out when it is false.
-    unarmed = _from_json({"records": [], "next_token": "", "done": False}, ReadOutput)
-    assert not unarmed.armed
-
-
-def test_a_read_without_arm_leaves_it_out():
-    # An outside reader has no callback, and an old handler refuses the member.
-    document = _to_json(ReadInput(stream=StreamRef.for_workflow("chat-1")))
-    assert "arm" not in document
+    assert old.records == [] and not old.done

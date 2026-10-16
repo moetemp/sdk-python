@@ -5,14 +5,15 @@ reports progress whenever the stream moves and completes the operation when
 the stream closes; the operation token names the stream. The reader turns
 that into batches of typed records: it reads from its cursor through the
 stream service on a Nexus endpoint, and waits for progress once a read finds
-nothing new. A read that waits its idle wait and finds nothing arms the stream,
-so the next append notifies the operation's callers.
+nothing new. Every append notifies the operation's callers, and the server
+folds the notifications of a busy stream into one per debounce window.
 
-By default every read is a Nexus operation of the Workflow, so History
-records what each read answered, and a replay hands over the same batches at
-the same points. With ``replay_from_store=True`` each read runs in a Local
-Activity, History keeps only the range that crossed and its digest, and a
-replay reads that range again from the owner's store.
+By default, ``replay_from_store=True``, each read runs in a Local Activity,
+History keeps only the range that crossed and its digest, and a replay reads
+that range again from the owner's store. It needs a direct-read transport
+for the endpoint. With ``replay_from_store=False`` every read is a Nexus
+operation of the Workflow, so History records what each read answered, and a
+replay hands over the same batches at the same points.
 """
 
 from __future__ import annotations
@@ -218,10 +219,10 @@ class StreamReader(Generic[T]):
     progress, so this read is what finds its record. Each such read costs a
     timer and a read in History.
 
-    By default every read is a Nexus operation result in the caller's
-    History, about three events and up to one read answer (1 MiB of records)
-    each. With ``replay_from_store=True`` a read is one Local Activity marker
-    of a few hundred bytes, as below. To read a long stream, Continue-as-New before History grows too large: pass
+    By default a read is one Local Activity marker of a few hundred bytes, as
+    below. With ``replay_from_store=False`` every read is a Nexus operation
+    result in the caller's History, about three events and up to one read
+    answer (1 MiB of records) each. To read a long stream, Continue-as-New before History grows too large: pass
     :attr:`position` to the new run, start the operation again there, and
     build the reader with ``after=position``. The position is at most about
     22 KiB. After a successful completion, the
@@ -233,14 +234,11 @@ class StreamReader(Generic[T]):
     ``StreamExpiredError`` as its cause. A new reader with no ``after`` starts
     again at the oldest record still kept.
 
-    Each read before the completion waits up to ``idle_wait`` for a record
-    and asks the stream service to arm the stream. A read with records
-    answers at once, so a busy stream costs no notification. A read that
-    waits the whole ``idle_wait`` and finds nothing arms the stream, and the
-    reader waits for progress. The stream's next append then notifies the
-    operation's callers once. A shorter ``idle_wait`` wakes the reader on
-    shorter gaps, at the cost of a notification and a progress Workflow Task
-    for each such gap.
+    Each read before the completion waits up to ``idle_wait`` for a record.
+    A read with records answers at once. A read that waits the whole
+    ``idle_wait`` and finds nothing puts the reader to sleep on progress,
+    which the stream's next append sends. So a gap shorter than ``idle_wait``
+    costs one read and no progress Workflow Task.
 
     Bodies reach Workflow code decoded: the stream service decodes each body
     with its Worker's data converter, payload codec included, and the read's
@@ -276,7 +274,7 @@ class StreamReader(Generic[T]):
         after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
         idle_wait: timedelta = timedelta(seconds=2),
-        replay_from_store: bool = False,
+        replay_from_store: bool = True,
     ) -> None:
         """Read the stream ``handle``'s operation returns.
 
@@ -295,16 +293,18 @@ class StreamReader(Generic[T]):
                 find nothing, or a stream that ended may wait for its
                 operation to complete, before the reader raises
                 :class:`StreamIncompleteError`.
-            idle_wait: How long a read waits for a record before it arms the
-                stream and the reader waits for progress. Zero arms on the
-                first empty read. Keep it well below the 10 second timeout of
-                a Nexus request.
+            idle_wait: How long a read waits for a record before the reader
+                waits for progress. Zero sleeps on the first empty read. Keep
+                it well below the 10 second timeout of a Nexus request.
             replay_from_store: Read in a Local Activity and record only the
                 range of each read and its digest, so the records stay out
-                of History. It needs :class:`StreamDirectReads` on the
-                Worker's client with a transport for ``endpoint``, and on
-                any Replayer. ``False`` records each read's answer, records
-                included.
+                of History. The default. It needs :class:`StreamDirectReads`
+                on the Worker's client with a transport for ``endpoint``, and
+                on any Replayer. Without one, the read raises
+                :class:`temporalio.contrib.streams.StreamUnsupportedError`,
+                which names this option. ``False`` reads through Nexus
+                operations and records each read's answer, records included,
+                so it needs no transport.
 
         Raises:
             ValueError: ``drain_limit`` is not positive, or ``idle_wait`` is
@@ -377,9 +377,7 @@ class StreamReader(Generic[T]):
         """The next batch of records, or ``None`` once the stream has ended.
 
         Reads on while reads answer with records, and waits for the
-        operation to report progress only once a read answers with none. A
-        read like that waited ``idle_wait`` and armed the stream. An empty
-        answer that did not arm waits for progress too.
+        operation to report progress only once a read answers with none.
         Never answers with an empty batch. The stream closes in the store
         before the operation completes, so once the operation completes the
         reader reads until the stream service says the stream is done, then
@@ -559,15 +557,12 @@ class StreamReader(Generic[T]):
         latest = self._handle.latest_progress
         if latest is not None:
             self._counter = max(self._counter, latest.counter)
-        # After the completion no progress follows, so a drain read never arms.
-        arm = not self._operation_resolved
         input = ReadInput(
             stream=self._stream,
             after_token=self._cursor or None,
             max_records=_BATCH,
-            wait_ms=self._idle_wait_ms if arm else _DRAIN_WAIT_MS,
+            wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else self._idle_wait_ms,
             state=self._state,
-            arm=True if arm else None,
         )
         if self._replay_from_store:
             self._answer = await self._direct_read(input)
@@ -605,6 +600,18 @@ class StreamReader(Generic[T]):
             )
             self._direct_reads += 1
             self._chain_run = chain_run_of(raw.payload)
+        except ValueError as error:
+            # The Worker refuses at the call a Local Activity it doesn't have,
+            # which is the case with no StreamDirectReads on its client.
+            if DIRECT_READ_ACTIVITY not in str(error):
+                raise
+            raise StreamUnsupportedError(
+                f"a stream read with replay_from_store=True (the default) reads "
+                f"directly from endpoint {self._endpoint!r}, and the Worker has no "
+                "StreamDirectReads; register it on the Worker's client with a "
+                "transport for the endpoint, or pass replay_from_store=False to the "
+                "StreamReader"
+            ) from error
         except (ActivityError, ApplicationError) as error:
             unsupported = _unsupported(error)
             if unsupported is None:

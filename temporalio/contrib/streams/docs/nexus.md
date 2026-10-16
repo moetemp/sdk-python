@@ -181,32 +181,30 @@ What happens underneath:
 1. The handler's start attaches the caller's callback to the stream's
    notifier on the server, and returns the stream reference in the
    operation token.
-2. Core notifies the notifier after an append, a Workflow's flushes
-   included, when a reader armed the stream. Notifications are folded: at
-   most one call is in flight, and the newest one wins.
+2. Core notifies the notifier after every append, a Workflow's publishes
+   included, or a StreamDriver does it from the store's notification log.
+   Notifications are folded: at most one call is in flight, and the newest
+   one wins.
 3. The notifier delivers the latest notification to the caller as progress.
 4. The close completes the caller's operation with the close result.
 
 ### When Core notifies
 
-[Readers that sleep](notifications.md) lists the steps: a read that waits
-and finds nothing arms the stream, and the next append notifies once. For
-streams over Nexus:
+[Readers that sleep](notifications.md) lists the steps: every append
+notifies, and the server delivers at most one notification per stream in
+each debounce window, plus the newest one at the window's end. For streams
+over Nexus:
 
 - A Workflow `StreamReader` waits `idle_wait` (2 seconds by default) before
-  a read arms the stream. A Worker follower waits 1 second.
+  it sleeps on progress. A Worker follower waits 1 second.
 - The notifier sends the progress to every attached caller, so one append
   wakes all sleeping readers.
 - A gap shorter than the idle wait costs only the read that returns the next
-  record. A longer gap costs one read that arms, one notification and one
-  progress task per caller.
-- The attach arms an empty stream, so the first append reaches a caller that
+  record. A busy stream costs at most about one progress task per caller per
+  debounce window.
+- The attach starts the notifier, so the first append reaches a caller that
   has no record to read yet. On a stream with records, the attach announces
-  the newest one. Closes do not depend on an arm, so a close always reaches
-  every caller.
-- A reader from this release on a stream service from an earlier release
-  fails its read with `BAD_REQUEST`, since the earlier service refuses the
-  `arm` member.
+  the newest one. A close always reaches every caller.
 
 ## The caller side
 
@@ -217,6 +215,7 @@ The caller Workflow starts the operation as usual and reads it with a
 from temporalio.contrib.streams.nexus import StreamReader
 
 handle = await nexus_client.start_operation(ConversationService.respond, request)
+# Reads directly by default, so the Worker needs a transport (see Direct reads).
 reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT)
 while (batch := await reader.next()) is not None:
     for message in batch:
@@ -239,8 +238,8 @@ What `next()` does:
   call reads at once. Later calls read on while answers carry records, and
   wait for newer progress only after an answer with no record. Each read
   before the completion waits up to `idle_wait` (a `StreamReader` keyword,
-  2 seconds by default) and arms the stream when it finds nothing. Zero arms
-  on the first empty read. Keep it well below the 10 second timeout of a
+  2 seconds by default) before the reader sleeps on progress. Zero sleeps on
+  the first empty read. Keep it well below the 10 second timeout of a
   Nexus request. It never returns an empty list.
 - It returns `None` only when the stream service says the stream is done,
   and the last records are handed over. After the operation completes, the
@@ -307,11 +306,11 @@ values at the same points.
 
 Reading a stream adds to the caller's History in two ways.
 
-- By default each read is a synchronous Nexus operation, about three events,
-  and its answer holds up to 1 MiB of records. A direct read is one marker
-  of about 1 KiB. A gap in the stream shorter than
-  `idle_wait` costs one read. A longer gap costs one empty read that arms
-  the stream, then one progress task.
+- By default a read is a direct read, one marker of about 1 KiB. With
+  `replay_from_store=False` each read is a synchronous Nexus operation,
+  about three events, and its answer holds up to 1 MiB of records. A gap in the stream shorter than
+  `idle_wait` costs one read. A longer gap costs one empty read, then one
+  progress task.
 - Each progress delivery costs at most one Workflow Task, three events,
   and up to about 3 KiB on its scheduled event. The server schedules a task
   for progress no sooner than `nexusoperation.progressMinInterval` (1 second
@@ -354,16 +353,8 @@ Two cases stop a reader that would otherwise read for ever.
 
 ### Direct reads
 
-A reader can keep the records out of its History. Build it with
-`replay_from_store=True`:
-
-```python
-reader = StreamReader(
-    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=True
-)
-```
-
-Then each read runs in a Local Activity, not as a Nexus operation of the
+By default, `replay_from_store=True`, a reader keeps the records out of its
+History. Each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and Core's digest of them, not the records. The marker is about
 1 KiB. Most of it is the stream service's read state, which grows with the
@@ -377,9 +368,20 @@ Workflow code sees it. On the live Workflow Task it takes the batch the
 Local Activity cached. On a replay it reads the range again through the
 stream service's `read_range`, which checks the records against the digest.
 
-It is off by default, since it needs a way to reach the endpoint outside the
-Workflow. Register `StreamDirectReads` on the caller Worker's client, and on
-any `Replayer`, with a transport for each endpoint:
+It needs a way to reach the endpoint outside the Workflow. Register
+`StreamDirectReads` on the caller Worker's client, and on any `Replayer`,
+with a transport for each endpoint. Without one, every read fails at once
+with `StreamUnsupportedError`, which names the opt-out. To read through
+Nexus operations instead, with each answer in History and no transport,
+build the reader with `replay_from_store=False`:
+
+```python
+reader = StreamReader(
+    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=False
+)
+```
+
+A transport:
 
 ```python
 from temporalio.contrib.streams.nexus import HttpTransport, StreamDirectReads
@@ -434,7 +436,8 @@ worker_client = await Client.connect(
   HTTP ingress and from a Workflow's Nexus call it is `None`.
 - It needs a server with the RPC turned on
   (`frontend.enableExecuteSyncNexusOperation`, off by default). Temporal Cloud
-  doesn't serve it yet.
+  doesn't serve it yet. So on Temporal Cloud no transport works today, and a
+  reader there needs `replay_from_store=False`.
 - It encodes the input and decodes the answer with the client's payload
   codec, under the wrappers that turn reads back into batches. So the
   handler's namespace must use the same codec.
@@ -465,8 +468,9 @@ A replay that misses the cache needs the endpoint and the records:
 A live read whose credential the endpoint refuses, 401 or 403, retries its
 Local Activity with backoff and logs an error, so a key that expired fails no
 caller Workflow. A refusal the handler marks final, such as its authorizer's,
-still fails the read for good. A live read on a Worker with no transport for the endpoint
-fails its Local Activity. The reader raises that again from `next()` as
+still fails the read for good. A live read on a Worker with no
+`StreamDirectReads`, or with no transport for the endpoint, fails its Local
+Activity at once, with no retry. The reader raises that again from `next()` as
 `StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
 is retried once the Worker is fixed. Workflow code that catches every
 `Exception` around `next()` swallows it, so catch narrower errors there, or
@@ -475,7 +479,10 @@ raise `StreamUnsupportedError` again.
 So keep the endpoint and its Worker up, and keep the floor lease longer
 than a run can wait before a replay. To stop direct reads, deploy readers
 with `replay_from_store=False`. A run that already has direct-read markers
-still needs the transport to replay them.
+still needs the transport to replay them. The mode decides the commands a
+read sends, so a History recorded in one mode replays only with code that
+builds the reader in the same mode. A run recorded before this default
+changed replays with `replay_from_store=False`.
 
 A record that crossed as an error replays as the same error, even when the
 codec decodes it now, since live Workflow code never saw it.
@@ -543,9 +550,9 @@ position, and the server keeps it on the callback and sends it back with the
 next call and with `OnComplete`. So the Worker keeps nothing between calls,
 and any Worker on the task queue can take the next one. A call reads page by
 page and calls `on_records` once per page. Each read waits up to 1 second
-for a record and asks to arm the stream. The call stops at the first answer
-that armed the stream, so the next append wakes the follower. A busy stream
-never arms, so the call also stops when half the request timeout passed.
+for a record. The call stops at the first answer with no record, since the
+next append wakes the follower. On a busy stream the call also stops when
+half the request timeout passed.
 Then it answers `behind`, and the server sends the same progress again after
 `callback.nexusHandler.progressBehindInterval` (1 second by default), so a
 long backlog is read in pages without a busy loop. `OnComplete` reads the rest of the stream,

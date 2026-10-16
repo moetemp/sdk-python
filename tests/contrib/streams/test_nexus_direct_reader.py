@@ -80,9 +80,8 @@ class DirectChatReader:
     async def run(self) -> None:
         client = workflow.create_nexus_client(service=ChatService, endpoint=ENDPOINT)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(
-            handle, item_type=Token, endpoint=ENDPOINT, replay_from_store=True
-        )
+        # The default reads directly.
+        reader = StreamReader(handle, item_type=Token, endpoint=ENDPOINT)
         observed = Seen()
         try:
             while True:

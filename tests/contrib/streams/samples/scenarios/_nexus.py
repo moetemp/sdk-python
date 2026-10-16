@@ -19,6 +19,7 @@ import temporalio.api.operatorservice.v1
 from temporalio.api.workflowservice.v1 import DescribeNamespaceRequest
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
+from temporalio.contrib.streams.nexus import ClientTransport, StreamDirectReads
 from temporalio.service import RPCError, RPCStatusCode
 from tests.contrib.streams.samples.scenarios._common import store
 
@@ -30,18 +31,27 @@ NewStore = Callable[[], StreamStorePlugin]
 
 
 async def connect(
-    client: Client, plugin: StreamStorePlugin | None, *, namespace: str | None = None
+    client: Client,
+    plugin: StreamStorePlugin | None,
+    *,
+    namespace: str | None = None,
+    reads: str | None = None,
 ) -> Client:
     """A client of ``client``'s server in ``namespace``, carrying ``plugin``.
 
     It connects, since connecting is what hands the store to Workers built
-    from it.
+    from it. With ``reads``, an endpoint name, it also carries
+    ``StreamDirectReads`` with a ``ClientTransport`` for that endpoint, so a
+    ``StreamReader`` on its Workers reads directly, as it does by default.
     """
+    plugins: list[Any] = [plugin] if plugin is not None else []
+    if reads is not None:
+        plugins.append(StreamDirectReads({reads: ClientTransport(client, reads)}))
     return await Client.connect(
         client.service_client.config.target_host,
         namespace=namespace or client.namespace,
         data_converter=client.data_converter,
-        plugins=[plugin] if plugin is not None else [],
+        plugins=plugins,
     )
 
 
@@ -74,6 +84,11 @@ async def two_namespaces(client: Client, plugin: StreamStorePlugin) -> Client:
     return await connect(client, plugin, namespace=NAMESPACE_B)
 
 
+def endpoint_name(task_queue: str) -> str:
+    """The name :func:`endpoint` gives the endpoint of ``task_queue``."""
+    return f"nexus-endpoint-{task_queue}"
+
+
 async def endpoint(
     client: Client, task_queue: str, *, namespace: str | None = None
 ) -> str:
@@ -81,7 +96,7 @@ async def endpoint(
 
     Callers in any namespace of the server use it by name. Returns the name.
     """
-    name = f"nexus-endpoint-{task_queue}"
+    name = endpoint_name(task_queue)
     await client.operator_service.create_nexus_endpoint(
         temporalio.api.operatorservice.v1.CreateNexusEndpointRequest(
             spec=temporalio.api.nexus.v1.EndpointSpec(

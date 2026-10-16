@@ -31,6 +31,11 @@ Workflow's run chain:
   (Python's `urllib.parse.quote(part, safe="")`). So no part can contain
   `:`, `{` or `}`, and no two streams share a key.
 
+The streams of one standalone Activity run share the hash tag
+`{<namespace>:!a:<activity id>:<run id>}`, with the same suffixes. The
+`!a` part is written as it is. Every other part is percent-encoded, which
+writes `!` as `%21`, so no Workflow id makes this tag.
+
 | Suffix | Type | Holds |
 |---|---|---|
 | `:t:<topic>` | stream | The log of one topic |
@@ -153,10 +158,11 @@ earlier attempts this way once the server accepts a Workflow Task.
 A cursor token is `redis:<stream hash>:<entry id>`.
 
 - `<stream hash>` is the first 8 lowercase hex characters of the SHA-256
-  over namespace, owner kind (`workflow`), Workflow id and topic, each as
-  UTF-8 bytes prefixed by its length as 8 bytes big-endian. The run id is
-  not part of it, so a cursor stays valid across Continue-as-New. So it
-  also can't tell two chains of one Workflow id apart.
+  over namespace, owner kind (`workflow` or `activity`), the Workflow id
+  or the Activity id, and topic, each as UTF-8 bytes prefixed by its
+  length as 8 bytes big-endian. The run id is not part of it, so a cursor
+  stays valid across Continue-as-New. So it also can't tell two chains of
+  one Workflow id apart.
 - The empty token is `BEGINNING` and `$end` is `END`.
 
 A reader refuses a token from another store or with another stream

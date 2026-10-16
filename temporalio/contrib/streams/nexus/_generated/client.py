@@ -481,7 +481,6 @@ class StreamHandle:
         wait_ms: int | None = None,
         latest_only: bool | None = None,
         state: bytes | None = None,
-        arm: bool | None = None,
         floor_holder: str | None = None,
     ) -> ReadOutput:
         """Answer with the records after the caller's cursor. The call waits until it
@@ -500,7 +499,6 @@ class StreamHandle:
                 wait_ms=wait_ms,
                 latest_only=latest_only,
                 state=state,
-                arm=arm,
                 floor_holder=floor_holder,
             ),
         )
@@ -512,7 +510,6 @@ class StreamHandle:
         max_records: int | None = None,
         latest_only: bool | None = None,
         state: bytes | None = None,
-        arm: bool | None = None,
         floor_holder: str | None = None,
         deadline: float,
     ) -> ReadOutput:
@@ -540,7 +537,6 @@ class StreamHandle:
                 max_records=max_records,
                 latest_only=latest_only,
                 state=state,
-                arm=arm,
                 floor_holder=floor_holder,
             ),
             deadline=deadline,

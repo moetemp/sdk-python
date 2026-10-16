@@ -5,7 +5,7 @@ publishes another, and closes its stream. A ``Connector`` Workflow in
 ``default`` follows the agent's ``message`` topic through a stream operation
 and posts each message through an Activity, as the ``nexus_slack_router``
 sample does. While the agent idles, the connector gets no progress, so after
-one read that waits its idle wait and arms the stream, its History has no
+one read that waits its idle wait and finds nothing, its History has no
 Workflow Task in the gap.
 
 Left out: a standalone Nexus operation as the caller, and a Worker Callback
@@ -47,6 +47,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     NewStore,
     connect,
     endpoint,
+    endpoint_name,
     run,
     two_namespaces,
 )
@@ -141,8 +142,8 @@ async def main(
     """
     posted.clear()
     b = await two_namespaces(client, new_store().notify_on_append())
-    a = await connect(client, None)
     b_queue = f"{task_queue}-b"
+    a = await connect(client, None, reads=endpoint_name(b_queue))
     name = await endpoint(client, b_queue, namespace=NAMESPACE_B)
     async with (
         Worker(

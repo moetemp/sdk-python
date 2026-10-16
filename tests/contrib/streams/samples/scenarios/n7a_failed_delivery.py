@@ -47,6 +47,7 @@ from tests.contrib.streams.samples.scenarios._nexus import (
     NewStore,
     connect,
     endpoint,
+    endpoint_name,
     run,
     until,
 )
@@ -137,7 +138,9 @@ async def main(
     ``client`` is a client of a server with the stream notifier. ``how`` is
     one of ``fail``, ``close-with-error`` and ``terminate``.
     """
-    streams = await connect(client, new_store().notify_on_append())
+    streams = await connect(
+        client, new_store().notify_on_append(), reads=endpoint_name(task_queue)
+    )
     name = await endpoint(client, task_queue)
     async with Worker(
         streams,

@@ -13,6 +13,7 @@ import base64
 import dataclasses
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -21,6 +22,7 @@ from temporalio.bridge.proto.streams import ReadRangeRequest, ReadResponse
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     END,
+    StoreCapabilities,
     StreamError,
     StreamReplayRangeLostError,
     StreamStorePlugin,
@@ -38,10 +40,16 @@ from temporalio.contrib.streams._workflow import _ReadInput, read_activity
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 from temporalio.workflow import NondeterminismError
-from tests.contrib.streams._support import connect_with
-from tests.contrib.streams.test_outside_handles import Waits, running_owner
+from tests.contrib.streams._support import connect_with, postgres_streams
+from tests.contrib.streams.test_outside_handles import (
+    ActivityKeyedCodec,
+    Waits,
+    owns_a_stream,
+    running_owner,
+)
 from tests.helpers import new_worker
 
 TOKENS = topic("tokens", str)
@@ -50,6 +58,8 @@ TOKENS = topic("tokens", str)
 def store(kind: str) -> StreamStorePlugin:
     if kind == "memory":
         return MemoryStreams()
+    if kind == "postgres":
+        return postgres_streams()
     import os
 
     url = os.environ.get("STREAMS_REDIS_URL", "")
@@ -58,7 +68,7 @@ def store(kind: str) -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=f"replay-reads-{uuid.uuid4().hex}")
 
 
-@pytest.fixture(params=["memory", "redis"])
+@pytest.fixture(params=["memory", "redis", "postgres"])
 async def streams(request: pytest.FixtureRequest, client: Client) -> Client:
     return await connect_with(client, store(request.param))
 
@@ -101,7 +111,6 @@ async def read_positions(
             topic=TOKENS.name,
             after=after,
             state=base64.b64encode(state).decode(),
-            arm=False,
             wait_ms=wait_ms,
             max_records=10,
             positions_only=True,
@@ -196,6 +205,38 @@ async def test_a_range_the_store_lost_fails_for_a_retry(streams: Client):
         await plugin.delete_workflow_streams(streams.namespace, owner)
         with pytest.raises(StreamReplayRangeLostError):
             await codec_of(streams).decode([payload])
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_store_with_no_holds_refuses_positions_only_reads(client: Client):
+    store = MemoryStreams(capabilities=StoreCapabilities(holds=False))
+    streams = await connect_with(client, store)
+    assert not store.capabilities.holds
+    assert store.capabilities.replay_horizon is None
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        with pytest.raises(ApplicationError) as raised:
+            await read_positions(streams, owner)
+        assert raised.value.type == "StreamUnsupportedError"
+        assert "replay_from_store=False" in str(raised.value)
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_a_store_with_a_replay_horizon_serves_positions_only_reads(
+    client: Client,
+):
+    horizon = StoreCapabilities(holds=False, replay_horizon=timedelta(days=30))
+    store = MemoryStreams(capabilities=horizon)
+    streams = await connect_with(client, store)
+    assert store.capabilities.replay_horizon == timedelta(days=30)
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        await (
+            get_stream_handle(streams, owner, topic=TOKENS)
+            .producer(producer_id="p", attempt=1)
+            .append("a")
+        )
+        assert is_positions(await read_positions(streams, owner))
         await streams.get_workflow_handle(owner).signal(Waits.finish)
 
 
@@ -344,24 +385,30 @@ def test_the_batch_cache_keeps_its_bytes_bounded():
     assert cache.take(ranges[1]) == big and cache.take(ranges[2]) == big
 
 
+@pytest.mark.parametrize("kind", ["redis", "postgres"])
 async def test_a_first_range_trimmed_past_its_hold_is_lost_not_other_records(
-    client: Client,
+    client: Client, kind: str
 ):
     import os
 
-    url = os.environ.get("STREAMS_REDIS_URL", "")
-    if not url:
-        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
-    # Retention trims as the next appends land, once the reader's hold lapsed.
-    streams = await connect_with(
-        client,
-        RedisStreams(
-            url,
-            key_prefix=f"replay-reads-{uuid.uuid4().hex}",
-            retention=timedelta(milliseconds=300),
-            floor_lease=timedelta(milliseconds=100),
-        ),
-    )
+    settings: dict[str, Any] = {
+        "retention": timedelta(milliseconds=300),
+        "floor_lease": timedelta(milliseconds=100),
+    }
+    if kind == "postgres":
+        # The janitor trims, so it runs often here.
+        store: StreamStorePlugin = postgres_streams(
+            janitor_interval=timedelta(milliseconds=100), **settings
+        )
+    else:
+        url = os.environ.get("STREAMS_REDIS_URL", "")
+        if not url:
+            pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+        # Retention trims as the next appends land, once the reader's hold lapsed.
+        store = RedisStreams(
+            url, key_prefix=f"replay-reads-{uuid.uuid4().hex}", **settings
+        )
+    streams = await connect_with(client, store)
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
@@ -385,3 +432,46 @@ async def test_the_codec_passes_other_payloads_through(client: Client):
     [payload] = DataConverter.default.payload_converter.to_payloads(["plain"])
     assert await codec_of(streams).decode([payload]) == [payload]
     assert await codec_of(streams).encode([payload]) == [payload]
+
+
+async def test_replay_reads_an_activity_stream_with_the_activitys_context(
+    client: Client,
+):
+    keyed = await connect_with(
+        client, MemoryStreams(), DataConverter(payload_codec=ActivityKeyedCodec())
+    )
+    activity_id = f"replay-reads-{uuid.uuid4().hex}"
+    async with new_worker(keyed, activities=[owns_a_stream]) as worker:
+        owner = await keyed.start_activity(
+            owns_a_stream,
+            ["a", "b"],
+            id=activity_id,
+            task_queue=worker.task_queue,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        run_id = await owner.result()
+    env = ActivityEnvironment(client=keyed)
+    env.info = dataclasses.replace(
+        env.info, workflow_run_id=f"reader-{uuid.uuid4()}", is_local=True
+    )
+    raw = await env.run(
+        read_activity,
+        _ReadInput(
+            workflow_id="",
+            owner_kind="activity",
+            activity_id=activity_id,
+            chain_run_id=run_id,
+            topic=TOKENS.name,
+            after="",
+            state="",
+            wait_ms=100,
+            max_records=10,
+            positions_only=True,
+            reader_id="1",
+        ),
+    )
+    plugin_of(keyed)._batches.clear()
+    # The codec keys each body by the Activity, so only the Activity's context
+    # decodes what the replay reads again.
+    [replayed] = await codec_of(keyed).decode([raw.payload])
+    assert values(replayed) == ["a", "b"]

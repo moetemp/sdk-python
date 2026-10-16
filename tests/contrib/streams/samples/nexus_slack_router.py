@@ -31,6 +31,8 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
+    ClientTransport,
+    StreamDirectReads,
     StreamOperationHandler,
     StreamReader,
     TemporalStreamsHandler,
@@ -130,12 +132,15 @@ async def main(client: Client, endpoint: str, task_queue: str) -> Routed:
     """
     # The store rides the client, and the Worker built from it gets the store.
     # With notifications on, Core tells the server's notifier when the stream
-    # moves, and the Worker serves the reads on the same endpoint.
+    # moves, and the Worker serves the reads on the same endpoint. The router
+    # reads directly by default, through ExecuteSyncNexusOperation with this
+    # client, so History keeps each read's range and not its records.
     store = MemoryStreams().notify_on_append()
+    reads = StreamDirectReads({endpoint: ClientTransport(client, endpoint)})
     store_client = await Client.connect(
         client.service_client.config.target_host,
         namespace=client.namespace,
-        plugins=[store],
+        plugins=[store, reads],
     )
     async with Worker(
         store_client,

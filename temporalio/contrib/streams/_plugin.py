@@ -57,7 +57,8 @@ T = TypeVar("T")
 class StreamStorePlugin(SimplePlugin):
     """The base class of the store configuration classes.
 
-    Use :class:`temporalio.contrib.streams.redis.RedisStreams` or
+    Use :class:`temporalio.contrib.streams.redis.RedisStreams`,
+    :class:`temporalio.contrib.streams.postgres.PostgresStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
     is one store, on one client connection, since Core asks about each
     stream's owner over the connection that connected the store. A second
@@ -80,10 +81,15 @@ class StreamStorePlugin(SimplePlugin):
         # Set once the server answered that it has no stream notifier.
         self._notifier_unsupported = False
         # Imported here, since that module imports this one.
-        from temporalio.contrib.streams._replay_reads import BatchCache, ReadStates
+        from temporalio.contrib.streams._replay_reads import (
+            BatchCache,
+            ByteCache,
+            ReadStates,
+        )
 
         self._batches = BatchCache()
         self._read_states = ReadStates()
+        self._follows = ByteCache()
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
@@ -148,11 +154,12 @@ class StreamStorePlugin(SimplePlugin):
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
         from temporalio.contrib.streams._workflow import read_activity
+        from temporalio.contrib.streams._workflow_follow import follow_activity
         from temporalio.contrib.streams._workflow_writer import close_activity
 
         activities = list(config.get("activities") or [])
         # The same plugin on the client and the Worker configures the Worker twice.
-        for builtin in (read_activity, close_activity):
+        for builtin in (read_activity, close_activity, follow_activity):
             if builtin not in activities:
                 activities.append(builtin)
         config["activities"] = activities
@@ -181,17 +188,15 @@ class StreamStorePlugin(SimplePlugin):
             await self.flush_notifications()
 
     def notify_on_append(
-        self, *, max_notifiers: int | None = None, every_append: bool = False
+        self, *, max_notifiers: int | None = None, notification_log: bool = False
     ) -> Self:
         """Tell each stream's notifier on the server when the stream moves.
 
         That is what wakes a reader that sleeps on the stream: a client
         reader that waits on the notifier, or a Workflow reader. Core tells
-        the notifier after an append, but only while a reader sleeps on the
-        stream. Such a reader arms the stream with a read that waited and
-        found nothing. A busy stream, whose readers find records on each
-        read, costs no notification. Off by default, since most streams have
-        no sleeping reader. It needs a server with the stream notifier. Turn
+        the notifier after every append, and folds the notifications of one
+        stream into one call in flight. Off by default, since most streams
+        have no sleeping reader. It needs a server with the stream notifier. Turn
         it on before a client connects the store, in every process that
         appends or reads, since a client reader sleeps on the notifier only
         with it on.
@@ -199,9 +204,12 @@ class StreamStorePlugin(SimplePlugin):
         Args:
             max_notifiers: How many streams Core keeps a notifier for,
                 dropping the least recently used. Core's default when unset.
-            every_append: Tell the notifier after every append, whether or
-                not a reader armed the stream. For readers that can't arm,
-                such as a hand-written reader over HTTP.
+            notification_log: Write a log entry with each append, in the
+                same store step, in place of the producer's notification. A
+                :class:`temporalio.contrib.streams.StreamDriver` reads the
+                log and notifies the server. Producers then make no call to
+                Temporal. Turn it on in every process that appends, and run
+                at least one driver.
 
         Raises:
             ValueError: A client already connected this store, or
@@ -217,7 +225,7 @@ class StreamStorePlugin(SimplePlugin):
         if max_notifiers is not None and max_notifiers < 1:
             raise ValueError(f"max_notifiers must be at least 1, got {max_notifiers}")
         self._config.notify_on_append = True
-        self._config.notify_every_append = every_append
+        self._config.notification_log = notification_log
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self
@@ -318,7 +326,8 @@ class StreamStorePlugin(SimplePlugin):
         An admin helper for cleanup and compliance requests. Deleting a
         Workflow does not delete its streams. Their retention bounds what is
         left, and this removes it at once, across every run chain of the
-        Workflow id. It asks Temporal nothing, so it can run after the
+        Workflow id, and the streams of every Activity that a run of the
+        Workflow scheduled. It asks Temporal nothing, so it can run after the
         Workflow is gone. On Redis it walks the keyspace, so run it rarely,
         not on a hot path.
 
@@ -342,6 +351,29 @@ class StreamStorePlugin(SimplePlugin):
             namespace=namespace,
             owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
             workflow_id=workflow_id,
+        )
+        return (await call(self._service.delete_owner(request))).deleted
+
+    async def delete_activity_streams(self, namespace: str, activity_id: str) -> int:
+        """Delete every stream of standalone Activity ``activity_id`` in ``namespace``.
+
+        The same admin helper as :meth:`delete_workflow_streams`, for the
+        streams of every run of the Activity id.
+
+        Returns:
+            How many store keys were deleted.
+
+        Raises:
+            ValueError: No client connected this store yet.
+            temporalio.contrib.streams.StreamStorageError: The store failed;
+                some keys may be deleted.
+        """
+        if self._service is None:
+            raise ValueError(f"no client has connected stream store {self.name()!r}")
+        request = DeleteOwnerRequest(
+            namespace=namespace,
+            owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+            activity_id=activity_id,
         )
         return (await call(self._service.delete_owner(request))).deleted
 

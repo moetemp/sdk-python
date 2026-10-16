@@ -42,6 +42,14 @@ class StreamService:
             "DeleteOwner", req, temporalio.bridge.proto.streams.DeleteOwnerResponse
         )
 
+    async def describe_store(
+        self, req: temporalio.bridge.proto.streams.DescribeStoreRequest
+    ) -> temporalio.bridge.proto.streams.DescribeStoreResponse:
+        """Invokes the StreamService.describe_store call."""
+        return await self._store.call(
+            "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
+        )
+
     async def flush_notifications(
         self, req: temporalio.bridge.proto.streams.FlushNotificationsRequest
     ) -> temporalio.bridge.proto.streams.FlushNotificationsResponse:
@@ -50,6 +58,22 @@ class StreamService:
             "FlushNotifications",
             req,
             temporalio.bridge.proto.streams.FlushNotificationsResponse,
+        )
+
+    async def follow(
+        self, req: temporalio.bridge.proto.streams.FollowRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow call."""
+        return await self._store.call(
+            "Follow", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
+    async def follow_range(
+        self, req: temporalio.bridge.proto.streams.FollowRangeRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow_range call."""
+        return await self._store.call(
+            "FollowRange", req, temporalio.bridge.proto.streams.FollowResponse
         )
 
     async def latest(
@@ -92,6 +116,16 @@ class StreamService:
             "RetireProducer",
             req,
             temporalio.bridge.proto.streams.RetireProducerResponse,
+        )
+
+    async def run_stream_driver(
+        self, req: temporalio.bridge.proto.streams.RunStreamDriverRequest
+    ) -> temporalio.bridge.proto.streams.RunStreamDriverResponse:
+        """Invokes the StreamService.run_stream_driver call."""
+        return await self._store.call(
+            "RunStreamDriver",
+            req,
+            temporalio.bridge.proto.streams.RunStreamDriverResponse,
         )
 
     async def subscribe(

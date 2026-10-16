@@ -34,8 +34,12 @@ from temporalio.client import (
     WorkflowUpdateFailedError,
 )
 from temporalio.contrib.streams import (
+    Cursor,
+    LinkEvent,
     RecordKind,
     StreamError,
+    StreamLink,
+    StreamRef,
     StreamStorePlugin,
     StreamUnsupportedError,
     SupersessionTracker,
@@ -46,6 +50,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._local_activity import StreamsInterceptor
 from temporalio.contrib.streams._workflow import read_activity
+from temporalio.contrib.streams._workflow_follow import follow_activity
 from temporalio.contrib.streams._workflow_writer import _RunWriters, close_activity
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
@@ -53,6 +58,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
+from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
 STEPS = topic("steps", str)
@@ -525,6 +531,7 @@ async def test_a_worker_registers_the_read_activity_once(client: Client):
     assert worker.config(active_config=True).get("activities") == [
         read_activity,
         close_activity,
+        follow_activity,
     ]
     with pytest.warns(UserWarning, match="same plugin type"):
         worker = Worker(
@@ -534,7 +541,7 @@ async def test_a_worker_registers_the_read_activity_once(client: Client):
             plugins=[store],
         )
     config = worker.config(active_config=True)
-    assert config.get("activities") == [read_activity, close_activity]
+    assert config.get("activities") == [read_activity, close_activity, follow_activity]
     interceptors = config.get("interceptors") or []
     assert sum(isinstance(i, StreamsInterceptor) for i in interceptors) == 1
 
@@ -578,3 +585,91 @@ async def test_a_history_of_the_local_activity_writer_does_not_replay():
         await Replayer(
             workflows=[FlushesOnce], plugins=[MemoryStreams()]
         ).replay_workflow(history)
+
+
+@activity.defn
+async def latest_link() -> str:
+    # Core appends the activation's records before it dispatches this call.
+    return (await activity_handle().latest(topic=STEPS)).token
+
+
+@workflow.defn
+class LinksAndJoins:
+    @workflow.run
+    async def run(self) -> tuple[str, str]:
+        steps = workflow_writer(STEPS)
+        steps.publish("d1")
+        steps.link(
+            StreamRef.for_workflow("child", chain_run_id="r"),
+            name="sub-1",
+            after=Cursor("c3"),
+            value="search",
+        )
+        landed = await workflow.execute_local_activity(
+            latest_link, start_to_close_timeout=timedelta(seconds=10)
+        )
+        steps.join(name="sub-1", until=Cursor("c9"))
+        steps.publish("d2")
+        oversized = ""
+        try:
+            steps.link(StreamRef.for_workflow("child"), name="")
+        except ValueError as error:
+            oversized = str(error)
+        return landed, oversized
+
+
+async def test_a_workflow_link_lands_with_its_activation(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, LinksAndJoins, activities=[latest_link]) as worker:
+        handle = await streams.start_workflow(
+            LinksAndJoins.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        landed, refused = await handle.result()
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.kind for r in records] == [
+        RecordKind.DATA,
+        RecordKind.LINK,
+        RecordKind.LINK,
+        RecordKind.DATA,
+    ]
+    # The link went out with the activation that wrote it, before the Local
+    # Activity ran.
+    assert landed == records[1].cursor.token
+    assert records[1].link == StreamLink(
+        LinkEvent.OPEN,
+        StreamRef.for_workflow("child", chain_run_id="r"),
+        "sub-1",
+        after=Cursor("c3"),
+    )
+    assert records[1].value == "search"
+    assert records[2].link == StreamLink(
+        LinkEvent.JOIN, None, "sub-1", until=Cursor("c9")
+    )
+    assert records[2].value is None
+    assert "1 to 256" in refused
+    await Replayer(
+        workflows=[LinksAndJoins], plugins=[MemoryStreams()]
+    ).replay_workflow(await handle.fetch_history())
+
+
+async def test_a_producer_links_and_joins(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(streams, Waits) as worker:
+        workflow_id = await running_owner(streams, worker.task_queue)
+        stream = get_stream_handle(streams, workflow_id, topic=STEPS)
+        producer = stream.producer(producer_id="agent", attempt=1)
+        tool = StreamRef.for_workflow_activity(
+            workflow_id, run_id="run", activity_id="tool-1"
+        )
+        await producer.append("d1")
+        opened = await producer.link(tool, name="tool-1", value={"tool": "search"})
+        await producer.join(name="tool-1")
+        await stream.close()
+        records = await read_all(stream.read())
+        await streams.get_workflow_handle(workflow_id).signal(Waits.finish)
+    assert [r.cursor for r in records][1] == opened
+    assert records[1].link == StreamLink(LinkEvent.OPEN, tool, "tool-1")
+    assert records[1].value == {"tool": "search"}
+    assert records[2].link == StreamLink(LinkEvent.JOIN, None, "tool-1")
+    assert [r.sequence for r in records] == [1, 2, 3]
