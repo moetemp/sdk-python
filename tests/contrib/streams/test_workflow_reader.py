@@ -9,6 +9,7 @@ Jetty lane.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -16,7 +17,7 @@ from typing import Any
 import pytest
 
 from temporalio import activity, workflow
-from temporalio.api.common.v1 import WorkflowExecution
+from temporalio.api.common.v1 import Payload, WorkflowExecution
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
 from temporalio.api.stream.v1 import StreamReference, StreamWake
@@ -33,10 +34,13 @@ from temporalio.common import RawValue
 from temporalio.contrib.streams import (
     RecordKind,
     StreamPosition,
+    StreamRecordError,
+    _workflow,
     get_stream_handle,
     topic,
     workflow_reader,
 )
+from temporalio.contrib.streams._wire import decode_or_mark, to_record
 from temporalio.contrib.streams._workflow import (
     READ_ACTIVITY,
     _ReadInput,
@@ -44,7 +48,7 @@ from temporalio.contrib.streams._workflow import (
     read_activity,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
-from temporalio.converter import DataConverter
+from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
@@ -72,6 +76,8 @@ class FakeReads:
 
 
 _fake: FakeReads | None = None
+# An answer that makes the read run until it is canceled.
+HANG = asyncio.CancelledError()
 
 
 @activity.defn(name=READ_ACTIVITY)
@@ -81,6 +87,8 @@ async def fake_read(input: _ReadInput) -> RawValue:
     if input.unsubscribe:
         return _result(ReadResponse(cursor=input.after), "")
     answer = _fake.answers.pop(0)
+    if answer is HANG:
+        await asyncio.sleep(30)
     if isinstance(answer, BaseException):
         raise answer
     return _result(answer, "")
@@ -96,6 +104,17 @@ def data(cursor: str, value: str, producer: str = "p", attempt: int = 1) -> Read
             producer_id=producer,
             attempt=attempt,
             body=body,
+        ),
+    )
+
+
+def unconvertible(cursor: str) -> ReadRecord:
+    return ReadRecord(
+        cursor=cursor,
+        stored=WireRecord(
+            topic="tokens",
+            kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
+            body=Payload(metadata={"encoding": b"binary/unknown"}, data=b"?"),
         ),
     )
 
@@ -589,3 +608,130 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
         )
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
     assert said == "failed: StreamUnsupportedError"
+
+
+@workflow.defn
+class ReadsPastBadRecords:
+    @workflow.run
+    async def run(self) -> list[str]:
+        seen: list[str] = []
+        async with workflow_reader("owner", topic=TOKENS) as reader:
+            while True:
+                try:
+                    batch = await anext(reader)
+                except StreamRecordError as error:
+                    seen.append(f"error {error.cursor.token}")
+                    continue
+                except StopAsyncIteration:
+                    return seen
+                seen.extend(_describe(r) for r in batch.records)
+                seen.append(f"at {batch.position.cursor}")
+
+
+async def test_a_record_that_does_not_convert_is_raised_once_then_passed(
+    client: Client,
+):
+    global _fake
+    _fake = FakeReads(
+        [
+            ReadResponse(
+                records=[
+                    data("c1", "one"),
+                    unconvertible("c2"),
+                    unconvertible("c3"),
+                    data("c4", "four"),
+                ],
+                cursor="c4",
+            ),
+            ReadResponse(records=[unconvertible("c5")], cursor="c5", done=True),
+        ]
+    )
+    async with new_worker(client, ReadsPastBadRecords, activities=[fake_read]) as w:
+        handle = await client.start_workflow(
+            ReadsPastBadRecords.run, id=new_workflow_id(), task_queue=w.task_queue
+        )
+        seen = await asyncio.wait_for(handle.result(), 20)
+    assert seen == [
+        "data one",
+        "at c1",
+        "error c2",
+        "error c3",
+        "data four",
+        "at c4",
+        "error c5",
+    ]
+    # Two reads, so the bad records cost no read of their own.
+    assert len(_fake.inputs) == 2
+    await Replayer(workflows=[ReadsPastBadRecords]).replay_workflow(
+        await handle.fetch_history()
+    )
+
+
+class FailingCodec(PayloadCodec):
+    async def encode(self, payloads: Any) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Any) -> list[Payload]:
+        raise RuntimeError("no key")
+
+
+async def test_a_body_the_codec_cannot_decode_is_one_bad_record():
+    read = data("c1", "one")
+    await decode_or_mark(DataConverter(payload_codec=FailingCodec()), read)
+    with pytest.raises(StreamRecordError, match="no key") as raised:
+        to_record(DataConverter.default.payload_converter, read, str)
+    assert raised.value.cursor.token == "c1"
+
+
+@workflow.defn
+class CancelsTheAttachingRead:
+    @workflow.run
+    async def run(self) -> None:
+        reader = workflow_reader("owner", topic=TOKENS)
+        try:
+            await asyncio.wait_for(anext(reader), 1)
+        except (asyncio.TimeoutError, ActivityError):
+            # The canceled Local Activity comes back as its failure.
+            pass
+        await reader.close()
+
+
+async def test_a_close_after_a_canceled_attach_detaches(client: Client):
+    global _fake
+    _fake = FakeReads([HANG])
+    async with new_worker(
+        client, CancelsTheAttachingRead, activities=[fake_read]
+    ) as worker:
+        await client.execute_workflow(
+            CancelsTheAttachingRead.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert _fake.inputs[0].subscription_id == "1"
+    last = _fake.inputs[-1]
+    assert last.unsubscribe and last.subscription_id == "1"
+
+
+async def test_an_attach_without_notifications_warns_once(
+    client: Client, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(_workflow, "_warned_no_notify", False)
+    streams_client = await connect_with(client, MemoryStreams())
+    env = ActivityEnvironment(client=streams_client)
+    input = _ReadInput(
+        workflow_id="owner",
+        chain_run_id="",
+        topic="tokens",
+        after="",
+        state="",
+        arm=True,
+        wait_ms=0,
+        max_records=10,
+        subscription_id="1",
+    )
+    with caplog.at_level(logging.WARNING):
+        for _ in range(2):
+            with pytest.raises(Exception):
+                await env.run(read_activity, input)
+    warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
+    assert len(warned) == 1
