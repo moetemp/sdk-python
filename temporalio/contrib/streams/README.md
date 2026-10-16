@@ -552,7 +552,9 @@ transport, and none works on Cloud yet. See
 
 - **Retries deduplicate.** An append that fails with
   `StreamOutcomeUnknownError` can be repeated on the same producer. The store
-  returns the original position and writes nothing twice.
+  returns the original position and writes nothing twice. On a store without
+  producer state, such as `RedisStreams(plain=True)`, the copy lands and
+  every reader drops it. `StreamStorePlugin.capabilities` says which.
 - **Retention.** A stream keeps records for `retention` (7 days by default,
   set on `RedisStreams` or `PostgresStreams`) and dies that long after its
   last write. A cursor
@@ -562,7 +564,9 @@ transport, and none works on Cloud yet. See
   `close_workflow_stream` in the Workflow or `close()` on a handle. A
   Workflow doesn't see a close from outside through its writer: Core drops
   its later records on that topic, and the run goes on. So close a topic
-  from the Workflow that owns it, or have readers check how it closed.
+  from the Workflow that owns it, or have readers check how it closed. On a
+  store without producer state, a late append can still answer success, and
+  no reader delivers it, since every read ends at the first `CLOSE` record.
 - **Readers before the owner.** A read of a Workflow that Temporal doesn't
   know yet waits for `owner_start_grace` (60 seconds by default, set on
   `RedisStreams`, `PostgresStreams` or `MemoryStreams`), counted from the read's first owner
@@ -579,6 +583,7 @@ transport, and none works on Cloud yet. See
 ## Further reading
 
 - [Readers that sleep](docs/notifications.md)
+- [Store capabilities and guarantees](docs/store-capabilities.md)
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
 - [PostgreSQL store: guarantees and setup](docs/postgres-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)

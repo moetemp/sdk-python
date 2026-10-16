@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import timedelta
+from typing import Any
 
 from temporalio.bridge.proto.streams import RedisStoreConfig, StreamStoreConfig
 from temporalio.contrib.streams._plugin import (
@@ -38,6 +39,7 @@ class RedisStreams(StreamStorePlugin):
         owner_start_grace: timedelta | None = None,
         notify_doorbells: int | None = None,
         archive: StreamArchive | None = None,
+        plain: bool = False,
     ) -> None:
         """Create the store's configuration.
 
@@ -81,6 +83,10 @@ class RedisStreams(StreamStorePlugin):
                 and the store needs
                 ``notify_on_append(notification_log=True)``. Core refuses
                 to connect the store without the log.
+            plain: Run no Lua scripts, for a Redis that refuses them. The
+                store then has no producer state, no kept last position, no
+                holds and no change feed, and Core takes the fallback of
+                each (see :attr:`capabilities`).
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
@@ -101,12 +107,15 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"notify_doorbells must be at least 1, got {notify_doorbells}"
             )
+        # Set only when asked for, so the config also fits a Core without it.
+        extra: dict[str, Any] = {"plain": True} if plain else {}
         config = RedisStoreConfig(
             urls=urls,
             cluster=cluster,
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
             notify_doorbells=notify_doorbells or 0,
+            **extra,
         )
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
