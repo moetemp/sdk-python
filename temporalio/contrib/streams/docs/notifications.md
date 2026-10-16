@@ -154,12 +154,16 @@ read's marker holds the read's range, Core's digest of its records, and
 Core's read state after the read. The state holds the newest attempt of
 each producer the read saw, up to 16 KiB. A read starts from the state the
 reader's previous read ended with, so its marker leaves that out, and
-replay takes it from the previous marker. Only a reader's first read also
-keeps the state it started from, the one `after=` gave. So a marker is a
+replay takes it from the previous marker. A read counts only once it
+returned, so a failed or canceled read leaves no gap. The reader's first
+read keeps the state it started from, the one `after=` gave, and so does
+the first read of a reset run, since the markers before it are another
+run's. So a marker is a
 few hundred bytes for a stream with a few producers, whatever the batch
-holds, and up to about 17 KiB for a stream with many, such as one a
-`workflow_writer` publishes to, which has a producer per flush. At that
-size, 1,000 reads add about 17 MiB to History.
+holds, and up to about 17 KiB for a stream with many, such as one that
+Local Activities write to, which has a producer per call. A stream that a
+`workflow_writer` publishes to has one producer per run, `@<run id>`, so its
+state stays small. At 17 KiB, 1,000 reads add about 17 MiB to History.
 
 - On replay, the Worker reads the same range from the store again, before
   Workflow code sees the batch. Workflow code gets the same records in both
@@ -186,6 +190,11 @@ size, 1,000 reads add about 17 MiB to History.
   on each retry until an operator resets the run. A long-running reader
   should Continue-as-New well before `floor_lease` passes, or pass
   `replay_from_store=False`.
+- A positions-only reader pins every record after its first read until its
+  run ends. Plan a Continue-as-New for a long reader. Each holder costs
+  store memory and append time. `reader.continue_as_new_suggested()` says
+  when the records it read pass 256 MiB, or a day passed since its first
+  read. Pass `reader.position` as `after=` to the next run.
 - Replay needs the store. A `Replayer` needs the store plugin and a client
   in its process that connected the same store. Without them, the read
   raises `StreamUnsupportedError`, which names the opt-out.
