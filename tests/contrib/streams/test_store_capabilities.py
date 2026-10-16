@@ -126,7 +126,13 @@ class _CoreWithoutDescribe:
         raise StreamCallFailure(StreamFailure(kind=self.kind, message=f"no {rpc}"))
 
 
-async def test_a_core_without_describe_serves_every_capability():
+async def test_a_core_without_describe_serves_every_capability(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The fake store never parses, so any message types stand in for the call's.
+    proto = temporalio.bridge.proto.streams
+    monkeypatch.setattr(proto, "DescribeStoreRequest", StreamFailure, raising=False)
+    monkeypatch.setattr(proto, "DescribeStoreResponse", StreamFailure, raising=False)
     unknown = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED)
     capabilities = await describe(unknown)  # type: ignore[arg-type]
     assert capabilities.producer_state and capabilities.kept_last
