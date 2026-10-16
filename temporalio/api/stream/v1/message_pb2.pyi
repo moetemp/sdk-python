@@ -387,3 +387,29 @@ class StreamNotification(google.protobuf.message.Message):
     ) -> None: ...
 
 global___StreamNotification = StreamNotification
+
+class StreamNotificationResult(google.protobuf.message.Message):
+    """The answer to one entry of a NotifyStreams request."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    CODE_FIELD_NUMBER: builtins.int
+    MESSAGE_FIELD_NUMBER: builtins.int
+    code: builtins.int
+    """The gRPC status code of the entry, as a NotifyStream call for it would answer. Zero (OK)
+    when the server applied the entry, or dropped it since the stream has no notifier.
+    """
+    message: builtins.str
+    """Why the server refused the entry. Empty when `code` is zero."""
+    def __init__(
+        self,
+        *,
+        code: builtins.int = ...,
+        message: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal["code", b"code", "message", b"message"],
+    ) -> None: ...
+
+global___StreamNotificationResult = StreamNotificationResult
