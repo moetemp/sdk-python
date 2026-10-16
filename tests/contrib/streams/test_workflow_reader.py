@@ -876,7 +876,6 @@ async def test_an_attach_without_notifications_warns_once(
         topic="tokens",
         after="",
         state="",
-        arm=True,
         wait_ms=0,
         max_records=10,
         subscription_id="1",
