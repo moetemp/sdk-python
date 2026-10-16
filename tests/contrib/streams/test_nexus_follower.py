@@ -1066,6 +1066,33 @@ async def test_a_follower_that_asks_for_links_gets_every_source_in_order() -> No
     assert transport.requests[1].state == b"follow-state-1"
 
 
+async def test_a_canceled_follow_of_links_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                FollowInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    # Both scripted pages are read, the second one empty, and none is done.
+    assert [r.value for b in collector.batches for r in b.records] == ["d1", "a1"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
+
+
 async def test_the_store_transport_follows_links_through_core(client: Client) -> None:
     streams = await connect_with(client, MemoryStreams())
     async with new_worker(streams, Waits) as worker:

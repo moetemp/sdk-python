@@ -462,13 +462,16 @@ class StreamFollowerService:
             stream = await self._stream_of(input.source_context)
             if stream is not None:
                 position = FollowInput(stream=stream)
+        # A canceled operation only detached its caller, so the stream and
+        # its links may go on with no end.
+        failed = isinstance(input.result, OnCompleteRequestResultFailure)
         if position is not None:
             end = _request_end(ctx)
             wait_ms = 0
             while True:
                 answer = await self._follow(position, wait_ms=wait_ms)
                 position = await self._hand_over_followed(followed, position, answer)
-                if answer.done:
+                if answer.done or (failed and not answer.records):
                     break
                 wait_ms = 0 if answer.records else _DRAIN_WAIT_MS
                 if asyncio.get_running_loop().time() >= end:

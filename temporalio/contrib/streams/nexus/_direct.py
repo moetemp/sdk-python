@@ -489,15 +489,7 @@ async def direct_read_activity(
         ) from error
     except (HTTPStatusError, StreamServiceCallError) as error:
         if _refused_credential(error):
-            # A credential that expired or lost a role is a deployment fault
-            # that an operator fixes, so the read retries with backoff and
-            # the caller Workflow does not fail for good.
-            temporalio.activity.logger.error(
-                "A direct stream read on endpoint %r was refused for its "
-                "credential; the read retries until the credential works",
-                endpoint,
-                exc_info=True,
-            )
+            _log_refused_credential(endpoint)
             raise
         if error.retryable:
             raise
@@ -508,12 +500,7 @@ async def direct_read_activity(
         ) from error
     except RPCError as error:
         if _refused_credential(error):
-            temporalio.activity.logger.error(
-                "A direct stream read on endpoint %r was refused for its "
-                "credential; the read retries until the credential works",
-                endpoint,
-                exc_info=True,
-            )
+            _log_refused_credential(endpoint)
             raise
         if error.status not in _FINAL_STATUSES:
             raise
@@ -581,6 +568,9 @@ async def direct_follow_activity(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
     except (HTTPStatusError, StreamServiceCallError) as error:
+        if _refused_credential(error):
+            _log_refused_credential(endpoint)
+            raise
         if error.retryable:
             raise
         raise ApplicationError(
@@ -589,6 +579,9 @@ async def direct_follow_activity(
             non_retryable=True,
         ) from error
     except RPCError as error:
+        if _refused_credential(error):
+            _log_refused_credential(endpoint)
+            raise
         if error.status not in _FINAL_STATUSES:
             raise
         raise ApplicationError(
@@ -996,6 +989,18 @@ def _failed(failure: Failure, call: str) -> Exception:
         f"{call} failed: {failure.message}",
         failure_type=handler_type,
         retryable=True if retryable is None else retryable,
+    )
+
+
+def _log_refused_credential(endpoint: str) -> None:
+    # A credential that expired or lost a role is a deployment fault that an
+    # operator fixes, so the Activity retries with backoff and the caller
+    # Workflow doesn't fail for good.
+    temporalio.activity.logger.error(
+        "A direct stream read on endpoint %r was refused for its credential; "
+        "the read retries until the credential works",
+        endpoint,
+        exc_info=True,
     )
 
 

@@ -53,6 +53,7 @@ from temporalio.contrib.streams.nexus._direct import (
     _put_follow,
     _transfer,
     answer_of,
+    direct_follow_activity,
     direct_read_activity,
     follow_answer_of,
     innermost_codec,
@@ -830,3 +831,25 @@ async def test_a_floor_holder_outside_the_callers_namespace_is_refused():
     with pytest.raises(nexusrpc.HandlerError) as refused:
         await handler._check(read("other-ns/run/1"))
     assert refused.value.type is nexusrpc.HandlerErrorType.UNAUTHORIZED
+
+
+async def test_a_refused_credential_retries_the_follow():
+    class Refuses:
+        async def read(self, request: ReadInput) -> ReadOutput:
+            raise AssertionError("a follow never reads")
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a follow never reads a range")
+
+        async def follow(self, request: FollowInput) -> FollowOutput:
+            raise generated_client.HTTPStatusError("http://stub", 403, "lost a role")
+
+        async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+            raise AssertionError("a live follow never follows a range")
+
+    plugin = StreamDirectReads({"e": Refuses()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # Raised as is, so the Activity's retry runs, not as a final failure.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_follow_activity, "e", "1", FollowInput(stream=_STREAM))
