@@ -17,6 +17,9 @@
 #   STREAMS_ARCHIVE_S3_URL  an `s3://bucket/prefix` the archive cases write to, with the `AWS_*`
 #                      settings Core reads. Without it, the script starts MinIO in Docker on a free
 #                      port and removes the container at the end.
+#   STREAMS_POSTGRES_URL  a PostgreSQL 14 or later database the Postgres cases use. Each case makes
+#                      a schema of its own. Without it, the script starts PostgreSQL 17 in Docker
+#                      on a free port and removes the container at the end.
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 #   PYTEST_TARGETS     the tests to run (default: tests/contrib/streams). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.
@@ -201,6 +204,22 @@ if [[ -z "${STREAMS_ARCHIVE_S3_URL:-}" ]]; then
     "import boto3; boto3.client('s3').create_bucket(Bucket='streams-archive')")
 fi
 
+if [[ -z "${STREAMS_POSTGRES_URL:-}" ]]; then
+  pg_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  pg=streams-lane-pg-$$
+  # Many cases connect at once, each with a pool and a listener.
+  docker run -d --rm --name "$pg" -p "127.0.0.1:$pg_port:5432" \
+    -e POSTGRES_USER=streams -e POSTGRES_PASSWORD=streams -e POSTGRES_DB=streams \
+    postgres:17 -c max_connections=1000 >/dev/null
+  containers+=("$pg")
+  for _ in $(seq 60); do
+    docker exec "$pg" pg_isready -q -U streams -d streams -h 127.0.0.1 && break
+    sleep 1
+  done
+  export STREAMS_POSTGRES_URL="postgres://streams:streams@127.0.0.1:$pg_port/streams"
+  STREAMS_POSTGRES_URL+="?sslmode=disable"
+fi
+
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -251,9 +270,9 @@ uv run --no-sync pytest ${PYTEST_TARGETS:-tests/contrib/streams} \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
-# A live test that skips here proves nothing, so a skip for a missing notifier or missing Redis
+# A live test that skips here proves nothing, so a skip for a missing notifier or a missing store
 # fails the lane.
-gated='no stream notifier|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|STREAMS_ARCHIVE_S3_URL'
+gated='no stream notifier|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|STREAMS_ARCHIVE_S3_URL|STREAMS_POSTGRES_URL'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
