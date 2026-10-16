@@ -25,7 +25,7 @@ import json
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -111,6 +111,12 @@ BATCH_TYPE = b"temporal.io/stream-nexus-read-batch"
 """The ``messageType`` of a direct read's result once the codec step turned it back."""
 
 _ENDPOINT_KEY = "temporal.io/stream-nexus-endpoint"
+_CHAIN_KEY = "temporal.io/stream-read-chain"
+# HTTP answers to a credential the endpoint refused.
+_AUTH_STATUSES = {401, 403}
+# What an HTTP call may take outside an Activity, where no Activity's time
+# bounds it.
+_DEFAULT_HTTP_TIMEOUT = 30.0
 # Batches the read Activity read in this process, so the live Workflow Task
 # turns its result back without a second read.
 _CACHE_SIZE = 256
@@ -138,8 +144,6 @@ _SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
 # Nexus handler errors that a repeat of the same call gets again.
 _FINAL_HANDLER_ERRORS = {
     "BAD_REQUEST",
-    "UNAUTHENTICATED",
-    "UNAUTHORIZED",
     "NOT_FOUND",
     "NOT_IMPLEMENTED",
 }
@@ -148,10 +152,11 @@ _FINAL_STATUSES = {
     RPCStatusCode.INVALID_ARGUMENT,
     RPCStatusCode.FAILED_PRECONDITION,
     RPCStatusCode.NOT_FOUND,
-    RPCStatusCode.PERMISSION_DENIED,
-    RPCStatusCode.UNAUTHENTICATED,
     RPCStatusCode.UNIMPLEMENTED,
 }
+# Refusals of the caller's credential, by the handler and by the server.
+_AUTH_HANDLER_ERRORS = {"UNAUTHENTICATED", "UNAUTHORIZED"}
+_AUTH_RPC_STATUSES = {RPCStatusCode.PERMISSION_DENIED, RPCStatusCode.UNAUTHENTICATED}
 _OPT_OUT = (
     "pass replay_from_store=False to the StreamReader to record each batch in "
     "History instead"
@@ -212,7 +217,7 @@ class HttpTransport:
         *,
         headers: Mapping[str, str] | None = None,
         ssl_context: SSLContext | None = None,
-        timeout: float = 30.0,
+        timeout: float | None = None,
         payload_codec: PayloadCodec | None = None,
     ) -> None:
         """Read through the stream service at ``url``.
@@ -225,46 +230,57 @@ class HttpTransport:
             headers: Sent with each call, such as ``Authorization``.
             ssl_context: The TLS for an ``https`` ``url``, such as a client
                 certificate for mTLS.
-            timeout: How long one call may take, in seconds.
+            timeout: How long one call may take, in seconds. By default, the
+                time the read's Local Activity has left, or 30 seconds
+                outside an Activity, such as on replay.
             payload_codec: The codec of the namespace that runs the handler.
                 Usually the one the caller's data converter has. Not the
                 client's wrapped codec, which would call itself.
         """
-        self._client = TemporalStreamsHttpClient(
-            url,
-            headers=dict(headers or {}),
-            timeout=timeout,
-            ssl_context=ssl_context,
-            payload_codec=payload_codec,
-        )
+        self._url = url
+        self._headers = dict(headers or {})
+        self._ssl_context = ssl_context
+        self._timeout = timeout
+        self._payload_codec = payload_codec
 
     async def read(self, request: ReadInput) -> ReadOutput:
         """Answer with the records after ``request``'s cursor."""
         try:
-            return await self._client.read(request)
+            return await self._call_client().read(request)
         except HTTPStatusError as error:
             raise _named(error) from error
 
     async def read_range(self, request: ReadRangeInput) -> ReadOutput:
         """Answer again the records of an earlier read that named a floor holder."""
         try:
-            return await self._client.read_range(request)
+            return await self._call_client().read_range(request)
         except HTTPStatusError as error:
             raise _named(error) from error
 
     async def follow(self, request: FollowInput) -> FollowOutput:
         """Answer with the items after ``request``'s position on a stream and its links."""
         try:
-            return await self._client.follow(request)
+            return await self._call_client().follow(request)
         except HTTPStatusError as error:
             raise _named(error) from error
 
     async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
         """Answer again the items of an earlier follow that named a floor holder."""
         try:
-            return await self._client.follow_range(request)
+            return await self._call_client().follow_range(request)
         except HTTPStatusError as error:
             raise _named(error) from error
+
+    def _call_client(self) -> TemporalStreamsHttpClient:
+        # A call that outlives its Local Activity is canceled anyway, and its
+        # answer is lost, so it gets the time the Activity has left.
+        return TemporalStreamsHttpClient(
+            self._url,
+            headers=self._headers,
+            timeout=self._timeout if self._timeout is not None else _time_left(),
+            ssl_context=self._ssl_context,
+            payload_codec=self._payload_codec,
+        )
 
 
 class ClientTransport:
@@ -450,23 +466,39 @@ class StreamDirectReads(SimplePlugin):
 
 @temporalio.activity.defn(name=DIRECT_READ_ACTIVITY)
 async def direct_read_activity(
-    endpoint: str, reader_id: str, input: ReadInput, read_seq: int = 0
+    endpoint: str,
+    reader_id: str,
+    input: ReadInput,
+    read_seq: int = 0,
+    chained: bool = False,
 ) -> RawValue:
     """Read one batch for a direct reader, holding its records for the run's replay.
 
     A :class:`StreamReader` with ``replay_from_store=True`` runs it as a Local
     Activity. :class:`StreamDirectReads` registers it on every Worker built
-    from its client. ``read_seq`` counts the reader's reads, this one
-    included. Past the first, the marker leaves out the read's input state,
-    which the previous marker holds as its answer state.
+    from its client. ``read_seq`` counts the reader's reads that returned,
+    this one included. With ``chained``, the reader says the previous read
+    was this run's, so the marker leaves out the read's input state, which
+    the previous marker holds as its answer state.
     """
     try:
-        return await _read(endpoint, reader_id, input, read_seq)
+        return await _read(endpoint, reader_id, input, read_seq, chained)
     except _FINAL_ERRORS as error:
         raise ApplicationError(
             str(error), type=type(error).__name__, non_retryable=True
         ) from error
     except (HTTPStatusError, StreamServiceCallError) as error:
+        if _refused_credential(error):
+            # A credential that expired or lost a role is a deployment fault
+            # that an operator fixes, so the read retries with backoff and
+            # the caller Workflow does not fail for good.
+            temporalio.activity.logger.error(
+                "A direct stream read on endpoint %r was refused for its "
+                "credential; the read retries until the credential works",
+                endpoint,
+                exc_info=True,
+            )
+            raise
         if error.retryable:
             raise
         raise ApplicationError(
@@ -475,6 +507,14 @@ async def direct_read_activity(
             non_retryable=True,
         ) from error
     except RPCError as error:
+        if _refused_credential(error):
+            temporalio.activity.logger.error(
+                "A direct stream read on endpoint %r was refused for its "
+                "credential; the read retries until the credential works",
+                endpoint,
+                exc_info=True,
+            )
+            raise
         if error.status not in _FINAL_STATUSES:
             raise
         raise ApplicationError(
@@ -483,7 +523,7 @@ async def direct_read_activity(
 
 
 async def _read(
-    endpoint: str, reader_id: str, input: ReadInput, read_seq: int
+    endpoint: str, reader_id: str, input: ReadInput, read_seq: int, chained: bool
 ) -> RawValue:
     info = temporalio.activity.info()
     plugin = _plugin_of(temporalio.activity.client())
@@ -510,11 +550,17 @@ async def _read(
     # sees it, from here while the run stays in this process.
     plugin._batches.put(range, answer)
     chain = None
+    elided = False
     if read_seq > 0:
-        chain = ReadChain(f"{info.workflow_id}/{reader_id}", read_seq)
-        if read_seq > 1:
+        # Keyed by the run that reads, since runs of one Workflow id each
+        # number their readers from 1.
+        chain = ReadChain(f"{info.workflow_run_id}/{reader_id}", read_seq)
+        if chained and read_seq > 1:
             range = dataclasses.replace(range, state=None)
-    return RawValue(positions_payload(endpoint, range, answer, chain))
+            elided = True
+    return RawValue(
+        positions_payload(endpoint, range, answer, chain, state_elided=elided)
+    )
 
 
 @temporalio.activity.defn(name=DIRECT_FOLLOW_ACTIVITY)
@@ -641,6 +687,7 @@ def positions_payload(
     range: ReadRangeInput,
     answer: ReadOutput,
     chain: ReadChain | None = None,
+    state_elided: bool = False,
 ) -> Payload:
     """The result a direct read records: its range, the rest of its answer, its errors.
 
@@ -649,12 +696,15 @@ def positions_payload(
     of each record that crossed as an error ride along, since a codec
     failure can be transient and a replay must not hand over a record that
     live code never saw. ``chain`` places the read among its reader's reads,
-    so a replay can take a left-out input state from the read before.
+    so a replay can take the input state ``state_elided`` left out from the
+    read before.
     """
     document: dict[str, Any] = {"range": _transfer(range), "done": answer.done}
     if chain is not None:
         document["reader"] = chain.reader
         document["seq"] = chain.seq
+        if state_elided:
+            document["elided"] = True
     if answer.state:
         document["state"] = base64.b64encode(answer.state).decode()
     errors = {record.token: record.error for record in answer.records if record.error}
@@ -687,11 +737,23 @@ def _answer_of(range: ReadRangeInput, document: Mapping[str, Any]) -> ReadOutput
     )
 
 
-def batch_payload(answer: ReadOutput) -> Payload:
-    """The result a direct read turns back into, with its records."""
+def batch_payload(answer: ReadOutput, chain: ReadChain | None = None) -> Payload:
+    """The result a direct read turns back into, with its records.
+
+    ``chain`` names the read's place among its reader's reads, which the
+    reader takes to tell whether its next read can leave out its input state.
+    """
     payload = _CONTRACT.to_payload(answer)
     payload.metadata["messageType"] = BATCH_TYPE
+    if chain is not None:
+        payload.metadata[_CHAIN_KEY] = chain.reader.encode()
     return payload
+
+
+def chain_run_of(payload: Payload) -> str:
+    """The run that made a direct read, from its turned-back result, or ``""``."""
+    reader = payload.metadata.get(_CHAIN_KEY)
+    return reader.decode().rsplit("/", 1)[0] if reader is not None else ""
 
 
 def is_positions(payload: Payload) -> bool:
@@ -838,11 +900,11 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
         if range.stored_records == 0:
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
-            return batch_payload(answer)
+            return batch_payload(answer, chain)
         cached = self._plugin._batches.take(range)
         if cached is not None:
-            return batch_payload(cached)
-        if chain is not None and chain.seq > 1:
+            return batch_payload(cached, chain)
+        if chain is not None and document.get("elided"):
             if previous is None:
                 raise StreamError(
                     "a direct stream read replays from the answer state of the "
@@ -860,7 +922,7 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
                 f"records: {error}"
             ) from error
         records = _with_errors(again.records, errors)
-        return batch_payload(dataclasses.replace(answer, records=records))
+        return batch_payload(dataclasses.replace(answer, records=records), chain)
 
 
 def _with_errors(
@@ -935,6 +997,26 @@ def _failed(failure: Failure, call: str) -> Exception:
         failure_type=handler_type,
         retryable=True if retryable is None else retryable,
     )
+
+
+def _refused_credential(error: Exception) -> bool:
+    if isinstance(error, HTTPStatusError):
+        return error.status in _AUTH_STATUSES
+    if isinstance(error, StreamServiceCallError):
+        return error.failure_type in _AUTH_HANDLER_ERRORS
+    if isinstance(error, RPCError):
+        return error.status in _AUTH_RPC_STATUSES
+    return False
+
+
+def _time_left() -> float:
+    if not temporalio.activity.in_activity():
+        return _DEFAULT_HTTP_TIMEOUT
+    info = temporalio.activity.info()
+    if info.start_to_close_timeout is None:
+        return _DEFAULT_HTTP_TIMEOUT
+    end = info.started_time + info.start_to_close_timeout
+    return max((end - datetime.now(timezone.utc)).total_seconds(), 0.001)
 
 
 def _plugin_of(client: Client) -> StreamDirectReads:
