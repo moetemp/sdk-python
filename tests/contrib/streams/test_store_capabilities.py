@@ -141,6 +141,8 @@ async def test_a_core_without_describe_serves_every_capability():
 async def test_an_sdk_without_the_describe_protos_serves_every_capability(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.delattr(temporalio.bridge.proto.streams, "DescribeStoreRequest")
+    monkeypatch.delattr(
+        temporalio.bridge.proto.streams, "DescribeStoreRequest", raising=False
+    )
     store = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
     assert (await describe(store)).producer_state  # type: ignore[arg-type]
