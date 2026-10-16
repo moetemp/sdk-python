@@ -258,12 +258,14 @@ class StreamFollowerService:
     the first answer with no record, since the stream's next append notifies
     the operation again, and answers with the new receiver state. On a busy
     stream it also stops once half the request timeout passed. Then it answers
-    ``behind``, and the server sends the same progress again at once. On the
-    completion it reads the rest of the stream, then calls
+    ``behind``, and the server sends the same progress again at once. On a
+    completion that succeeded it reads the rest of the stream, then calls
     :meth:`StreamFollower.on_close`. If the stream doesn't end within the
     request timeout, the completion fails as retryable, so the server sends
     it again and the follower reads again from the last state the server
-    took.
+    took. A canceled or failed operation can leave the stream open, so on
+    that completion it reads only what the store holds, up to the first empty
+    read, then calls :meth:`StreamFollower.on_close`.
 
     The receiver state is the generated :class:`ReadInput` with the stream,
     in its JSON transfer form. It holds the cursor and Core's read state, so
@@ -371,8 +373,9 @@ class StreamFollowerService:
             stream = await self._stream_of(input.source_context)
             if stream is not None:
                 position = ReadInput(stream=stream)
+        failed = isinstance(input.result, OnCompleteRequestResultFailure)
         if position is not None:
-            await self._drain(ctx, followed, position)
+            await self._drain(ctx, followed, position, to_end=not failed)
         outcome = FollowOutcome(stream=position.stream if position else None)
         if isinstance(input.result, OnCompleteRequestResultFailure):
             outcome = dataclasses.replace(outcome, error=input.result.value)
@@ -382,17 +385,23 @@ class StreamFollowerService:
         return OnCompleteResponse()
 
     async def _drain(
-        self, ctx: StartOperationContext, followed: _Followed, position: ReadInput
+        self,
+        ctx: StartOperationContext,
+        followed: _Followed,
+        position: ReadInput,
+        *,
+        to_end: bool,
     ) -> None:
-        # The store closes the stream before the operation completes, so every
-        # read ends at the stream's end.
+        # The store closes the stream before a successful operation completes,
+        # so those reads end at the stream's end. A canceled operation only
+        # detached its caller, so the stream may go on with no end.
         end = _request_end(ctx)
         wait_ms = 0
         while True:
             answer = await self._read(position, wait_ms=wait_ms)
             await self._hand_over(followed, position.stream, answer)
             position = _moved(position, answer)
-            if answer.done:
+            if answer.done or (not to_end and not answer.records):
                 return
             wait_ms = 0 if answer.records else _DRAIN_WAIT_MS
             if asyncio.get_running_loop().time() >= end:

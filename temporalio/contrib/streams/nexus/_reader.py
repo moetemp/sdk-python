@@ -349,6 +349,8 @@ class StreamReader(Generic[T]):
         self._replay_from_store = replay_from_store
         self._reader_id = str(_next_reader()) if replay_from_store else ""
         self._direct_reads = 0
+        # The run that made the last direct read.
+        self._chain_run = ""
 
     @property
     def cursor(self) -> Cursor:
@@ -522,11 +524,20 @@ class StreamReader(Generic[T]):
                     f"{error}",
                     cursor,
                 )
-                self._caught_up = False
+                if self._pending:
+                    self._caught_up = False
+                else:
+                    # The answer ends here, so its state and token go with
+                    # the cursor now, or the next read sends the old state.
+                    self._take_answer_end()
                 return batch
             if record is None:
                 continue
             batch.append(cast(T, record[2]))
+        self._take_answer_end()
+        return batch
+
+    def _take_answer_end(self) -> None:
         answer = self._answer
         assert answer is not None
         if answer.next_token:
@@ -535,7 +546,6 @@ class StreamReader(Generic[T]):
         self._state = answer.state
         self._caught_up = not answer.records
         self._stream_done = answer.done
-        return batch
 
     async def _fetch(self) -> None:
         if self._stream is None:
@@ -574,18 +584,28 @@ class StreamReader(Generic[T]):
         from temporalio.contrib.streams.nexus._direct import (
             DIRECT_READ_ACTIVITY,
             answer_of,
+            chain_run_of,
         )
 
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
                 DIRECT_READ_ACTIVITY,
-                args=[self._endpoint, self._reader_id, input, self._direct_reads + 1],
+                args=[
+                    self._endpoint,
+                    self._reader_id,
+                    input,
+                    self._direct_reads + 1,
+                    # A reset run replays the old run's reads, whose markers
+                    # chain under that run, so its first read keeps its state.
+                    self._chain_run == workflow.info().run_id,
+                ],
                 result_type=RawValue,
                 start_to_close_timeout=wait + _DIRECT_READ_SLACK,
                 summary=f"stream read {input.stream.topic}",
             )
             self._direct_reads += 1
+            self._chain_run = chain_run_of(raw.payload)
         except ValueError as error:
             # The Worker refuses at the call a Local Activity it doesn't have,
             # which is the case with no StreamDirectReads on its client.

@@ -364,9 +364,10 @@ History. Each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and Core's digest of them, not the records. The marker is about
 1 KiB. Most of it is the stream service's read state, which grows with the
-producers the reader saw. Past a reader's first read, the marker leaves out
-the read's input state, since the previous marker holds it as its answer
-state. A process that replays a later marker without the ones before it
+producers the reader saw. A read counts once it returned. When the read
+before was the same run's, the marker leaves out the read's input state,
+since the previous marker holds it as its answer state. The first read of a
+run, also of a reset run, keeps it. A process that replays a later marker without the ones before it
 fails the Workflow Task, and the retry replays the History from the start. All the Local Activities of one Workflow Task count
 as one Action. The Worker turns the marker back into the batch before
 Workflow code sees it. On the live Workflow Task it takes the batch the
@@ -405,7 +406,8 @@ client = await Client.connect(address, data_converter=converter, plugins=[reads]
 ```
 
 Two transports ship. `HttpTransport` calls the endpoint over the server's
-Nexus HTTP ingress.
+Nexus HTTP ingress. It is a stopgap for self-hosted servers, until a
+transport that Cloud serves exists.
 
 - It works on a self-hosted server only. Temporal Cloud has no HTTP ingress
   for endpoints.
@@ -469,8 +471,11 @@ A replay that misses the cache needs the endpoint and the records:
 | The store down, the endpoint gone, 401, 403, 429, 5xx, `NotFound`, `NamespaceNotActive` or a timeout | The Workflow Task fails and is retried |
 | No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
 
-A live read on a Worker with no `StreamDirectReads`, or with no transport for
-the endpoint, fails its Local Activity at once, with no retry. The reader raises that again from `next()` as
+A live read whose credential the endpoint refuses, 401 or 403, retries its
+Local Activity with backoff and logs an error, so a key that expired fails no
+caller Workflow. A live read on a Worker with no `StreamDirectReads`, or with
+no transport for the endpoint, fails its Local Activity at once, with no
+retry. The reader raises that again from `next()` as
 `StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
 is retried once the Worker is fixed. Workflow code that catches every
 `Exception` around `next()` swallows it, so catch narrower errors there, or
@@ -565,7 +570,8 @@ half the request timeout passed.
 Then it answers `behind`, and the server sends the same progress again after
 `callback.nexusHandler.progressBehindInterval` (1 second by default), so a
 long backlog is read in pages without a busy loop. `OnComplete` reads the rest of the stream,
-then calls `on_close`.
+then calls `on_close`. A canceled or failed operation can leave the stream
+open, so its `OnComplete` reads only up to the first empty read.
 
 **Delivery is at least once.** A batch repeats after a lost answer or a
 timeout, and a completion can overtake a progress call in flight, so a batch
@@ -798,15 +804,18 @@ handler's store.
 
 The stream service writes and reads with its Worker's client and store
 credentials, whatever caller sent the call. So by default every caller that
-can reach the endpoint can read and append to every stream of the handler's
-namespace, as any producer. Limit who reaches the endpoint with its allowed
+can reach the endpoint can read every stream of the handler's namespace.
+Without `authorize`, the handler refuses every append, since an append could
+write as any producer. Limit who reaches the endpoint with its allowed
 caller namespaces, and pass `authorize` to `TemporalStreamsHandler` to check
 each call. It gets a `StreamAccess` (`operation`, `stream`, the Nexus
 `context` with the caller's headers, for an append `producer_id` and
 `attempt`, and for a direct read or its `read_range` the `floor_holder`) and
 answers whether to serve it. The caller picks the holder, so treat it as a
 claim. A call through `ExecuteSyncNexusOperation` also carries
-`caller_namespace`, which the server vouches for, so a rule can key on it. A refused call fails as
+`caller_namespace`, which the server vouches for, so a rule can key on it.
+Then the handler also refuses a holder that is not under
+`<caller namespace>/`, whatever `authorize` says. A refused call fails as
 unauthorized.
 
 Parked reads hold Nexus task slots on the handler's Worker for up to a few
