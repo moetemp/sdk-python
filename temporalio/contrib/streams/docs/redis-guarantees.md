@@ -106,8 +106,10 @@ stream: the next run keeps publishing to it.
 Temporal does not authorize or meter record traffic. Records go straight
 between your applications and your Redis, so access is Redis's job.
 
-Readers write nothing, so a reader needs only read access to Redis, and
-the Temporal permission to describe the Workflow. A read holds one Redis connection while it
+Readers write no records and no close flags. A client reader needs only read
+access to Redis, and the Temporal permission to describe the Workflow. A
+`workflow_reader` with `replay_from_store=True` also writes its hold in the
+topic's `:floors` hash, so its Worker needs the writer rules. A read holds one Redis connection while it
 waits, from a pool Core keeps per node, so set `blocking_reads_per_node` on
 `RedisStreams` to the streams a process follows at once. A read that finds
 the pool full waits for a connection until its own poll ends, then answers
@@ -130,6 +132,11 @@ topology with `CLUSTER SLOTS` first. An ACL user lives on one node, so on a
 cluster you create the user on every node. The delete helper also needs
 `+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
 store goes on when a server refuses it.
+
+With `plain=True` the store runs no scripts, so the user above works. A user
+for plain mode alone needs only `+multi +exec +xadd +xread +xrange
++xrevrange +pexpire +scan +unlink` and the connect rules from `+info` on.
+Core's suite doesn't run plain mode as an ACL user.
 
 What crosses the wire:
 
