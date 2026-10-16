@@ -367,9 +367,10 @@ Then each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and Core's digest of them, not the records. The marker is about
 1 KiB. Most of it is the stream service's read state, which grows with the
-producers the reader saw. Past a reader's first read, the marker leaves out
-the read's input state, since the previous marker holds it as its answer
-state. A process that replays a later marker without the ones before it
+producers the reader saw. A read counts once it returned. When the read
+before was the same run's, the marker leaves out the read's input state,
+since the previous marker holds it as its answer state. The first read of a
+run, also of a reset run, keeps it. A process that replays a later marker without the ones before it
 fails the Workflow Task, and the retry replays the History from the start. All the Local Activities of one Workflow Task count
 as one Action. The Worker turns the marker back into the batch before
 Workflow code sees it. On the live Workflow Task it takes the batch the
@@ -396,7 +397,9 @@ reads = StreamDirectReads(
 client = await Client.connect(address, data_converter=converter, plugins=[reads])
 ```
 
-`HttpTransport` calls the endpoint over the server's Nexus HTTP ingress.
+`HttpTransport` calls the endpoint over the server's Nexus HTTP ingress. It
+is a stopgap for self-hosted servers, until a transport that Cloud serves
+exists.
 
 - It works on a self-hosted server only. Temporal Cloud has no HTTP ingress
   for endpoints.
@@ -427,8 +430,10 @@ A replay that misses the cache needs the endpoint and the records:
 | The store down, the endpoint gone, 401, 403, 429, 5xx or a timeout | The Workflow Task fails and is retried |
 | No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
 
-A live read on a Worker with no transport for the endpoint fails its Local
-Activity. The reader raises that again from `next()` as
+A live read whose credential the endpoint refuses, 401 or 403, retries its
+Local Activity with backoff and logs an error, so a key that expired fails no
+caller Workflow. A live read on a Worker with no transport for the endpoint
+fails its Local Activity. The reader raises that again from `next()` as
 `StreamUnsupportedError`, a `TemporalError`, so the Workflow Task fails and
 is retried once the Worker is fixed. Workflow code that catches every
 `Exception` around `next()` swallows it, so catch narrower errors there, or
