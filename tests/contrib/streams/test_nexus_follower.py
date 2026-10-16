@@ -398,6 +398,28 @@ async def test_a_failed_operation_reaches_on_close_as_its_failure() -> None:
     assert "owner failed" in str(outcome.error)
 
 
+async def test_a_canceled_operation_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeTransport(_stored(3)), _Collector()
+    service = _service(transport, collector)
+    taken = await service.on_progress(_context(), _progress("c1"))
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=taken.receiver_state,
+        ),
+    )
+
+    # The records the store holds still reach the follower, then the close.
+    assert collector.values == ["v1", "v2", "v3"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
+
+
 async def test_the_marks_stay_out_of_the_records() -> None:
     records = [
         RecordWire(token="c1", record=_wire("v1")),
@@ -1042,6 +1064,33 @@ async def test_a_follower_that_asks_for_links_gets_every_source_in_order() -> No
     # The follow state holds every open link, so it carries the position.
     assert state.state == b"follow-state-2"
     assert transport.requests[1].state == b"follow-state-1"
+
+
+async def test_a_canceled_follow_of_links_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                FollowInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    # Both scripted pages are read, the second one empty, and none is done.
+    assert [r.value for b in collector.batches for r in b.records] == ["d1", "a1"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
 
 
 async def test_the_store_transport_follows_links_through_core(client: Client) -> None:

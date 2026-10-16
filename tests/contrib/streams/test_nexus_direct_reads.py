@@ -6,9 +6,12 @@ import base64
 import dataclasses
 import json
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
+import nexusrpc
 import pytest
 
 from temporalio.api.common.v1 import Payload
@@ -39,8 +42,10 @@ from temporalio.contrib.streams.nexus import (
     ReadInput,
     ReadOutput,
     RecordWire,
+    StreamAccess,
     StreamDirectReads,
     StreamServiceCallError,
+    TemporalStreamsHandler,
 )
 from temporalio.contrib.streams.nexus._direct import (
     FOLLOW_POSITIONS_TYPE,
@@ -48,6 +53,8 @@ from temporalio.contrib.streams.nexus._direct import (
     _put_follow,
     _transfer,
     answer_of,
+    direct_follow_activity,
+    direct_read_activity,
     follow_answer_of,
     innermost_codec,
     positions_payload,
@@ -65,6 +72,7 @@ from temporalio.contrib.streams.nexus._generated import (
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.contrib.streams.nexus._handler import _caller_namespace
 from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.testing import ActivityEnvironment
 from temporalio.worker import ReplayerConfig
 from temporalio.workflow import NondeterminismError
 
@@ -320,6 +328,7 @@ def chained() -> tuple[list[Payload], list[ReadRangeInput]]:
             dataclasses.replace(second_range, state=None),
             second,
             ReadChain("wf/1", 2),
+            state_elided=True,
         ),
     ]
     return markers, [first_range, second_range]
@@ -532,7 +541,8 @@ async def test_the_client_transport_raises_the_class_the_handler_named(
 @pytest.mark.parametrize(
     "kind,retry,retryable",
     [
-        ("UNAUTHORIZED", None, False),
+        # A refused credential is a deployment fault, so the read retries.
+        ("UNAUTHORIZED", None, True),
         ("UNAVAILABLE", None, True),
         ("INTERNAL", "non_retryable", False),
         ("BAD_REQUEST", "retryable", True),
@@ -693,3 +703,153 @@ async def test_the_client_transport_follows_through_execute_sync():
     assert got == answer
     [request] = service.requests
     assert request.operation == "follow"
+
+
+class LiveTransport:
+    """Answers each live read with one record, and keeps the timeout it got."""
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        return live(record("c1", "a"))[1]
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        raise AssertionError("a live read never reads a range")
+
+
+@pytest.mark.parametrize("chained", [False, True])
+async def test_the_read_activity_chains_by_the_reading_run(chained: bool):
+    plugin = StreamDirectReads({"e": LiveTransport()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, workflow_run_id="run-b", is_local=True)
+    raw = await env.run(
+        direct_read_activity,
+        "e",
+        "1",
+        ReadInput(stream=_STREAM, state=b"\x01"),
+        2,
+        chained,
+    )
+    document = json.loads(raw.payload.data)
+    # Runs of one Workflow id number their readers alike, so the run names
+    # the chain. Only a read the reader says follows its own run's read
+    # leaves its input state out.
+    assert document["reader"] == "run-b/1"
+    assert ("state" in document["range"]) is not chained
+    assert document.get("elided", False) is chained
+
+
+async def test_the_http_transport_waits_no_longer_than_the_activity_has_left(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    timeouts: list[float] = []
+
+    def post(
+        url: str, body: bytes, headers: Any, timeout: float, *_: Any, **__: Any
+    ) -> Any:
+        timeouts.append(timeout)
+        raise generated_client.HTTPStatusError(url, 503, "down")
+
+    monkeypatch.setattr(generated_client, "_post", post)
+    transport = HttpTransport("http://stub")
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(
+        env.info,
+        started_time=datetime.now(timezone.utc),
+        start_to_close_timeout=timedelta(seconds=5),
+    )
+
+    async def read() -> None:
+        await transport.read(ReadInput(stream=_STREAM))
+
+    for run in (env.run(read), read()):
+        with pytest.raises(generated_client.HTTPStatusError):
+            await run
+    assert 0 < timeouts[0] <= 5 and timeouts[1] == 30
+
+
+async def test_a_refused_credential_retries_the_read(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class RefusesOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def read(self, request: ReadInput) -> ReadOutput:
+            self.calls += 1
+            if self.calls == 1:
+                raise generated_client.HTTPStatusError("http://stub", 401, "expired")
+            return live(record("c1", "a"))[1]
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a live read never reads a range")
+
+    transport = RefusesOnce()
+    plugin = StreamDirectReads({"e": transport})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # The Activity's own failure is retryable, so its next attempt reads.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    raw = await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    assert json.loads(raw.payload.data)["range"]["to_token"] == "c1"
+
+
+async def test_a_credential_the_server_refuses_retries_the_read():
+    class RefusesOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def read(self, request: ReadInput) -> ReadOutput:
+            self.calls += 1
+            if self.calls == 1:
+                raise StreamServiceCallError(
+                    "e/read failed: refused",
+                    failure_type="UNAUTHORIZED",
+                    retryable=False,
+                )
+            return live(record("c1", "a"))[1]
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a live read never reads a range")
+
+    plugin = StreamDirectReads({"e": RefusesOnce()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    with pytest.raises(StreamServiceCallError):
+        await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    raw = await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    assert json.loads(raw.payload.data)["range"]["to_token"] == "c1"
+
+
+async def test_a_floor_holder_outside_the_callers_namespace_is_refused():
+    handler = TemporalStreamsHandler()
+    context: Any = SimpleNamespace(headers={"temporal-caller-namespace": "caller-ns"})
+
+    def read(holder: str) -> StreamAccess:
+        return StreamAccess("read", _STREAM, context, floor_holder=holder)
+
+    await handler._check(read("caller-ns/run/1"))
+    with pytest.raises(nexusrpc.HandlerError) as refused:
+        await handler._check(read("other-ns/run/1"))
+    assert refused.value.type is nexusrpc.HandlerErrorType.UNAUTHORIZED
+
+
+async def test_a_refused_credential_retries_the_follow():
+    class Refuses:
+        async def read(self, request: ReadInput) -> ReadOutput:
+            raise AssertionError("a follow never reads")
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a follow never reads a range")
+
+        async def follow(self, request: FollowInput) -> FollowOutput:
+            raise generated_client.HTTPStatusError("http://stub", 403, "lost a role")
+
+        async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+            raise AssertionError("a live follow never follows a range")
+
+    plugin = StreamDirectReads({"e": Refuses()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # Raised as is, so the Activity's retry runs, not as a final failure.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_follow_activity, "e", "1", FollowInput(stream=_STREAM))

@@ -183,6 +183,10 @@ async def _memory_backing(client: Client) -> AsyncIterator[Backing]:
 BACKINGS: dict[str, Callable[[Client], Any]] = {"memory": _memory_backing}
 
 
+async def allow_all(_access: StreamAccess) -> bool:
+    return True
+
+
 @dataclass
 class Service:
     """A handler served by a Worker, and a caller on its endpoint."""
@@ -204,8 +208,10 @@ async def serve(
 ) -> AsyncIterator[Service]:
     """Serve ``backing`` behind a fresh endpoint, deleted on the way out.
 
-    The handler's Worker runs on ``client``, the backing's by default.
+    The handler's Worker runs on ``client``, the backing's by default. It
+    serves every call unless ``authorize`` is given.
     """
+    handler_options.setdefault("authorize", allow_all)
     handler = TemporalStreamsHandler(**handler_options)
     task_queue = f"streams-service-{uuid.uuid4().hex}"
     endpoint_name = f"streams-{uuid.uuid4().hex}"
@@ -530,6 +536,20 @@ async def test_an_authorizers_own_handler_error_crosses_as_it_is(
     assert refused.value.status == 403
     assert not refused.value.retryable
     assert "the caller's token expired" in refused.value.detail
+
+
+async def test_a_handler_with_no_authorizer_refuses_appends_and_serves_reads(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, authorize=None) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+        assert refused.value.status == 403
+        assert not refused.value.retryable
+        assert "authorize" in refused.value.detail
+        answer = await service.caller.read(ReadInput(stream=ref, wait_ms=0))
+        assert not answer.records
 
 
 async def test_finish_is_a_call_of_its_own(service: Service):
@@ -969,6 +989,29 @@ async def test_a_read_range_answers_the_records_a_holders_read_got(service: Serv
     )
     assert texts(again) == texts(answer) == ["a", "b"]
     assert again.next_token == answer.next_token
+
+
+async def test_a_handler_with_no_authorizer_serves_a_read_range(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, authorize=None) as service:
+        ref = await stream_of(service)
+        answer = await service.caller.read(
+            ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+        )
+        assert answer.replay is not None
+        again = await service.caller.read_range(
+            ReadRangeInput(
+                stream=ref,
+                chain_first_run_id=answer.replay.chain_first_run_id,
+                after_token=answer.replay.after_token,
+                to_token=answer.next_token,
+                stored_records=answer.replay.stored_records,
+                records_digest=answer.replay.records_digest,
+                floor_holder="ns/run/1",
+            )
+        )
+    assert not again.records
 
 
 async def test_a_read_range_with_another_digest_is_a_mismatch(service: Service):
