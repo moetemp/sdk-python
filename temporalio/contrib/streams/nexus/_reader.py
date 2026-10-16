@@ -563,6 +563,12 @@ class StreamReader(Generic[T]):
             max_records=_BATCH,
             wait_ms=_DRAIN_WAIT_MS if self._operation_resolved else self._idle_wait_ms,
             state=self._state,
+            # An empty answer makes the stream service ask the notifier to wake
+            # this operation's idle callback once the stream moves on. After the
+            # completion no progress follows, so a drain read asks for nothing.
+            wake_token=None
+            if self._operation_resolved
+            else self._handle.operation_token or None,
         )
         if self._replay_from_store:
             self._answer = await self._direct_read(input)

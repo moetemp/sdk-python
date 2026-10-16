@@ -179,14 +179,20 @@ handler attaches, and a cancel detaches.
 What happens underneath:
 
 1. The handler's start attaches the caller's callback to the stream's
-   notifier on the server, and returns the stream reference in the
-   operation token.
+   notifier on the server as an idle callback, which hears no progress
+   until it waits, and returns the stream reference in the operation token.
 2. Core notifies the notifier after every append, a Workflow's publishes
    included, or a StreamDriver does it from the store's notification log.
    Notifications are folded: at most one call is in flight, and the newest
    one wins.
-3. The notifier delivers the latest notification to the caller as progress.
-4. The close completes the caller's operation with the close result.
+3. A reader reads first. Each read names its operation (`wake_token`). A
+   read that finds nothing asks the notifier to wake that operation's
+   callback once the stream moves past the read, then reads once more, and
+   answers what that finds. So a record that lands while the wait is set up
+   is not lost.
+4. The notifier delivers one notification to each waiting callback as
+   progress, and the callback is idle again until the reader waits again.
+5. The close completes the caller's operation with the close result.
 
 ### When Core notifies
 
@@ -197,14 +203,14 @@ over Nexus:
 
 - A Workflow `StreamReader` waits `idle_wait` (2 seconds by default) before
   it sleeps on progress. A Worker follower waits 1 second.
-- The notifier sends the progress to every attached caller, so one append
+- The notifier sends the progress to every waiting caller, so one append
   wakes all sleeping readers.
-- A gap shorter than the idle wait costs only the read that returns the next
-  record. A busy stream costs at most about one progress task per caller per
-  debounce window.
-- The attach starts the notifier, so the first append reaches a caller that
-  has no record to read yet. On a stream with records, the attach announces
-  the newest one. A close always reaches every caller.
+- A reader that finds records on each read never waits, so it gets no
+  progress at all. A gap shorter than the idle wait costs only the read that
+  returns the next record. A reader that waits gets one delivery per idle
+  stretch, however many appends come in it, within the debounce window.
+- The attach starts the notifier and announces nothing, since the reader
+  reads first. A close always reaches every caller, waiting or not.
 
 ## The caller side
 
@@ -545,6 +551,15 @@ the stream service on a Nexus endpoint's HTTP ingress. With neither, the
 service raises at construction. The stream service and the follower must use
 the same payload codec.
 
+**The first wake.** A follower reads only inside a progress call, so its
+idle callback must be woken once before it can read at all. `follow_stream`
+sends the start header `temporal-stream-first-wake-after: 0`, and the
+handler asks Core for that first wake at the attach. The first record of the
+stream then reaches the follower, or at once when the stream already holds
+one. After that, each progress call reads until it finds nothing, and that
+empty read asks for the next wake. A follower that reads a burst in one call
+gets one delivery for it, not one per append.
+
 **Where the position lives.** Each answer to `OnProgress` carries the read
 position, and the server keeps it on the callback and sends it back with the
 next call and with `OnComplete`. So the Worker keeps nothing between calls,
@@ -759,3 +774,10 @@ it with the settings above and a scratch Redis, and runs those tests against
 it, along with Core's live notifier test. It fails unless each test on its
 gated list passes. A release of streams over Nexus needs a green run of it,
 until CI has a lane with such a server.
+
+The push cases in `tests/contrib/streams/test_nexus_push.py` run a
+StreamDriver over a store with a notification log, on memory, standalone
+Redis and a Redis Cluster that the lane starts unless
+`STREAMS_REDIS_CLUSTER_URL` names one. A sleeping caller wakes through the
+driver, and a busy stream delivers at most two progress notifications per
+debounce window.

@@ -47,10 +47,12 @@ from temporalio.contrib.streams.nexus._generated.models import RecordWireSuperse
 from temporalio.exceptions import ApplicationError
 from temporalio.nexus.system.notification_service import (
     NexusOperationProgress,
+    NotificationService,
     OnCompleteRequest,
     OnCompleteRequestResultFailure,
     OnCompleteRequestResultSuccess,
     OnProgressRequest,
+    OnProgressResponse,
 )
 from temporalio.service import RPCError, RPCStatusCode, ServiceClient
 from temporalio.testing import WorkflowEnvironment
@@ -502,6 +504,8 @@ class _Lane:
     followed: list[Any] = field(default_factory=list)
     transport: Any = None
     """How the follower reads. Its client's store when ``None``."""
+    service_class: type[StreamFollowerService] = StreamFollowerService
+    """The follower service the Worker runs, so a test can count its calls."""
 
     def handler(self) -> Any:
         ref = self.ref
@@ -548,7 +552,7 @@ class _Lane:
                 await self.end(follower)
 
     def service(self, follower: _LiveFollower) -> StreamFollowerService:
-        return StreamFollowerService(
+        return self.service_class(
             {"orders": follower},
             client=self.client,
             transport=self.transport,
@@ -739,3 +743,126 @@ async def test_live_a_failed_owner_reaches_on_close_as_a_failure(
     assert not outcome.succeeded
     assert "the owner gave up" in str(outcome.error)
     assert follower.ordered() == ["a"]
+
+
+async def test_each_progress_read_carries_the_wake_token() -> None:
+    """An empty read with the operation's token asks the notifier to wake the
+    callback after its position, so the follower hears of the next append."""
+    transport, collector = _FakeTransport(_stored(3)), _Collector()
+
+    answer = await _service(transport, collector, max_records=2).on_progress(
+        _context(), _progress("c3")
+    )
+
+    assert collector.values == ["v1", "v2", "v3"]
+    assert {r.wake_token for r in transport.requests} == {_token()}
+    # The token rides on the read only, not in the state the server keeps.
+    state = CONVERTER.payload_converter.from_payload(
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
+        ReadInput,
+    )
+    assert state.wake_token is None
+
+
+async def test_the_completion_drain_sends_no_wake_token() -> None:
+    transport, collector = _FakeTransport(_stored(1), closed=True), _Collector()
+
+    await _service(transport, collector).on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultSuccess("finished"),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                ReadInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    assert [r.wake_token for r in transport.requests] == [None]
+
+
+async def test_follow_stream_asks_for_the_first_wake_from_the_start() -> None:
+    started: dict[str, Any] = {}
+
+    class FakeNexusClient:
+        async def start_operation(self, *_args: Any, **kwargs: Any) -> Any:
+            started.update(kwargs)
+            return object()
+
+    client = Mock(create_nexus_client=Mock(return_value=FakeNexusClient()))
+    await follow_stream(
+        client,
+        endpoint="orders",
+        service=FollowedOrders,
+        operation=FollowedOrders.order_stream,
+        arg="order-1",
+        follower="orders",
+        task_queue="followers",
+    )
+    # The follower reads only when woken, so its idle callback asks for the
+    # first wake at the attach.
+    assert started["headers"] == {"temporal-stream-first-wake-after": "0"}
+
+
+_progress_calls: list[str] = []
+
+
+@nexusrpc.handler.service_handler(service=NotificationService)
+class _CountingFollowerService(StreamFollowerService):
+    @nexusrpc.handler.sync_operation
+    async def on_progress(
+        self, ctx: nexusrpc.handler.StartOperationContext, input: OnProgressRequest
+    ) -> OnProgressResponse:
+        _progress_calls.append(ctx.request_id)
+        return await super().on_progress(ctx, input)
+
+
+async def test_live_a_follower_on_an_empty_stream_hears_the_first_append(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        # Nothing is there yet, so the first wake waits for the first append.
+        await asyncio.sleep(2)
+        assert follower.ordered() == []
+        await (
+            get_stream_handle(lane.client, lane.ref)
+            .producer(producer_id="writer", attempt=1)
+            .append("first")
+        )
+        await _until(lambda: "first" in follower.ordered())
+        await lane.close("done")
+        await _closed(follower)
+    assert follower.ordered() == ["first"]
+
+
+async def test_live_a_follower_that_reads_a_burst_gets_no_extra_progress(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    lane.service_class = _CountingFollowerService
+    _progress_calls.clear()
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        texts = [f"t{n}" for n in range(20)]
+        for text in texts:
+            await producer.append(text)
+        await lane.follow()
+        await _until(lambda: "t19" in follower.ordered())
+        # The callback waits only after a read found nothing, so the burst
+        # costs the one first wake, not a delivery per append.
+        await asyncio.sleep(3)
+        calls = len(_progress_calls)
+        await lane.close("done")
+        await _closed(follower)
+    assert follower.ordered() == texts
+    assert calls == 1, _progress_calls

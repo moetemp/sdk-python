@@ -13,6 +13,8 @@ from .models import (
     NotifyStreamResponse,
     SignalWithStartWorkflowRequest,
     SignalWithStartWorkflowResponse,
+    WaitStreamCallbackRequest,
+    WaitStreamCallbackResponse,
 )
 
 
@@ -43,3 +45,8 @@ class WorkflowService:
         NotifyStreamRequest,
         NotifyStreamResponse,
     ] = Operation(name="NotifyStream")
+
+    wait_stream_callback: Operation[
+        WaitStreamCallbackRequest,
+        WaitStreamCallbackResponse,
+    ] = Operation(name="WaitStreamCallback")

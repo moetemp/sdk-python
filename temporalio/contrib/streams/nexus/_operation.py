@@ -61,6 +61,14 @@ async def _caller_calls(client: Client) -> StreamNexusService:
         ) from None
 
 
+FIRST_WAKE_HEADER = "temporal-stream-first-wake-after"
+"""The start header that asks for the callback's first wake after a counter.
+
+A follower that reads only when woken sends it, so its idle callback hears
+of the first record. A reader that reads first sends none.
+"""
+
+
 class StreamOperationHandler(
     nexusrpc.handler.OperationHandler[InputT, OutputT], Generic[InputT, OutputT]
 ):
@@ -69,10 +77,13 @@ class StreamOperationHandler(
     ``open_stream`` names the stream for a start: it creates or finds the
     stream and returns its reference. The start then attaches the caller's
     callback to that stream's notifier and answers asynchronously, with the
-    reference in the operation token. From then on the server tells the
-    caller when the stream moves while a reader sleeps on it, when the store
-    has :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
+    reference in the operation token. The callback is idle: the server tells
+    the caller when the stream moves only after a read that found nothing
+    asked for a wake, when the store has
+    :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
     and completes the operation with the close result when the stream closes.
+    A start with the ``temporal-stream-first-wake-after`` header, which
+    :func:`follow_stream` sends, asks for the first wake at the attach.
     A cancel detaches the caller.
 
     The operation's output type is the close result's type. The records
@@ -118,27 +129,34 @@ class StreamOperationHandler(
         client = temporalio.nexus.client()
         service = await _caller_calls(client)
         ref = await self._open_stream(ctx, input)
-        response = await call(
-            service.attach_caller(
-                AttachCallerRequest(
-                    stream=StreamAddress(
-                        namespace=client.namespace,
-                        # Core refuses an owner kind this release doesn't open.
-                        owner_kind=(
-                            StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW
-                            if ref.kind == "workflow"
-                            else StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
-                        ),
-                        workflow_id=ref.workflow_id,
-                        run_id=ref.chain_run_id or "",
-                        topic=ref.topic,
-                    ),
-                    request_id=ctx.request_id,
-                    callback_url=ctx.callback_url,
-                    callback_headers=dict(ctx.callback_headers),
-                )
-            )
+        first_wake = ctx.headers.get(FIRST_WAKE_HEADER)
+        request = AttachCallerRequest(
+            stream=StreamAddress(
+                namespace=client.namespace,
+                # Core refuses an owner kind this release doesn't open.
+                owner_kind=(
+                    StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW
+                    if ref.kind == "workflow"
+                    else StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
+                ),
+                workflow_id=ref.workflow_id,
+                run_id=ref.chain_run_id or "",
+                topic=ref.topic,
+            ),
+            request_id=ctx.request_id,
+            callback_url=ctx.callback_url,
+            callback_headers=dict(ctx.callback_headers),
         )
+        if first_wake is not None:
+            try:
+                request.wake_after_counter = int(first_wake)
+            except ValueError:
+                raise nexusrpc.HandlerError(
+                    f"{FIRST_WAKE_HEADER} must be a counter, got {first_wake!r}",
+                    type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+                    retryable_override=False,
+                ) from None
+        response = await call(service.attach_caller(request))
         if response.HasField("failure"):
             raise _handler_error(response.failure)
         return nexusrpc.handler.StartOperationResultAsync(

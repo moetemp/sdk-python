@@ -482,6 +482,7 @@ class StreamHandle:
         latest_only: bool | None = None,
         state: bytes | None = None,
         floor_holder: str | None = None,
+        wake_token: str | None = None,
     ) -> ReadOutput:
         """Answer with the records after the caller's cursor. The call waits until it
         has max_records records or wait_ms passes, whichever comes first, and
@@ -500,6 +501,7 @@ class StreamHandle:
                 latest_only=latest_only,
                 state=state,
                 floor_holder=floor_holder,
+                wake_token=wake_token,
             ),
         )
 
@@ -511,6 +513,7 @@ class StreamHandle:
         latest_only: bool | None = None,
         state: bytes | None = None,
         floor_holder: str | None = None,
+        wake_token: str | None = None,
         deadline: float,
     ) -> ReadOutput:
         """Calls ``read`` until it answers with something, or until ``deadline``.
@@ -538,6 +541,7 @@ class StreamHandle:
                 latest_only=latest_only,
                 state=state,
                 floor_holder=floor_holder,
+                wake_token=wake_token,
             ),
             deadline=deadline,
         )

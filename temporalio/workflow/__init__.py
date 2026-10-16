@@ -8,6 +8,7 @@ from temporalio.nexus.system.workflow_service import (
     detach_stream_callback,
     notify_stream,
     signal_with_start_workflow,
+    wait_stream_callback,
 )
 
 # END GENERATED NEXUS SYSTEM EXPORTS
@@ -338,5 +339,6 @@ __all__ = [
     "detach_stream_callback",
     "notify_stream",
     "signal_with_start_workflow",
+    "wait_stream_callback",
     # END GENERATED NEXUS SYSTEM __ALL__
 ]

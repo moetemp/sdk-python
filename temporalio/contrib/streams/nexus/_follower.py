@@ -48,7 +48,10 @@ from temporalio.contrib.streams.nexus._generated import (
     RecordWire,
 )
 from temporalio.contrib.streams.nexus._handler import serve_in_core
-from temporalio.contrib.streams.nexus._operation import stream_ref_from_token
+from temporalio.contrib.streams.nexus._operation import (
+    FIRST_WAKE_HEADER,
+    stream_ref_from_token,
+)
 from temporalio.contrib.streams.nexus._reader import ReadStaleRecord, ReadSupersession
 from temporalio.converter import WorkflowSerializationContext
 from temporalio.nexus.system.notification_service import (
@@ -344,7 +347,9 @@ class StreamFollowerService:
         while True:
             left_ms = int((end - asyncio.get_running_loop().time()) * 1000)
             wait_ms = min(_IDLE_WAIT_MS, max(left_ms, 0))
-            answer = await self._read(position, wait_ms=wait_ms)
+            answer = await self._read(
+                position, wait_ms=wait_ms, wake_token=input.operation_token
+            )
             await self._hand_over(followed, stream, answer)
             position = _moved(position, answer)
             if answer.done or not answer.records:
@@ -407,10 +412,16 @@ class StreamFollowerService:
                     retryable_override=True,
                 )
 
-    async def _read(self, position: ReadInput, *, wait_ms: int) -> ReadOutput:
+    async def _read(
+        self, position: ReadInput, *, wait_ms: int, wake_token: str | None = None
+    ) -> ReadOutput:
+        # The wake token rides only on this read, not in the receiver state.
         return await self._transport.read(
             dataclasses.replace(
-                position, max_records=self._max_records, wait_ms=wait_ms
+                position,
+                max_records=self._max_records,
+                wait_ms=wait_ms,
+                wake_token=wake_token,
             )
         )
 
@@ -562,6 +573,9 @@ async def follow_stream(
         arg,
         id=operation_id,
         schedule_to_close_timeout=schedule_to_close_timeout,
+        # The follower reads only when woken, so its callback asks for the
+        # first wake at the attach, from the stream's start.
+        headers={FIRST_WAKE_HEADER: "0"},
         completion_callbacks=[
             NexusHandlerCallback(
                 task_queue=task_queue,

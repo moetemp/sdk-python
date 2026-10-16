@@ -39,6 +39,7 @@ async def attach_stream_callback(
     callback: CallbackNexus | None = None,
     operation_token: str,
     start_time: Timestamp | None = None,
+    idle: bool | None = None,
 ) -> NexusOperationHandle[AttachStreamCallbackResponse,]:
     request = AttachStreamCallbackRequest(
         stream_ref=stream_ref,
@@ -46,5 +47,6 @@ async def attach_stream_callback(
         callback=callback,
         operation_token=operation_token,
         start_time=start_time,
+        idle=idle,
     )
     return await _attach_stream_callback(request)
