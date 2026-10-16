@@ -27,7 +27,7 @@ from temporalio.bridge.proto.streams import (
 from temporalio.client import Client
 from temporalio.contrib.streams._body import decode_bodies, decode_body, encode_bodies
 from temporalio.contrib.streams._plugin import call, store_for_client
-from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams.nexus._generated import (
     AppendInput,
     AppendOutput,
@@ -39,7 +39,7 @@ from temporalio.contrib.streams.nexus._generated import (
 from temporalio.contrib.streams.nexus._generated.forwarder import (
     TemporalStreamsForwarder,
 )
-from temporalio.converter import DataConverter, WorkflowSerializationContext
+from temporalio.converter import DataConverter
 
 __all__ = ["StreamAccess", "TemporalStreamsHandler"]
 
@@ -64,7 +64,14 @@ class StreamAccess:
     an earlier read that named a floor holder, for a Workflow that replays it."""
 
     stream: StreamRef
-    """The stream the call names."""
+    """The stream the call names.
+
+    Check ``stream.kind`` before an owner field. A Workflow's stream names
+    ``workflow_id``, and a standalone Activity's names ``activity_id`` with
+    an empty ``workflow_id``. The stream of an Activity that a Workflow
+    scheduled names ``workflow_id``, ``activity_id`` and the scheduling run
+    in ``chain_run_id``.
+    """
 
     context: nexusrpc.handler.StartOperationContext
     """The Nexus call, with the caller's headers."""
@@ -254,9 +261,17 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
             raise _handler_error(_internal(error)) from None
         if allowed:
             return
+        stream = access.stream
+        if stream.kind == "activity":
+            owner = f"Activity {stream.activity_id!r}"
+        elif stream.kind == "workflow_activity":
+            owner = (
+                f"Activity {stream.activity_id!r} of Workflow {stream.workflow_id!r}"
+            )
+        else:
+            owner = f"Workflow {stream.workflow_id!r}"
         raise nexusrpc.HandlerError(
-            f"the caller may not {access.operation} stream {access.stream.topic!r} "
-            f"of Workflow {access.stream.workflow_id!r}",
+            f"the caller may not {access.operation} stream {stream.topic!r} of {owner}",
             type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
             retryable_override=False,
         )
@@ -310,11 +325,9 @@ async def serve_in_core(
 
 
 async def _run_codec(converter: DataConverter, work: CodecWork) -> list[CodecResult]:
-    # The stream is the Workflow's, so its bodies use the Workflow's context.
+    # Every body of one owner's streams uses that owner's context.
     converter = converter.with_context(
-        WorkflowSerializationContext(
-            namespace=work.namespace, workflow_id=work.workflow_id
-        )
+        owner_context(work.namespace, work.workflow_id, work.activity_id)
     )
     payloads = list(work.payloads)
     if work.encode:

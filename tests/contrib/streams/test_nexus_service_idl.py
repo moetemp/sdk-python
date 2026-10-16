@@ -107,6 +107,29 @@ def test_an_append_crosses_as_the_contract_spells_it():
     assert type(decoded.stream) is StreamRef
 
 
+def test_an_activity_reference_crosses_with_its_activity_id():
+    ref = StreamRef.for_activity("tool-1", run_id="act-run-1", topic="tokens")
+    read = ReadInput(stream=ref, wait_ms=2000)
+    document = _to_json(read)
+    assert document["stream"] == {
+        "kind": "activity",
+        "workflow_id": "",
+        "activity_id": "tool-1",
+        "chain_run_id": "act-run-1",
+        "topic": "tokens",
+    }
+    decoded = _from_json(document, ReadInput)
+    assert decoded.stream == ref
+    assert type(decoded.stream) is StreamRef
+
+
+def test_a_workflow_reference_sends_no_activity_id():
+    document = _to_json(ReadInput(stream=StreamRef.for_workflow("wf-1")))
+    stream = document["stream"]
+    assert isinstance(stream, dict)
+    assert "activity_id" not in stream
+
+
 def test_a_read_answer_decodes_with_its_cursors_and_records():
     document = {
         "records": [{"token": "memory:abcd1234:0", "record": "CgF0"}],
@@ -265,6 +288,7 @@ def _token_of(vector: dict[str, Any]) -> StreamOperationToken:
             kind=ref["kind"],
             workflow_id=ref["workflow_id"],
             chain_run_id=ref.get("chain_run_id"),
+            activity_id=ref.get("activity_id"),
             topic=ref["topic"],
         ),
         attach=vector["attach"],
@@ -286,8 +310,13 @@ def test_the_operation_token_reads_cores_decode_only_vectors(vector: dict[str, A
 
 @pytest.mark.parametrize("token", _TOKEN_VECTORS["refused"])
 def test_the_operation_token_refuses_cores_refused_vectors(token: str):
-    with pytest.raises(ValueError):
-        StreamOperationToken.from_token(token)
+    try:
+        decoded = StreamOperationToken.from_token(token)
+    except ValueError:
+        return
+    # A ref of a kind this release lacks decodes, and opening it refuses it.
+    with pytest.raises(StreamUnsupportedError):
+        decoded.ref._require_supported()  # type: ignore[reportPrivateUsage]
 
 
 def test_a_read_and_its_answer_carry_no_arm():

@@ -2317,7 +2317,8 @@ class StreamOperationToken:
 
     chain: str
     """The first run of the run chain the start attached to, so a cancel detaches from it
-    even after the Workflow id moved on to a new chain.
+    even after the Workflow id moved on to a new chain. For an Activity owner, the
+    Activity run. For a Workflow Activity owner, the run that scheduled it.
     """
 
     def to_token(self) -> str:
@@ -2398,6 +2399,19 @@ class _StreamRefTransferTypeConverter(
             else:
                 workflow_id_value = workflow_id_value_raw
 
+        activity_id_value: str | None = None
+        if "activity_id" in raw:
+            activity_id_value_raw = raw["activity_id"]
+            if activity_id_value_raw is None:
+                activity_id_value = None
+            else:
+                if not isinstance(activity_id_value_raw, str):
+                    violations.append(
+                        Violation(path="activity_id", reason="expected string")
+                    )
+                else:
+                    activity_id_value = activity_id_value_raw
+
         chain_run_id_value: str | None = None
         if "chain_run_id" in raw:
             chain_run_id_value_raw = raw["chain_run_id"]
@@ -2425,6 +2439,7 @@ class _StreamRefTransferTypeConverter(
             if (
                 key != "kind"
                 and key != "workflow_id"
+                and key != "activity_id"
                 and key != "chain_run_id"
                 and key != "topic"
             ):
@@ -2436,6 +2451,7 @@ class _StreamRefTransferTypeConverter(
         return StreamRef(
             kind=kind_value,
             workflow_id=workflow_id_value,
+            activity_id=activity_id_value,
             chain_run_id=chain_run_id_value,
             topic=topic_value,
         )
@@ -2465,6 +2481,13 @@ class _StreamRefTransferTypeConverter(
                     Violation(path="workflow_id", reason="expected string")
                 )
             out["workflow_id"] = workflow_id_value
+        activity_id_value: typing.Any = runtime_value.activity_id
+        if activity_id_value is not None:
+            if not (isinstance(activity_id_value, str)):
+                violations.append(
+                    Violation(path="activity_id", reason="expected string")
+                )
+            out["activity_id"] = activity_id_value
         chain_run_id_value: typing.Any = runtime_value.chain_run_id
         if chain_run_id_value is not None:
             if not (isinstance(chain_run_id_value, str)):

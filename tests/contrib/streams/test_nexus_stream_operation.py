@@ -33,6 +33,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     StreamStorePlugin,
+    StreamUnsupportedError,
     close_workflow_stream,
     get_stream_handle,
     workflow_writer,
@@ -141,6 +142,25 @@ async def test_a_start_for_an_owner_that_does_not_exist_is_not_found(
     assert _raised(raised.value) == ("NOT_FOUND", False, "StreamNotFoundError")
 
 
+async def test_a_start_for_an_activity_that_does_not_exist_is_not_found(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ref reaches Core as an Activity owner, which Core checks with a
+    # describe of the Activity.
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+
+    async def open_missing(_ctx: Any, _prompt: str) -> StreamRef:
+        return StreamRef.for_activity(
+            f"missing-{uuid.uuid4()}", run_id=str(uuid.uuid4()), topic="tokens"
+        )
+
+    with pytest.raises(nexusrpc.HandlerError) as raised:
+        await StreamOperationHandler(open_missing).start(start_context(), "hi")
+
+    assert _raised(raised.value) == ("NOT_FOUND", False, "StreamNotFoundError")
+
+
 async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
     client: Client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -169,10 +189,16 @@ def test_a_token_reads_as_the_shared_vectors_say() -> None:
             workflow_id=ref["workflow_id"],
             chain_run_id=ref.get("chain_run_id"),
             topic=ref["topic"],
+            activity_id=ref.get("activity_id"),
         )
     for token in vectors["refused"]:
-        with pytest.raises(ValueError):
-            stream_ref_from_token(token)
+        try:
+            decoded = stream_ref_from_token(token)
+        except ValueError:
+            continue
+        # A ref of a kind this release lacks decodes, and opening it refuses it.
+        with pytest.raises(StreamUnsupportedError):
+            decoded._require_supported()  # type: ignore[reportPrivateUsage]
 
 
 # Live: a caller Workflow sees the stream's progress and the close result.
@@ -799,3 +825,109 @@ async def test_live_a_terminated_owner_fails_the_operation(
 
     outcome = await _caller_outcome(client, env, terminate)
     assert outcome[0] == "TerminatedError", outcome
+
+
+async def test_live_a_retried_start_on_an_activity_stream_attaches_once(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+    activity_id = f"tool-{uuid.uuid4().hex}"
+    # No Worker polls the task queue, so the Activity run stays open.
+    owner = await store_client.start_activity(
+        "never_polled",
+        id=activity_id,
+        task_queue=f"unpolled-{uuid.uuid4().hex}",
+        start_to_close_timeout=timedelta(minutes=5),
+    )
+    ref = StreamRef.for_activity(activity_id, run_id=owner.run_id, topic="tokens")
+    await _skip_without_notifier(client, StreamRef.for_workflow("probe"))
+
+    async def open_tool_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    handler: StreamOperationHandler[str, Any] = StreamOperationHandler(open_tool_stream)
+    first = await handler.start(start_context(), "hi")
+    again = await handler.start(start_context(), "hi")
+
+    assert again.token == first.token
+    assert stream_ref_from_token(first.token) == ref
+    described = await client.workflow_service.describe_stream_notifier(
+        DescribeStreamNotifierRequest(
+            namespace=client.namespace,
+            stream_ref=StreamReference(
+                owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+                activity_id=activity_id,
+                run_id=owner.run_id or "",
+                topic="tokens",
+            ),
+        )
+    )
+    assert len(described.callbacks) == 1
+    await owner.terminate(reason="done")
+
+
+@workflow.defn
+class SchedulesAToolNoOnePolls:
+    @workflow.run
+    async def run(self, task_queue: str) -> None:
+        await workflow.execute_activity(
+            "never_polled",
+            activity_id="tool-1",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+
+
+async def test_live_a_retried_start_on_a_tool_stream_attaches_once(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+    await _skip_without_notifier(client, StreamRef.for_workflow("probe"))
+    task_queue = f"agent-{uuid.uuid4().hex}"
+    async with Worker(
+        store_client, task_queue=task_queue, workflows=[SchedulesAToolNoOnePolls]
+    ):
+        agent = await store_client.start_workflow(
+            SchedulesAToolNoOnePolls.run,
+            f"unpolled-{uuid.uuid4().hex}",
+            id=f"agent-{uuid.uuid4().hex}",
+            task_queue=task_queue,
+        )
+        for _ in range(100):
+            if (await agent.describe()).raw_description.pending_activities:
+                break
+            await asyncio.sleep(0.1)
+        ref = StreamRef.for_workflow_activity(
+            agent.id,
+            run_id=agent.result_run_id or "",
+            activity_id="tool-1",
+            topic="tokens",
+        )
+
+        async def open_tool_stream(_ctx: Any, _prompt: str) -> StreamRef:
+            return ref
+
+        handler: StreamOperationHandler[str, Any] = StreamOperationHandler(
+            open_tool_stream
+        )
+        first = await handler.start(start_context(), "hi")
+        again = await handler.start(start_context(), "hi")
+
+        assert again.token == first.token
+        assert stream_ref_from_token(first.token) == ref
+        described = await client.workflow_service.describe_stream_notifier(
+            DescribeStreamNotifierRequest(
+                namespace=client.namespace,
+                stream_ref=StreamReference(
+                    owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+                    workflow_id=agent.id,
+                    run_id=agent.result_run_id or "",
+                    activity_id="tool-1",
+                    topic="tokens",
+                ),
+            )
+        )
+        assert len(described.callbacks) == 1
+        await agent.terminate()

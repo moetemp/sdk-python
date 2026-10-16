@@ -607,6 +607,74 @@ generated from api's `nexus/notification-service.wit`. The Worker decodes the
 callback's `source_context` and the operation's result with its data
 converter, so a handler gets the values, not payloads.
 
+## A Nexus operation that returns a standalone Activity's stream
+
+A stream-returning operation can name a stream that a standalone Activity
+owns. `open_stream` starts the Activity and returns its ref. This fits a tool
+call, where the tool runs as an Activity and streams its output while it
+runs.
+
+```python
+from temporalio.common import ActivityIDConflictPolicy, RetryPolicy
+from temporalio.contrib.streams import StreamRef, activity_handle, topic
+
+TOKENS = topic("tokens", str)
+
+@activity.defn
+async def run_tool(call: str) -> str:
+    stream = activity_handle()
+    out = stream.producer(topic=TOKENS)
+    async for token in tool(call):
+        await out.append(token)
+    await stream.close(topic=TOKENS, result="done")
+    return "ok"
+
+async def open_tool_stream(ctx, call: str) -> StreamRef:
+    handle = await temporalio.nexus.client().start_activity(
+        run_tool, call, id=f"tool-{ctx.request_id}", task_queue="tools",
+        start_to_close_timeout=timedelta(minutes=5),
+        retry_policy=RetryPolicy(maximum_attempts=3),
+        id_conflict_policy=ActivityIDConflictPolicy.USE_EXISTING,
+    )
+    return StreamRef.for_activity(handle.id, run_id=handle.run_id, topic=TOKENS)
+
+@nexusrpc.handler.service_handler(service=Tools)
+class ToolsHandler:
+    @nexusrpc.handler.operation_handler
+    def call_tool(self) -> nexusrpc.handler.OperationHandler[str, str]:
+        return StreamOperationHandler(open_tool_stream)
+```
+
+- **Which Worker serves it.** `TemporalStreamsHandler` runs on any Worker
+  of the Activity's namespace whose client carries the stream store. It
+  needs no tie to the Activity's task queue or Worker. Its client needs
+  `DescribeActivityExecution` in that namespace, since Core checks the owner.
+- **A retried start.** A retried start has the same request id. With an
+  Activity id derived from it and `USE_EXISTING`, it reaches the same run,
+  and the caller attaches once.
+- **The token.** The operation token names the Activity and its run. A
+  `StreamReader`, a `StreamFollowerService` and `follow_stream` take the ref
+  from the token, so the caller side is the same as for a Workflow owner.
+- **Retries.** Each attempt of the Activity writes a new producer attempt,
+  so a reader gets the retry in `supersessions`. Its low 11 bits are the
+  Temporal attempt.
+- **The end.** The operation completes with the stream's close. When the
+  Activity ends with no close, the stream's notifier closes the stream with
+  the Activity's outcome: a null result when it completed, its failure
+  otherwise.
+- **Codec.** The stream service decodes an Activity stream's bodies with
+  `ActivitySerializationContext` that holds only the namespace and the
+  Activity id.
+- **Authorization.** `StreamAccess.stream.kind` is `"activity"`, with
+  `activity_id` set and `workflow_id` empty. An authorizer that reads
+  `workflow_id` must check `kind` first.
+- **Server.** The server runs standalone Activities
+  (`activity.enableStandalone`) besides the settings above.
+
+[`tests/contrib/streams/samples/nexus_tool_call_stream.py`](../../../../tests/contrib/streams/samples/nexus_tool_call_stream.py)
+runs a tool as a standalone Activity in another namespace and a caller
+Workflow that reads its stream, directly or recorded.
+
 ## Limits and timeouts
 
 - A notification's `position` is at most 1 KiB of UTF-8, and its metadata

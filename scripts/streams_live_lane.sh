@@ -28,7 +28,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-24f9238c19b889912f47a24ccdcf7d5b88b76b12}
+SERVER_REF=${SERVER_REF:-06db55b791af7aaabce357cc6f60399dc8554f4b}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -353,6 +353,12 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_replay_of_a_lost_range_fails_the_task \
   test_live_a_read_after_a_timed_out_read_replays_from_the_store \
   test_live_a_workflow_reader_waits_for_an_owner_that_starts_later
+gate tests/contrib/streams/test_live_activity_stream_nexus.py \
+  test_live_a_caller_reads_a_tool_calls_activity_stream \
+  test_live_a_reader_wakes_at_most_once_per_burst_of_a_tool \
+  test_live_a_worker_follows_a_tool_calls_activity_stream \
+  test_live_a_tool_that_fails_with_no_close_fails_the_operation \
+  test_live_an_authorizer_takes_activity_reads_from_one_caller_namespace
 gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_both_readers_follow_a_standalone_activity_across_its_retry \
   test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
