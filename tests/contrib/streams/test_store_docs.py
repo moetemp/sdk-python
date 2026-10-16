@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import temporalio.bridge.proto.streams
 from temporalio.client import Client
 from temporalio.contrib.streams import StoreCapabilities, StreamStorePlugin
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -61,6 +62,10 @@ def _store(row: str) -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=prefix, plain="plain=True" in row)
 
 
+@pytest.mark.skipif(
+    not hasattr(temporalio.bridge.proto.streams, "DescribeStoreRequest"),
+    reason="this Core can't describe a store",
+)
 @pytest.mark.parametrize("row", list(_table()))
 async def test_the_store_table_matches_core(client: Client, row: str):
     store = _store(row)
