@@ -104,7 +104,9 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     endpoint gets the Worker's store rights, for every stream in the
     namespace and as any producer. Pass ``authorize`` to check each call: it
     gets a :class:`StreamAccess` and answers whether to serve it, and a
-    refused call fails as unauthorized. A ``nexusrpc.HandlerError`` it raises
+    refused call fails as unauthorized. Without ``authorize``, the handler
+    serves reads to any caller and refuses every append as unauthorized,
+    since an append could write as any producer. A ``nexusrpc.HandlerError`` it raises
     crosses as it is, so it can give the caller a reason. Any other exception
     crosses as a retryable ``INTERNAL`` error.
 
@@ -198,7 +200,15 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
 
     async def _check(self, access: StreamAccess) -> None:
         if self._authorize is None:
-            return
+            if access.operation == "read":
+                return
+            raise nexusrpc.HandlerError(
+                "this stream service refuses appends, since its handler has no "
+                "authorize check; pass authorize= to TemporalStreamsHandler to "
+                "serve them",
+                type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+                retryable_override=False,
+            )
         try:
             allowed = await self._authorize(access)
         except nexusrpc.HandlerError:
