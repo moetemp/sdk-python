@@ -653,11 +653,6 @@ class WorkflowServiceStub(object):
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.FromString,
         )
-        self.WaitStreamCallback = channel.unary_unary(
-            "/temporal.api.workflowservice.v1.WorkflowService/WaitStreamCallback",
-            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.SerializeToString,
-            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.FromString,
-        )
         self.NotifyStream = channel.unary_unary(
             "/temporal.api.workflowservice.v1.WorkflowService/NotifyStream",
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.SerializeToString,
@@ -677,11 +672,6 @@ class WorkflowServiceStub(object):
             "/temporal.api.workflowservice.v1.WorkflowService/ExecuteSyncNexusOperation",
             request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.SerializeToString,
             response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.FromString,
-        )
-        self.NotifyStreams = channel.unary_unary(
-            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStreams",
-            request_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.SerializeToString,
-            response_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.FromString,
         )
 
 
@@ -1963,8 +1953,7 @@ class WorkflowServiceServicer(object):
     def AttachStreamCallback(self, request, context):
         """AttachStreamCallback attaches a callback to the notifier of a stream. The callback receives the
         stream's progress while it is open and one completion when it closes. A Nexus handler whose
-        operation returns a stream calls it with the caller's callback when the operation starts. It
-        starts the notifier when the stream has none.
+        operation returns a stream calls it with the caller's callback when the operation starts.
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -1985,29 +1974,10 @@ class WorkflowServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def WaitStreamCallback(self, request, context):
-        """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
-        notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
-        After the delivery the callback is idle again. A reader calls it when a read finds nothing.
-        The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
-        for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
-        nothing. Waiting on a callback that is not idle changes nothing.
-
-        (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
     def NotifyStream(self, request, context):
         """NotifyStream tells the notifier of a stream that the stream moved, or that it closed. The
         notifier passes the latest notification on to every attached callback as progress, and on close
         completes them. Producers fold their notifications and keep at most one call in flight.
-
-        A notification that does not close the stream starts nothing. When the stream has no
-        notifier, nobody waits on it, and the server drops the notification. A close starts a notifier
-        when the stream has none, so a callback that attaches later still gets the close outcome.
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -2031,10 +2001,8 @@ class WorkflowServiceServicer(object):
         """PollStreamNotifier waits until the notifier of a stream has a counter above `after_counter`,
         or the stream is closed. It returns with no change after a wait limit set by the server
         (`streamnotifier.pollMaxWait`). A client that reads a stream calls it after a read that
-        found nothing, in place of another blocking read on the store. It starts the notifier when the
-        stream has none. The client reads the stream once more after the poll starts, since a
-        notification that came before the notifier existed was dropped. It is a long poll, so it is
-        not exposed through System Nexus.
+        found nothing and armed the topic, in place of another blocking read on the store. It is a
+        long poll, so it is not exposed through System Nexus.
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
@@ -2055,20 +2023,6 @@ class WorkflowServiceServicer(object):
 
         (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs call it through gRPC. --)
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def NotifyStreams(self, request, context):
-        """NotifyStreams tells the notifiers of many streams in one namespace that they moved. It acts as
-        one NotifyStream without close per entry. A stream with no notifier drops its entry, as
-        NotifyStream does. A driver that reads the store's notification log calls it with the newest
-        counter of each stream in a batch. A call that fails may have applied some entries. Sending
-        the batch again is safe, since a notifier ignores a counter at or below the one it holds.
-
-        (-- api-linter: core::0127::http-annotation=disabled
-        aip.dev/not-precedent: SDKs reach the stream notifier through gRPC. --)
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
@@ -2702,11 +2656,6 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.DetachStreamCallbackResponse.SerializeToString,
         ),
-        "WaitStreamCallback": grpc.unary_unary_rpc_method_handler(
-            servicer.WaitStreamCallback,
-            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.FromString,
-            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.SerializeToString,
-        ),
         "NotifyStream": grpc.unary_unary_rpc_method_handler(
             servicer.NotifyStream,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamRequest.FromString,
@@ -2726,11 +2675,6 @@ def add_WorkflowServiceServicer_to_server(servicer, server):
             servicer.ExecuteSyncNexusOperation,
             request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.FromString,
             response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.SerializeToString,
-        ),
-        "NotifyStreams": grpc.unary_unary_rpc_method_handler(
-            servicer.NotifyStreams,
-            request_deserializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.FromString,
-            response_serializer=temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -6380,35 +6324,6 @@ class WorkflowService(object):
         )
 
     @staticmethod
-    def WaitStreamCallback(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/temporal.api.workflowservice.v1.WorkflowService/WaitStreamCallback",
-            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackRequest.SerializeToString,
-            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.WaitStreamCallbackResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-        )
-
-    @staticmethod
     def NotifyStream(
         request,
         target,
@@ -6514,35 +6429,6 @@ class WorkflowService(object):
             "/temporal.api.workflowservice.v1.WorkflowService/ExecuteSyncNexusOperation",
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationRequest.SerializeToString,
             temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.ExecuteSyncNexusOperationResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-        )
-
-    @staticmethod
-    def NotifyStreams(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/temporal.api.workflowservice.v1.WorkflowService/NotifyStreams",
-            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsRequest.SerializeToString,
-            temporal_dot_api_dot_workflowservice_dot_v1_dot_request__response__pb2.NotifyStreamsResponse.FromString,
             options,
             channel_credentials,
             insecure,

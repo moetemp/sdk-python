@@ -13726,7 +13726,6 @@ class AttachStreamCallbackRequest(google.protobuf.message.Message):
     OPERATION_TOKEN_FIELD_NUMBER: builtins.int
     START_TIME_FIELD_NUMBER: builtins.int
     WORKFLOW_TARGET_FIELD_NUMBER: builtins.int
-    IDLE_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamReference:
@@ -13759,12 +13758,6 @@ class AttachStreamCallbackRequest(google.protobuf.message.Message):
         Workflow gets each change of the stream as a `StreamWake` on its next Workflow Task. Exactly
         one of `callback` and `workflow_target` is set.
         """
-    idle: builtins.bool
-    """Attaches the callback idle. An idle callback gets no progress until WaitStreamCallback asks
-    for one wake, and it goes back to idle after that delivery. It still gets the completion
-    when the stream closes. A Workflow reader attaches its `workflow_target` idle, so a busy
-    reader gets no wake.
-    """
     def __init__(
         self,
         *,
@@ -13777,7 +13770,6 @@ class AttachStreamCallbackRequest(google.protobuf.message.Message):
         start_time: google.protobuf.timestamp_pb2.Timestamp | None = ...,
         workflow_target: temporalio.api.stream.v1.message_pb2.WorkflowWakeTarget
         | None = ...,
-        idle: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -13799,8 +13791,6 @@ class AttachStreamCallbackRequest(google.protobuf.message.Message):
             b"callback",
             "identity",
             b"identity",
-            "idle",
-            b"idle",
             "namespace",
             b"namespace",
             "operation_token",
@@ -13826,68 +13816,6 @@ class AttachStreamCallbackResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___AttachStreamCallbackResponse = AttachStreamCallbackResponse
-
-class WaitStreamCallbackRequest(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    NAMESPACE_FIELD_NUMBER: builtins.int
-    STREAM_REF_FIELD_NUMBER: builtins.int
-    REQUEST_ID_FIELD_NUMBER: builtins.int
-    AFTER_COUNTER_FIELD_NUMBER: builtins.int
-    IDENTITY_FIELD_NUMBER: builtins.int
-    namespace: builtins.str
-    @property
-    def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamReference: ...
-    request_id: builtins.str
-    """The request ID the idle callback was attached with."""
-    after_counter: builtins.int
-    """The notifier delivers progress to the callback once, when its counter is above this value.
-    If the counter is above it already, the delivery goes out at once. A reader passes the
-    counter of the position its last read reached.
-
-    (-- api-linter: core::0140::prepositions=disabled
-        aip.dev/not-precedent: "after" names the bound the counter must pass. --)
-    """
-    identity: builtins.str
-    """The identity of the caller."""
-    def __init__(
-        self,
-        *,
-        namespace: builtins.str = ...,
-        stream_ref: temporalio.api.stream.v1.message_pb2.StreamReference | None = ...,
-        request_id: builtins.str = ...,
-        after_counter: builtins.int = ...,
-        identity: builtins.str = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["stream_ref", b"stream_ref"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "after_counter",
-            b"after_counter",
-            "identity",
-            b"identity",
-            "namespace",
-            b"namespace",
-            "request_id",
-            b"request_id",
-            "stream_ref",
-            b"stream_ref",
-        ],
-    ) -> None: ...
-
-global___WaitStreamCallbackRequest = WaitStreamCallbackRequest
-
-class WaitStreamCallbackResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___WaitStreamCallbackResponse = WaitStreamCallbackResponse
 
 class DetachStreamCallbackRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -14159,7 +14087,7 @@ class PollStreamNotifierRequest(google.protobuf.message.Message):
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamReference: ...
     after_counter: builtins.int
     """The poll returns when the notifier's counter is above this value, or when the stream is
-    closed. A reader passes the counter of the position its last read reached, so a
+    closed. A reader passes the counter of the position where it armed its read, so a
     notification that landed before the poll makes it return at once.
 
     (-- api-linter: core::0140::prepositions=disabled
@@ -14404,54 +14332,3 @@ class ExecuteSyncNexusOperationResponse(google.protobuf.message.Message):
     ) -> typing_extensions.Literal["result", "failure"] | None: ...
 
 global___ExecuteSyncNexusOperationResponse = ExecuteSyncNexusOperationResponse
-
-class NotifyStreamsRequest(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    NAMESPACE_FIELD_NUMBER: builtins.int
-    NOTIFICATIONS_FIELD_NUMBER: builtins.int
-    IDENTITY_FIELD_NUMBER: builtins.int
-    namespace: builtins.str
-    @property
-    def notifications(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
-        temporalio.api.stream.v1.message_pb2.StreamNotification
-    ]:
-        """One entry per stream. The server rejects a request with more than
-        `streamnotifier.maxNotifyBatch` entries, or with two entries for one stream.
-        """
-    identity: builtins.str
-    """The identity of the caller, such as a stream driver."""
-    def __init__(
-        self,
-        *,
-        namespace: builtins.str = ...,
-        notifications: collections.abc.Iterable[
-            temporalio.api.stream.v1.message_pb2.StreamNotification
-        ]
-        | None = ...,
-        identity: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "identity",
-            b"identity",
-            "namespace",
-            b"namespace",
-            "notifications",
-            b"notifications",
-        ],
-    ) -> None: ...
-
-global___NotifyStreamsRequest = NotifyStreamsRequest
-
-class NotifyStreamsResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___NotifyStreamsResponse = NotifyStreamsResponse
