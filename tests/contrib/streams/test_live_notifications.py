@@ -16,6 +16,7 @@ import asyncio
 import os
 import time
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -40,10 +41,10 @@ from temporalio.contrib.streams import (
     workflow_reader,
     workflow_writer,
 )
-from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE
+from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE, ReadStates
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import connect_with, new_workflow_id
@@ -625,3 +626,58 @@ async def test_live_a_replay_of_a_lost_range_fails_the_task(notifying: Client):
     # A lost range fails the task for a retry, not as nondeterminism.
     assert "StreamReplayRangeLostError" in str(raised.value)
     assert "NonDeterministicError" not in str(raised.value)
+
+
+@workflow.defn
+class ReadsThroughATimeout:
+    """Reads one batch, times out a read on the idle stream, then reads again."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    @workflow.run
+    async def run(self, owner: str) -> list[str]:
+        reader = workflow_reader(owner, topic=TOKENS, idle_wait=timedelta(seconds=5))
+        async with reader:
+            self.seen.extend(str(r.value) for r in (await anext(reader)).records)
+            try:
+                await asyncio.wait_for(anext(reader), 1)
+            except (asyncio.TimeoutError, ActivityError):
+                self.seen.append("timed out")
+            self.seen.extend(str(r.value) for r in (await anext(reader)).records)
+        return self.seen
+
+    @workflow.query
+    def progress(self) -> list[str]:
+        return self.seen
+
+
+async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
+    notifying: Client,
+):
+    async with new_worker(notifying, Waits, ReadsThroughATimeout) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        await stream.producer(producer_id="p", attempt=1).append("a")
+        reader = await notifying.start_workflow(
+            ReadsThroughATimeout.run,
+            owner,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+
+        async def timed_out() -> bool:
+            return "timed out" in await reader.query(ReadsThroughATimeout.progress)
+
+        await until(timed_out)
+        await stream.producer(producer_id="p", attempt=2).append("b")
+        assert await asyncio.wait_for(reader.result(), 30) == ["a", "timed out", "b"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+    # A Worker that never ran the reader replays it with no batch cached and
+    # no answer state kept.
+    store = store_for(notifying)
+    store._batches.clear()
+    store._read_states = ReadStates()
+    await Replayer(workflows=[ReadsThroughATimeout], plugins=[store]).replay_workflow(
+        await reader.fetch_history()
+    )

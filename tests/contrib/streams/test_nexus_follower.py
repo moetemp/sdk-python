@@ -263,6 +263,28 @@ async def test_a_failed_operation_reaches_on_close_as_its_failure() -> None:
     assert "owner failed" in str(outcome.error)
 
 
+async def test_a_canceled_operation_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeTransport(_stored(3)), _Collector()
+    service = _service(transport, collector)
+    taken = await service.on_progress(_context(), _progress("c1"))
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=taken.receiver_state,
+        ),
+    )
+
+    # The records the store holds still reach the follower, then the close.
+    assert collector.values == ["v1", "v2", "v3"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
+
+
 async def test_the_marks_stay_out_of_the_records() -> None:
     records = [
         RecordWire(token="c1", record=_wire("v1")),
