@@ -224,6 +224,24 @@ def stream_address(
     return address
 
 
+def from_address(address: StreamAddress) -> StreamRef:
+    """The ref of the stream Core's ``address`` names."""
+    if address.owner_kind == _OwnerKind.STREAM_OWNER_KIND_ACTIVITY:
+        return StreamRef.for_activity(
+            address.activity_id, run_id=address.run_id or None, topic=address.topic
+        )
+    if address.owner_kind == _OwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY:
+        return StreamRef.for_workflow_activity(
+            address.workflow_id,
+            run_id=address.run_id,
+            activity_id=address.activity_id,
+            topic=address.topic,
+        )
+    return StreamRef.for_workflow(
+        address.workflow_id, topic=address.topic, chain_run_id=address.run_id or None
+    )
+
+
 def owner_context(
     namespace: str, workflow_id: str, activity_id: str | None
 ) -> SerializationContext:

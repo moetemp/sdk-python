@@ -33,6 +33,7 @@ __all__ = [
     "WireRecord",
     "decode_or_mark",
     "from_read",
+    "from_wire_link",
     "to_record",
     "to_wire",
     "to_wire_link",
@@ -141,7 +142,8 @@ def to_wire_link(link: StreamLink) -> WireLink:
     return wire
 
 
-def _from_wire_link(wire: WireLink) -> StreamLink:
+def from_wire_link(wire: WireLink) -> StreamLink:
+    """The link Core stored in ``wire``."""
     return StreamLink(
         event=LinkEvent(wire.event),
         ref=from_reference(wire.stream) if wire.HasField("stream") else None,
@@ -248,7 +250,7 @@ def to_record(
                 else None
             )
             value = payload_converter.from_payloads([wire.body], hints)[0]
-        link = _from_wire_link(wire.link) if kind is RecordKind.LINK else None
+        link = from_wire_link(wire.link) if kind is RecordKind.LINK else None
     except Exception as error:
         raise StreamRecordError(
             f"stream record at {cursor} could not be decoded: {error}", cursor
