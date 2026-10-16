@@ -2930,6 +2930,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "crc16",
+ "gethostname",
  "lru",
  "prost",
  "redis",
@@ -3049,6 +3050,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

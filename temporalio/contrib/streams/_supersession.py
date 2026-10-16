@@ -14,7 +14,7 @@ from collections import OrderedDict
 from collections.abc import AsyncGenerator, AsyncIterable
 from typing import Generic, TypeVar
 
-from temporalio.contrib.streams._record import RecordKind, StreamRecord
+from temporalio.contrib.streams._record import RecordKind, StreamRecord, Supersession
 
 __all__ = ["SupersessionTracker", "track_supersession"]
 
@@ -90,27 +90,20 @@ class SupersessionTracker(Generic[T]):
         For a :attr:`RecordKind.SUPERSEDED` record, these are the held
         records of its producer with an attempt below the new one, in stream
         order. For a Workflow's producer, ``@<run id>``, it is only those of
-        the same Workflow Task prefix, since the earlier tasks completed. For a record marked ``stale``, it is the record itself, since
-        an older attempt wrote it after the read delivered a newer one. For
-        any other record, nothing.
+        the Workflow Task of the attempt it names as previous, since the
+        other tasks completed. That task is the new attempt's own on a rerun,
+        or an earlier one whose rerun wrote nothing to the topic. For a
+        record marked ``stale``, it is the record itself, since an older
+        attempt wrote it after the read delivered a newer one. For any other
+        record, nothing.
         """
         if record.kind is RecordKind.SUPERSEDED:
             supersession = record.supersession
             if supersession is None:
                 return []
             held = self._held.get(supersession.producer_id, [])
-            withdrawn = [
-                r
-                for _, r in held
-                if _withdraws(supersession.producer_id, r.attempt, supersession.attempt)
-            ]
-            kept = [
-                (i, r)
-                for i, r in held
-                if not _withdraws(
-                    supersession.producer_id, r.attempt, supersession.attempt
-                )
-            ]
+            withdrawn = [r for _, r in held if _withdraws(supersession, r.attempt)]
+            kept = [(i, r) for i, r in held if not _withdraws(supersession, r.attempt)]
             if kept:
                 self._held[supersession.producer_id] = kept
             else:
@@ -160,13 +153,16 @@ class SupersessionTracker(Generic[T]):
             self._bytes -= _size(producer_id)
 
 
-def _withdraws(producer_id: str, held: int, new: int) -> bool:
-    if producer_id.startswith(WORKFLOW_PRODUCER_PREFIX):
+def _withdraws(supersession: Supersession, held: int) -> bool:
+    if supersession.producer_id.startswith(WORKFLOW_PRODUCER_PREFIX):
         # A Workflow's attempt is its Workflow Task prefix, then the retry of
-        # that task. A rerun withdraws only the records of its own prefix,
-        # since the tasks before it completed.
-        return held >> _RETRY_BITS == new >> _RETRY_BITS and held < new
-    return held < new
+        # that task. Core withdraws only the task of the attempt it names, a
+        # rerun's or one whose rerun wrote nothing, since the others completed.
+        return (
+            held >> _RETRY_BITS == supersession.previous_attempt >> _RETRY_BITS
+            and held < supersession.attempt
+        )
+    return held < supersession.attempt
 
 
 def _size(producer_id: str) -> int:
