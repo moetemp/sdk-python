@@ -29,6 +29,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._replay_reads import (
     POSITIONS_TYPE,
+    BatchCache,
     ReadStates,
     ReplayReadCodec,
     is_positions,
@@ -82,10 +83,14 @@ async def read_positions(
     wait_ms: int = 100,
     state: bytes = b"",
     read_seq: int = 0,
+    run_id: str | None = None,
+    chained: bool = False,
 ) -> Payload:
     """Run the read Activity in positions-only mode, as a Workflow reader's Local Activity does."""
     env = ActivityEnvironment(client=client)
-    env.info = dataclasses.replace(env.info, workflow_run_id=f"reader-{uuid.uuid4()}")
+    env.info = dataclasses.replace(
+        env.info, workflow_run_id=run_id or f"reader-{uuid.uuid4()}"
+    )
     raw = await env.run(
         read_activity,
         _ReadInput(
@@ -100,6 +105,7 @@ async def read_positions(
             positions_only=True,
             reader_id="1",
             read_seq=read_seq,
+            chained=chained,
         ),
     )
     return raw.payload
@@ -243,12 +249,19 @@ async def test_a_later_read_replays_from_the_previous_reads_state(
         owner = await running_owner(streams, worker.task_queue)
         handle = get_stream_handle(streams, owner, topic=TOKENS)
         await handle.producer(producer_id="p", attempt=1).append("a")
-        first = await read_positions(streams, owner, read_seq=1)
+        run_id = f"reader-{uuid.uuid4()}"
+        first = await read_positions(streams, owner, read_seq=1, run_id=run_id)
         [first_live] = await codec_of(streams).decode([first])
         answer = ReadResponse.FromString(first_live.data)
         await handle.producer(producer_id="p", attempt=2).append("b")
         second = await read_positions(
-            streams, owner, after=answer.cursor, state=answer.state, read_seq=2
+            streams,
+            owner,
+            after=answer.cursor,
+            state=answer.state,
+            read_seq=2,
+            run_id=run_id,
+            chained=True,
         )
         # The second marker leaves out its input state, which the first holds.
         range = ReadRangeRequest.FromString(
@@ -270,6 +283,63 @@ async def test_a_later_read_replays_from_the_previous_reads_state(
         with pytest.raises(StreamError, match="previous read"):
             await codec_of(streams).decode([second])
         await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_two_runs_of_one_workflow_chain_their_reads_apart(streams: Client):
+    async with new_worker(streams, Waits) as worker:
+        owner = await running_owner(streams, worker.task_queue)
+        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        a = await handle.producer(producer_id="p", attempt=1).append("a")
+        await handle.producer(producer_id="q", attempt=1).append("x")
+        # Both runs have reader 1, but the second run starts past "a", so its
+        # state has not seen producer p.
+        firsts = {
+            "run-a": await read_positions(streams, owner, read_seq=1, run_id="run-a"),
+            "run-b": await read_positions(
+                streams, owner, after=a.token, read_seq=1, run_id="run-b"
+            ),
+        }
+        answers = {
+            run: ReadResponse.FromString((await codec_of(streams).decode([p]))[0].data)
+            for run, p in firsts.items()
+        }
+        await handle.producer(producer_id="p", attempt=2).append("b")
+        seconds = {
+            run: await read_positions(
+                streams,
+                owner,
+                after=answers[run].cursor,
+                state=answers[run].state,
+                read_seq=2,
+                run_id=run,
+                chained=True,
+            )
+            for run in firsts
+        }
+        live = {
+            run: (await codec_of(streams).decode([p]))[0] for run, p in seconds.items()
+        }
+        # A replay that interleaves the two runs gives each read its own run's
+        # input state.
+        plugin = plugin_of(streams)
+        plugin._batches.clear()
+        plugin._read_states = ReadStates()
+        _, _, a2, b2 = await codec_of(streams).decode(
+            [firsts["run-a"], firsts["run-b"], seconds["run-a"], seconds["run-b"]]
+        )
+        assert ReadResponse.FromString(a2.data).records[0].HasField("superseded")
+        assert a2.data == live["run-a"].data and b2.data == live["run-b"].data
+        await streams.get_workflow_handle(owner).signal(Waits.finish)
+
+
+def test_the_batch_cache_keeps_its_bytes_bounded():
+    cache = BatchCache(size=10, max_bytes=3000)
+    ranges = [ReadRangeRequest(after=str(i), to=str(i + 1)) for i in range(3)]
+    big = ReadResponse(cursor="x" * 1400)
+    for read in ranges:
+        cache.put(read, big)
+    assert cache.take(ranges[0]) is None
+    assert cache.take(ranges[1]) == big and cache.take(ranges[2]) == big
 
 
 async def test_a_first_range_trimmed_past_its_hold_is_lost_not_other_records(

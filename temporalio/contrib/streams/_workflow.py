@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Generic, TypeVar, overload
 
 import temporalio.activity
@@ -57,6 +57,7 @@ from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._replay_reads import (
     ReadChain,
     batch_payload,
+    is_chained,
     is_positions,
     positions_payload,
 )
@@ -174,7 +175,9 @@ class _ReadInput:
     reader_id: str = ""
     """The reader's id in its run, which names its hold on the records."""
     read_seq: int = 0
-    """How many reads the reader made, this one included."""
+    """How many reads of the reader returned, this one included."""
+    chained: bool = False
+    """Set when the previous read's marker holds this read's input state."""
 
 
 @dataclass
@@ -193,6 +196,13 @@ class _ReaderState:
     close_failure: Failure | None = None
     failure_raised: bool = False
     reads: int = 0
+    # The run that made the last read, when that read's marker holds its
+    # answer state, so the next read can leave its input state out.
+    chain_run: str = ""
+    # What a positions-only reader read since its first read, which the store
+    # holds for it until its run ends.
+    held_bytes: int = 0
+    first_read_at: datetime | None = None
     # The records of the last read not delivered yet, after one that did not
     # convert, and the cursor past the read.
     pending: list[ReadRecord] = field(default_factory=list)
@@ -262,6 +272,32 @@ class WorkflowStreamReader(Generic[T]):
         """Where the reader stands: past the last record it delivered."""
         return StreamPosition(
             self._state.cursor, base64.b64encode(self._state.state).decode()
+        )
+
+    def continue_as_new_suggested(
+        self,
+        max_bytes: int = 256 << 20,
+        max_age: timedelta = timedelta(days=1),
+    ) -> bool:
+        """Whether the run should Continue-as-New to free what this reader holds.
+
+        A reader with ``replay_from_store`` holds every record after its
+        first read in the store until its run ends, since the run may replay
+        its reads. Each hold costs store memory and append time. This is
+        ``True`` once the records it read pass ``max_bytes``, or once
+        ``max_age`` of Workflow time passed since its first read. The counts
+        come from the reader's own reads, so replay gives the same answer. A
+        reader that records its batches in History holds nothing, and this
+        is ``False``.
+
+        Pass :attr:`position` as ``after`` to the next run's reader.
+        """
+        state = self._state
+        if state.first_read_at is None:
+            return False
+        return (
+            state.held_bytes >= max_bytes
+            or workflow.now() - state.first_read_at >= max_age
         )
 
     def __aiter__(self) -> WorkflowStreamReader[T]:
@@ -455,18 +491,28 @@ class WorkflowStreamReader(Generic[T]):
         # A closed stream needs no wake, so the read neither attaches nor arms.
         arm = wake is None or not wake.closed
         input = self._input(arm=arm)
-        state.reads += 1
-        input.read_seq = state.reads
+        # A read counts once it returned, so a failed or canceled read leaves
+        # no gap in the chain of answer states that replay follows.
+        input.read_seq = state.reads + 1
+        input.chained = state.chain_run == workflow.info().run_id
         if input.subscription_id:
             # A read canceled while it runs may have attached already.
             state.attached = True
-        response, state.read_run_id, read_by = await self._run(input)
+        response, state.read_run_id, read_by, chained = await self._run(input)
+        state.reads = input.read_seq
+        state.chain_run = read_by if chained else ""
+        if input.positions_only:
+            if state.first_read_at is None:
+                state.first_read_at = workflow.now()
+            state.held_bytes += sum(
+                r.stored.ByteSize() for r in response.records if r.HasField("stored")
+            )
         if input.subscription_id:
             state.attach = False
             state.attached_run_id = read_by
         return response
 
-    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str]:
+    async def _run(self, input: _ReadInput) -> tuple[ReadResponse, str, str, bool]:
         what = "unsubscribe" if input.unsubscribe else "read"
         raw = await workflow.execute_local_activity(
             READ_ACTIVITY,
@@ -490,6 +536,7 @@ class WorkflowStreamReader(Generic[T]):
             response,
             payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
             read_by.decode() if read_by is not None else workflow.info().run_id,
+            is_chained(payload),
         )
 
 
@@ -744,14 +791,19 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
     store._batches.put(range, response)
-    chain = ReadChain(f"{info.workflow_id}/{input.reader_id}", input.read_seq)
-    if input.read_seq > 1:
+    chain = ReadChain(f"{info.workflow_run_id}/{input.reader_id}", input.read_seq)
+    if input.chained:
         # The input is the previous read's answer state, which that read's
         # marker holds, so replay takes it from there.
         range.ClearField("state")
     return RawValue(
         positions_payload(
-            range, response, read_run_id, info.workflow_run_id or "", chain
+            range,
+            response,
+            read_run_id,
+            info.workflow_run_id or "",
+            chain,
+            state_elided=input.chained,
         )
     )
 
