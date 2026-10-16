@@ -33,16 +33,26 @@ class StreamReference(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
     TOPIC_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
     owner_kind: temporalio.api.enums.v1.stream_pb2.StreamOwnerKind.ValueType
     workflow_id: builtins.str
-    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`."""
+    """The owning Workflow, for `STREAM_OWNER_KIND_WORKFLOW`. The Workflow that scheduled the
+    owning Activity, for `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`. Empty for other kinds.
+    """
     run_id: builtins.str
-    """The id of the first run in the owning Workflow's run chain. The stream notifier is keyed by
-    it, so one notifier serves the stream across the chain's runs, and a stream that reuses the
-    Workflow id in a new chain gets a notifier of its own. An empty run id is refused.
+    """For `STREAM_OWNER_KIND_WORKFLOW`, the id of the first run in the owning Workflow's run
+    chain. The stream notifier is keyed by it, so one notifier serves the stream across the
+    chain's runs, and a stream that reuses the Workflow id in a new chain gets a notifier of its
+    own. For `STREAM_OWNER_KIND_ACTIVITY`, the id of the owning Activity run. For
+    `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`, the id of the run that scheduled the Activity, not
+    the chain's first run. An empty run id is refused.
     """
     topic: builtins.str
     """The stream's topic within its owner."""
+    activity_id: builtins.str
+    """The owning standalone Activity, for `STREAM_OWNER_KIND_ACTIVITY`. The owning Activity's id
+    in the scheduling run, for `STREAM_OWNER_KIND_WORKFLOW_ACTIVITY`. Empty for other kinds.
+    """
     def __init__(
         self,
         *,
@@ -50,10 +60,13 @@ class StreamReference(google.protobuf.message.Message):
         workflow_id: builtins.str = ...,
         run_id: builtins.str = ...,
         topic: builtins.str = ...,
+        activity_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
             "owner_kind",
             b"owner_kind",
             "run_id",
@@ -240,7 +253,7 @@ class StreamWake(google.protobuf.message.Message):
     position: builtins.str
     """The position that came with `counter`, in the producer's terms."""
     counter: builtins.int
-    """The highest counter the notifier has seen. A reader that armed its read at a counter wakes
+    """The highest counter the notifier has seen. A reader that subscribed after a counter wakes
     when this value is above it. Zero when the notifier has seen no notification.
     """
     @property
@@ -310,3 +323,72 @@ class StreamWake(google.protobuf.message.Message):
     ) -> None: ...
 
 global___StreamWake = StreamWake
+
+class StreamNotification(google.protobuf.message.Message):
+    """One stream's entry in a NotifyStreams request: the same fields as a NotifyStream request that
+    does not close the stream.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class MetadataEntry(google.protobuf.message.Message):
+        DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+        KEY_FIELD_NUMBER: builtins.int
+        VALUE_FIELD_NUMBER: builtins.int
+        key: builtins.str
+        value: builtins.str
+        def __init__(
+            self,
+            *,
+            key: builtins.str = ...,
+            value: builtins.str = ...,
+        ) -> None: ...
+        def ClearField(
+            self,
+            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
+        ) -> None: ...
+
+    STREAM_REF_FIELD_NUMBER: builtins.int
+    POSITION_FIELD_NUMBER: builtins.int
+    COUNTER_FIELD_NUMBER: builtins.int
+    METADATA_FIELD_NUMBER: builtins.int
+    @property
+    def stream_ref(self) -> global___StreamReference: ...
+    position: builtins.str
+    """Where the stream stands, in the producer's terms. At most 1 KiB of UTF-8."""
+    counter: builtins.int
+    """The newest counter of the stream. Must be positive. The notifier ignores a counter at or
+    below the one it holds.
+    """
+    @property
+    def metadata(
+        self,
+    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
+        """Small details passed on to the callbacks. At most 2 KiB in total, counted as UTF-8 bytes."""
+    def __init__(
+        self,
+        *,
+        stream_ref: global___StreamReference | None = ...,
+        position: builtins.str = ...,
+        counter: builtins.int = ...,
+        metadata: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream_ref", b"stream_ref"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "counter",
+            b"counter",
+            "metadata",
+            b"metadata",
+            "position",
+            b"position",
+            "stream_ref",
+            b"stream_ref",
+        ],
+    ) -> None: ...
+
+global___StreamNotification = StreamNotification
