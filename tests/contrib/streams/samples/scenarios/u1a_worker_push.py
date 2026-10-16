@@ -130,8 +130,7 @@ async def main(
     ``client`` is a client of a server with the stream notifier and NexusHandler
     callbacks on standalone operations.
     """
-    # The follower reads up to the progress position and never arms the stream.
-    streams = await connect(client, new_store().notify_on_append(every_append=True))
+    streams = await connect(client, new_store().notify_on_append())
     name = await endpoint(client, task_queue)
     follower = AppFollower()
     async with Worker(
