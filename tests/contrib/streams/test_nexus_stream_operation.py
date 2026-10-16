@@ -359,8 +359,8 @@ async def test_a_caller_sees_appends_as_progress_and_the_close_as_the_result(
             task_queue=task_queue,
         )
         await asyncio.wait_for(started.wait(), 10)
-        # Progress that reaches the caller before its started event is dropped
-        # (DD-43), so the first append waits for the operation to be started.
+        # Progress that reaches the caller before its started event is dropped,
+        # so the first append waits for the operation to be started.
 
         async def operation_started() -> bool:
             history = await handle.fetch_history()
