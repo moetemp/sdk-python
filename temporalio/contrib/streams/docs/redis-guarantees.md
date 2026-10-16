@@ -6,7 +6,9 @@ Stream records live in your Redis. Temporal never sees them, so what a
 stream guarantees is what your Redis guarantees. Core runs the store for
 every SDK, with the scripts in `crates/streams/lua/` of the Core repository.
 This page says what the store promises, which Redis settings those promises
-depend on, and who is responsible for what.
+depend on, and who is responsible for what. With `plain=True` the store runs
+no scripts and takes Core's fallbacks. The [store capabilities
+page](store-capabilities.md) says what changes then.
 
 ## What an acknowledged append means
 
@@ -80,25 +82,27 @@ The store cleans up after itself, with no job to run:
 
 ## When a Workflow closes
 
-Redis cannot see a Workflow close, so Core marks the stream closed
-when someone notices: a producer when it first writes, or a reader when its
-read ends. After that, appends fail with `StreamClosedError`.
+Redis cannot see a Workflow close, so Core marks the stream closed. When
+the run chain ends through a Workflow Task, the owner's Core marks it after
+the server accepts that task. When the Workflow is terminated or times out,
+a producer marks it when its owner check sees the end. After the mark,
+appends fail with `StreamClosedError`. Readers never mark it.
 
 Between the Workflow's close and that mark there is a closing window in
-which appends are still accepted. It lasts until a reader or a producer
-notices. A producer checks again at least once a minute, so a running
-producer notices within a minute. Records written in the window stay readable.
-Continue-as-New does not close a stream: the next run keeps publishing to
-it.
+which appends are still accepted. After a terminate or a timeout, it lasts
+until a producer notices. A producer checks again at least once a minute,
+so a running producer notices within a minute. Records written in the window
+stay readable. Each reader ends its own read when it sees the end, so two
+readers can end at different records. Continue-as-New does not close a
+stream: the next run keeps publishing to it.
 
 ## Access control
 
 Temporal does not authorize or meter record traffic. Records go straight
 between your applications and your Redis, so access is Redis's job.
 
-Readers write too. A read marks the chain closed when it ends. So a reader
-needs the same Redis rules as a writer, and the Temporal permission to
-describe the Workflow. A read holds one Redis connection while it
+Readers write nothing, so a reader needs only read access to Redis, and
+the Temporal permission to describe the Workflow. A read holds one Redis connection while it
 waits, from a pool Core keeps per node, so set `blocking_reads_per_node` on
 `RedisStreams` to the streams a process follows at once. A read that finds
 the pool full waits for a connection until its own poll ends, then answers
@@ -121,6 +125,11 @@ topology with `CLUSTER SLOTS` first. An ACL user lives on one node, so on a
 cluster you create the user on every node. The delete helper also needs
 `+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
 store goes on when a server refuses it.
+
+With `plain=True` the store runs no scripts, so the user above works. A user
+for plain mode alone needs only `+multi +exec +xadd +xread +xrange
++xrevrange +pexpire +scan +unlink` and the connect rules from `+info` on.
+Core's suite doesn't run plain mode as an ACL user.
 
 What crosses the wire:
 
