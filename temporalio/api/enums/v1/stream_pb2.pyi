@@ -34,21 +34,6 @@ class _StreamOwnerKindEnumTypeWrapper(
     failure. If the Workflow's run chain ends with no close and callbacks are attached, the
     stream notifier closes the stream with a failure within `streamnotifier.ownerCheckInterval`.
     """
-    STREAM_OWNER_KIND_ACTIVITY: _StreamOwnerKind.ValueType  # 2
-    """A standalone Activity owns the stream. The Activity closes the stream itself, with a result
-    or a failure. If the Activity run reaches a terminal status with no close and callbacks
-    are attached, the stream notifier closes the stream within
-    `streamnotifier.ownerCheckInterval`. A completed run gives no result. A failed, canceled,
-    terminated or timed-out run gives the run's own failure.
-    """
-    STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: _StreamOwnerKind.ValueType  # 3
-    """An Activity that a Workflow scheduled owns the stream. `workflow_id` names the Workflow,
-    `run_id` the run that scheduled the Activity, and `activity_id` the Activity. The stream
-    closes when the Workflow sees the Activity end. If the Activity is no longer pending in the
-    run and no close came, the stream notifier closes the stream with a failure, after
-    `streamnotifier.ownerStartGrace` from its start and `streamnotifier.ownerCloseGrace` from
-    the first check that found the Activity gone.
-    """
 
 class StreamOwnerKind(_StreamOwnerKind, metaclass=_StreamOwnerKindEnumTypeWrapper):
     """What owns a stream. The owner decides when the stream closes."""
@@ -58,20 +43,5 @@ STREAM_OWNER_KIND_WORKFLOW: StreamOwnerKind.ValueType  # 1
 """A Workflow owns the stream. The Workflow closes the stream itself, with a result or a
 failure. If the Workflow's run chain ends with no close and callbacks are attached, the
 stream notifier closes the stream with a failure within `streamnotifier.ownerCheckInterval`.
-"""
-STREAM_OWNER_KIND_ACTIVITY: StreamOwnerKind.ValueType  # 2
-"""A standalone Activity owns the stream. The Activity closes the stream itself, with a result
-or a failure. If the Activity run reaches a terminal status with no close and callbacks
-are attached, the stream notifier closes the stream within
-`streamnotifier.ownerCheckInterval`. A completed run gives no result. A failed, canceled,
-terminated or timed-out run gives the run's own failure.
-"""
-STREAM_OWNER_KIND_WORKFLOW_ACTIVITY: StreamOwnerKind.ValueType  # 3
-"""An Activity that a Workflow scheduled owns the stream. `workflow_id` names the Workflow,
-`run_id` the run that scheduled the Activity, and `activity_id` the Activity. The stream
-closes when the Workflow sees the Activity end. If the Activity is no longer pending in the
-run and no close came, the stream notifier closes the stream with a failure, after
-`streamnotifier.ownerStartGrace` from its start and `streamnotifier.ownerCloseGrace` from
-the first check that found the Activity gone.
 """
 global___StreamOwnerKind = StreamOwnerKind
