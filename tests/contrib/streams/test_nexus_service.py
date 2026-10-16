@@ -961,6 +961,29 @@ async def test_a_read_range_answers_the_records_a_holders_read_got(service: Serv
     assert again.next_token == answer.next_token
 
 
+async def test_a_handler_with_no_authorizer_serves_a_read_range(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, authorize=None) as service:
+        ref = await stream_of(service)
+        answer = await service.caller.read(
+            ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+        )
+        assert answer.replay is not None
+        again = await service.caller.read_range(
+            ReadRangeInput(
+                stream=ref,
+                chain_first_run_id=answer.replay.chain_first_run_id,
+                after_token=answer.replay.after_token,
+                to_token=answer.next_token,
+                stored_records=answer.replay.stored_records,
+                records_digest=answer.replay.records_digest,
+                floor_holder="ns/run/1",
+            )
+        )
+    assert not again.records
+
+
 async def test_a_read_range_with_another_digest_is_a_mismatch(service: Service):
     ref = await stream_of(service)
     await append(service, ref, "a")
