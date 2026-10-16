@@ -50,7 +50,12 @@ from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with, new_workflow_id
+from tests.contrib.streams._support import (
+    connect_with,
+    new_schema,
+    new_workflow_id,
+    postgres_streams,
+)
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
@@ -108,6 +113,8 @@ async def skip_without_notifier(client: Client) -> None:
 def store(kind: str) -> StreamStorePlugin:
     if kind == "memory":
         return MemoryStreams()
+    if kind == "postgres":
+        return postgres_streams()
     if kind == "cluster":
         url = os.environ.get("STREAMS_REDIS_CLUSTER_URL", "")
         if not url:
@@ -119,14 +126,14 @@ def store(kind: str) -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=f"live-{uuid.uuid4().hex}")
 
 
-@pytest.fixture(params=["memory", "redis"])
+@pytest.fixture(params=["memory", "redis", "postgres"])
 async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
     return await connect_with(client, store(request.param).notify_on_append())
 
 
-@pytest.fixture(params=["memory", "redis", "cluster"])
+@pytest.fixture(params=["memory", "redis", "cluster", "postgres"])
 async def driven(
     request: pytest.FixtureRequest, client: Client
 ) -> AsyncIterator[Client]:
@@ -221,13 +228,14 @@ async def test_live_streams_on_many_slots_all_wake_through_the_driver(
             await driven.get_workflow_handle(owner).signal(Waits.finish)
 
 
+@pytest.mark.parametrize("kind", ["redis", "postgres"])
 async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
-    client: Client,
+    client: Client, kind: str
 ):
     # The producer's process never notifies, as after a crash between the
     # append and the notification. The reader's read at the poll limit
     # (streamnotifier.pollMaxWait, a few seconds in the lane) finds the record.
-    reading, silent = await two_processes(client)
+    reading, silent = await two_processes(client, kind)
     async with new_worker(reading, Waits) as worker:
         owner = await running_owner(reading, worker.task_queue)
         records = get_stream_handle(reading, owner, topic=TOKENS).read()
@@ -243,9 +251,15 @@ async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
         await reading.get_workflow_handle(owner).signal(Waits.finish)
 
 
-async def two_processes(client: Client) -> tuple[Client, Client]:
-    """A reader's client that notifies, and a producer's that never does, on one Redis."""
+async def two_processes(client: Client, kind: str) -> tuple[Client, Client]:
+    """A reader's client that notifies, and a producer's that never does, on one store."""
     await skip_without_notifier(client)
+    if kind == "postgres":
+        schema = new_schema()
+        reading = await connect_with(
+            client, postgres_streams(schema).notify_on_append()
+        )
+        return reading, await connect_with(client, postgres_streams(schema))
     url = os.environ.get("STREAMS_REDIS_URL", "")
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to share a store across two clients")
@@ -633,12 +647,13 @@ async def test_live_a_position_resumes_the_reader_after_continue_as_new(
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
+@pytest.mark.parametrize("kind", ["redis", "postgres"])
 async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
-    client: Client,
+    client: Client, kind: str
 ):
     # The producer's process never notifies, so only the notifier's recheck
     # (streamnotifier.recheckInitial, a few seconds in the lane) wakes the reader.
-    reading, silent = await two_processes(client)
+    reading, silent = await two_processes(client, kind)
     async with new_worker(reading, Waits, Reads) as worker:
         owner = await running_owner(reading, worker.task_queue)
         reader_id = new_workflow_id()

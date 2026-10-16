@@ -342,8 +342,9 @@ class StreamHandle:
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         """Yield the records on ``topic`` after ``after`` as they arrive.
 
-        ``BEGINNING`` starts at the oldest record the topic retains, and
-        ``END`` at whatever is appended after the read starts. Any other
+        ``BEGINNING`` starts at the oldest record the topic retains, in the
+        store's archive when it has one, and ``END`` at whatever is appended
+        after the read starts. Any other
         cursor came from a record of this stream, and the read resumes just
         past it, so a reader that keeps the last cursor it handled and hands
         it back sees every stored record once. A resumed read knows the

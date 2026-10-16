@@ -161,14 +161,18 @@ class StreamStoreConfig(google.protobuf.message.Message):
 
     REDIS_FIELD_NUMBER: builtins.int
     MEMORY_FIELD_NUMBER: builtins.int
+    POSTGRES_FIELD_NUMBER: builtins.int
     NOTIFY_ON_APPEND_FIELD_NUMBER: builtins.int
     MAX_NOTIFIERS_FIELD_NUMBER: builtins.int
     OWNER_START_GRACE_FIELD_NUMBER: builtins.int
     NOTIFICATION_LOG_FIELD_NUMBER: builtins.int
+    ARCHIVE_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
     def memory(self) -> global___MemoryStoreConfig: ...
+    @property
+    def postgres(self) -> global___PostgresStoreConfig: ...
     notify_on_append: builtins.bool
     """Tells each stream's notifier on the server when the stream moves, after every append. That's
     what wakes a reader that waits on the notifier. Off by default, since most streams have no
@@ -190,23 +194,35 @@ class StreamStoreConfig(google.protobuf.message.Message):
     notifications. A `StreamDriver` reads the entries and notifies the server, so readers wake
     only while one runs. Off by default. A store without a notification log refuses it.
     """
+    @property
+    def archive(self) -> global___ArchiveConfig:
+        """Keeps streams in object storage after the store drops them, so they stay readable for longer
+        than the store's retention. Reads cross from the archive to the store with no gap, with the
+        same cursors. A `StreamDriver` writes the archive, so it needs `notification_log`.
+        """
     def __init__(
         self,
         *,
         redis: global___RedisStoreConfig | None = ...,
         memory: global___MemoryStoreConfig | None = ...,
+        postgres: global___PostgresStoreConfig | None = ...,
         notify_on_append: builtins.bool = ...,
         max_notifiers: builtins.int = ...,
         owner_start_grace: google.protobuf.duration_pb2.Duration | None = ...,
         notification_log: builtins.bool = ...,
+        archive: global___ArchiveConfig | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
+            "archive",
+            b"archive",
             "memory",
             b"memory",
             "owner_start_grace",
             b"owner_start_grace",
+            "postgres",
+            b"postgres",
             "redis",
             b"redis",
             "store",
@@ -216,6 +232,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "archive",
+            b"archive",
             "max_notifiers",
             b"max_notifiers",
             "memory",
@@ -226,6 +244,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
             b"notify_on_append",
             "owner_start_grace",
             b"owner_start_grace",
+            "postgres",
+            b"postgres",
             "redis",
             b"redis",
             "store",
@@ -234,9 +254,69 @@ class StreamStoreConfig(google.protobuf.message.Message):
     ) -> None: ...
     def WhichOneof(
         self, oneof_group: typing_extensions.Literal["store", b"store"]
-    ) -> typing_extensions.Literal["redis", "memory"] | None: ...
+    ) -> typing_extensions.Literal["redis", "memory", "postgres"] | None: ...
 
 global___StreamStoreConfig = StreamStoreConfig
+
+class ArchiveConfig(google.protobuf.message.Message):
+    """Where and how a stream archive keeps streams."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    URL_FIELD_NUMBER: builtins.int
+    SEGMENT_BYTES_FIELD_NUMBER: builtins.int
+    SEGMENT_IDLE_FIELD_NUMBER: builtins.int
+    STALL_LIMIT_FIELD_NUMBER: builtins.int
+    url: builtins.str
+    """`s3://<bucket>/<prefix>` or `file:///<directory>`. S3 credentials, the region and the
+    endpoint come from the environment, as `AWS_ACCESS_KEY_ID`, `AWS_REGION` and
+    `AWS_ENDPOINT_URL`. The archive deletes nothing but an owner's delete, so a bucket lifecycle
+    rule sets how long it keeps streams.
+    """
+    segment_bytes: builtins.int
+    """A segment ends at the first record that takes it to this many bytes or more. Zero uses
+    4 MiB.
+    """
+    @property
+    def segment_idle(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a stream goes without a write before the driver archives its tail. A stream that
+        keeps taking writes has its tail archived this often too. Unset uses five minutes.
+        """
+    @property
+    def stall_limit(self) -> google.protobuf.duration_pb2.Duration:
+        """How long the store holds records that the archive doesn't hold yet, after the archive last
+        moved. When the driver stops for longer, the store's retention goes on and readers find the
+        gap as expired. Unset uses seven days.
+        """
+    def __init__(
+        self,
+        *,
+        url: builtins.str = ...,
+        segment_bytes: builtins.int = ...,
+        segment_idle: google.protobuf.duration_pb2.Duration | None = ...,
+        stall_limit: google.protobuf.duration_pb2.Duration | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "segment_idle", b"segment_idle", "stall_limit", b"stall_limit"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "segment_bytes",
+            b"segment_bytes",
+            "segment_idle",
+            b"segment_idle",
+            "stall_limit",
+            b"stall_limit",
+            "url",
+            b"url",
+        ],
+    ) -> None: ...
+
+global___ArchiveConfig = ArchiveConfig
 
 class RedisStoreConfig(google.protobuf.message.Message):
     """Streams in a Redis or Redis Cluster that Core connects to itself."""
@@ -345,6 +425,134 @@ class RedisStoreConfig(google.protobuf.message.Message):
     ) -> None: ...
 
 global___RedisStoreConfig = RedisStoreConfig
+
+class PostgresStoreConfig(google.protobuf.message.Message):
+    """Streams in a PostgreSQL database that Core connects to itself, PostgreSQL 14 or later."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    URL_FIELD_NUMBER: builtins.int
+    SCHEMA_FIELD_NUMBER: builtins.int
+    RETENTION_FIELD_NUMBER: builtins.int
+    MAX_CONNECTIONS_FIELD_NUMBER: builtins.int
+    RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
+    FLOOR_LEASE_FIELD_NUMBER: builtins.int
+    FLOOR_RELEASE_GRACE_FIELD_NUMBER: builtins.int
+    NOTIFY_DOORBELLS_FIELD_NUMBER: builtins.int
+    LISTEN_URL_FIELD_NUMBER: builtins.int
+    POLL_INTERVAL_FIELD_NUMBER: builtins.int
+    NOTIFY_READS_FIELD_NUMBER: builtins.int
+    SKIP_MIGRATIONS_FIELD_NUMBER: builtins.int
+    JANITOR_INTERVAL_FIELD_NUMBER: builtins.int
+    url: builtins.str
+    """A `postgres://` or `postgresql://` URL. Credentials come from the URL. TLS follows the URL's
+    `sslmode` and `sslrootcert` as libpq reads them.
+    """
+    schema: builtins.str
+    """The schema that holds the tables. Empty uses `temporal_streams`."""
+    @property
+    def retention(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a stream keeps a record. Unset keeps seven days."""
+    max_connections: builtins.int
+    """How many connections the pool keeps. Zero uses 16."""
+    @property
+    def response_timeout(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a call waits, as the session's `statement_timeout`. Unset uses five seconds."""
+    @property
+    def floor_lease(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a positions-only reader holds a stream's records after its last read. Unset uses
+        `retention`.
+        """
+    @property
+    def floor_release_grace(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a hold lasts after its reader released it. Unset keeps one day."""
+    notify_doorbells: builtins.int
+    """With `StreamStoreConfig.notification_log`, how many doorbells the log rings, from 1 to 64.
+    Zero uses 16.
+    """
+    listen_url: builtins.str
+    """A URL for the connection that listens and the one that applies migrations, when `url` goes
+    through a pooler in transaction mode. Empty uses `url`.
+    """
+    @property
+    def poll_interval(self) -> google.protobuf.duration_pb2.Duration:
+        """How often a process looks for new records for its waiting reads. Unset uses 100 ms."""
+    notify_reads: builtins.bool
+    """Each append also sends NOTIFY, so waiting reads in other processes wake in milliseconds.
+    Costs append throughput when many producers write at once.
+    """
+    skip_migrations: builtins.bool
+    """The store checks the schema version and never changes it. A DBA applies the migrations."""
+    @property
+    def janitor_interval(self) -> google.protobuf.duration_pb2.Duration:
+        """How often the janitor trims records past the retention. Unset uses one minute."""
+    def __init__(
+        self,
+        *,
+        url: builtins.str = ...,
+        schema: builtins.str = ...,
+        retention: google.protobuf.duration_pb2.Duration | None = ...,
+        max_connections: builtins.int = ...,
+        response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
+        floor_lease: google.protobuf.duration_pb2.Duration | None = ...,
+        floor_release_grace: google.protobuf.duration_pb2.Duration | None = ...,
+        notify_doorbells: builtins.int = ...,
+        listen_url: builtins.str = ...,
+        poll_interval: google.protobuf.duration_pb2.Duration | None = ...,
+        notify_reads: builtins.bool = ...,
+        skip_migrations: builtins.bool = ...,
+        janitor_interval: google.protobuf.duration_pb2.Duration | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "floor_lease",
+            b"floor_lease",
+            "floor_release_grace",
+            b"floor_release_grace",
+            "janitor_interval",
+            b"janitor_interval",
+            "poll_interval",
+            b"poll_interval",
+            "response_timeout",
+            b"response_timeout",
+            "retention",
+            b"retention",
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "floor_lease",
+            b"floor_lease",
+            "floor_release_grace",
+            b"floor_release_grace",
+            "janitor_interval",
+            b"janitor_interval",
+            "listen_url",
+            b"listen_url",
+            "max_connections",
+            b"max_connections",
+            "notify_doorbells",
+            b"notify_doorbells",
+            "notify_reads",
+            b"notify_reads",
+            "poll_interval",
+            b"poll_interval",
+            "response_timeout",
+            b"response_timeout",
+            "retention",
+            b"retention",
+            "schema",
+            b"schema",
+            "skip_migrations",
+            b"skip_migrations",
+            "url",
+            b"url",
+        ],
+    ) -> None: ...
+
+global___PostgresStoreConfig = PostgresStoreConfig
 
 class MemoryStoreConfig(google.protobuf.message.Message):
     """Streams in this process's memory, for tests and local development. Nothing survives the

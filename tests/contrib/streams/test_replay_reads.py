@@ -13,6 +13,7 @@ import base64
 import dataclasses
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -40,7 +41,7 @@ from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.converter import DataConverter
 from temporalio.testing import ActivityEnvironment
 from temporalio.workflow import NondeterminismError
-from tests.contrib.streams._support import connect_with
+from tests.contrib.streams._support import connect_with, postgres_streams
 from tests.contrib.streams.test_outside_handles import (
     ActivityKeyedCodec,
     Waits,
@@ -55,6 +56,8 @@ TOKENS = topic("tokens", str)
 def store(kind: str) -> StreamStorePlugin:
     if kind == "memory":
         return MemoryStreams()
+    if kind == "postgres":
+        return postgres_streams()
     import os
 
     url = os.environ.get("STREAMS_REDIS_URL", "")
@@ -63,7 +66,7 @@ def store(kind: str) -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=f"replay-reads-{uuid.uuid4().hex}")
 
 
-@pytest.fixture(params=["memory", "redis"])
+@pytest.fixture(params=["memory", "redis", "postgres"])
 async def streams(request: pytest.FixtureRequest, client: Client) -> Client:
     return await connect_with(client, store(request.param))
 
@@ -348,24 +351,30 @@ def test_the_batch_cache_keeps_its_bytes_bounded():
     assert cache.take(ranges[1]) == big and cache.take(ranges[2]) == big
 
 
+@pytest.mark.parametrize("kind", ["redis", "postgres"])
 async def test_a_first_range_trimmed_past_its_hold_is_lost_not_other_records(
-    client: Client,
+    client: Client, kind: str
 ):
     import os
 
-    url = os.environ.get("STREAMS_REDIS_URL", "")
-    if not url:
-        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
-    # Retention trims as the next appends land, once the reader's hold lapsed.
-    streams = await connect_with(
-        client,
-        RedisStreams(
-            url,
-            key_prefix=f"replay-reads-{uuid.uuid4().hex}",
-            retention=timedelta(milliseconds=300),
-            floor_lease=timedelta(milliseconds=100),
-        ),
-    )
+    settings: dict[str, Any] = {
+        "retention": timedelta(milliseconds=300),
+        "floor_lease": timedelta(milliseconds=100),
+    }
+    if kind == "postgres":
+        # The janitor trims, so it runs often here.
+        store: StreamStorePlugin = postgres_streams(
+            janitor_interval=timedelta(milliseconds=100), **settings
+        )
+    else:
+        url = os.environ.get("STREAMS_REDIS_URL", "")
+        if not url:
+            pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+        # Retention trims as the next appends land, once the reader's hold lapsed.
+        store = RedisStreams(
+            url, key_prefix=f"replay-reads-{uuid.uuid4().hex}", **settings
+        )
+    streams = await connect_with(client, store)
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
