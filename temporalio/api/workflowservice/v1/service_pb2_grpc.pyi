@@ -1184,6 +1184,20 @@ class WorkflowServiceStub:
     (-- api-linter: core::0127::http-annotation=disabled
         aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
     """
+    WaitStreamCallback: grpc.UnaryUnaryMultiCallable[
+        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
+    ]
+    """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
+    notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
+    After the delivery the callback is idle again. A reader calls it when a read finds nothing.
+    The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
+    for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
+    nothing. Waiting on a callback that is not idle changes nothing.
+
+    (-- api-linter: core::0127::http-annotation=disabled
+        aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
+    """
     NotifyStream: grpc.UnaryUnaryMultiCallable[
         temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
         temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse,
@@ -2686,6 +2700,22 @@ class WorkflowServiceServicer(metaclass=abc.ABCMeta):
         """DetachStreamCallback removes a callback from the notifier of a stream. The notifier completes
         the callback's operation as canceled and sends it no more progress. A Nexus handler calls it
         when the caller cancels the operation.
+
+        (-- api-linter: core::0127::http-annotation=disabled
+            aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
+        """
+    @abc.abstractmethod
+    def WaitStreamCallback(
+        self,
+        request: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+        context: grpc.ServicerContext,
+    ) -> temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse:
+        """WaitStreamCallback asks the notifier of a stream to wake one idle callback once, when the
+        notifier's counter passes `after_counter`. If it passed already, the wake goes out at once.
+        After the delivery the callback is idle again. A reader calls it when a read finds nothing.
+        The handler of a stream operation calls it for its caller, and a Workflow reader's Worker
+        for its `workflow_target`. So a busy stream that the reader keeps up with sends the reader
+        nothing. Waiting on a callback that is not idle changes nothing.
 
         (-- api-linter: core::0127::http-annotation=disabled
             aip.dev/not-precedent: SDKs reach the stream notifier through System Nexus or gRPC. --)
