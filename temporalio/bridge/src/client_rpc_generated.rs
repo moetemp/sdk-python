@@ -1190,6 +1190,15 @@ impl ClientRef {
                         validate_worker_deployment_version_compute_config
                     )
                 }
+                "wait_stream_callback" => {
+                    rpc_call!(
+                        connection,
+                        call,
+                        WorkflowService,
+                        workflow_service,
+                        wait_stream_callback
+                    )
+                }
                 _ => {
                     return Err(PyValueError::new_err(format!(
                         "Unknown RPC call {}",
