@@ -295,3 +295,4 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
 - [Moving from Workflow Streams](docs/migration.md)
+- [Streams over Nexus](docs/nexus.md)
