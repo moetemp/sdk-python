@@ -6,7 +6,9 @@ import base64
 import dataclasses
 import json
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -32,6 +34,7 @@ from temporalio.contrib.streams.nexus import (
 from temporalio.contrib.streams.nexus._direct import (
     _DirectReadCodec,
     answer_of,
+    direct_read_activity,
     innermost_codec,
     positions_payload,
 )
@@ -41,6 +44,7 @@ from temporalio.contrib.streams.nexus._generated import (
 )
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.testing import ActivityEnvironment
 from temporalio.worker import ReplayerConfig
 from temporalio.workflow import NondeterminismError
 
@@ -296,6 +300,7 @@ def chained() -> tuple[list[Payload], list[ReadRangeInput]]:
             dataclasses.replace(second_range, state=None),
             second,
             ReadChain("wf/1", 2),
+            state_elided=True,
         ),
     ]
     return markers, [first_range, second_range]
@@ -369,3 +374,91 @@ async def test_the_http_transport_keeps_an_unnamed_failure(
     with pytest.raises(generated_client.HTTPStatusError) as raised:
         await HttpTransport("http://stub").read(ReadInput(stream=_STREAM))
     assert raised.value.retryable
+
+
+class LiveTransport:
+    """Answers each live read with one record, and keeps the timeout it got."""
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        return live(record("c1", "a"))[1]
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        raise AssertionError("a live read never reads a range")
+
+
+@pytest.mark.parametrize("chained", [False, True])
+async def test_the_read_activity_chains_by_the_reading_run(chained: bool):
+    plugin = StreamDirectReads({"e": LiveTransport()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, workflow_run_id="run-b", is_local=True)
+    raw = await env.run(
+        direct_read_activity,
+        "e",
+        "1",
+        ReadInput(stream=_STREAM, state=b"\x01"),
+        2,
+        chained,
+    )
+    document = json.loads(raw.payload.data)
+    # Runs of one Workflow id number their readers alike, so the run names
+    # the chain. Only a read the reader says follows its own run's read
+    # leaves its input state out.
+    assert document["reader"] == "run-b/1"
+    assert ("state" in document["range"]) is not chained
+    assert document.get("elided", False) is chained
+
+
+async def test_the_http_transport_waits_no_longer_than_the_activity_has_left(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    timeouts: list[float] = []
+
+    def post(
+        url: str, body: bytes, headers: Any, timeout: float, *_: Any, **__: Any
+    ) -> Any:
+        timeouts.append(timeout)
+        raise generated_client.HTTPStatusError(url, 503, "down")
+
+    monkeypatch.setattr(generated_client, "_post", post)
+    transport = HttpTransport("http://stub")
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(
+        env.info,
+        started_time=datetime.now(timezone.utc),
+        start_to_close_timeout=timedelta(seconds=5),
+    )
+
+    async def read() -> None:
+        await transport.read(ReadInput(stream=_STREAM))
+
+    for run in (env.run(read), read()):
+        with pytest.raises(generated_client.HTTPStatusError):
+            await run
+    assert 0 < timeouts[0] <= 5 and timeouts[1] == 30
+
+
+async def test_a_refused_credential_retries_the_read(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class RefusesOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def read(self, request: ReadInput) -> ReadOutput:
+            self.calls += 1
+            if self.calls == 1:
+                raise generated_client.HTTPStatusError("http://stub", 401, "expired")
+            return live(record("c1", "a"))[1]
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            raise AssertionError("a live read never reads a range")
+
+    transport = RefusesOnce()
+    plugin = StreamDirectReads({"e": transport})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # The Activity's own failure is retryable, so its next attempt reads.
+    with pytest.raises(generated_client.HTTPStatusError):
+        await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    raw = await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    assert json.loads(raw.payload.data)["range"]["to_token"] == "c1"
