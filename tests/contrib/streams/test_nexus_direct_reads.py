@@ -44,6 +44,7 @@ from temporalio.contrib.streams.nexus._generated import (
 )
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import ReplayerConfig
 from temporalio.workflow import NondeterminismError
@@ -469,3 +470,24 @@ async def test_a_refused_credential_retries_the_read():
         await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
     raw = await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
     assert json.loads(raw.payload.data)["range"]["to_token"] == "c1"
+
+
+async def test_a_refusal_the_handler_marks_final_fails_the_read():
+    class Refuses:
+        async def read(self, request: ReadInput) -> ReadOutput:
+            del request
+            raise generated_client.HTTPStatusError(
+                "http://stub", 403, "the caller may not read", False
+            )
+
+        async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+            del request
+            raise AssertionError("a live read never reads a range")
+
+    plugin = StreamDirectReads({"e": Refuses()})
+    env = ActivityEnvironment(client=Mock(config=lambda: {"plugins": [plugin]}))
+    env.info = dataclasses.replace(env.info, is_local=True)
+    # An authorizer's refusal is a decision, not a fault, so it stays final.
+    with pytest.raises(ApplicationError) as raised:
+        await env.run(direct_read_activity, "e", "1", ReadInput(stream=_STREAM), 1)
+    assert raised.value.non_retryable
