@@ -954,3 +954,26 @@ async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
     await Replayer(workflows=[ReadsThroughATimeout], plugins=[store]).replay_workflow(
         await reader.fetch_history()
     )
+
+
+async def test_live_a_workflow_reader_waits_for_an_owner_that_starts_later(
+    notifying: Client,
+):
+    # Inside the owner start grace, Core answers an idle read with no chain
+    # and attaches nothing, so the reader reads again on a timer.
+    async with new_worker(notifying, Waits, Reads) as worker:
+        owner = new_workflow_id()
+        reader = await notifying.start_workflow(
+            Reads.run,
+            args=[owner, 1],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(3)
+        await notifying.start_workflow(
+            Waits.run, id=owner, task_queue=worker.task_queue
+        )
+        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        await stream.producer(producer_id="p", attempt=1).append("first")
+        assert await asyncio.wait_for(reader.result(), 30) == ["first"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)

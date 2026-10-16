@@ -104,8 +104,9 @@ forgets producers by the same rule, so a dropped producer gets no
 `SUPERSEDED` either. Each Local Activity call is a producer, about 57 bytes
 of id each, so on a stream that many calls write the tracker holds about 200
 of them and its memory stays steady. For a Workflow's producer, `@<run id>`,
-it holds only the records of the newest Workflow Task, since a rerun
-withdraws only the records of its own task. Of one producer it keeps the
+it holds only the records of the newest Workflow Task, since a
+`SUPERSEDED` withdraws only the records of one task: the rerun's own, or an
+earlier one whose rerun wrote nothing to the topic. Of one producer it keeps the
 newest `max_records_per_producer` records (10,000 by default), so a long
 attempt can't grow it either. A `SUPERSEDED` past that withdraws only the
 records still held. Call `forget(producer_id)` once a producer can't retry,
