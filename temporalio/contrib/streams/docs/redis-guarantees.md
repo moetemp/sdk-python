@@ -40,6 +40,11 @@ reader's cursor can name an entry the new primary never had, and new
 entries can get lower ids, so the reader skips them. Read again from
 `latest()` after a known failover.
 
+OSS Redis, Valkey and ElastiCache replicate asynchronously. A failover can
+lose acked records, closes and dedupe entries. A positions-only Workflow
+reader then fails replay as nondeterministic. Use MemoryDB, or
+`replay_from_store=False`.
+
 Recommended for production: `appendonly yes` with `appendfsync everysec` or
 `always`, at least one replica, and the settings below.
 
