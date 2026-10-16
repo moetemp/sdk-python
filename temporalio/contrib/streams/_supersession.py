@@ -97,6 +97,9 @@ class SupersessionTracker(Generic[T]):
         self._marks: OrderedDict[str, tuple[int, int]] = OrderedDict()
         self._mark_bytes = 0
         self._closed = False
+        # The read's topic, from its first record, so a CLOSE of another topic
+        # is told apart.
+        self._topic: str | None = None
 
     @property
     def closed(self) -> bool:
@@ -104,16 +107,19 @@ class SupersessionTracker(Generic[T]):
         return self._closed
 
     def drops(self, record: StreamRecord[T]) -> bool:
-        """Whether Core's reader rules drop ``record``.
+        """Whether Core's reader rules drop ``record``, so a reader doesn't show it.
 
-        A record after the first ``CLOSE`` is dropped. So is a copy of a
-        record already seen, with the same producer and attempt and a
-        sequence at or below the highest seen for that attempt. A store
-        without producer state can hold such a copy after a retry of an
-        append whose answer was lost. A record with sequence 0 is never a
-        copy. Neither is a ``stale`` one, which an older attempt wrote.
+        ``CLOSE`` and ``TOPIC`` records are dropped, and so is every record
+        after the first ``CLOSE`` of the topic or of the run chain. So is a
+        copy of a record already seen, with the same producer and attempt
+        and a sequence at or below the highest seen for that attempt. A
+        store without producer state can hold such a copy after a retry of
+        an append whose answer was lost. A record with sequence 0 is never
+        a copy. Neither is a ``stale`` one, which an older attempt wrote.
+        Pass a dropped record to :meth:`observe` too, since a ``CLOSE``
+        ends the stream there.
         """
-        if self._closed:
+        if self._closed or record.kind in (RecordKind.CLOSE, RecordKind.TOPIC):
             return True
         if record.kind is RecordKind.SUPERSEDED or record.stale:
             return False
@@ -137,11 +143,14 @@ class SupersessionTracker(Generic[T]):
         attempt wrote it after the read delivered a newer one. For a record
         that :meth:`drops`, and for any other record, nothing.
         """
+        if record.kind is RecordKind.CLOSE and not self._closed:
+            if not record.topic or self._topic in (None, record.topic):
+                self._closed = True
+            return []
         if self.drops(record):
             return []
-        if record.kind is RecordKind.CLOSE:
-            self._closed = True
-            return []
+        if self._topic is None:
+            self._topic = record.topic
         if record.kind is not RecordKind.SUPERSEDED:
             self._mark(record)
         if record.kind is RecordKind.SUPERSEDED:
@@ -244,7 +253,7 @@ async def track_supersession(
     """Yield each record of ``records`` with the earlier records it withdraws.
 
     It skips the records that :meth:`SupersessionTracker.drops`, and stops
-    after the first ``CLOSE``. A wrapper over :class:`SupersessionTracker`
+    at the first ``CLOSE``. A wrapper over :class:`SupersessionTracker`
     for a read::
 
         async for record, withdrawn in track_supersession(handle.read()):
@@ -264,10 +273,11 @@ async def track_supersession(
     try:
         async for record in records:
             if tracker.drops(record):
+                tracker.observe(record)
+                if tracker.closed:
+                    return
                 continue
             yield record, tracker.observe(record)
-            if tracker.closed:
-                return
     finally:
         close = getattr(records, "aclose", None)
         if close is not None:

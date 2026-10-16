@@ -67,21 +67,21 @@ class RecordKind(enum.IntEnum):
     # 4 is kept for a kind a later release stores.
 
     CLOSE = 5
-    """The stream's topic is closed, and the read ends here.
+    """The topic in ``topic`` is closed, or every topic of the run chain when empty.
 
     A producer writes it when it closes the topic, or when it learns that the
     owner ended. The owner's Core writes it when the run chain ends through
-    a Workflow Task. Only the first one counts. Readers drop what an append
-    that raced the close wrote after it. An empty ``topic`` closes every
-    topic of the run chain.
+    a Workflow Task. Core's read ends at the first one and doesn't deliver
+    it, and it drops what an append that raced the close wrote after it. So
+    a reader sees one only in records that come from somewhere else.
     """
 
     TOPIC = 6
     """A producer started writing on the topic in ``topic``.
 
     It sits in the run chain's control log, on a store that can't list a
-    chain's topics, so a closer finds every topic to close. A reader of a
-    topic never sees it.
+    chain's topics, so a closer finds every topic to close. A read never
+    delivers it.
     """
 
 
