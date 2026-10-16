@@ -598,21 +598,6 @@ class _ReadInputTransferTypeConverter(
                 else:
                     floor_holder_value = floor_holder_value_raw
 
-        wake_token_value: str | None = None
-        if "wake_token" in raw:
-            wake_token_value_raw = raw["wake_token"]
-            if wake_token_value_raw is None:
-                violations.append(
-                    Violation(path="wake_token", reason="explicit null not allowed")
-                )
-            else:
-                if not isinstance(wake_token_value_raw, str):
-                    violations.append(
-                        Violation(path="wake_token", reason="expected string")
-                    )
-                else:
-                    wake_token_value = wake_token_value_raw
-
         for key in raw:
             if (
                 key != "stream"
@@ -622,7 +607,6 @@ class _ReadInputTransferTypeConverter(
                 and key != "latest_only"
                 and key != "state"
                 and key != "floor_holder"
-                and key != "wake_token"
             ):
                 violations.append(
                     Violation(path=_member_path(key), reason="unknown field")
@@ -637,7 +621,6 @@ class _ReadInputTransferTypeConverter(
             latest_only=latest_only_value,
             state=state_value,
             floor_holder=floor_holder_value,
-            wake_token=wake_token_value,
         )
 
     @typing_extensions.override
@@ -757,13 +740,6 @@ class _ReadInputTransferTypeConverter(
                     Violation(path="floor_holder", reason="expected string")
                 )
             out["floor_holder"] = floor_holder_value
-        wake_token_value: typing.Any = runtime_value.wake_token
-        if wake_token_value is not None:
-            if not (isinstance(wake_token_value, str)):
-                violations.append(
-                    Violation(path="wake_token", reason="expected string")
-                )
-            out["wake_token"] = wake_token_value
         if violations:
             raise temporalio.converter.create_payload_validation_error(violations)
         return out
@@ -813,15 +789,6 @@ class ReadInput:
     replay. Each read and read_range of the holder renews the hold, which lapses the
     store's floor lease after the last one. At most 512 bytes. Refused beside
     latest_only, which answers no records.
-    """
-
-    wake_token: str | None = None
-    """The operation token of the reader's stream operation. When the call answers no
-    records and not done, the endpoint asks the stream's notifier to wake that
-    operation's callback once the stream moves past the answer, then reads once more, so
-    a record that landed meanwhile is in the answer. A reader that finds records on each
-    call never waits, and its operation hears nothing. Refused when the token names
-    another stream.
     """
 
 

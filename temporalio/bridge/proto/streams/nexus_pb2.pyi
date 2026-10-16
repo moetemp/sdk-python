@@ -343,7 +343,6 @@ class AttachCallerRequest(google.protobuf.message.Message):
     REQUEST_ID_FIELD_NUMBER: builtins.int
     CALLBACK_URL_FIELD_NUMBER: builtins.int
     CALLBACK_HEADERS_FIELD_NUMBER: builtins.int
-    WAKE_AFTER_COUNTER_FIELD_NUMBER: builtins.int
     @property
     def stream(self) -> temporalio.bridge.proto.streams.streams_pb2.StreamAddress:
         """The stream the operation's start names. An empty run id attaches to the chain that holds the
@@ -359,13 +358,6 @@ class AttachCallerRequest(google.protobuf.message.Message):
     def callback_headers(
         self,
     ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]: ...
-    wake_after_counter: builtins.int
-    """The callback is idle, so it hears no progress until a wait. Set, this asks for the first
-    wait right after the attach: one wake once the stream holds a record above this counter, at
-    once when it already does. A follower that reads only when woken sets it, zero for the
-    stream's start. A reader that reads first leaves it unset and waits through its reads'
-    `wake_token`.
-    """
     def __init__(
         self,
         *,
@@ -374,24 +366,13 @@ class AttachCallerRequest(google.protobuf.message.Message):
         callback_url: builtins.str = ...,
         callback_headers: collections.abc.Mapping[builtins.str, builtins.str]
         | None = ...,
-        wake_after_counter: builtins.int | None = ...,
     ) -> None: ...
     def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "_wake_after_counter",
-            b"_wake_after_counter",
-            "stream",
-            b"stream",
-            "wake_after_counter",
-            b"wake_after_counter",
-        ],
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "_wake_after_counter",
-            b"_wake_after_counter",
             "callback_headers",
             b"callback_headers",
             "callback_url",
@@ -400,16 +381,8 @@ class AttachCallerRequest(google.protobuf.message.Message):
             b"request_id",
             "stream",
             b"stream",
-            "wake_after_counter",
-            b"wake_after_counter",
         ],
     ) -> None: ...
-    def WhichOneof(
-        self,
-        oneof_group: typing_extensions.Literal[
-            "_wake_after_counter", b"_wake_after_counter"
-        ],
-    ) -> typing_extensions.Literal["wake_after_counter"] | None: ...
 
 global___AttachCallerRequest = AttachCallerRequest
 
