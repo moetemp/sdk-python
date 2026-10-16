@@ -35,6 +35,7 @@ class RedisStreams(StreamStorePlugin):
         floor_lease: timedelta | None = None,
         floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
+        plain: bool = False,
     ) -> None:
         """Create the store's configuration.
 
@@ -68,6 +69,10 @@ class RedisStreams(StreamStorePlugin):
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
+            plain: Run no Lua scripts, for a Redis that refuses them. The
+                store then has no producer state, no kept last position, no
+                holds and no change feed, and Core takes the fallback of
+                each (see :attr:`capabilities`).
 
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
@@ -89,6 +94,8 @@ class RedisStreams(StreamStorePlugin):
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
         )
+        if plain:
+            config.plain = True
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
