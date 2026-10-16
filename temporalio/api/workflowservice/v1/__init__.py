@@ -119,6 +119,8 @@ from .request_response_pb2 import (
     ListWorkflowRulesResponse,
     NotifyStreamRequest,
     NotifyStreamResponse,
+    NotifyStreamsRequest,
+    NotifyStreamsResponse,
     PatchScheduleRequest,
     PatchScheduleResponse,
     PauseActivityExecutionRequest,
@@ -255,6 +257,8 @@ from .request_response_pb2 import (
     UpdateWorkflowExecutionResponse,
     ValidateWorkerDeploymentVersionComputeConfigRequest,
     ValidateWorkerDeploymentVersionComputeConfigResponse,
+    WaitStreamCallbackRequest,
+    WaitStreamCallbackResponse,
 )
 
 __all__ = [
@@ -378,6 +382,8 @@ __all__ = [
     "ListWorkflowRulesResponse",
     "NotifyStreamRequest",
     "NotifyStreamResponse",
+    "NotifyStreamsRequest",
+    "NotifyStreamsResponse",
     "PatchScheduleRequest",
     "PatchScheduleResponse",
     "PauseActivityExecutionRequest",
@@ -514,6 +520,8 @@ __all__ = [
     "UpdateWorkflowExecutionResponse",
     "ValidateWorkerDeploymentVersionComputeConfigRequest",
     "ValidateWorkerDeploymentVersionComputeConfigResponse",
+    "WaitStreamCallbackRequest",
+    "WaitStreamCallbackResponse",
 ]
 
 # gRPC is optional
