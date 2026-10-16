@@ -985,7 +985,8 @@ class CancelsTheAttachingRead:
 
 async def test_a_close_after_a_canceled_attach_detaches(client: Client):
     global _fake
-    _fake = FakeReads([HANG])
+    # The reader attaches on the read after an empty one.
+    _fake = FakeReads([ReadResponse(cursor=""), HANG])
     async with new_worker(
         client, CancelsTheAttachingRead, activities=[fake_read]
     ) as worker:
@@ -994,7 +995,7 @@ async def test_a_close_after_a_canceled_attach_detaches(client: Client):
             id=new_workflow_id(),
             task_queue=worker.task_queue,
         )
-    assert _fake.inputs[0].subscription_id == "1"
+    assert _fake.inputs[1].subscription_id == "1"
     last = _fake.inputs[-1]
     assert last.unsubscribe and last.subscription_id == "1"
 
@@ -1012,7 +1013,6 @@ async def test_an_attach_without_notifications_warns_once(
         topic="tokens",
         after="",
         state="",
-        arm=True,
         wait_ms=0,
         max_records=10,
         subscription_id="1",
