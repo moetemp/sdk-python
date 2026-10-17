@@ -22,6 +22,7 @@ import temporalio.bridge.temporal_sdk_bridge
 import temporalio.converter
 import temporalio.converter._extstore
 from temporalio.api.common.v1.message_pb2 import Payload
+from temporalio.api.stream.v1.message_pb2 import StreamWake
 from temporalio.bridge._visitor_functions import PayloadSequence, VisitorFunctions
 from temporalio.bridge.temporal_sdk_bridge import (
     CustomSlotSupplier as BridgeCustomSlotSupplier,
@@ -330,7 +331,47 @@ async def decode_activation(
         skip_headers=not decode_headers,
     ).visit(_Visitor(data_converter._decode_payload_sequence), activation)
 
+    with metrics.track():
+        await _visit_stream_wakes(
+            activation, _Visitor(data_converter._external_retrieve_payload_sequence)
+        )
+    await _visit_stream_wakes(
+        activation, _Visitor(data_converter._decode_payload_sequence)
+    )
+
     return metrics
+
+
+async def _visit_stream_wakes(
+    activation: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
+    fs: VisitorFunctions,
+) -> None:
+    """Apply ``fs`` to the close outcome of each stream wake the activation attaches.
+
+    The server packs each wake in an ``Any``, and the payload visitor does not
+    open an ``Any``. The outcome holds what the producer's codec encoded, so the
+    reader decodes it with its own codec, in the Workflow's context.
+    """
+    visitor = CommandAwarePayloadVisitor(skip_search_attributes=True)
+    for job in activation.jobs:
+        if not job.HasField("workflow_task_attachments"):
+            continue
+        for attachment in job.workflow_task_attachments.attachments:
+            if not attachment.Is(StreamWake.DESCRIPTOR):
+                continue
+            wake = StreamWake()
+            attachment.Unpack(wake)
+            if not wake.HasField("close_result") and not wake.HasField("close_failure"):
+                continue
+            if wake.HasField("close_result"):
+                await visitor._visit_temporal_api_common_v1_Payload(
+                    fs, wake.close_result
+                )
+            if wake.HasField("close_failure"):
+                await visitor._visit_temporal_api_failure_v1_Failure(
+                    fs, wake.close_failure
+                )
+            attachment.Pack(wake)
 
 
 async def encode_completion(

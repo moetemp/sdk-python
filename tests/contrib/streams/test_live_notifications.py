@@ -26,7 +26,7 @@ import pytest
 from temporalio import workflow
 from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType, StreamOwnerKind
-from temporalio.api.stream.v1 import StreamReference
+from temporalio.api.stream.v1 import StreamReference, StreamWake
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,
@@ -474,9 +474,10 @@ async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
         assert await asyncio.wait_for(reader.result(), 30) == 31
         await driven.get_workflow_handle(owner).signal(Waits.finish)
     wakes = sum(
-        len(e.workflow_task_scheduled_event_attributes.stream_wakes)
+        a.Is(StreamWake.DESCRIPTOR)
         for e in (await reader.fetch_history()).events
         if e.HasField("workflow_task_scheduled_event_attributes")
+        for a in e.workflow_task_scheduled_event_attributes.attachments
     )
     # One leading and one trailing delivery per window, plus the first wake.
     assert 1 <= wakes <= 2 * (int(elapsed) + 1) + 1, wakes
@@ -510,12 +511,18 @@ class _History:
 
 def _wake_tasks(history: Any) -> list[list[Any]]:
     """The wakes of each Workflow Task scheduled event that carries any."""
-    return [
-        list(e.workflow_task_scheduled_event_attributes.stream_wakes)
-        for e in history.events
-        if e.HasField("workflow_task_scheduled_event_attributes")
-        and e.workflow_task_scheduled_event_attributes.stream_wakes
-    ]
+    tasks: list[list[Any]] = []
+    for e in history.events:
+        if not e.HasField("workflow_task_scheduled_event_attributes"):
+            continue
+        wakes: list[Any] = []
+        for attachment in e.workflow_task_scheduled_event_attributes.attachments:
+            wake = StreamWake()
+            if attachment.Unpack(wake):
+                wakes.append(wake)
+        if wakes:
+            tasks.append(wakes)
+    return tasks
 
 
 async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works(
