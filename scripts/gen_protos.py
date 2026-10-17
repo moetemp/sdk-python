@@ -1,4 +1,5 @@
 import collections
+import json
 import re
 import shutil
 import subprocess
@@ -20,6 +21,33 @@ test_proto_dir = base_dir / "tests"
 additional_proto_dir = base_dir / "scripts" / "_proto"
 health_proto_dir = additional_proto_dir / "grpc"
 
+
+def find_streams_proto_dir() -> Path:
+    """The protos of the temporalio-streams crate the bridge builds against.
+
+    Cargo checks out the crate at the bridge's pinned rev, so the generated
+    modules match the code the bridge links.
+    """
+    metadata = json.loads(
+        subprocess.check_output(
+            [
+                "cargo",
+                "metadata",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                str(base_dir / "temporalio" / "bridge" / "Cargo.toml"),
+            ]
+        )
+    )
+    for package in metadata["packages"]:
+        if package["name"] == "temporalio-streams":
+            return Path(package["manifest_path"]).parent / "protos"
+    raise RuntimeError("temporalio-streams is not a dependency of the bridge")
+
+
+streams_proto_dir = find_streams_proto_dir()
+
 # Exclude testsrv dependencies protos
 proto_paths = [
     v
@@ -28,6 +56,8 @@ proto_paths = [
     and not "health" in str(v)
     and not "google" in str(v)
 ]
+# The crate's api_include copy is left out, since api_upstream generates those modules.
+proto_paths.extend((streams_proto_dir / "temporal").glob("**/*.proto"))
 proto_paths.extend(test_proto_dir.glob("**/*.proto"))
 proto_paths.extend(additional_proto_dir.glob("**/*.proto"))
 
@@ -191,6 +221,7 @@ def generate_protos(output_dir: Path):
             f"--proto_path={testsrv_proto_dir}",
             f"--proto_path={health_proto_dir}",
             f"--proto_path={proto_dir}",
+            f"--proto_path={streams_proto_dir}",
             f"--proto_path={test_proto_dir}",
             f"--proto_path={additional_proto_dir}",
             f"--python_out={output_dir}",
@@ -225,7 +256,7 @@ def generate_protos(output_dir: Path):
     for p in (output_dir / "temporal" / "sdk" / "core").iterdir():
         shutil.rmtree(sdk_out_dir / p.name, ignore_errors=True)
         p.replace(sdk_out_dir / p.name)
-    # The stream record envelope sits beside Core's own stream messages, which the loop above
+    # The stream record envelope sits beside the crate's stream messages, which the loop above
     # has just moved in.
     (output_dir / "temporal" / "sdk" / "streams" / "v1").replace(
         sdk_out_dir / "streams" / "v1"

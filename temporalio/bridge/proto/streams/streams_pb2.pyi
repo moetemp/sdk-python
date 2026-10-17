@@ -152,6 +152,34 @@ STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamFailureKind.ValueType  # 14
 """
 global___StreamFailureKind = StreamFailureKind
 
+class _WorkflowTerminalCommand:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _WorkflowTerminalCommandEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _WorkflowTerminalCommand.ValueType
+    ],
+    builtins.type,
+):  # noqa: F821
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    WORKFLOW_TERMINAL_COMMAND_UNSPECIFIED: _WorkflowTerminalCommand.ValueType  # 0
+    WORKFLOW_TERMINAL_COMMAND_COMPLETE: _WorkflowTerminalCommand.ValueType  # 1
+    WORKFLOW_TERMINAL_COMMAND_FAIL: _WorkflowTerminalCommand.ValueType  # 2
+    WORKFLOW_TERMINAL_COMMAND_CANCEL: _WorkflowTerminalCommand.ValueType  # 3
+    WORKFLOW_TERMINAL_COMMAND_CONTINUE_AS_NEW: _WorkflowTerminalCommand.ValueType  # 4
+
+class WorkflowTerminalCommand(
+    _WorkflowTerminalCommand, metaclass=_WorkflowTerminalCommandEnumTypeWrapper
+): ...
+
+WORKFLOW_TERMINAL_COMMAND_UNSPECIFIED: WorkflowTerminalCommand.ValueType  # 0
+WORKFLOW_TERMINAL_COMMAND_COMPLETE: WorkflowTerminalCommand.ValueType  # 1
+WORKFLOW_TERMINAL_COMMAND_FAIL: WorkflowTerminalCommand.ValueType  # 2
+WORKFLOW_TERMINAL_COMMAND_CANCEL: WorkflowTerminalCommand.ValueType  # 3
+WORKFLOW_TERMINAL_COMMAND_CONTINUE_AS_NEW: WorkflowTerminalCommand.ValueType  # 4
+global___WorkflowTerminalCommand = WorkflowTerminalCommand
+
 class StreamStoreConfig(google.protobuf.message.Message):
     """Which store holds a process's streams, and how to reach it. Lang builds one store from it and
     sends its stream calls there.
@@ -319,7 +347,7 @@ class ArchiveConfig(google.protobuf.message.Message):
 global___ArchiveConfig = ArchiveConfig
 
 class RedisStoreConfig(google.protobuf.message.Message):
-    """Streams in a Redis or Redis Cluster that Core connects to itself."""
+    """Streams in a Redis or Redis Cluster that the service connects to itself."""
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -368,8 +396,8 @@ class RedisStoreConfig(google.protobuf.message.Message):
     a driver blocks on. Zero uses 16.
     """
     plain: builtins.bool
-    """Runs with no Lua, so the store keeps no producer state and no last position, and Core takes
-    their fallbacks. For tests of the fallbacks on a real store.
+    """Runs with no Lua, so the store keeps no producer state and no last position, and the service
+    takes their fallbacks. For tests of the fallbacks on a real store.
     """
     def __init__(
         self,
@@ -427,7 +455,7 @@ class RedisStoreConfig(google.protobuf.message.Message):
 global___RedisStoreConfig = RedisStoreConfig
 
 class PostgresStoreConfig(google.protobuf.message.Message):
-    """Streams in a PostgreSQL database that Core connects to itself, PostgreSQL 14 or later."""
+    """Streams in a PostgreSQL database that the service connects to itself, PostgreSQL 14 or later."""
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -715,8 +743,8 @@ class NamedProducer(google.protobuf.message.Message):
 global___NamedProducer = NamedProducer
 
 class ActivityProducer(google.protobuf.message.Message):
-    """An Activity attempt that writes. Core derives the producer id from it, so every SDK writes the
-    same one, and the attempt is the Activity's.
+    """An Activity attempt that writes. The service derives the producer id from it, so every SDK writes
+    the same one, and the attempt is the Activity's.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -732,9 +760,9 @@ class ActivityProducer(google.protobuf.message.Message):
     attempt: builtins.int
     @property
     def attempt_started_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
-        """When the attempt started, as the Activity task gives it. With it, Core writes the attempt as
-        `started_unix_ms << 11 | min(attempt, 2047)`, so a later attempt and a reset attempt both
-        supersede an earlier one. Unset writes `attempt` as it is.
+        """When the attempt started, as the Activity task gives it. With it, the service writes the
+        attempt as `started_unix_ms << 11 | min(attempt, 2047)`, so a later attempt and a reset
+        attempt both supersede an earlier one. Unset writes `attempt` as it is.
         """
     def __init__(
         self,
@@ -939,12 +967,12 @@ class ReadRequest(google.protobuf.message.Message):
     """
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration:
-        """How long to wait for a record when none is there. Zero answers at once. Core waits at most
-        60 seconds, the stream service contract's long-poll maximum.
+        """How long to wait for a record when none is there. Zero answers at once. The service waits at
+        most 60 seconds, the stream service contract's long-poll maximum.
         """
     max_records: builtins.int
     """How many stored records one answer holds at most. A synthesized supersession comes on top.
-    Zero lets Core choose. Core answers with at most 1,000 records.
+    Zero lets the service choose. The service answers with at most 1,000 records.
     """
     state: builtins.bytes
     """The `state` of the previous answer of the same read. Empty on its first call."""
@@ -1383,10 +1411,10 @@ class FollowRequest(google.protobuf.message.Message):
     """The `state` of the previous answer. Empty on the first call."""
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration:
-        """How long to wait for a record when no source has one. Core waits at most 60 seconds."""
+        """How long to wait for a record when no source has one. The service waits at most 60 seconds."""
     max_records: builtins.int
-    """How many stored records one answer holds at most, across all sources. Zero uses 100. Core
-    answers with at most 1,000.
+    """How many stored records one answer holds at most, across all sources. Zero uses 100. The
+    service answers with at most 1,000.
     """
     max_depth: builtins.int
     """How deep links are followed. The root is depth zero. Zero uses 4. The first call's limits
@@ -2016,7 +2044,7 @@ class CloseRequest(google.protobuf.message.Message):
     def result(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """What every callback attached to the stream's notifier completes with, after lang's payload
         codec. The stream's notifier on the server closes once the store has. When set, a notifier
-        that doesn't take the close fails the call, and Core keeps trying in the background too.
+        that doesn't take the close fails the call, and the service keeps trying in the background too.
         Unset, the callbacks complete with a `binary/null` result, and the notifier close is retried
         in the background.
         """
@@ -2027,9 +2055,9 @@ class CloseRequest(google.protobuf.message.Message):
         A close carries a result or a failure, never both.
         """
     closed_by: builtins.str
-    """Who closed the stream, opaque to Core. At most 256 bytes. The store keeps it with the first
-    close's outcome, and readers and refused appends see it, so a writer can tell a close by its
-    own run.
+    """Who closed the stream, opaque to the service. At most 256 bytes. The store keeps it with the
+    first close's outcome, and readers and refused appends see it, so a writer can tell a close by
+    its own run.
     """
     def __init__(
         self,
@@ -2569,7 +2597,7 @@ class DescribeStoreResponse(google.protobuf.message.Message):
 global___DescribeStoreResponse = DescribeStoreResponse
 
 class StoreCapabilities(google.protobuf.message.Message):
-    """What a store can do beyond the log every store gives. Core takes a fallback for each
+    """What a store can do beyond the log every store gives. The service takes a fallback for each
     capability the store lacks, with the weaker guarantee the fallback names.
     """
 
@@ -2715,8 +2743,8 @@ class StreamFailure(google.protobuf.message.Message):
 global___StreamFailure = StreamFailure
 
 class StoreAppendRequest(google.protobuf.message.Message):
-    """The calls below are what Core asks of a store, below owner checks, cursors and supersession.
-    They name chains and store positions, not addresses and cursors.
+    """The calls below are what the service asks of a store, below owner checks, cursors and
+    supersession. They name chains and store positions, not addresses and cursors.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -2946,3 +2974,254 @@ class StoreLatestResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___StoreLatestResponse = StoreLatestResponse
+
+class PublishWorkflowTaskRequest(google.protobuf.message.Message):
+    """One live activation's stream output and the facts of its run, sent before lang completes the
+    activation. Lang sends none while it replays, since the records are in the store already. It
+    sends one for an activation with records or with a terminal command.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NAMESPACE_FIELD_NUMBER: builtins.int
+    WORKER_ID_FIELD_NUMBER: builtins.int
+    TASK_QUEUE_FIELD_NUMBER: builtins.int
+    WORKFLOW_TYPE_FIELD_NUMBER: builtins.int
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    FIRST_EXECUTION_RUN_ID_FIELD_NUMBER: builtins.int
+    CRON_FIELD_NUMBER: builtins.int
+    HAS_RETRY_POLICY_FIELD_NUMBER: builtins.int
+    TASK_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    FAILED_ATTEMPTS_FIELD_NUMBER: builtins.int
+    COMPLETED_STARTED_EVENT_IDS_FIELD_NUMBER: builtins.int
+    RECORDS_FIELD_NUMBER: builtins.int
+    TERMINAL_COMMAND_FIELD_NUMBER: builtins.int
+    namespace: builtins.str
+    worker_id: builtins.str
+    """Names the lang Worker. The service keys each run's state by the Worker and the run, so two
+    Workers in one process never share counters.
+    """
+    task_queue: builtins.str
+    workflow_type: builtins.str
+    workflow_id: builtins.str
+    run_id: builtins.str
+    first_execution_run_id: builtins.str
+    """From `InitializeWorkflow`. Empty means the run starts its chain."""
+    cron: builtins.bool
+    """A cron schedule starts the chain's next run when this one completes or fails."""
+    has_retry_policy: builtins.bool
+    """A failure with a retry policy can go on in the same chain."""
+    task_started_event_id: builtins.int
+    """The three fields of the activation's `WorkflowTaskHistoryInfo`."""
+    failed_attempts: builtins.int
+    @property
+    def completed_started_event_ids(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.int
+    ]: ...
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___OutputRecord
+    ]:
+        """In publish order across topics."""
+    terminal_command: global___WorkflowTerminalCommand.ValueType
+    """The first terminal command of the completion, which is the one Core keeps."""
+    def __init__(
+        self,
+        *,
+        namespace: builtins.str = ...,
+        worker_id: builtins.str = ...,
+        task_queue: builtins.str = ...,
+        workflow_type: builtins.str = ...,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+        first_execution_run_id: builtins.str = ...,
+        cron: builtins.bool = ...,
+        has_retry_policy: builtins.bool = ...,
+        task_started_event_id: builtins.int = ...,
+        failed_attempts: builtins.int = ...,
+        completed_started_event_ids: collections.abc.Iterable[builtins.int]
+        | None = ...,
+        records: collections.abc.Iterable[global___OutputRecord] | None = ...,
+        terminal_command: global___WorkflowTerminalCommand.ValueType = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "completed_started_event_ids",
+            b"completed_started_event_ids",
+            "cron",
+            b"cron",
+            "failed_attempts",
+            b"failed_attempts",
+            "first_execution_run_id",
+            b"first_execution_run_id",
+            "has_retry_policy",
+            b"has_retry_policy",
+            "namespace",
+            b"namespace",
+            "records",
+            b"records",
+            "run_id",
+            b"run_id",
+            "task_queue",
+            b"task_queue",
+            "task_started_event_id",
+            b"task_started_event_id",
+            "terminal_command",
+            b"terminal_command",
+            "worker_id",
+            b"worker_id",
+            "workflow_id",
+            b"workflow_id",
+            "workflow_type",
+            b"workflow_type",
+        ],
+    ) -> None: ...
+
+global___PublishWorkflowTaskRequest = PublishWorkflowTaskRequest
+
+class OutputRecord(google.protobuf.message.Message):
+    """One record a Workflow published."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    TOPIC_FIELD_NUMBER: builtins.int
+    KIND_FIELD_NUMBER: builtins.int
+    BODY_FIELD_NUMBER: builtins.int
+    CONTENT_HASH_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
+    topic: builtins.str
+    kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
+    """DATA, FINISH or LINK."""
+    @property
+    def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """The value on DATA, after lang's payload codec. Absent on FINISH. Optional on LINK."""
+    content_hash: builtins.bytes
+    """The SHA-256 of the body as the payload converter made it, before the codec. Set with a body.
+    The service builds each topic's batch digest from these, so a repeat of a batch matches
+    whatever the codec made of the bodies.
+    """
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink:
+        """Set on LINK only."""
+    def __init__(
+        self,
+        *,
+        topic: builtins.str = ...,
+        kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType = ...,
+        body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        content_hash: builtins.bytes = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "body",
+            b"body",
+            "content_hash",
+            b"content_hash",
+            "kind",
+            b"kind",
+            "link",
+            b"link",
+            "topic",
+            b"topic",
+        ],
+    ) -> None: ...
+
+global___OutputRecord = OutputRecord
+
+class PublishWorkflowTaskResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    DROPPED_TOPICS_FIELD_NUMBER: builtins.int
+    @property
+    def dropped_topics(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
+        """The topics whose records the service dropped, since the store has closed them. The other
+        topics went on.
+        """
+    def __init__(
+        self,
+        *,
+        dropped_topics: collections.abc.Iterable[builtins.str] | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["dropped_topics", b"dropped_topics"]
+    ) -> None: ...
+
+global___PublishWorkflowTaskResponse = PublishWorkflowTaskResponse
+
+class RunEvictedRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    WORKER_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    WORKFLOW_EXECUTION_ENDING_FIELD_NUMBER: builtins.int
+    worker_id: builtins.str
+    run_id: builtins.str
+    workflow_execution_ending: builtins.bool
+    """The eviction reason is `WorkflowExecutionEnding`. Then the service can close the run's chain."""
+    def __init__(
+        self,
+        *,
+        worker_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+        workflow_execution_ending: builtins.bool = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "run_id",
+            b"run_id",
+            "worker_id",
+            b"worker_id",
+            "workflow_execution_ending",
+            b"workflow_execution_ending",
+        ],
+    ) -> None: ...
+
+global___RunEvictedRequest = RunEvictedRequest
+
+class RunEvictedResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___RunEvictedResponse = RunEvictedResponse
+
+class ShutdownWorkerRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    WORKER_ID_FIELD_NUMBER: builtins.int
+    worker_id: builtins.str
+    def __init__(
+        self,
+        *,
+        worker_id: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["worker_id", b"worker_id"]
+    ) -> None: ...
+
+global___ShutdownWorkerRequest = ShutdownWorkerRequest
+
+class ShutdownWorkerResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___ShutdownWorkerResponse = ShutdownWorkerResponse

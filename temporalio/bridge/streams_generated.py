@@ -84,6 +84,16 @@ class StreamService:
             "Latest", req, temporalio.bridge.proto.streams.LatestResponse
         )
 
+    async def publish_workflow_task(
+        self, req: temporalio.bridge.proto.streams.PublishWorkflowTaskRequest
+    ) -> temporalio.bridge.proto.streams.PublishWorkflowTaskResponse:
+        """Invokes the StreamService.publish_workflow_task call."""
+        return await self._store.call(
+            "PublishWorkflowTask",
+            req,
+            temporalio.bridge.proto.streams.PublishWorkflowTaskResponse,
+        )
+
     async def read(
         self, req: temporalio.bridge.proto.streams.ReadRequest
     ) -> temporalio.bridge.proto.streams.ReadResponse:
@@ -118,6 +128,14 @@ class StreamService:
             temporalio.bridge.proto.streams.RetireProducerResponse,
         )
 
+    async def run_evicted(
+        self, req: temporalio.bridge.proto.streams.RunEvictedRequest
+    ) -> temporalio.bridge.proto.streams.RunEvictedResponse:
+        """Invokes the StreamService.run_evicted call."""
+        return await self._store.call(
+            "RunEvicted", req, temporalio.bridge.proto.streams.RunEvictedResponse
+        )
+
     async def run_stream_driver(
         self, req: temporalio.bridge.proto.streams.RunStreamDriverRequest
     ) -> temporalio.bridge.proto.streams.RunStreamDriverResponse:
@@ -126,6 +144,16 @@ class StreamService:
             "RunStreamDriver",
             req,
             temporalio.bridge.proto.streams.RunStreamDriverResponse,
+        )
+
+    async def shutdown_worker(
+        self, req: temporalio.bridge.proto.streams.ShutdownWorkerRequest
+    ) -> temporalio.bridge.proto.streams.ShutdownWorkerResponse:
+        """Invokes the StreamService.shutdown_worker call."""
+        return await self._store.call(
+            "ShutdownWorker",
+            req,
+            temporalio.bridge.proto.streams.ShutdownWorkerResponse,
         )
 
     async def subscribe(

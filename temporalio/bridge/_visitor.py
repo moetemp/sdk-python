@@ -308,14 +308,6 @@ class PayloadVisitor:
         if o.HasField("result"):
             await self._visit_coresdk_nexus_NexusOperationResult(fs, o.result)
 
-    async def _visit_coresdk_workflow_activation_ResolveStreamWake(
-        self, fs: VisitorFunctions, o: Any
-    ):
-        if o.HasField("close_result"):
-            await self._visit_temporal_api_common_v1_Payload(fs, o.close_result)
-        if o.HasField("close_failure"):
-            await self._visit_temporal_api_failure_v1_Failure(fs, o.close_failure)
-
     async def _visit_coresdk_workflow_activation_WorkflowActivationJob(
         self, fs: VisitorFunctions, o: Any
     ):
@@ -360,10 +352,6 @@ class PayloadVisitor:
         elif o.HasField("resolve_nexus_operation"):
             await self._visit_coresdk_workflow_activation_ResolveNexusOperation(
                 fs, o.resolve_nexus_operation
-            )
-        elif o.HasField("resolve_stream_wake"):
-            await self._visit_coresdk_workflow_activation_ResolveStreamWake(
-                fs, o.resolve_stream_wake
             )
 
     async def _visit_coresdk_workflow_activation_WorkflowActivation(
@@ -504,18 +492,6 @@ class PayloadVisitor:
         if o.HasField("input"):
             await self._visit_nexus_operation_input_payload(fs, o.input)
 
-    async def _visit_coresdk_workflow_commands_OutputRecord(
-        self, fs: VisitorFunctions, o: Any
-    ):
-        if o.HasField("body"):
-            await self._visit_temporal_api_common_v1_Payload(fs, o.body)
-
-    async def _visit_coresdk_workflow_commands_WorkflowOutputStreamCommit(
-        self, fs: VisitorFunctions, o: Any
-    ):
-        for v in o.records:
-            await self._visit_coresdk_workflow_commands_OutputRecord(fs, v)
-
     async def _visit_coresdk_workflow_commands_WorkflowCommand(
         self, fs: VisitorFunctions, o: Any
     ):
@@ -574,10 +550,6 @@ class PayloadVisitor:
         elif o.HasField("schedule_nexus_operation"):
             await self._visit_coresdk_workflow_commands_ScheduleNexusOperation(
                 fs, o.schedule_nexus_operation
-            )
-        elif o.HasField("workflow_output_stream_commit"):
-            await self._visit_coresdk_workflow_commands_WorkflowOutputStreamCommit(
-                fs, o.workflow_output_stream_commit
             )
 
     async def _visit_coresdk_workflow_completion_Success(

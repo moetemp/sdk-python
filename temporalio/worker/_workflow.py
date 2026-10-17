@@ -9,17 +9,22 @@ import logging
 import os
 import sys
 import threading
+import uuid
 from collections.abc import Awaitable, Callable, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import timezone
 from types import TracebackType
 
+import google.protobuf.message
+
 import temporalio.api.common.v1
 import temporalio.api.enums.v1
 import temporalio.bridge.proto.common
+import temporalio.bridge.proto.streams
 import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.proto.workflow_completion
 import temporalio.bridge.runtime
+import temporalio.bridge.streams
 import temporalio.bridge.worker
 import temporalio.common
 import temporalio.converter
@@ -105,6 +110,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         encode_headers: bool,
         max_workflow_task_external_storage_concurrency: int,
         default_workflow_logic_flags: frozenset[_WorkflowLogicFlag] | None = None,
+        stream_store: temporalio.bridge.streams.StreamStore | None = None,
     ) -> None:
         # Debug mode is enabled if specified or if the TEMPORAL_DEBUG env var is truthy
         debug_mode = debug_mode or bool(os.environ.get("TEMPORAL_DEBUG"))
@@ -175,6 +181,10 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             max_workflow_task_external_storage_concurrency
         )
         self._throw_after_activation: Exception | None = None
+        self._stream_store = stream_store
+        # The stream service keys run state by this, so a replacement Worker with the same
+        # identity never shares state with the Worker it replaces.
+        self._stream_worker_id = str(uuid.uuid4())
 
         # If debug mode is enabled, disable deadlock detection
         # otherwise set to 2 seconds
@@ -252,6 +262,15 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             ]
             if our_tasks:
                 await asyncio.wait(our_tasks)
+            # Core evicted every run before the poll stopped, so this is after the last eviction.
+            if self._stream_store:
+                await self._stream_call(
+                    "ShutdownWorker",
+                    temporalio.bridge.proto.streams.ShutdownWorkerRequest(
+                        worker_id=self._stream_worker_id
+                    ),
+                    temporalio.bridge.proto.streams.ShutdownWorkerResponse,
+                )
             # Shutdown the thread pool executor if we created it
             if not self._workflow_task_executor_user_provided:
                 self._workflow_task_executor.shutdown()
@@ -392,7 +411,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             if not workflow:
                 assert init_job
                 workflow = _RunningWorkflow(
-                    self._create_workflow_instance(act, init_job), workflow_id
+                    self._create_workflow_instance(act, init_job), workflow_id, init_job
                 )
                 self._running_workflows[act.run_id] = workflow
 
@@ -514,6 +533,9 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             )
             completion.failed.Clear()
             completion.failed.failure.message = f"Failed encoding completion: {err}"
+
+        if workflow and self._stream_store:
+            await self._publish_stream_output(act, workflow, completion)
 
         # Reported on the completion so core can include them in its workflow-task duration
         # log; core measures the duration itself.
@@ -639,6 +661,18 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         # Remove from map and send completion
         if act.run_id in self._running_workflows:
             del self._running_workflows[act.run_id]
+        # Awaited, so the run's next cache entry can't publish before its state is gone.
+        if self._stream_store:
+            await self._stream_call(
+                "RunEvicted",
+                temporalio.bridge.proto.streams.RunEvictedRequest(
+                    worker_id=self._stream_worker_id,
+                    run_id=act.run_id,
+                    workflow_execution_ending=job.reason
+                    == job.WORKFLOW_EXECUTION_ENDING,
+                ),
+                temporalio.bridge.proto.streams.RunEvictedResponse,
+            )
         try:
             await self._bridge_worker().complete_workflow_activation(
                 temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion(
@@ -660,6 +694,97 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                 self._throw_after_activation = e
                 logger.debug("Shutting down worker on eviction hook exception")
                 self._bridge_worker().initiate_shutdown()
+
+    async def _publish_stream_output(
+        self,
+        act: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
+        workflow: _RunningWorkflow,
+        completion: temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion,
+    ) -> None:
+        # Replay publishes nothing, since the records are in the store already. A query can't
+        # publish, and its completion never ends the run.
+        if act.is_replaying or not completion.HasField("successful"):
+            return
+        if all(job.HasField("query_workflow") for job in act.jobs):
+            return
+        records = list(workflow.instance.stream_records())
+        terminal = _terminal_command(completion.successful)
+        if not records and not terminal:
+            return
+        info = workflow.get_info()
+        request = temporalio.bridge.proto.streams.PublishWorkflowTaskRequest(
+            namespace=self._namespace,
+            worker_id=self._stream_worker_id,
+            task_queue=self._task_queue,
+            workflow_type=info.workflow_type,
+            workflow_id=workflow.workflow_id,
+            run_id=act.run_id,
+            first_execution_run_id=workflow.first_execution_run_id,
+            cron=workflow.cron,
+            has_retry_policy=workflow.has_retry_policy,
+            task_started_event_id=act.workflow_task.started_event_id,
+            failed_attempts=act.workflow_task.failed_attempts,
+            completed_started_event_ids=act.workflow_task.completed_started_event_ids,
+            terminal_command=terminal,
+        )
+        try:
+            # The stream is the Workflow's, so the bodies encode with its context.
+            data_converter = self._data_converter.with_context(
+                temporalio.converter.WorkflowSerializationContext(
+                    namespace=self._namespace, workflow_id=workflow.workflow_id
+                )
+            )
+            bodies = [record.body for record in records if record.HasField("body")]
+            if bodies:
+                encoded = await data_converter._encode_payload_sequence(bodies)
+                encoded = await data_converter._external_store_payload_sequence(encoded)
+                for body, payload in zip(bodies, encoded):
+                    body.CopyFrom(payload)
+            request.records.extend(records)
+            response = await self._stream_store.call(  # type: ignore[union-attr]
+                "PublishWorkflowTask",
+                request,
+                temporalio.bridge.proto.streams.PublishWorkflowTaskResponse,
+            )
+        except Exception as err:
+            logger.warning(
+                "Failed publishing stream output on workflow with run ID %s",
+                act.run_id,
+                exc_info=True,
+            )
+            # The task fails and runs again under a higher attempt, which supersedes whatever
+            # part of this output landed.
+            completion.ClearField("successful")
+            cause = temporalio.api.enums.v1.WorkflowTaskFailedCause
+            completion.failed.force_cause = (
+                cause.WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE
+            )
+            completion.failed.failure.message = (
+                f"Could not append the Workflow Task's stream output ({err})"
+            )
+            completion.failed.failure.application_failure_info.type = (
+                "StreamOutputNotAppended"
+            )
+            return
+        if response.dropped_topics:
+            logger.warning(
+                "Dropped stream output on closed topics %s of workflow with run ID %s",
+                list(response.dropped_topics),
+                act.run_id,
+            )
+
+    async def _stream_call(
+        self,
+        rpc: str,
+        request: google.protobuf.message.Message,
+        resp_type: type[google.protobuf.message.Message],
+    ) -> None:
+        # The run state these calls drop also goes at the store's producer-state retention, so a
+        # failure here only logs.
+        try:
+            await self._stream_store.call(rpc, request, resp_type)  # type: ignore[union-attr]
+        except Exception:
+            logger.warning("Failed stream call %s", rpc, exc_info=True)
 
     def _create_workflow_instance(
         self,
@@ -849,14 +974,39 @@ class _DeadlockError(Exception):
         return tb
 
 
+def _terminal_command(
+    success: temporalio.bridge.proto.workflow_completion.Success,
+) -> temporalio.bridge.proto.streams.WorkflowTerminalCommand.ValueType:
+    # Core keeps the first terminal command of a completion and drops the rest.
+    for command in success.commands:
+        kind = _TERMINAL_COMMANDS.get(command.WhichOneof("variant") or "")
+        if kind:
+            return kind
+    return _Terminal.WORKFLOW_TERMINAL_COMMAND_UNSPECIFIED
+
+
+_Terminal = temporalio.bridge.proto.streams.WorkflowTerminalCommand
+_TERMINAL_COMMANDS = {
+    "complete_workflow_execution": _Terminal.WORKFLOW_TERMINAL_COMMAND_COMPLETE,
+    "fail_workflow_execution": _Terminal.WORKFLOW_TERMINAL_COMMAND_FAIL,
+    "cancel_workflow_execution": _Terminal.WORKFLOW_TERMINAL_COMMAND_CANCEL,
+    "continue_as_new_workflow_execution": _Terminal.WORKFLOW_TERMINAL_COMMAND_CONTINUE_AS_NEW,
+}
+
+
 class _RunningWorkflow:
     def __init__(
         self,
         instance: WorkflowInstance,
         workflow_id: str,
+        init_job: temporalio.bridge.proto.workflow_activation.InitializeWorkflow,
     ):
         self.instance = instance
         self.workflow_id = workflow_id
+        # The run facts the stream service needs to find the run's chain and its end.
+        self.first_execution_run_id = init_job.first_execution_run_id
+        self.cron = bool(init_job.cron_schedule)
+        self.has_retry_policy = init_job.HasField("retry_policy")
         self.deadlocked_activation_task: Awaitable | None = None
         self._deadlock_can_be_interrupted_lock = threading.Lock()
         self._deadlock_can_be_interrupted = False

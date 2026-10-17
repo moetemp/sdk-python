@@ -1,7 +1,7 @@
-"""How a record crosses to Core and back: the proto is the record.
+"""How a record crosses to the stream runtime and back: the proto is the record.
 
 ``temporal.sdk.streams.v1.StreamRecord`` is the stored format on every
-store, and Core builds and parses it. ``body`` is the user's payload,
+store, and the stream runtime builds and parses it. ``body`` is the user's payload,
 produced and consumed through the payload converter, so a pre-encoded
 :class:`temporalio.common.RawValue` passes through untouched.
 """
@@ -46,7 +46,7 @@ _MAX_LINK_FIELD_BYTES = 1024
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
 
-Core stamps it on every record the owning Workflow publishes, because a
+The stream runtime stamps it on every record the owning Workflow publishes, because a
 stream follows the Workflow's run chain and a reader needs the run to tell a
 reset branch or a successor run apart. Its value is a payload with
 ``encoding`` ``binary/plain`` whose data is the run id.
