@@ -7,7 +7,8 @@ import typing
 
 import typing_extensions
 
-import temporalio.api.nexus.v1.message_pb2
+import temporalio.api.nexus.v1.progress_pb2
+import temporalio.api.notificationservice.v1.progress_pb2
 import temporalio.api.notificationservice.v1.request_response_pb2
 import temporalio.converter
 import temporalio.nexus.system._support as _support
@@ -150,20 +151,18 @@ class OnProgressRequest:
 class _OnProgressRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         OnProgressRequest,
-        temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest,
+        temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest,
     ]
 ):
     transfer_type: (
-        type[
-            temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest
-        ]
+        type[temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest]
         | None
-    ) = temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest
+    ) = temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest,
+        value: temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest,
         type_hint: type[OnProgressRequest],
     ) -> OnProgressRequest:
         return OnProgressRequest(
@@ -185,8 +184,8 @@ class _OnProgressRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: OnProgressRequest,
-    ) -> temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest:
-        message = temporalio.api.notificationservice.v1.request_response_pb2.OnProgressRequest()
+    ) -> temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest:
+        message = temporalio.api.notificationservice.v1.progress_pb2.OnProgressRequest()
         if value.progress is not None:
             message.progress.CopyFrom(
                 _NexusOperationProgressTransferTypeConverter().to_transfer_type(
@@ -225,24 +224,26 @@ class NexusOperationProgress:
 class _NexusOperationProgressTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         NexusOperationProgress,
-        temporalio.api.nexus.v1.message_pb2.NexusOperationProgress,
+        temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress,
     ]
 ):
     transfer_type: (
-        type[temporalio.api.nexus.v1.message_pb2.NexusOperationProgress] | None
-    ) = temporalio.api.nexus.v1.message_pb2.NexusOperationProgress
+        type[temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress] | None
+    ) = temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.nexus.v1.message_pb2.NexusOperationProgress,
+        value: temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress,
         type_hint: type[NexusOperationProgress],
     ) -> NexusOperationProgress:
-        _oneof_operation: NexusOperationProgressOperationScheduledEventId | None
+        _oneof_operation: NexusOperationProgressOperationOperationKey | None
         match value.WhichOneof("operation"):
-            case "scheduled_event_id":
-                _oneof_operation = NexusOperationProgressOperationScheduledEventId(
-                    value.scheduled_event_id
+            case "operation_key":
+                _oneof_operation = NexusOperationProgressOperationOperationKey(
+                    _NexusOperationProgressOperationKeyTransferTypeConverter().from_transfer_type(
+                        value.operation_key, NexusOperationProgressOperationKey
+                    )
                 )
             case None:
                 _oneof_operation = None
@@ -257,12 +258,16 @@ class _NexusOperationProgressTransferTypeConverter(
     def to_transfer_type(
         self,
         value: NexusOperationProgress,
-    ) -> temporalio.api.nexus.v1.message_pb2.NexusOperationProgress:
-        message = temporalio.api.nexus.v1.message_pb2.NexusOperationProgress()
+    ) -> temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress:
+        message = temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress()
         if value.operation is not None:
             match value.operation:
-                case NexusOperationProgressOperationScheduledEventId():
-                    message.scheduled_event_id = value.operation.value
+                case NexusOperationProgressOperationOperationKey():
+                    message.operation_key.CopyFrom(
+                        _NexusOperationProgressOperationKeyTransferTypeConverter().to_transfer_type(
+                            value.operation.value
+                        )
+                    )
         if value.position is not None:
             message.position = value.position
         if value.counter is not None:
@@ -275,6 +280,64 @@ class _NexusOperationProgressTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _NexusOperationProgressTransferTypeConverter
 )(NexusOperationProgress)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
+class NexusOperationProgressOperationKey:
+    endpoint: str | None = None
+    service: str | None = None
+    operation: str | None = None
+    operation_token: str | None = None
+
+
+class _NexusOperationProgressOperationKeyTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        NexusOperationProgressOperationKey,
+        temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey,
+    ]
+):
+    transfer_type: (
+        type[temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey]
+        | None
+    ) = temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey,
+        type_hint: type[NexusOperationProgressOperationKey],
+    ) -> NexusOperationProgressOperationKey:
+        return NexusOperationProgressOperationKey(
+            endpoint=value.endpoint if bool(value.endpoint) else None,
+            service=value.service if bool(value.service) else None,
+            operation=value.operation if bool(value.operation) else None,
+            operation_token=value.operation_token
+            if bool(value.operation_token)
+            else None,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: NexusOperationProgressOperationKey,
+    ) -> temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey:
+        message = (
+            temporalio.api.nexus.v1.progress_pb2.NexusOperationProgress.OperationKey()
+        )
+        if value.endpoint is not None:
+            message.endpoint = value.endpoint
+        if value.service is not None:
+            message.service = value.service
+        if value.operation is not None:
+            message.operation = value.operation
+        if value.operation_token is not None:
+            message.operation_token = value.operation_token
+        return message
+
+
+temporalio.converter.transfer_type_convertible(
+    _NexusOperationProgressOperationKeyTransferTypeConverter
+)(NexusOperationProgressOperationKey)  # pyright: ignore[reportUnusedCallResult]
 
 
 @dataclasses.dataclass(slots=True)
@@ -291,20 +354,18 @@ class OnProgressResponse:
 class _OnProgressResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         OnProgressResponse,
-        temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse,
+        temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse,
     ]
 ):
     transfer_type: (
-        type[
-            temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse
-        ]
+        type[temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse]
         | None
-    ) = temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse
+    ) = temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse,
+        value: temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse,
         type_hint: type[OnProgressResponse],
     ) -> OnProgressResponse:
         return OnProgressResponse(
@@ -316,8 +377,10 @@ class _OnProgressResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: OnProgressResponse,
-    ) -> temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse:
-        message = temporalio.api.notificationservice.v1.request_response_pb2.OnProgressResponse()
+    ) -> temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse:
+        message = (
+            temporalio.api.notificationservice.v1.progress_pb2.OnProgressResponse()
+        )
         if value.receiver_state is not None:
             message.receiver_state = value.receiver_state
         if value.behind is not None:
@@ -346,8 +409,8 @@ OnCompleteRequestResult = (
 
 
 @dataclasses.dataclass(slots=True)
-class NexusOperationProgressOperationScheduledEventId:
-    value: int
+class NexusOperationProgressOperationOperationKey:
+    value: NexusOperationProgressOperationKey
 
 
-NexusOperationProgressOperation = NexusOperationProgressOperationScheduledEventId
+NexusOperationProgressOperation = NexusOperationProgressOperationOperationKey
