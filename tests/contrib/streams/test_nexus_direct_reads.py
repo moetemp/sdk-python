@@ -25,6 +25,8 @@ from temporalio.api.workflowservice.v1 import (
     ExecuteSyncNexusOperationRequest,
     ExecuteSyncNexusOperationResponse,
 )
+import temporalio.contrib.streams.nexus._direct as direct_module
+from temporalio.bridge.client import RPCError as BridgeRPCError
 from temporalio.client import ClientConfig
 from temporalio.contrib.streams import (
     StreamError,
@@ -73,6 +75,7 @@ from temporalio.contrib.streams.nexus._generated import client as generated_clie
 from temporalio.contrib.streams.nexus._handler import _caller_namespace
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import ReplayerConfig
 from temporalio.workflow import NondeterminismError
@@ -406,7 +409,11 @@ async def test_the_http_transport_keeps_an_unnamed_failure(
 
 
 class FakeWorkflowService:
-    """Answers ``execute_sync_nexus_operation`` from a list, and keeps the requests."""
+    """Answers ``execute_sync_nexus_operation`` from a list, and keeps the requests.
+
+    ``fake_client`` hands it out as the bridge client, and ``sync_calls_to_fakes``
+    sends the transport's calls to it.
+    """
 
     def __init__(self, *answers: ExecuteSyncNexusOperationResponse | Exception) -> None:
         self.answers = list(answers)
@@ -422,13 +429,27 @@ class FakeWorkflowService:
         return answer
 
 
+@pytest.fixture(autouse=True)
+def sync_calls_to_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def call(
+        bridge: FakeWorkflowService, req: ExecuteSyncNexusOperationRequest
+    ) -> ExecuteSyncNexusOperationResponse:
+        return await bridge.execute_sync_nexus_operation(req)
+
+    monkeypatch.setattr(direct_module, "execute_sync_nexus_operation", call)
+
+
 def fake_client(service: FakeWorkflowService, codec: PayloadCodec | None = None) -> Any:
     converter = dataclasses.replace(DataConverter.default, payload_codec=codec)
+
+    async def connected_client() -> FakeWorkflowService:
+        return service
+
     return SimpleNamespace(
         namespace="caller-ns",
         identity="caller@host",
         data_converter=converter,
-        workflow_service=service,
+        service_client=SimpleNamespace(_connected_client=connected_client),
     )
 
 
@@ -562,6 +583,14 @@ async def test_the_client_transport_keeps_an_unnamed_failure_and_its_retry(
         await ClientTransport(fake_client(service), "e").read(ReadInput(stream=_STREAM))
     assert raised.value.failure_type == kind
     assert raised.value.retryable is retryable
+
+
+async def test_the_client_transport_raises_the_bridge_status_as_an_rpc_error():
+    service = FakeWorkflowService(BridgeRPCError(7, "denied", b""))
+    with pytest.raises(RPCError) as raised:
+        await ClientTransport(fake_client(service), "e").read(ReadInput(stream=_STREAM))
+    assert raised.value.status == RPCStatusCode.PERMISSION_DENIED
+    assert raised.value.message == "denied"
 
 
 async def test_the_client_transport_refuses_an_answer_its_codec_cannot_read():
