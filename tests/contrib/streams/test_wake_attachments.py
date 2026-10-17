@@ -3,12 +3,16 @@
 Each wake is an ``Any`` of ``StreamWake`` in a ``WorkflowTaskAttachments``
 job. The close outcome in a wake holds what the producer's codec encoded, so
 the Worker decodes it with the reader's codec before the instance sees it.
+The fold must give the results of the sdk-streams vectors.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from typing import Any
 
+import pytest
 from google.protobuf.any_pb2 import Any as AnyProto
 
 from temporalio.api.common.v1 import Payload
@@ -20,7 +24,9 @@ from temporalio.bridge.proto.workflow_activation import (
     WorkflowTaskAttachments,
 )
 from temporalio.bridge.worker import decode_activation
+from temporalio.contrib.streams._wakes import fold_stream_wakes
 from temporalio.converter import DataConverter, PayloadCodec
+from tests.contrib.streams._support import streams_crate_dir
 
 
 class XorCodec(PayloadCodec):
@@ -116,3 +122,28 @@ async def test_attachments_of_other_types_pass_unchanged():
         act, CONVERTER, decode_headers=False, storage_concurrency_limit=1
     )
     assert act.SerializeToString() == before
+
+
+def _fold_cases() -> list[dict[str, Any]]:
+    with open(streams_crate_dir() / "testdata" / "wake_folds.json") as f:
+        return json.load(f)
+
+
+def _wake(fields: dict[str, Any]) -> StreamWake:
+    # The vectors give a close result by its data and a close failure by its
+    # message.
+    fields = dict(fields)
+    result = fields.pop("close_result", None)
+    failure = fields.pop("close_failure", None)
+    wake = StreamWake(**fields)
+    if result is not None:
+        wake.close_result.CopyFrom(Payload(data=result.encode()))
+    if failure is not None:
+        wake.close_failure.CopyFrom(Failure(message=failure))
+    return wake
+
+
+@pytest.mark.parametrize("case", _fold_cases(), ids=lambda case: case["name"])
+def test_the_fold_gives_the_shared_vectors(case: dict[str, Any]):
+    folded = fold_stream_wakes([_wake(w) for w in case["wakes"]])
+    assert folded == [_wake(w) for w in case["folded"]]
