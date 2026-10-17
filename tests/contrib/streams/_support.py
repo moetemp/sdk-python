@@ -103,6 +103,11 @@ def streams_crate_dir() -> Path:
     raise RuntimeError("temporalio-streams is not a dependency of the bridge")
 
 
+
+def streams_crate_nexus() -> Path:
+    """The crate's ``nexus`` directory, with the contract and the token vectors."""
+    return streams_crate_dir() / "nexus"
+
 def new_workflow_id() -> str:
     return f"streams-{uuid.uuid4().hex}"
 

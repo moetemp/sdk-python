@@ -50,7 +50,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
-from tests.contrib.streams._support import vendored_core_nexus
+from tests.contrib.streams._support import streams_crate_nexus
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
@@ -180,7 +180,7 @@ async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
 
 def test_a_token_reads_as_the_shared_vectors_say() -> None:
     vectors = json.loads(
-        (vendored_core_nexus() / "operation_token_vectors.json").read_text()
+        (streams_crate_nexus() / "operation_token_vectors.json").read_text()
     )
     for vector in vectors["vectors"] + vectors["decode_only"]:
         ref = vector["ref"]
