@@ -341,7 +341,7 @@ async def close_workflow_stream(
 
     Call it from Workflow code, before the run ends. The run's ``FINISH`` on
     the topic goes with this activation, after what the run published
-    before. Core appends it before it runs the close's Local Activity, which
+    before. The stream runtime appends it before it runs the close's Local Activity, which
     closes the stream in the store and on the server. Without the store's
     Worker interceptor, that Local Activity writes ``FINISH`` itself. Every
     read ends after the last record, and each reader that sleeps on the
@@ -358,7 +358,7 @@ async def close_workflow_stream(
     also the run's producer id. After a failed Workflow Task, the task runs
     again and publishes again, and the store refuses those appends as closed
     by this run. Everything the run published before the close landed before
-    it, so Core drops those records, and the close's rerun takes the
+    it, so the stream runtime drops those records, and the close's rerun takes the
     refusal as done. The first close's outcome stays.
 
     Args:
@@ -430,7 +430,7 @@ async def close_activity(topic: str, finish: bool, outcome: RawValue) -> None:
     """Close a Workflow's own stream, as :func:`close_workflow_stream` asks.
 
     It writes ``FINISH`` first when asked, as this Local Activity's
-    producer. Then it sends Core's close with the outcome through the
+    producer. Then it sends the stream runtime's close with the outcome through the
     codec, which closes the store and then the stream's notifier.
     """
     try:

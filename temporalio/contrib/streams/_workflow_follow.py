@@ -1,8 +1,8 @@
 """Following links inside Workflow code, one Local Activity per step.
 
-A Workflow follower is the Workflow reader's shape over Core's ``Follow``.
+A Workflow follower is the Workflow reader's shape over the stream runtime's ``Follow``.
 Each step runs one ``Follow`` in a Local Activity. With the running Workflow
-as the subscriber, Core attaches each source that goes idle, and an empty
+as the subscriber, the stream runtime attaches each source that goes idle, and an empty
 step asks each idle source's notifier for one wake past its counter and
 answers those counters. A step that finds items asks for nothing, so a busy
 follower gets no wakes. The follower then waits,
@@ -11,7 +11,7 @@ moves past its counter, asks for a recheck, closes, or asks to attach again.
 
 With ``replay_from_store``, the marker holds the step's ranges, its input
 state and its digest in place of the records, and replay reads them again
-with Core's ``FollowRange`` before Workflow code sees the batch.
+with the stream runtime's ``FollowRange`` before Workflow code sees the batch.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ _RESPONSE_TYPE = FollowResponse.DESCRIPTOR.full_name.encode()
 _FOLLOW_BY_RUN_ID_KEY = "temporal.io/stream-follow-by-run-id"
 _FOLLOW_RUN_ID_KEY = "temporal.io/stream-follow-run-id"
 _MAX_RECORDS = 100
-# How long a follower waits when Core named no source to wake it, which
+# How long a follower waits when the stream runtime named no source to wake it, which
 # happens only while every source waits for its owner to start.
 _NO_WAKE_RETRY = timedelta(seconds=2)
 
@@ -136,7 +136,7 @@ class _FollowerState:
     attached: dict[str, int] = field(default_factory=dict)
     addresses: dict[int, StreamAddress] = field(default_factory=dict)
     sources: dict[int, FollowSourceInfo] = field(default_factory=dict)
-    # Set once a step came back empty. Core attaches each idle source of a
+    # Set once a step came back empty. The stream runtime attaches each idle source of a
     # step that names the subscriber.
     subscribe: bool = False
     done: bool = False
@@ -470,7 +470,7 @@ def workflow_follower(
 
     A step waits up to ``idle_wait`` in the store. When one still comes
     back empty, the follower steps once more with the running Workflow as
-    the subscriber, so Core attaches each idle source, and then sleeps until
+    the subscriber, so the stream runtime attaches each idle source, and then sleeps until
     a wake. To go on in the next run, pass
     :attr:`WorkflowStreamFollower.position` as ``after``.
 
@@ -492,7 +492,7 @@ def workflow_follower(
             for a Workflow reader.
         replay_from_store: Record each step's ranges and digest in History
             in place of the records. On by default. Replay reads them again
-            through Core's ``FollowRange``, so a ``Replayer`` needs the store
+            through the stream runtime's ``FollowRange``, so a ``Replayer`` needs the store
             plugin and a connected client. ``False`` records each batch.
 
     Raises:

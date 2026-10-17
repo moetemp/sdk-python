@@ -391,7 +391,7 @@ async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
   same items in batches, one Local Activity per step, and sleeps on the
   wakes of every open source. Each open source is one subscription of the
   Workflow. By default each step's marker holds its ranges and a digest,
-  and replay reads them again through Core.
+  and replay reads them again through the stream runtime.
 - **Retries.** `SUPERSEDED` does not take back an expanded link. The link
   record and the withdrawal both reach user code, and
   `SupersessionTracker` withdraws the link.
@@ -406,7 +406,7 @@ How the harness's subagent events map:
 | `SUBAGENT_STARTED` with the child `workflow_id` | `link(StreamRef.for_workflow(child_id), name=...)` |
 | `SUBAGENT_MESSAGE_SENT` with `from_offset` | `link(..., after=<child cursor>)` for each turn |
 | `SUBAGENT_REPLY_RECEIVED` | `join(name=..., until=<child cursor at the turn end>)` |
-| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which Core reports |
+| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which the stream runtime reports |
 | A merge offset per child | `FollowPosition`, which holds every open segment |
 
 Known limits:
@@ -548,7 +548,7 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window. Close earlier with
   `close_workflow_stream` in the Workflow or `close()` on a handle. A
-  Workflow doesn't see a close from outside through its writer: Core drops
+  Workflow doesn't see a close from outside through its writer: the stream runtime drops
   its later records on that topic, and the run goes on. So close a topic
   from the Workflow that owns it, or have readers check how it closed. On a
   store without producer state, a late append can still answer success, and

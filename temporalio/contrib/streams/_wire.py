@@ -39,7 +39,7 @@ __all__ = [
     "to_wire_link",
 ]
 
-# The most bytes a link's name and its other strings may take, as Core checks them.
+# The most bytes a link's name and its other strings may take, as the stream runtime checks them.
 _MAX_LINK_NAME_BYTES = 256
 _MAX_LINK_FIELD_BYTES = 1024
 
@@ -102,7 +102,7 @@ def to_wire(
 
 
 def to_wire_link(link: StreamLink) -> WireLink:
-    """``link`` as Core stores it.
+    """``link`` as the stream runtime stores it.
 
     Raises:
         ValueError: The name is empty or over 256 bytes, a cursor, the
@@ -143,7 +143,7 @@ def to_wire_link(link: StreamLink) -> WireLink:
 
 
 def from_wire_link(wire: WireLink) -> StreamLink:
-    """The link Core stored in ``wire``."""
+    """The link the stream runtime stored in ``wire``."""
     return StreamLink(
         event=LinkEvent(wire.event),
         ref=from_reference(wire.stream) if wire.HasField("stream") else None,
@@ -160,7 +160,7 @@ async def from_read(
     read: ReadRecord,
     result_type: type | None,
 ) -> StreamRecord[Any]:
-    """The record a reader yields for one record of Core's answer.
+    """The record a reader yields for one record of the stream runtime's answer.
 
     Raises:
         StreamRecordError: The body did not decode or convert, or the record

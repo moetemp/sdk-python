@@ -2,9 +2,10 @@
 
 A configuration class is registered once, on the client:
 ``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks
-Core for the store it names. Core serves that one store to the client's
-handles and to every Worker built from the client, so a Workflow's publish,
-an Activity's append and an outside read meet in the same place.
+the stream runtime for the store it names. The stream runtime serves that one
+store to the client's handles and to every Worker built from the client, so a
+Workflow's publish, an Activity's append and an outside read meet in the same
+place.
 
 On a Worker the plugin hands the Worker the store, and the Worker appends
 what :func:`temporalio.contrib.streams.workflow_writer` publishes before it
@@ -60,7 +61,7 @@ class StreamStorePlugin(SimplePlugin):
     Use :class:`temporalio.contrib.streams.redis.RedisStreams`,
     :class:`temporalio.contrib.streams.postgres.PostgresStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
-    is one store, on one client connection, since Core asks about each
+    is one store, on one client connection, since the stream runtime asks about each
     stream's owner over the connection that connected the store. A second
     connection, such as another namespace's endpoint, needs its own instance.
     Registering a second, different store on the same client raises
@@ -68,7 +69,7 @@ class StreamStorePlugin(SimplePlugin):
     """
 
     def __init__(self, name: str, config: StreamStoreConfig) -> None:
-        """Name the plugin and the store Core connects to."""
+        """Name the plugin and the store the stream runtime connects to."""
         super().__init__(name)
         self._config = config
         self._service: StreamService | None = None
@@ -116,11 +117,11 @@ class StreamStorePlugin(SimplePlugin):
     ) -> ServiceClient:
         """Connect the client, then the store, so Workers built from it have one.
 
-        A lazy client connects here too, since Core needs its connection to
+        A lazy client connects here too, since the stream runtime needs its connection to
         ask about a stream's owner.
 
         Raises:
-            temporalio.contrib.streams.StreamError: Core could not reach the
+            temporalio.contrib.streams.StreamError: the stream runtime could not reach the
                 store.
         """
         service_client = await next(config)
@@ -175,9 +176,9 @@ class StreamStorePlugin(SimplePlugin):
         worker: Worker,
         next: Callable[[Worker], Awaitable[None]],
     ) -> None:
-        """Run the Worker, then wait for the notifications Core still has out.
+        """Run the Worker, then wait for the notifications the stream runtime still has out.
 
-        The Worker's Activities append and close through this store, and Core
+        The Worker's Activities append and close through this store, and the stream runtime
         tells each stream's notifier in the background. A Worker that stops
         right after its last Activity would otherwise drop a notification a
         sleeping reader waits for.
@@ -193,7 +194,7 @@ class StreamStorePlugin(SimplePlugin):
         """Tell each stream's notifier on the server when the stream moves.
 
         That is what wakes a reader that sleeps on the stream: a client
-        reader that waits on the notifier, or a Workflow reader. Core tells
+        reader that waits on the notifier, or a Workflow reader. The stream runtime tells
         the notifier after every append, and folds the notifications of one
         stream into one call in flight. Off by default, since most streams
         have no sleeping reader. It needs a server with the stream notifier. Turn
@@ -202,8 +203,8 @@ class StreamStorePlugin(SimplePlugin):
         with it on.
 
         Args:
-            max_notifiers: How many streams Core keeps a notifier for,
-                dropping the least recently used. Core's default when unset.
+            max_notifiers: How many streams the stream runtime keeps a notifier for,
+                dropping the least recently used. The stream runtime's default when unset.
             notification_log: Write a log entry with each append, in the
                 same store step, in place of the producer's notification. A
                 :class:`temporalio.contrib.streams.StreamDriver` reads the
@@ -266,9 +267,9 @@ class StreamStorePlugin(SimplePlugin):
         await StreamHandle(self, client, ref).close(result, error=error)
 
     async def flush_notifications(self) -> None:
-        """Wait for the notifications Core still has out, for up to 10 seconds.
+        """Wait for the notifications the stream runtime still has out, for up to 10 seconds.
 
-        Core tells a stream's notifier on the server in the background, after
+        The stream runtime tells a stream's notifier on the server in the background, after
         an append that a sleeping reader waits for and after a close. A
         Worker built from the client does this when it stops. A process that
         holds only a client calls it before it exits. Before a client
@@ -311,7 +312,7 @@ class StreamStorePlugin(SimplePlugin):
 
     @property
     def capabilities(self) -> StoreCapabilities:
-        """What the store can do, as Core found when a client connected it.
+        """What the store can do, as the stream runtime found when a client connected it.
 
         Raises:
             ValueError: No client connected this store yet.
@@ -411,7 +412,7 @@ class StreamStorePlugin(SimplePlugin):
 
 
 async def call(pending: Awaitable[T]) -> T:
-    """Await a stream call, raising Core's failure as the error a caller catches."""
+    """Await a stream call, raising the stream runtime's failure as the error a caller catches."""
     try:
         return await pending
     except StreamCallFailure as failure:

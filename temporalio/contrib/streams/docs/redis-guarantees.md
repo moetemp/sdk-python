@@ -103,7 +103,7 @@ On AWS, Amazon MemoryDB for Valkey is the production target for the store.
 It runs the store's scripts unchanged, and its multi-AZ write log keeps
 acknowledged records through a failover. Its data tiering moves cold keys
 to SSD, but it moves a topic's whole log, and keeps a log above 128 MiB in
-memory. See `crates/streams/docs/redis.md` in the Core repository for its
+memory. See `crates/streams/docs/redis.md` in the sdk-streams repository for its
 access string.
 
 For long retention on any Redis, give the store an archive:
@@ -143,7 +143,7 @@ one stream are safe.
   `retention` and the longest driver outage you plan for.
 - **You own the bucket.** `delete_workflow_streams` and
   `delete_activity_streams` also delete the archived objects, as best they
-  can. Core deletes nothing else in the archive. Set a lifecycle rule for
+  can. The stream runtime deletes nothing else in the archive. Set a lifecycle rule for
   how long to keep it. Bodies are archived as your payload
   codec encoded them. Set bucket encryption, such as SSE-KMS, for the rest
   of each object.
