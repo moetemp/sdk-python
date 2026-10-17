@@ -8,7 +8,7 @@
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: the wake target commit the release names)
+#   SERVER_REF         commit to build (default: moe/jetty/js14-task-attachments)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7941)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6441.
@@ -26,7 +26,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-41d8b0b3d675b6d2058cc1a3d9b1859ccb87a118}
+SERVER_REF=${SERVER_REF:-489dd467505e0800cae07f5f8b7b21f8f3f79aca}
 PORT_BASE=${PORT_BASE:-7941}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
