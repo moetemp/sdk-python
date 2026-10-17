@@ -82,7 +82,7 @@ async def call_workflow_service(
     ) as channel:
         method = channel.unary_unary(
             f"/temporal.api.workflowservice.v1.WorkflowService/{rpc}",
-            request_serializer=Message.SerializeToString,
+            request_serializer=lambda message: message.SerializeToString(),
             response_deserializer=response_type.FromString,
         )
         try:
