@@ -179,9 +179,12 @@ if [[ -z "${STREAMS_REDIS_URL:-}" ]]; then
 fi
 
 if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
+  # The script comes from the checkout of the temporalio-streams crate the bridge builds against.
+  crate_dir=$(cd "$SDK_DIR" && uv run --no-sync python -c \
+    "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
   # Three primaries with one replica each, as the driver's cluster tests need.
   eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
-    bash "$SDK_DIR/temporalio/bridge/sdk-core/crates/streams/scripts/redis-test-servers.sh" |
+    bash "$crate_dir/scripts/redis-test-servers.sh" |
     grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
 fi
 
