@@ -271,8 +271,8 @@ class StreamReader(Generic[T]):
     :class:`StreamDirectReads` on the Worker's client maps the endpoint to.
     The read names a floor holder, ``<caller namespace>/<run id>/<reader
     number>``, so the owner's store keeps the records it read. The marker
-    holds the range that crossed and Core's digest of its records, not the
-    records. The Worker turns it back into the batch before Workflow code
+    holds the range that crossed and the stream runtime's digest of its
+    records, not the records. The Worker turns it back into the batch before Workflow code
     sees it, from a cache on the live Workflow Task, or else with a
     ``read_range`` through the same transport, which checks the digest. A
     replay that finds other records fails the Workflow Task as
@@ -370,7 +370,8 @@ class StreamReader(Generic[T]):
         self._drain_since: datetime | None = None
         self._done_since: datetime | None = None
         self._stream: StreamRef | None = None
-        # Core's read state from the last answer, which the next read carries.
+        # The stream runtime's read state from the last answer, which the next
+        # read carries.
         self._state: bytes | None = None
         if isinstance(after, ReadPosition) and after.state:
             self._state = base64.b64decode(after.state)
@@ -617,7 +618,8 @@ class StreamReader(Generic[T]):
         assert answer is not None
         if answer.next_token:
             self._cursor = answer.next_token
-        # Core's state matches the answer's end, so it goes with the cursor.
+        # The stream runtime's state matches the answer's end, so it goes with
+        # the cursor.
         self._state = answer.state
         self._caught_up = not answer.records
         self._stream_done = answer.done

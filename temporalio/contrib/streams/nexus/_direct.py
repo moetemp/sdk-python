@@ -4,12 +4,12 @@ A :class:`StreamReader` built with ``replay_from_store=True`` reads in a Local
 Activity through a :class:`StreamDirectTransport`, not as a Nexus operation of
 the Workflow. The read names a floor holder, so the owner's store holds the
 records it read, and the Activity's result, and so its marker, holds only the
-range that crossed and Core's digest of its records. Before Workflow code sees
-the result, the Worker turns it back into the batch. It takes the batch the
-Activity cached in this process, or else reads the range again through the
-stream service's ``read_range``, which checks it against the digest. So
-Workflow code gets the same records in both modes, and no I/O runs in Workflow
-code.
+range that crossed and the stream runtime's digest of its records. Before
+Workflow code sees the result, the Worker turns it back into the batch. It
+takes the batch the Activity cached in this process, or else reads the range
+again through the stream service's ``read_range``, which checks it against the
+digest. So Workflow code gets the same records in both modes, and no I/O runs
+in Workflow code.
 
 The step runs as part of the client's payload codec, on decode, as for the
 positions-only Workflow reader of :mod:`temporalio.contrib.streams`. The

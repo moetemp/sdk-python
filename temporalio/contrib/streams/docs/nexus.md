@@ -121,24 +121,25 @@ worker = Worker(
 )
 ```
 
-Core serves the stream service. `TemporalStreamsHandler` hands each call to
-Core and keeps only what Core can't do: your `authorize` callable and the
-namespace's payload codec. It holds nothing between calls, so it needs no
-shutdown, and any Worker on the endpoint's task queue can serve a reader's
-next read. The reader carries Core's read state in each read instead. So
-the reader and the stream service come from the same release. A stream
-service from an earlier release refuses the reader's `state` as an unknown
-member. A reader from an earlier release on a newer service still works, but
-it sends no state, so the service primes from the cursor on every read and
-knows only the cursor record's producer.
+The stream runtime serves the stream service. `TemporalStreamsHandler` hands
+each call to the stream runtime and keeps only what the stream runtime can't
+do: your `authorize` callable and the namespace's payload codec. It holds
+nothing between calls, so it needs no shutdown, and any Worker on the
+endpoint's task queue can serve a reader's next read. The reader carries the
+stream runtime's read state in each read instead. So the reader and the
+stream service come from the same release. A stream service from an earlier
+release refuses the reader's `state` as an unknown member. A reader from an
+earlier release on a newer service still works, but it sends no state, so
+the service primes from the cursor on every read and knows only the cursor
+record's producer.
 
 `notify_on_append()` turns on progress. Without it, the caller sees no
-progress, but the close still completes every operation with its result.
-Core closes a stream's notifier after every store close, whether or not
-progress is on. Core notifies only while a reader sleeps on the stream, so a
-busy stream costs no notification. [Readers that sleep](notifications.md)
-says when Core notifies and how a process flushes its notifications before
-it exits.
+progress, but the close still completes every operation with its result. The
+stream runtime closes a stream's notifier after every store close, whether
+or not progress is on. The stream runtime notifies only while a reader
+sleeps on the stream, so a busy stream costs no notification. [Readers that
+sleep](notifications.md) says when the stream runtime notifies and how a
+process flushes its notifications before it exits.
 
 Closing the stream completes every operation that handed it out:
 
@@ -181,10 +182,10 @@ What happens underneath:
 1. The handler's start attaches the caller's callback to the stream's
    notifier on the server as an idle callback, which hears no progress
    until it waits, and returns the stream reference in the operation token.
-2. Core notifies the notifier after every append, a Workflow's publishes
-   included, or a StreamDriver does it from the store's notification log.
-   Notifications are folded: at most one call is in flight, and the newest
-   one wins.
+2. The stream runtime notifies the notifier after every append, a Workflow's
+   publishes included, or a StreamDriver does it from the store's
+   notification log. Notifications are folded: at most one call is in
+   flight, and the newest one wins.
 3. A reader reads first. Each read names its operation (`wake_token`). A
    read that finds nothing asks the notifier to wake that operation's
    callback once the stream moves past the read, then reads once more, and
@@ -194,7 +195,7 @@ What happens underneath:
    progress, and the callback is idle again until the reader waits again.
 5. The close completes the caller's operation with the close result.
 
-### When Core notifies
+### When the stream runtime notifies
 
 [Readers that sleep](notifications.md) lists the steps: every append
 notifies, and the server delivers at most one notification per stream in
@@ -287,11 +288,12 @@ Worker's data converter, the read result crosses once encoded with that
 Worker's payload codec, and the caller's codec decodes it. So the handler's
 Worker and the caller's Worker must use the same payload codec.
 
-The codec runs in the handler Worker's process, as a step Core asks for in
-the middle of a call. So Core holds plain bodies in memory during a call:
-an append's bodies before the codec encodes them, and a read's bodies after
-the codec decodes them. Core never stores or logs them, and sends them only
-in the read's answer. The store keeps only encoded bodies.
+The codec runs in the handler Worker's process, as a step the stream runtime
+asks for in the middle of a call. So the stream runtime holds plain bodies
+in memory during a call: an append's bodies before the codec encodes them,
+and a read's bodies after the codec decodes them. The stream runtime never
+stores or logs them, and sends them only in the read's answer. The store
+keeps only encoded bodies.
 
 By default each read is a synchronous Nexus operation of the Workflow, so
 History records it and a replay reads the same records. When a read finds no new
@@ -362,16 +364,17 @@ Two cases stop a reader that would otherwise read for ever.
 By default, `replay_from_store=True`, a reader keeps the records out of its
 History. Each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
-crossed and Core's digest of them, not the records. The marker is about
-1 KiB. Most of it is the stream service's read state, which grows with the
-producers the reader saw. A read counts once it returned. When the read
-before was the same run's, the marker leaves out the read's input state,
-since the previous marker holds it as its answer state. The first read of a
-run, also of a reset run, keeps it. A process that replays a later marker without the ones before it
-fails the Workflow Task, and the retry replays the History from the start. All the Local Activities of one Workflow Task count
-as one Action. The Worker turns the marker back into the batch before
-Workflow code sees it. On the live Workflow Task it takes the batch the
-Local Activity cached. On a replay it reads the range again through the
+crossed and the stream runtime's digest of them, not the records. The marker
+is about 1 KiB. Most of it is the stream service's read state, which grows
+with the producers the reader saw. A read counts once it returned. When the
+read before was the same run's, the marker leaves out the read's input
+state, since the previous marker holds it as its answer state. The first
+read of a run, also of a reset run, keeps it. A process that replays a later
+marker without the ones before it fails the Workflow Task, and the retry
+replays the History from the start. All the Local Activities of one Workflow
+Task count as one Action. The Worker turns the marker back into the batch
+before Workflow code sees it. On the live Workflow Task it takes the batch
+the Local Activity cached. On a replay it reads the range again through the
 stream service's `read_range`, which checks the records against the digest.
 
 It needs a way to reach the endpoint outside the Workflow. Register
@@ -544,21 +547,21 @@ each record body decodes into. One `StreamFollowerService` per Worker routes
 calls by the follower key, since a Worker registers a service name once.
 
 **How it reads.** With `client=` a client that carries a stream store, the
-service reads through Core's stream service on that store, as an outside
-reader does (`StoreTransport`). For a stream in another namespace or another
-store, pass `transport=TemporalStreamsHttpClient(url)`, which reads through
-the stream service on a Nexus endpoint's HTTP ingress. With neither, the
-service raises at construction. The stream service and the follower must use
-the same payload codec.
+service reads through the stream runtime's stream service on that store, as
+an outside reader does (`StoreTransport`). For a stream in another namespace
+or another store, pass `transport=TemporalStreamsHttpClient(url)`, which
+reads through the stream service on a Nexus endpoint's HTTP ingress. With
+neither, the service raises at construction. The stream service and the
+follower must use the same payload codec.
 
 **The first wake.** A follower reads only inside a progress call, so its
 idle callback must be woken once before it can read at all. `follow_stream`
 sends the start header `temporal-stream-first-wake-after: 0`, and the
-handler asks Core for that first wake at the attach. The first record of the
-stream then reaches the follower, or at once when the stream already holds
-one. After that, each progress call reads until it finds nothing, and that
-empty read asks for the next wake. A follower that reads a burst in one call
-gets one delivery for it, not one per append.
+handler asks the stream runtime for that first wake at the attach. The first
+record of the stream then reaches the follower, or at once when the stream
+already holds one. After that, each progress call reads until it finds
+nothing, and that empty read asks for the next wake. A follower that reads a
+burst in one call gets one delivery for it, not one per append.
 
 **Where the position lives.** Each answer to `OnProgress` carries the read
 position, and the server keeps it on the callback and sends it back with the
@@ -645,10 +648,11 @@ class ToolsHandler:
         return StreamOperationHandler(open_tool_stream)
 ```
 
-- **Which Worker serves it.** `TemporalStreamsHandler` runs on any Worker
-  of the Activity's namespace whose client carries the stream store. It
-  needs no tie to the Activity's task queue or Worker. Its client needs
-  `DescribeActivityExecution` in that namespace, since Core checks the owner.
+- **Which Worker serves it.** `TemporalStreamsHandler` runs on any Worker of
+  the Activity's namespace whose client carries the stream store. It needs
+  no tie to the Activity's task queue or Worker. Its client needs
+  `DescribeActivityExecution` in that namespace, since the stream runtime
+  checks the owner.
 - **A retried start.** A retried start has the same request id. With an
   Activity id derived from it and `USE_EXISTING`, it reaches the same run,
   and the caller attaches once.
@@ -680,7 +684,7 @@ Workflow that reads its stream, directly or recorded.
 A stream can hold link records that open other streams, such as one per tool
 call of an agent (see [Link records and followers](../README.md)). A caller
 follows them all through the stream service's `follow` operation, which
-Core serves on the owner's Worker.
+The stream runtime serves on the owner's Worker.
 
 ```python
 reader = StreamReader(handle, item_type=Event, endpoint="agents", follow_links=True)
@@ -706,9 +710,9 @@ while (items := await reader.next_followed()) is not None:
   `max_receiver_state_bytes` fails the call, so raise the server's
   `callback.nexusHandler.receiverStateMaxSize` for a follower with many open
   links.
-- **Authorization.** `authorize` sees one `follow` access for the root. Core
-  opens the linked streams in the same namespace with no further check, so
-  allowing a follow allows every stream its links reach.
+- **Authorization.** `authorize` sees one `follow` access for the root. The
+  stream runtime opens the linked streams in the same namespace with no
+  further check, so allowing a follow allows every stream its links reach.
 - **Limits.** A link to another namespace or to a stream behind another
   endpoint is not expanded. It comes as `SKIPPED` with reason `endpoint`,
   and the caller may follow it on its own. `append` takes no links. A
@@ -733,8 +737,9 @@ in a new run from its position, and replays.
 - If a stream gets no attach and no notification for
   `streamnotifier.idleTimeout` (7 days by default), the notifier fails the
   callers waiting on it. The stream stays open, and later attaches and
-  notifications work as before. Core sends a busy stream's last counter
-  again once a day, so a stream that gets appends keeps its notifier.
+  notifications work as before. The stream runtime sends a busy stream's
+  last counter again once a day, so a stream that gets appends keeps its
+  notifier.
 - While callers are attached, the notifier checks the owner Workflow every
   `streamnotifier.ownerCheckInterval` (30 seconds by default). If the owner's
   run chain closed without closing the stream, the notifier closes it by the
@@ -764,8 +769,8 @@ in a new run from its position, and replays.
   the new chain's records. Give each stream owner its own Workflow id, or
   reuse an id only after its readers finish.
 - `close_workflow_stream` closes the store first, then the notifier, from
-  one Local Activity. Core tries a failed notifier close again with
-  backoff, from 1 second up to 1 minute. A close the server refuses for
+  one Local Activity. The stream runtime tries a failed notifier close again
+  with backoff, from 1 second up to 1 minute. A close the server refuses for
   good, such as one for a stream it doesn't know, isn't retried. The Local
   Activity's retries cover the rest.
 - No Worker closes a stream when its owner's run chain ends. A stream that
@@ -882,9 +887,9 @@ callbacks on a standalone operation, so the sample test and the reader,
 progress, stream operation and follower lifecycle tests skip there.
 `scripts/streams_live_lane.sh` builds a server that has the notifier, starts
 it with the settings above and a scratch Redis, and runs those tests against
-it, along with Core's live notifier test. It fails unless each test on its
-gated list passes. A release of streams over Nexus needs a green run of it,
-until CI has a lane with such a server.
+it, along with the stream runtime's live notifier test. It fails unless each
+test on its gated list passes. A release of streams over Nexus needs a green
+run of it, until CI has a lane with such a server.
 
 The push cases in `tests/contrib/streams/test_nexus_push.py` run a
 StreamDriver over a store with a notification log, on memory, standalone

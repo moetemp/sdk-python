@@ -1,4 +1,4 @@
-"""The stream service's handler, which Core serves."""
+"""The stream service's handler, which the stream runtime serves."""
 
 from __future__ import annotations
 
@@ -110,25 +110,27 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
     point a Nexus endpoint at the Worker's task queue. The Worker's client
     must carry a stream store, and a stream lives in the client's namespace.
 
-    Core serves each call and runs every rule of the contract. The handler
-    runs only what Core can't: ``authorize``, and the namespace's payload
-    codec from the Worker's client. The store keeps each body encoded with
-    that codec, and a read decodes the bodies, so Workflow code that reads
-    gets plain bodies with no codec of its own. Core holds those plain bodies
-    in memory during the call only. It never stores or logs them.
+    The stream runtime serves each call and runs every rule of the contract.
+    The handler runs only what the stream runtime can't: ``authorize``, and
+    the namespace's payload codec from the Worker's client. The store keeps
+    each body encoded with that codec, and a read decodes the bodies, so
+    Workflow code that reads gets plain bodies with no codec of its own. The
+    stream runtime holds those plain bodies in memory during the call only.
+    It never stores or logs them.
 
-    The handler holds no state between calls. A reader carries Core's read
-    state in ``ReadInput.state``, so any Worker on the endpoint's task queue
-    can serve its next call, and retries are deduplicated by the store.
+    The handler holds no state between calls. A reader carries the stream
+    runtime's read state in ``ReadInput.state``, so any Worker on the
+    endpoint's task queue can serve its next call, and retries are
+    deduplicated by the store.
 
     A read answers with at most ``max_records`` records and, past its first
     record, at most ``max_answer_bytes`` of records as they cross, so a read's
     result stays below the server's blob size limit. A record whose bytes
     would take more than ``max_record_bytes`` in a read result can never be
     read through the service, so an append with one is refused. A record
-    already in the store that is larger, a record Core can't parse, and a
-    record whose body the codec can't decode each cross as an error at their
-    cursor, which a reader goes on past. Sizes count what crosses: the record
+    already in the store that is larger, a record the stream runtime can't
+    parse, and a record whose body the codec can't decode each cross as an
+    error at their cursor, which a reader goes on past. Sizes count what crosses: the record
     bytes as base64, about 4/3 of them.
 
     A read that names a floor holder holds its records in the store and
@@ -241,7 +243,7 @@ class TemporalStreamsHandler(TemporalStreamsForwarder):
         ctx: nexusrpc.handler.StartOperationContext,
         transfer: Any,
     ) -> Any:
-        """Serve one operation in Core, running the codec when Core asks."""
+        """Serve one operation in the stream runtime, which asks for the codec."""
         return await serve_in_core(
             temporalio.nexus.client(),
             operation,
@@ -312,14 +314,14 @@ async def serve_in_core(
     limits: NexusLimits,
     deadline: datetime | None,
 ) -> Any:
-    """Serve one stream service operation in Core, on the store of ``client``.
+    """Serve one stream service operation on the store of ``client``.
 
     ``transfer`` is the input's JSON transfer form, and the answer is the
-    output's. Core runs every rule of the contract and asks for the codec of
-    ``client`` when a body crosses it.
+    output's. The stream runtime runs every rule of the contract and asks for
+    the codec of ``client`` when a body crosses it.
 
     Raises:
-        nexusrpc.HandlerError: Core refused the call.
+        nexusrpc.HandlerError: The stream runtime refused the call.
         ValueError: No stream store is registered on ``client``.
     """
     service = await store_for_client(client)._nexus_service_for(client)
@@ -398,8 +400,8 @@ def _caller_namespace(ctx: nexusrpc.handler.StartOperationContext) -> str | None
 
 
 def _internal(error: Exception) -> NexusFailure:
-    # The same shape Core gives a stream condition, with the error's class as
-    # the cause's type and no stack.
+    # The same shape the stream runtime gives a stream condition, with the
+    # error's class as the cause's type and no stack.
     name = type(error).__name__
     return NexusFailure(
         handler_error_type=nexusrpc.HandlerErrorType.INTERNAL.name,
@@ -424,8 +426,8 @@ def _handler_error(failure: NexusFailure) -> nexusrpc.HandlerError:
     try:
         kind = nexusrpc.HandlerErrorType[failure.handler_error_type]
     except KeyError:
-        # A type this release doesn't know, which only a Core from another
-        # release sends.
+        # A type this release doesn't know, which only a stream runtime from
+        # another release sends.
         kind = nexusrpc.HandlerErrorType.INTERNAL
     return nexusrpc.HandlerError(
         failure.message,

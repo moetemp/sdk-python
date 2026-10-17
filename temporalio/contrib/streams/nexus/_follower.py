@@ -120,14 +120,14 @@ class StreamReadTransport(Protocol):
 
 
 class StoreTransport:
-    """Reads through the stream service in Core, on the store of a client.
+    """Reads through the stream runtime's stream service, on the store of a client.
 
     .. warning::
         This API is experimental and may change in future versions.
 
-    This is the path an outside reader takes. Core runs every rule of the
-    contract, and the client's payload codec decodes each body. Use it for a
-    stream in the client's namespace and store.
+    This is the path an outside reader takes. The stream runtime runs every
+    rule of the contract, and the client's payload codec decodes each body.
+    Use it for a stream in the client's namespace and store.
     """
 
     def __init__(
@@ -296,10 +296,10 @@ class StreamFollowerService:
     read, then calls :meth:`StreamFollower.on_close`.
 
     The receiver state is the generated :class:`ReadInput` with the stream,
-    in its JSON transfer form. It holds the cursor and Core's read state, so
-    the superseded and stale marks hold across calls and Workers. If it is
-    larger than ``max_receiver_state_bytes``, the follower drops Core's read
-    state and keeps the cursor. Marks of the dropped producers can then read
+    in its JSON transfer form. It holds the cursor and the stream runtime's read
+    state, so the superseded and stale marks hold across calls and Workers. If
+    it is larger than ``max_receiver_state_bytes``, the follower drops the
+    stream runtime's read state and keeps the cursor. Marks of the dropped producers can then read
     without ``SUPERSEDED``.
 
     The stream service and the follower must use the same payload codec,
@@ -847,8 +847,8 @@ def _state_out(position: ReadInput, cap: int) -> bytes:
     state = _CONTRACT.to_payload(position).data
     if len(state) <= cap:
         return state
-    # Core's read state lets the marks hold across reads, and the cursor alone
-    # still loses no record.
+    # The stream runtime's read state lets the marks hold across reads, and
+    # the cursor alone still loses no record.
     return _CONTRACT.to_payload(dataclasses.replace(position, state=None)).data
 
 

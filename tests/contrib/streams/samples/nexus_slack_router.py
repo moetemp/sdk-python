@@ -131,10 +131,11 @@ async def main(client: Client, endpoint: str, task_queue: str) -> Routed:
     ``streamnotifier.enabled``.
     """
     # The store rides the client, and the Worker built from it gets the store.
-    # With notifications on, Core tells the server's notifier when the stream
-    # moves, and the Worker serves the reads on the same endpoint. The router
-    # reads directly by default, through ExecuteSyncNexusOperation with this
-    # client, so History keeps each read's range and not its records.
+    # With notifications on, the stream runtime tells the server's notifier
+    # when the stream moves, and the Worker serves the reads on the same
+    # endpoint. The router reads directly by default, through
+    # ExecuteSyncNexusOperation with this client, so History keeps each read's
+    # range and not its records.
     store = MemoryStreams().notify_on_append()
     reads = StreamDirectReads({endpoint: ClientTransport(client, endpoint)})
     store_client = await Client.connect(

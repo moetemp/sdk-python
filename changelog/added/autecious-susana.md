@@ -1,1 +1,1 @@
-Core: Experimental: the API protos carry `WorkflowService.ExecuteSyncNexusOperation`, which runs one synchronous Nexus operation for a caller namespace and persists nothing. The client and the C bridge call it, and its `input` counts against the blob size limit.
+Experimental: `ClientTransport` calls `WorkflowService.ExecuteSyncNexusOperation` through the stream runtime by its method path, since Core's client has no stub for it. The call runs one synchronous Nexus operation for a caller namespace and persists nothing.
