@@ -74,13 +74,6 @@ temporalio-sdk-core = { version = "0.10.0", path = "./sdk-core/crates/sdk-core",
     "envconfig",
     "prometheus",
 ] }
-# The stream runtime Python calls. Its defaults are off so the TLS features above
-# pick its provider too. The rev moves with the sdk-core pin, and the patch below
-# makes it use the submodule's crates, so the bridge sees one `Connection` type.
-temporalio-streams = { git = "https://github.com/moetemp/sdk-streams", rev = "4a530898afc704baf05ec62553405c8e1e74e583", default-features = false, features = [
-    "envconfig",
-    "redis",
-] }
 tokio = "1.26"
 # Matches the sdk-core client crate's rustls stack; used to build the custom
 # server certificate verifier for ClientTlsConfig.verification_server_name.
@@ -92,6 +85,15 @@ tokio-stream = "0.1"
 tonic = "0.14"
 tracing = "0.1"
 url = "2.2"
+
+# The stream runtime Python calls. Its defaults are off so the TLS features above
+# pick its provider too. The rev moves with the sdk-core pin, and the patch below
+# makes it use the submodule's crates, so the bridge sees one `Connection` type.
+[dependencies.temporalio-streams]
+git = "https://github.com/moetemp/sdk-streams"
+rev = "4e17e73a9691d60fd9f51f5a919ff2cea2f77991"
+default-features = false
+features = ["envconfig", "redis"]
 
 # The key must match the sdk-rust URL in the sdk-streams manifest byte for byte, or Cargo
 # ignores the patch with only a warning.
