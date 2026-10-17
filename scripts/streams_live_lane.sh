@@ -9,7 +9,7 @@
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: the Bridge server commit the release names)
+#   SERVER_REF         commit to build (default: moe/bridge/v2/dr40-sdk-streams)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-06db55b791af7aaabce357cc6f60399dc8554f4b}
+SERVER_REF=${SERVER_REF:-f67725104c0322212bb3fa2a9db40dadbd8aa66f}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
