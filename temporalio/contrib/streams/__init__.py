@@ -42,8 +42,8 @@ client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
 - Workflow code publishes to its own stream with :func:`workflow_writer`.
-  Core appends each activation's records when the activation completes,
-  and nothing goes to History.
+  The Worker appends each activation's records before it completes the
+  activation, and nothing goes to History.
 - An Activity reaches the stream of the Workflow that scheduled it with
   :func:`activity_handle`, and writes as itself: its Activity id with the
   scheduling run id, and its Temporal attempt. A Local Activity writes as

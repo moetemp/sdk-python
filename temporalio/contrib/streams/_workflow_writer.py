@@ -2,17 +2,18 @@
 
 Workflow code can't do I/O. :func:`workflow_writer` converts and hashes each
 value on the Workflow thread and adds the record to the activation's
-``WorkflowOutputStreamCommit``. The Worker's completion encoder runs each
-body through the payload codec, and Core appends the records to the store
-when the activation completes, before it reports the completion to the
-server. Nothing about them goes to History.
+output. When the activation ends, the Worker runs each body through the
+payload codec and appends the records to the store with one
+``PublishWorkflowTask`` call, before it gives the completion to Core.
+Nothing about them goes to History.
 
-The run is the producer ``@<run id>``. Core gives each Workflow Task a
-producer attempt from History, so a task that fails and runs again writes a
-higher attempt, and readers see ``SUPERSEDED`` for the records of the failed
-task only. Records of tasks that completed stay.
+The run is the producer ``@<run id>``. The stream runtime gives each
+Workflow Task a producer attempt from the task facts Core puts on the
+activation, which come from History. So a task that fails and runs again
+writes a higher attempt, and readers see ``SUPERSEDED`` for the records of
+the failed task only. Records of tasks that completed stay.
 
-Replay sends no commit, since the records are in the store already.
+Replay publishes nothing, since the records are in the store already.
 """
 
 from __future__ import annotations
@@ -20,8 +21,8 @@ from __future__ import annotations
 from typing import Any, Generic, TypeVar, overload
 
 from temporalio import workflow
+from temporalio.bridge.proto.streams import OutputRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
-from temporalio.bridge.proto.workflow_commands import OutputRecord
 from temporalio.contrib.streams._body import content_hash
 from temporalio.contrib.streams._errors import StreamError, StreamUnsupportedError
 from temporalio.contrib.streams._local_activity import _WorkflowInbound
@@ -47,16 +48,16 @@ class _RunWriters:
         self.finished: set[str] = set()
 
     def add(self, record: OutputRecord) -> None:
-        """Add ``record`` to this activation's commit.
+        """Add ``record`` to this activation's output.
 
-        Replay adds nothing, since Core stored the record when the
+        Replay adds nothing, since the Worker stored the record when the
         activation first ran. No limit on the activation's bytes is checked
         here, since replay can't check it the same way, and a caught error
         would then give other commands on replay.
         """
         if workflow.unsafe.is_replaying():
             return
-        workflow._Runtime.current().workflow_stream_commit().records.append(record)
+        workflow._Runtime.current().workflow_stream_records().append(record)
 
 
 # Held on the run's runtime, so the state goes with the run at eviction and is
@@ -99,7 +100,7 @@ class WorkflowStreamWriter(Generic[T]):
     """Publishes to one topic of the running Workflow's own stream.
 
     Each record goes with the completion of the activation that published
-    it, and Core appends it before it reports that completion.
+    it, and the Worker appends it before it gives that completion to Core.
     """
 
     def __init__(self, writers: _RunWriters, topic: str) -> None:

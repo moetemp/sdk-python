@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import temporalio.bridge.proto.streams
 import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.proto.workflow_completion
 import temporalio.common
@@ -125,6 +126,9 @@ class _Instance(WorkflowInstance):
         )
 
         self._current_thread_id: int | None = None
+        self._stream_records: Sequence[
+            temporalio.bridge.proto.streams.OutputRecord
+        ] = []
 
         # Create the instance
         self.globals_and_locals = {
@@ -175,10 +179,14 @@ class _Instance(WorkflowInstance):
         try:
             self._run_code(
                 "with __temporal_importer.applied():\n"
-                "  __temporal_completion = __temporal_in_sandbox.activate(__temporal_activation)\n",
+                "  __temporal_completion = __temporal_in_sandbox.activate(__temporal_activation)\n"
+                "  __temporal_stream_records = __temporal_in_sandbox.instance.stream_records()\n",
                 __temporal_importer=self.importer,
                 __temporal_activation=act,
             )
+            self._stream_records = self.globals_and_locals.pop(
+                "__temporal_stream_records", []
+            )  # type: ignore
             return self.globals_and_locals.pop("__temporal_completion")  # type: ignore
         finally:
             self.importer.restriction_context.is_runtime = False
@@ -202,6 +210,9 @@ class _Instance(WorkflowInstance):
 
     def get_thread_id(self) -> int | None:
         return self._current_thread_id
+
+    def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
+        return self._stream_records
 
     def get_serialization_context(
         self,
