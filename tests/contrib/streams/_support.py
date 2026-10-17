@@ -65,6 +65,10 @@ async def describe_stream_notifier(
     return await call(service.describe_stream_notifier(request))
 
 
+def _serialize(message: Message) -> bytes:
+    return message.SerializeToString()
+
+
 async def call_workflow_service(
     client: Client, rpc: str, request: Message, response_type: type[ResponseT]
 ) -> ResponseT:
@@ -82,7 +86,7 @@ async def call_workflow_service(
     ) as channel:
         method = channel.unary_unary(
             f"/temporal.api.workflowservice.v1.WorkflowService/{rpc}",
-            request_serializer=lambda message: message.SerializeToString(),
+            request_serializer=_serialize,
             response_deserializer=response_type.FromString,
         )
         try:
