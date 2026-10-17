@@ -18,7 +18,7 @@ __all__ = ["MemoryStreams"]
 class MemoryStreams(StreamStorePlugin):
     """A store in this process's memory.
 
-    Core holds it, so the client's handles and every Worker built from the
+    The stream runtime holds it, so the client's handles and every Worker built from the
     client share it. Nothing survives the process, and another process sees
     none of it.
     """
@@ -38,7 +38,7 @@ class MemoryStreams(StreamStorePlugin):
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
             capabilities: A mask over the store's capabilities. A field set to
-                ``False`` turns that capability off, and Core takes its
+                ``False`` turns that capability off, and the stream runtime takes its
                 fallback, as on a store that lacks it. For tests, and to try
                 the weaker guarantees. Every capability when unset.
 

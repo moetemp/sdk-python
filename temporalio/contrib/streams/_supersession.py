@@ -7,9 +7,9 @@ find the withdrawn ones by producer and attempt, not by position. This
 module holds the records a read delivered under their producer, and names
 the ones each ``SUPERSEDED`` withdraws.
 
-It also applies the rules Core's reader applies on every store. It drops a
+It also applies the rules the stream runtime's reader applies on every store. It drops a
 second copy of a record, which a store without producer state can hold, and
-everything after the first ``CLOSE``. Core already dropped them from its own
+everything after the first ``CLOSE``. The stream runtime already dropped them from its own
 reads, so on those the rules change nothing. They matter for records that
 come from somewhere else, for example a copy of a read kept by the
 application.
@@ -27,10 +27,10 @@ __all__ = ["SupersessionTracker", "track_supersession"]
 
 T = TypeVar("T")
 
-# The bounds of a read's state in Core, which forgets the producer it saw
+# The bounds of a read's state in the stream runtime, which forgets the producer it saw
 # least recently past either one. The read reports no SUPERSEDED for a
 # producer it forgot, so holding that producer's records would only use
-# memory. Core counts each producer as its id plus about 20 bytes.
+# memory. The stream runtime counts each producer as its id plus about 20 bytes.
 _MAX_PRODUCERS = 1_000
 _MAX_STATE_BYTES = 16 << 10
 _PRODUCER_OVERHEAD = 20
@@ -51,7 +51,7 @@ class SupersessionTracker(Generic[T]):
     the producers it saw most recently, at most ``max_producers`` of them
     and no more than fit in 16 KiB at their id's length plus 20 bytes each,
     and drops the producer it saw least recently past that. The read's own
-    state in Core forgets producers by the same rule, so a producer the
+    state in the stream runtime forgets producers by the same rule, so a producer the
     tracker dropped gets no ``SUPERSEDED`` either. For producer ids of
     Local Activities, that is about 200 producers. A stream that many Local
     Activities write to has a producer per call, so this bound is what keeps
@@ -59,7 +59,7 @@ class SupersessionTracker(Generic[T]):
     it holds only the records of the newest Workflow Task prefix, since a
     rerun can't withdraw what a completed task wrote.
 
-    It drops a record as Core's reader does (see :meth:`drops`). Such a
+    It drops a record as the stream runtime's reader does (see :meth:`drops`). Such a
     record withdraws nothing and is not held.
 
     A record with an empty ``producer_id`` or no attempt can't be
@@ -107,7 +107,7 @@ class SupersessionTracker(Generic[T]):
         return self._closed
 
     def drops(self, record: StreamRecord[T]) -> bool:
-        """Whether Core's reader rules drop ``record``, so a reader doesn't show it.
+        """Whether the stream runtime's reader rules drop ``record``, so a reader doesn't show it.
 
         ``CLOSE`` and ``TOPIC`` records are dropped, and so is every record
         after the first ``CLOSE`` of the topic or of the run chain. So is a
@@ -166,7 +166,7 @@ class SupersessionTracker(Generic[T]):
                 self.forget(supersession.producer_id)
             return withdrawn
         if record.stale:
-            # Core counts a stale record as a sight of its producer.
+            # The stream runtime counts a stale record as a sight of its producer.
             if record.producer_id in self._held:
                 self._held.move_to_end(record.producer_id)
             return [record]
@@ -231,7 +231,7 @@ class SupersessionTracker(Generic[T]):
 def _withdraws(supersession: Supersession, held: int) -> bool:
     if supersession.producer_id.startswith(WORKFLOW_PRODUCER_PREFIX):
         # A Workflow's attempt is its Workflow Task prefix, then the retry of
-        # that task. Core withdraws only the task of the attempt it names, a
+        # that task. The stream runtime withdraws only the task of the attempt it names, a
         # rerun's or one whose rerun wrote nothing, since the others completed.
         return (
             held >> _RETRY_BITS == supersession.previous_attempt >> _RETRY_BITS

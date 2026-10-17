@@ -5,8 +5,10 @@
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
 it from Workflow code, and its Activities and any client append to it.
 Outside readers follow it from a cursor. Records live in the application's
-Redis or PostgreSQL and never pass through Temporal or its History. Core runs the store
-for every SDK, so Python reads what any other SDK writes. Publishes and
+Redis or PostgreSQL and never pass through Temporal or its History. The
+stream runtime, the `temporalio-streams` crate from the sdk-streams
+repository, runs the store for every SDK, so Python reads what any other SDK
+writes. Publishes and
 appends add nothing to History.
 
 ## Register
@@ -25,10 +27,10 @@ client = await Client.connect(
 ```
 
 Redis 7.0 or later is required. Use `maxmemory-policy noeviction`: an
-evicting Redis drops whole stream keys under memory pressure, and Core logs
-a warning when it sees another policy. For tests and local development,
-`temporalio.contrib.streams.memory.MemoryStreams` keeps streams in the
-process.
+evicting Redis drops whole stream keys under memory pressure, and the stream
+runtime logs a warning when it sees another policy. For tests and local
+development, `temporalio.contrib.streams.memory.MemoryStreams` keeps streams
+in the process.
 
 To keep streams in PostgreSQL 14 or later, register
 `temporalio.contrib.streams.postgres.PostgresStreams` instead. It makes its
@@ -96,21 +98,21 @@ async for record, withdrawn in track_supersession(handle.read(topic=TOKENS)):
 
 A record marked `stale` comes back withdrawn as it arrives, since an older
 attempt wrote it after the read delivered a newer one. The tracker keeps
-every record it may still withdraw in memory, for the producers it saw
-most recently. It keeps at most `max_producers` of them (1,000 by default),
-and no more than fit in 16 KiB at each id's length plus 20 bytes. Past that
-it drops the producer it saw least recently. The read's state in Core
-forgets producers by the same rule, so a dropped producer gets no
+every record it may still withdraw in memory, for the producers it saw most
+recently. It keeps at most `max_producers` of them (1,000 by default), and
+no more than fit in 16 KiB at each id's length plus 20 bytes. Past that it
+drops the producer it saw least recently. The read's state in the stream
+runtime forgets producers by the same rule, so a dropped producer gets no
 `SUPERSEDED` either. Each Local Activity call is a producer, about 57 bytes
 of id each, so on a stream that many calls write the tracker holds about 200
 of them and its memory stays steady. For a Workflow's producer, `@<run id>`,
-it holds only the records of the newest Workflow Task, since a
-`SUPERSEDED` withdraws only the records of one task: the rerun's own, or an
-earlier one whose rerun wrote nothing to the topic. Of one producer it keeps the
-newest `max_records_per_producer` records (10,000 by default), so a long
-attempt can't grow it either. A `SUPERSEDED` past that withdraws only the
-records still held. Call `forget(producer_id)` once a producer can't retry,
-to drop it sooner.
+it holds only the records of the newest Workflow Task, since a `SUPERSEDED`
+withdraws only the records of one task: the rerun's own, or an earlier one
+whose rerun wrote nothing to the topic. Of one producer it keeps the newest
+`max_records_per_producer` records (10,000 by default), so a long attempt
+can't grow it either. A `SUPERSEDED` past that withdraws only the records
+still held. Call `forget(producer_id)` once a producer can't retry, to drop
+it sooner.
 
 A future Workflow reader can't drop superseded records silently, because
 replay must see the same records, so it will deliver `SUPERSEDED` too.
@@ -153,13 +155,14 @@ Known limits:
 
 - **One describe call.** Each Local Activity attempt makes one
   `DescribeWorkflowExecution` call before its first append, so its first
-  record waits one round trip to the server. Later appends make no call.
-  Core's owner check also describes the Workflow, but it caches the answer
-  per owner run for a minute, so the run's Local Activities share it.
+  record waits one round trip to the server. Later appends make no call. The
+  stream runtime's owner check also describes the Workflow, but it caches
+  the answer per owner run for a minute, so the run's Local Activities share
+  it.
 - **Describe permission.** The Worker's identity needs permission to
-  describe the Workflow (`DescribeWorkflowExecution` on its namespace),
-  both for the attempt and for Core's owner check. Without it, the first
-  append fails.
+  describe the Workflow (`DescribeWorkflowExecution` on its namespace), both
+  for the attempt and for the stream runtime's owner check. Without it, the
+  first append fails.
 - **A later Core change removes the call.** Workflow code doesn't see the
   Workflow Task attempt, so the server is asked for it. A later Core change
   can supply the Workflow Task attempt, which removes the call.
@@ -388,7 +391,7 @@ async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
   same items in batches, one Local Activity per step, and sleeps on the
   wakes of every open source. Each open source is one subscription of the
   Workflow. By default each step's marker holds its ranges and a digest,
-  and replay reads them again through Core.
+  and replay reads them again through the stream runtime.
 - **Retries.** `SUPERSEDED` does not take back an expanded link. The link
   record and the withdrawal both reach user code, and
   `SupersessionTracker` withdraws the link.
@@ -403,7 +406,7 @@ How the harness's subagent events map:
 | `SUBAGENT_STARTED` with the child `workflow_id` | `link(StreamRef.for_workflow(child_id), name=...)` |
 | `SUBAGENT_MESSAGE_SENT` with `from_offset` | `link(..., after=<child cursor>)` for each turn |
 | `SUBAGENT_REPLY_RECEIVED` | `join(name=..., until=<child cursor at the turn end>)` |
-| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which Core reports |
+| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which the stream runtime reports |
 | A merge offset per child | `FollowPosition`, which holds every open segment |
 
 Known limits:
@@ -419,9 +422,10 @@ The sample runs in full in `tests/contrib/streams/samples/agent_with_links.py`.
 
 ## A Workflow publishes to its own stream
 
-Workflow code can't do I/O, so `workflow_writer` hands its records to Core
-with the activation that published them. Core appends them to the store when
-the activation completes, before it reports the Workflow Task to the server.
+Workflow code can't do I/O, so `workflow_writer` hands its records to the
+Worker with the activation that published them. The Worker appends them to
+the store through the stream runtime when the activation ends, before it
+gives the completion to Core, so before the Workflow Task goes to the server.
 
 ```python
 STEPS = topic("steps", str)
@@ -462,8 +466,9 @@ class Agent:
   with `StreamOutputNotAppended` and retries, as for any task failure. The
   run makes no progress until the store takes the records.
 - **Closed topic.** If the store reports the topic closed, a retry could
-  never land, so Core drops that topic's records with a warning and the task
-  goes on. A Workflow can't see this through its writer.
+  never land, so the stream runtime drops that topic's records with a
+  warning and the task goes on. A Workflow can't see this through its
+  writer.
 - **Run end.** The records of the activation that completes, fails, cancels
   or continues the run as new land with that completion. `finish()` writes
   `FINISH` with the activation. `flush()` returns at once, since nothing
@@ -474,7 +479,7 @@ class Agent:
 - **Queries and validators.** Opening a writer or publishing there raises
   `ReadOnlyContextError`.
 - **Codec.** The values are converted in the Workflow. The payload codec
-  runs on each record body when the Worker encodes the completion.
+  runs on each record body when the Worker publishes the records.
 - **Size.** A record holds at most 1.5 MiB. A larger publish raises
   `StreamError` and publishes nothing. One activation's records have no
   limit in the Workflow, since replay can't check one the same way.
@@ -484,9 +489,8 @@ Known limits:
 - **One output stream per agent.** A Workflow publishes only to its own
   stream. Use one topic per kind of output, for example `steps` and
   `tokens`, and write to another Workflow's stream from an Activity.
-- **The Worker needs the store.** Core on the Workflow's Worker does the
-  append, so every Worker that runs the Workflow needs the store plugin on
-  its client.
+- **The Worker needs the store.** The Workflow's Worker does the append, so
+  every Worker that runs the Workflow needs the store plugin on its client.
 - **No check on replay.** Replay doesn't compare the records the run
   publishes with the store, so a Workflow change that publishes other
   records replays without an error.
@@ -544,7 +548,7 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window. Close earlier with
   `close_workflow_stream` in the Workflow or `close()` on a handle. A
-  Workflow doesn't see a close from outside through its writer: Core drops
+  Workflow doesn't see a close from outside through its writer: the stream runtime drops
   its later records on that topic, and the run goes on. So close a topic
   from the Workflow that owns it, or have readers check how it closed. On a
   store without producer state, a late append can still answer success, and

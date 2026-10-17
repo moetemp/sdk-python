@@ -20,13 +20,18 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     RecordKind,
     StreamClosedError,
+    StreamRefusedError,
+    StreamUnsupportedError,
     get_stream_handle,
     topic,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.exceptions import ApplicationError
-from temporalio.service import RPCError, RPCStatusCode
-from tests.contrib.streams._support import connect_with, read_all
+from tests.contrib.streams._support import (
+    connect_with,
+    describe_stream_notifier,
+    read_all,
+)
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
 
@@ -125,15 +130,14 @@ async def _describe_notifier(
             topic=TOKENS.name,
         ),
     )
-    return await client.workflow_service.describe_stream_notifier(request)
+    return await describe_stream_notifier(client, request)
 
 
 async def _server_has_notifier(client: Client, workflow_id: str) -> bool:
     try:
         await _describe_notifier(client, workflow_id)
-    except RPCError as error:
-        if error.status == RPCStatusCode.UNIMPLEMENTED:
-            return False
-        if error.status != RPCStatusCode.NOT_FOUND:
-            raise
+    except StreamUnsupportedError:
+        return False
+    except StreamRefusedError:
+        pass
     return True

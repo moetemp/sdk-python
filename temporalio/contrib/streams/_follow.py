@@ -1,6 +1,6 @@
 """Following a stream and the streams its links open, in one order.
 
-Core's ``Follow`` keeps the order. It reads the root and each open linked
+The stream runtime's ``Follow`` keeps the order. It reads the root and each open linked
 stream, holds a child's records until its ``OPEN`` and a parent's records
 after a ``JOIN`` until the child reached the join point, and reports each
 link's state. What stays here is what needs the user's types: the codec of
@@ -53,7 +53,7 @@ class FollowPosition:
     """Where a follower stands, in the root stream and in each open link.
 
     Pass it as ``after=`` to resume. It is plain data, so it can cross
-    Continue-as-New. ``cursor`` is the root's cursor, and ``state`` Core's
+    Continue-as-New. ``cursor`` is the root's cursor, and ``state`` the stream runtime's
     follow state in base64, which holds the cursor of each open linked
     stream.
     """
@@ -107,7 +107,7 @@ class FollowedItem(Generic[T]):
     position: FollowPosition | None
     """Where to resume after this item.
 
-    Set only on the last item of each batch, since Core gives the follow
+    Set only on the last item of each batch, since the stream runtime gives the follow
     state at each batch end. Other items carry ``None``. To resume from an
     earlier item, resume from the previous batch end, which gives that
     item and the rest of its batch again."""

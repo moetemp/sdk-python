@@ -48,9 +48,10 @@ LOCAL_ACTIVITY_HEADER = "__temporal_streams_local_activity"
 STREAM_OWNER_HEADER = "__temporal_stream_owner"
 """The header that marks an Activity as the owner of its own stream.
 
-Core closes the streams of a marked Activity when the scheduling Workflow
-sees the Activity end. Only the key counts, since a header codec may encode
-the value.
+When the scheduling Workflow sees a marked Activity end, the Worker passes
+the resolution in its publish call, and the stream runtime closes the
+Activity's streams. Only the key counts, since a header codec may encode the
+value.
 """
 
 LOCAL_ATTEMPTS = 10_000

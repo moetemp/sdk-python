@@ -1,22 +1,22 @@
 """Reaching a stream from an Activity or from client code.
 
-Every call goes to Core's stream service, which checks the owner, mints and
+Every call goes to the stream service, which checks the owner, mints and
 checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
 needs the plaintext or the user's types: converting values, the two hashes
 taken before the codec, and the codec itself.
 
 An Activity reaches the stream of the Workflow that scheduled it, or its own
-stream when the Workflow scheduled it to own one, and writes as itself: Core derives its producer id as
-``<Activity id>@<scheduling run id>`` and its producer attempt from the
-attempt's start time and its Temporal attempt, so a retry is reported to
-readers as ``SUPERSEDED``. The
-run is part of the id because a stream outlives a run, and Activity ids
-repeat across the runs of a chain. A standalone Activity has no scheduling
-Workflow. It owns a stream of its own and writes it as
-``<Activity id>@<Activity run id>``. A Local Activity writes as
-``__temporal_local_<call number>@<scheduling run id>``, with an attempt that grows
-across its reruns (see ``_local_activity``). Its attempt doesn't fit the
-Activity form's 32 bits, so it writes as a named producer.
+stream when the Workflow scheduled it to own one, and writes as itself. The
+stream runtime derives its producer id as ``<Activity id>@<scheduling run id>``
+and its producer attempt from the attempt's start time and its Temporal
+attempt, so a retry is reported to readers as ``SUPERSEDED``. The run is part
+of the id because a stream outlives a run, and Activity ids repeat across the
+runs of a chain. A standalone Activity has no scheduling Workflow. It owns a
+stream of its own and writes it as ``<Activity id>@<Activity run id>``. A
+Local Activity writes as ``__temporal_local_<call number>@<scheduling run id>``,
+with an attempt that grows across its reruns (see ``_local_activity``). Its
+attempt doesn't fit the Activity form's 32 bits, so it writes as a named
+producer.
 
 Any process holding a client reaches a Workflow's stream by Workflow id and
 writes with a producer id and attempt of its own.
@@ -120,7 +120,7 @@ class StreamProducer(Generic[T]):
         self._local_call = local_call
         self._sequence = 1
         self._last = BEGINNING
-        # A batch reads the sequence, then awaits the codec and Core, then
+        # A batch reads the sequence, then awaits the codec and the stream runtime, then
         # moves it on; calls one at a time keep each batch's sequences.
         self._lock = asyncio.Lock()
 
@@ -525,7 +525,7 @@ class StreamHandle:
         """Close ``topic`` with ``result``, or with ``error`` as a failure.
 
         The store refuses appends from then on, and every read ends after
-        the last record. Core then closes the stream's notifier on the
+        the last record. The stream runtime then closes the stream's notifier on the
         server, so each reader that sleeps on it wakes and sees the outcome.
         ``result`` goes through the client's data converter and codec, and
         ``error`` through its failure converter. A close with neither ends
@@ -617,7 +617,7 @@ class StreamHandle:
         )
 
     async def _read_run_id(self) -> str:
-        """The run a read names to Core, which ends a read when that run closes.
+        """The run a read names to the stream runtime, which ends a read when that run closes.
 
         A read must end only with its chain. While the chain that holds
         ``chain_run_id`` is the Workflow id's newest, the read names no run
@@ -926,7 +926,7 @@ def _standalone_handle(info: temporalio.activity.Info) -> ActivityStreamHandle:
 def _set_attempt_start(identity: ActivityProducer, started: datetime) -> None:
     started_time = Timestamp()
     started_time.FromDatetime(started)
-    # A start time Core refuses, such as the epoch that a test environment
+    # A start time the stream runtime refuses, such as the epoch that a test environment
     # gives, leaves the Temporal attempt as the producer attempt.
     if attempt_key(identity.attempt, started_time.ToMilliseconds()) is not None:
         identity.attempt_started_time.CopyFrom(started_time)
@@ -942,11 +942,11 @@ def _activity_attempt(identity: ActivityProducer) -> int:
 
 
 def attempt_key(attempt: int, started_ms: int | None) -> int | None:
-    """The producer attempt Core writes for an Activity attempt.
+    """The producer attempt the stream runtime writes for an Activity attempt.
 
     ``started_ms`` is the Unix time in milliseconds at which the server
     started the attempt, or ``None`` when the producer sends none. Returns
-    ``None`` for an attempt that Core refuses.
+    ``None`` for an attempt that the stream runtime refuses.
     """
     if started_ms is None:
         return attempt

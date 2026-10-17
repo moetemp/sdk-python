@@ -37,15 +37,16 @@ from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
+from tests.contrib.streams._support import (
+    connect_with,
+    new_workflow_id,
+    read_all,
+    streams_crate_dir,
+)
 from tests.helpers import new_worker
 
 TOKENS = topic("tokens", str)
 _HISTORIES = Path(__file__).parent / "histories"
-_VECTORS = (
-    Path(__file__).parents[3]
-    / "temporalio/bridge/sdk-core/crates/streams/testdata/streams/activity_attempts.json"
-)
 
 
 @activity.defn
@@ -81,7 +82,10 @@ class ReadsItsActivityStream:
 
 
 def test_the_attempt_key_matches_the_core_vectors():
-    for vector in json.loads(_VECTORS.read_text()):
+    # Found here, not at import, since the sandbox imports this module again
+    # and refuses the cargo call there.
+    vectors = streams_crate_dir() / "testdata/streams/activity_attempts.json"
+    for vector in json.loads(vectors.read_text()):
         started = vector["started_time"]
         started_ms = None
         if started is not None:

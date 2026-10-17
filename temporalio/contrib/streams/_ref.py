@@ -201,7 +201,7 @@ def stream_address(
     topic: str | None = None,
     run_id: str | None = None,
 ) -> StreamAddress:
-    """Core's address of ``ref``'s stream, on ``topic`` or the ref's topic.
+    """The stream runtime's address of ``ref``'s stream, on ``topic`` or the ref's topic.
 
     ``run_id`` replaces the ref's ``chain_run_id``. An empty one names the
     owner's newest chain or run.
@@ -225,7 +225,7 @@ def stream_address(
 
 
 def from_address(address: StreamAddress) -> StreamRef:
-    """The ref of the stream Core's ``address`` names."""
+    """The ref of the stream the stream runtime's ``address`` names."""
     if address.owner_kind == _OwnerKind.STREAM_OWNER_KIND_ACTIVITY:
         return StreamRef.for_activity(
             address.activity_id, run_id=address.run_id or None, topic=address.topic

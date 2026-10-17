@@ -1,14 +1,16 @@
-"""The PostgreSQL docs this package ships stay in step with Core's store."""
+"""The PostgreSQL docs this package ships stay in step with the crate's store."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
+from tests.contrib.streams._support import streams_crate_dir
+
 _ROOT = Path(__file__).resolve().parents[3]
 _PYTHON_DOC = _ROOT / "temporalio/contrib/streams/docs/postgres-guarantees.md"
-# The grants Core's role test lane runs the store with.
-_CORE_DOC = _ROOT / "temporalio/bridge/sdk-core/crates/streams/docs/postgres.md"
+# The grants the crate's role test lane runs the store with.
+_CORE_DOC = streams_crate_dir() / "docs/postgres.md"
 
 
 def grant_lines(doc: Path) -> list[str]:
