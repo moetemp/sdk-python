@@ -44,6 +44,7 @@ from temporalio.contrib.streams import (
     StreamPosition,
     StreamRecordError,
     StreamRef,
+    StreamRefusedError,
     StreamStorePlugin,
     StreamUnsupportedError,
     _workflow,
@@ -71,11 +72,11 @@ from temporalio.contrib.streams._workflow import (
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
+    describe_stream_notifier,
     new_workflow_id,
     postgres_streams,
 )
@@ -709,7 +710,8 @@ class ReadsOnAServerWithoutANotifier:
 
 async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await describe_stream_notifier(
+            client,
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -718,11 +720,12 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
                     run_id="probe",
                     topic="tokens",
                 ),
-            )
+            ),
         )
-    except RPCError as error:
-        if error.status != RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has the stream notifier")
+    except StreamUnsupportedError:
+        pass
+    except StreamRefusedError:
+        pytest.skip("the server has the stream notifier")
     else:
         pytest.skip("the server has the stream notifier")
     streams_client = await connect_with(client, MemoryStreams())

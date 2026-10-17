@@ -37,7 +37,9 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamDriver,
     StreamPosition,
+    StreamRefusedError,
     StreamStorePlugin,
+    StreamUnsupportedError,
     close_workflow_stream,
     get_stream_handle,
     topic,
@@ -48,10 +50,10 @@ from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE, ReadStates
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
+    describe_stream_notifier,
     new_schema,
     new_workflow_id,
     postgres_streams,
@@ -84,13 +86,11 @@ async def describe_notifier(
         ),
     )
     try:
-        return await client.workflow_service.describe_stream_notifier(request)
-    except RPCError as error:
-        if error.status == RPCStatusCode.NOT_FOUND:
-            return None
-        if error.status == RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has no stream notifier")
-        raise
+        return await describe_stream_notifier(client, request)
+    except StreamRefusedError:
+        return None
+    except StreamUnsupportedError:
+        pytest.skip("the server has no stream notifier")
 
 
 async def skip_without_notifier(client: Client) -> None:
@@ -104,10 +104,11 @@ async def skip_without_notifier(client: Client) -> None:
         ),
     )
     try:
-        await client.workflow_service.describe_stream_notifier(request)
-    except RPCError as error:
-        if error.status == RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has no stream notifier")
+        await describe_stream_notifier(client, request)
+    except StreamRefusedError:
+        pass
+    except StreamUnsupportedError:
+        pytest.skip("the server has no stream notifier")
 
 
 def store(kind: str) -> StreamStorePlugin:
