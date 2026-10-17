@@ -6,9 +6,9 @@ Core for the store it names. Core serves that one store to the client's
 handles and to every Worker built from the client, so a Workflow's publish,
 an Activity's append and an outside read meet in the same place.
 
-On a Worker the plugin hands Core the store, which appends what
-:func:`temporalio.contrib.streams.workflow_writer` publishes when the
-activation completes. It adds the interceptor that gives a Local Activity a
+On a Worker the plugin hands the Worker the store, and the Worker appends
+what :func:`temporalio.contrib.streams.workflow_writer` publishes before it
+completes the activation. It adds the interceptor that gives a Local Activity a
 producer identity and tells Workflow code the Worker has a store. On a
 Replayer it adds the interceptor only, since a replay stores nothing.
 """
@@ -133,7 +133,7 @@ class StreamStorePlugin(SimplePlugin):
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
         """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.
 
-        The Replayer needs no store, since a replay sends no records to Core.
+        The Replayer needs no store, since a replay publishes no records.
         Without the interceptor, ``workflow_writer`` raises
         :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
         """
@@ -148,7 +148,7 @@ class StreamStorePlugin(SimplePlugin):
 
     @property
     def _temporal_stream_store(self) -> StreamStoreRef | None:
-        # The Worker looks for this name on its plugins and gives the store to Core.
+        # The Worker looks for this name on its plugins and publishes its Workflows' records to it.
         return self._store.ref if self._store is not None else None
 
     @property

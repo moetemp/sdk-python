@@ -2912,7 +2912,6 @@ dependencies = [
  "temporalio-client",
  "temporalio-common",
  "temporalio-macros",
- "temporalio-streams",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -2927,15 +2926,23 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
+source = "git+https://github.com/moetemp/sdk-streams?rev=43ede66bbee9294bcdfaa261a368667dfc0635b7#43ede66bbee9294bcdfaa261a368667dfc0635b7"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "crc16",
+ "parking_lot",
  "prost",
+ "prost-wkt-types",
  "redis",
  "sha2",
+ "temporalio-client",
  "temporalio-common",
  "thiserror",
  "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-prost-build",
  "tracing",
 ]
 

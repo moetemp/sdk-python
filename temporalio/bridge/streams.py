@@ -1,8 +1,8 @@
-"""Core's stream store, reached in process.
+"""The stream store of the ``temporalio-streams`` crate, reached in process.
 
-Core serves the stream service against one store per process. Python sends each call as a
-serialized request and gets the serialized response back, so the typed calls in
-:mod:`temporalio.bridge.streams_generated` are generated from Core's protos.
+The crate serves the stream service against one store per connect call. Python sends each call
+as a serialized request and gets the serialized response back, so the typed calls in
+:mod:`temporalio.bridge.streams_generated` are generated from the crate's protos.
 """
 
 from __future__ import annotations

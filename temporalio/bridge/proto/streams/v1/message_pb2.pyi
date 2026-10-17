@@ -44,7 +44,7 @@ class _StreamRecordKindEnumTypeWrapper(
     STREAM_RECORD_KIND_CLOSE: _StreamRecordKind.ValueType  # 5
     """Ends `topic` for every reader, or every topic of the chain when `topic`
     is empty. Readers drop every record after the first one. On a store
-    without close flags, producers and the owner's Core write it to close.
+    without close flags, producers and the owner's Worker write it to close.
     """
     STREAM_RECORD_KIND_TOPIC: _StreamRecordKind.ValueType  # 6
     """Names `topic` in the chain's control log `_chain`, so a closer finds the
@@ -65,7 +65,7 @@ Says nothing about that producer's outcome and does not end the stream.
 STREAM_RECORD_KIND_CLOSE: StreamRecordKind.ValueType  # 5
 """Ends `topic` for every reader, or every topic of the chain when `topic`
 is empty. Readers drop every record after the first one. On a store
-without close flags, producers and the owner's Core write it to close.
+without close flags, producers and the owner's Worker write it to close.
 """
 STREAM_RECORD_KIND_TOPIC: StreamRecordKind.ValueType  # 6
 """Names `topic` in the chain's control log `_chain`, so a closer finds the
@@ -119,7 +119,7 @@ class StreamRecord(google.protobuf.message.Message):
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The value the producer published. Lang runs it through the payload
         codec and external storage before it reaches any store, so a store and
-        Core see only the encoded payload.
+        the service see only the encoded payload.
         """
     @property
     def metadata(

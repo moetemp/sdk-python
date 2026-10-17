@@ -51,6 +51,7 @@ import temporalio.bridge.proto.activity_result
 import temporalio.bridge.proto.child_workflow
 import temporalio.bridge.proto.common
 import temporalio.bridge.proto.nexus
+import temporalio.bridge.proto.streams
 import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.proto.workflow_commands
 import temporalio.bridge.proto.workflow_completion
@@ -249,6 +250,18 @@ class WorkflowInstance(ABC):
         """
         return None
 
+    def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
+        """Return the stream records the last activation published.
+
+        Not an abstractmethod because it is not mandatory to implement. The
+        Worker appends these to the stream store before it completes the
+        activation.
+
+        Returns:
+            The records in publish order, empty if there are none.
+        """
+        return []
+
 
 class UnsandboxedWorkflowRunner(WorkflowRunner):
     """Workflow runner that does not do any sandboxing."""
@@ -445,6 +458,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     def get_thread_id(self) -> int | None:
         return self._current_thread_id
 
+    def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
+        return self._stream_records
+
     #### Activation functions ####
     # These are in alphabetical order and besides "activate", and
     # "_make_workflow_input", all other calls are "_apply_" + the job field
@@ -458,9 +474,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion()
         )
         self._current_completion.successful.SetInParent()
-        self._stream_commit: (
-            temporalio.bridge.proto.workflow_commands.WorkflowOutputStreamCommit | None
-        ) = None
+        self._stream_records: list[temporalio.bridge.proto.streams.OutputRecord] = []
 
         self._current_activation_error: Exception | None = None
         self._deployment_version_for_current_task = (
@@ -1375,15 +1389,10 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     def workflow_is_read_only(self) -> bool:
         return self._read_only
 
-    def workflow_stream_commit(
+    def workflow_stream_records(
         self,
-    ) -> temporalio.bridge.proto.workflow_commands.WorkflowOutputStreamCommit:
-        # Core takes one commit per completion, wherever it sits among the commands.
-        if self._stream_commit is None:
-            command = self._add_command()
-            command.workflow_output_stream_commit.SetInParent()
-            self._stream_commit = command.workflow_output_stream_commit
-        return self._stream_commit
+    ) -> list[temporalio.bridge.proto.streams.OutputRecord]:
+        return self._stream_records
 
     def workflow_memo(self) -> Mapping[str, Any]:
         if self._untyped_converted_memo is None:

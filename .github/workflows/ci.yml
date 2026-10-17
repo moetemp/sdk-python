@@ -130,8 +130,9 @@ jobs:
           # whether the string is empty -- NOT by the exit code, because
           # `cargo tree -i` exits 0 either way (an absent crate just prints
           # "nothing to print" to stderr). Ported from sdk-ruby PR #466.
+          # Normal and build edges only, since a dev-dependency never links.
           links_in_fips_build() {
-            cargo tree -p temporal-sdk-bridge --no-default-features --features fips -i "$1" 2>/dev/null
+            cargo tree -e normal,build -p temporal-sdk-bridge --no-default-features --features fips -i "$1" 2>/dev/null
           }
           echo "== aws-lc-fips-sys must be PRESENT =="
           aws_lc_fips="$(links_in_fips_build aws-lc-fips-sys)"
@@ -309,6 +310,8 @@ jobs:
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
       - run: uv tool install poethepoet
       - run: uv sync --all-extras
+      # The build never reads the sdk-rust rev in the sdk-streams manifest, so check it here.
+      - run: uv run python scripts/check_streams_pin.py
       - run: poe build-develop
       - run: poe test -s tests/contrib/streams
         timeout-minutes: 15

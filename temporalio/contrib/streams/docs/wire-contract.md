@@ -3,10 +3,11 @@
 > This package is experimental and may change in future versions.
 
 This page is the contract another SDK, or a tool, follows to read and write
-the same streams in Redis as Core's store, which every Core-based SDK uses.
-Everything here is part of the stored format: change it and existing
-streams stop working. The canonical scripts are in `crates/streams/lua/` of
-the Core repository: `append.lua`, with the trim and refresh in `keep.lua`.
+the same streams in Redis as the store of the stream runtime, which every
+SDK uses. Everything here is part of the stored format: change it and
+existing streams stop working. The canonical scripts are in
+`crates/streams/lua/` of the sdk-streams repository: `append.lua`, with the
+trim and refresh in `keep.lua`.
 
 ## Redis
 
@@ -41,8 +42,8 @@ Workflow's run chain:
 
 Each entry of a log has one field, `r`, whose value is the serialized
 `temporal.sdk.streams.v1.StreamRecord` protobuf
-(`crates/protos/protos/local/temporal/sdk/streams/v1/message.proto` in
-Core). The package
+(`crates/streams/protos/temporal/sdk/streams/v1/message.proto` in
+sdk-streams). The package
 `temporal.sdk.streams` is reserved for this envelope, so no other proto may
 use it:
 
@@ -76,7 +77,7 @@ later Workflow Task. It withdraws the earlier attempt only when that
 attempt's `task_started_event_id` is not in the new record's
 `completed_tasks`, and the earlier prefix is in that list past its first
 entry. That is the case when a rerun of the earlier task completed and
-wrote nothing to the topic. Core's vectors in
+wrote nothing to the topic. The stream runtime's vectors in
 `crates/streams/testdata/workflow_attempts.json` are the reference.
 
 A reader applies two more rules on every store, so a store without the
@@ -85,7 +86,7 @@ dedupe script below still gives each reader each record once:
 - It keeps, per producer, the newest attempt it delivered and the highest
   sequence of that attempt. A record of that attempt with a sequence at or
   below the highest is a copy, and the reader drops it. A record with
-  sequence 0 is never a copy. Core's vectors in
+  sequence 0 is never a copy. The stream runtime's vectors in
   `crates/streams/testdata/reader_rules.json` are the reference.
 - The first `CLOSE` record of the topic, or one with an empty `topic` in
   the chain, ends the read. The reader doesn't deliver it, and drops every
@@ -145,8 +146,9 @@ touches no record. A missing field or `meta` is not a failure. Do it only
 after the attempt's last append returned, since a retry of an earlier batch
 would find no field to compare with and land a second time. Readers lose
 nothing: a store compares a batch only with its own attempt's field, and
-readers find a newer attempt from the records. Core retires a Workflow's
-earlier attempts this way once the server accepts a Workflow Task.
+readers find a newer attempt from the records. The stream runtime retires a
+Workflow's earlier attempts this way when a later attempt of the run
+publishes, when the Worker evicts the run, and at Worker shutdown.
 
 ## Cursors
 
@@ -168,9 +170,9 @@ expired when `meta.trimmed` is newer than it, or, if the log is gone, when
 
 A writer that sees the Workflow's run chain end (complete, fail, cancel,
 terminate or time out, but not Continue-as-New) sets `HSET chain closed 1`
-and `PEXPIRE chain <retention + 30 days>`. The owner's Core does it after the
-server accepts the run's last Workflow Task. A producer does it when its
-owner check sees the end. Readers write nothing.
+and `PEXPIRE chain <retention + 30 days>`. The owner's Worker does it when
+the run's History shows that its Workflow Task closed the run. A producer
+does it when its owner check sees the end. Readers write nothing.
 
 A close of one topic before its chain ends, such as the owner closing a
 stream, sets `HSET meta closed 1` and `PEXPIRE meta <retention + 30 days>`
@@ -179,9 +181,9 @@ lands after a close returned.
 
 A producer of the earlier interim release runs its own append script in
 Python, and that script checks only `chain`. It knows nothing of a topic
-close. In a fleet that mixes it with Core-based writers, it goes on writing
-to a topic that Core closed, until the chain ends. Upgrade every writer of a
-stream before you rely on a topic close.
+close. In a fleet that mixes it with writers on the stream runtime, it goes
+on writing to a topic that the stream runtime closed, until the chain ends.
+Upgrade every writer of a stream before you rely on a topic close.
 
 ## Plain mode
 
