@@ -26,7 +26,7 @@ import pytest
 from temporalio import workflow
 from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType, StreamOwnerKind
-from temporalio.api.stream.v1 import StreamReference
+from temporalio.api.stream.v1 import StreamReference, StreamWake
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,
@@ -37,7 +37,9 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamDriver,
     StreamPosition,
+    StreamRefusedError,
     StreamStorePlugin,
+    StreamUnsupportedError,
     close_workflow_stream,
     get_stream_handle,
     topic,
@@ -48,10 +50,10 @@ from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE, ReadStates
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
+    describe_stream_notifier,
     new_schema,
     new_workflow_id,
     postgres_streams,
@@ -84,13 +86,11 @@ async def describe_notifier(
         ),
     )
     try:
-        return await client.workflow_service.describe_stream_notifier(request)
-    except RPCError as error:
-        if error.status == RPCStatusCode.NOT_FOUND:
-            return None
-        if error.status == RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has no stream notifier")
-        raise
+        return await describe_stream_notifier(client, request)
+    except StreamRefusedError:
+        return None
+    except StreamUnsupportedError:
+        pytest.skip("the server has no stream notifier")
 
 
 async def skip_without_notifier(client: Client) -> None:
@@ -104,10 +104,11 @@ async def skip_without_notifier(client: Client) -> None:
         ),
     )
     try:
-        await client.workflow_service.describe_stream_notifier(request)
-    except RPCError as error:
-        if error.status == RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has no stream notifier")
+        await describe_stream_notifier(client, request)
+    except StreamRefusedError:
+        pass
+    except StreamUnsupportedError:
+        pytest.skip("the server has no stream notifier")
 
 
 def store(kind: str) -> StreamStorePlugin:
@@ -474,9 +475,10 @@ async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
         assert await asyncio.wait_for(reader.result(), 30) == 31
         await driven.get_workflow_handle(owner).signal(Waits.finish)
     wakes = sum(
-        len(e.workflow_task_scheduled_event_attributes.stream_wakes)
+        a.Is(StreamWake.DESCRIPTOR)
         for e in (await reader.fetch_history()).events
         if e.HasField("workflow_task_scheduled_event_attributes")
+        for a in e.workflow_task_scheduled_event_attributes.attachments
     )
     # One leading and one trailing delivery per window, plus the first wake.
     assert 1 <= wakes <= 2 * (int(elapsed) + 1) + 1, wakes
@@ -510,12 +512,18 @@ class _History:
 
 def _wake_tasks(history: Any) -> list[list[Any]]:
     """The wakes of each Workflow Task scheduled event that carries any."""
-    return [
-        list(e.workflow_task_scheduled_event_attributes.stream_wakes)
-        for e in history.events
-        if e.HasField("workflow_task_scheduled_event_attributes")
-        and e.workflow_task_scheduled_event_attributes.stream_wakes
-    ]
+    tasks: list[list[Any]] = []
+    for e in history.events:
+        if not e.HasField("workflow_task_scheduled_event_attributes"):
+            continue
+        wakes: list[Any] = []
+        for attachment in e.workflow_task_scheduled_event_attributes.attachments:
+            wake = StreamWake()
+            if attachment.Unpack(wake):
+                wakes.append(wake)
+        if wakes:
+            tasks.append(wakes)
+    return tasks
 
 
 async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works(

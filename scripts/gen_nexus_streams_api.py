@@ -1,8 +1,9 @@
 """Generate the stream service's Python bindings from its Nexus contract.
 
-Core serves the contract, so its one copy is Core's
-``crates/streams/nexus/temporal_streams.nexusrpc.yaml``, read from the vendored
-Core, and the bindings land in ``temporalio/contrib/streams/nexus/_generated``. With
+The stream runtime serves the contract, so its one copy is the
+``crates/streams/nexus/temporal_streams.nexusrpc.yaml`` of the temporalio-streams
+crate that the bridge pins, and the bindings land in
+``temporalio/contrib/streams/nexus/_generated``. With
 ``--check`` the script generates into a scratch directory and fails when the
 result differs from what is checked in, which is how CI keeps the two in step.
 
@@ -24,17 +25,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+import gen_protos
+
 base_dir = Path(__file__).parent.parent
 package_dir = base_dir / "temporalio" / "contrib" / "streams" / "nexus"
 contract_path = (
-    base_dir
-    / "temporalio"
-    / "bridge"
-    / "sdk-core"
-    / "crates"
-    / "streams"
-    / "nexus"
-    / "temporal_streams.nexusrpc.yaml"
+    gen_protos.streams_proto_dir.parent / "nexus" / "temporal_streams.nexusrpc.yaml"
 )
 output_dir = package_dir / "_generated"
 

@@ -27,6 +27,7 @@ from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
 )
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.contrib.streams import (
@@ -50,7 +51,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
-from tests.contrib.streams._support import vendored_core_nexus
+from tests.contrib.streams._support import call_workflow_service, streams_crate_nexus
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
@@ -180,7 +181,7 @@ async def test_a_cancel_with_a_token_that_names_no_stream_is_a_bad_request(
 
 def test_a_token_reads_as_the_shared_vectors_say() -> None:
     vectors = json.loads(
-        (vendored_core_nexus() / "operation_token_vectors.json").read_text()
+        (streams_crate_nexus() / "operation_token_vectors.json").read_text()
     )
     for vector in vectors["vectors"] + vectors["decode_only"]:
         ref = vector["ref"]
@@ -270,7 +271,9 @@ async def connect(client: Client, store: StreamStorePlugin) -> Client:
 
 async def _skip_without_notifier(client: Client, ref: StreamRef) -> None:
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -278,7 +281,8 @@ async def _skip_without_notifier(client: Client, ref: StreamRef) -> None:
                     workflow_id=ref.workflow_id,
                     topic=ref.topic,
                 ),
-            )
+            ),
+            DescribeStreamNotifierResponse,
         )
     except RPCError as err:
         if err.status == RPCStatusCode.UNIMPLEMENTED:
@@ -852,7 +856,9 @@ async def test_live_a_retried_start_on_an_activity_stream_attaches_once(
 
     assert again.token == first.token
     assert stream_ref_from_token(first.token) == ref
-    described = await client.workflow_service.describe_stream_notifier(
+    described = await call_workflow_service(
+        client,
+        "DescribeStreamNotifier",
         DescribeStreamNotifierRequest(
             namespace=client.namespace,
             stream_ref=StreamReference(
@@ -861,7 +867,8 @@ async def test_live_a_retried_start_on_an_activity_stream_attaches_once(
                 run_id=owner.run_id or "",
                 topic="tokens",
             ),
-        )
+        ),
+        DescribeStreamNotifierResponse,
     )
     assert len(described.callbacks) == 1
     await owner.terminate(reason="done")
@@ -917,7 +924,9 @@ async def test_live_a_retried_start_on_a_tool_stream_attaches_once(
 
         assert again.token == first.token
         assert stream_ref_from_token(first.token) == ref
-        described = await client.workflow_service.describe_stream_notifier(
+        described = await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -927,7 +936,8 @@ async def test_live_a_retried_start_on_a_tool_stream_attaches_once(
                     activity_id="tool-1",
                     topic="tokens",
                 ),
-            )
+            ),
+            DescribeStreamNotifierResponse,
         )
         assert len(described.callbacks) == 1
         await agent.terminate()

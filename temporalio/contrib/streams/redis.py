@@ -17,7 +17,7 @@ __all__ = ["RedisStreams"]
 
 
 class RedisStreams(StreamStorePlugin):
-    """A store in a Redis or a Redis Cluster that Core connects to.
+    """A store in a Redis or a Redis Cluster that the stream runtime connects to.
 
     One instance per Redis deployment. Pass it to the client as a plugin,
     and open handles from the client with
@@ -57,10 +57,10 @@ class RedisStreams(StreamStorePlugin):
             retention: How long a stream keeps a record, and how long after
                 its last write the stream itself lives.
             blocking_reads_per_node: How many reads may wait on one node at
-                once, each on a connection of its own. Core's default when
+                once, each on a connection of its own. The stream runtime's default when
                 unset.
             response_timeout: How long a short call waits for its reply.
-                Core's default when unset.
+                The stream runtime's default when unset.
             floor_lease: How long a Workflow reader that replays from the
                 store, as ``workflow_reader`` does by default, holds the records it read against
                 retention after its last read. ``retention`` when unset.
@@ -75,17 +75,17 @@ class RedisStreams(StreamStorePlugin):
                 Zero fails at once.
             notify_doorbells: With a notification log, how many doorbell
                 streams an append rings when its slot's log takes a first
-                entry. A driver blocks on each one. Core's 16 when unset.
+                entry. A driver blocks on each one. The stream runtime's 16 when unset.
             archive: Object storage that keeps records after ``retention``
                 trims them, so streams stay readable longer than Redis
                 memory allows. A running
                 :class:`temporalio.contrib.streams.StreamDriver` fills it,
                 and the store needs
-                ``notify_on_append(notification_log=True)``. Core refuses
+                ``notify_on_append(notification_log=True)``. The stream runtime refuses
                 to connect the store without the log.
             plain: Run no Lua scripts, for a Redis that refuses them. The
                 store then has no producer state, no kept last position, no
-                holds and no change feed, and Core takes the fallback of
+                holds and no change feed, and the stream runtime takes the fallback of
                 each (see :attr:`capabilities`).
 
         Raises:

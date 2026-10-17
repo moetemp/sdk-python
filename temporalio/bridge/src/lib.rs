@@ -66,6 +66,7 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_class::<streams::StreamStoreRef>()?;
     m.add_function(wrap_pyfunction!(streams::connect_stream_store, m)?)?;
+    m.add_function(wrap_pyfunction!(streams::execute_sync_nexus_operation, m)?)?;
 
     m.add_class::<worker::WorkerRef>()?;
     m.add_class::<worker::HistoryPusher>()?;

@@ -24,6 +24,7 @@ import pytest
 
 import temporalio.nexus
 from temporalio import workflow
+from temporalio.api.nexus.v1 import NexusOperationProgress
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamDriver,
@@ -206,7 +207,10 @@ async def test_live_a_busy_stream_notifies_at_most_once_per_debounce_window(
     assert len(await asyncio.wait_for(reader.result(), 60)) == 31
     elapsed = time.monotonic() - started
     deliveries = sum(
-        len(e.workflow_task_scheduled_event_attributes.nexus_operation_progress)
+        sum(
+            a.Is(NexusOperationProgress.DESCRIPTOR)
+            for a in e.workflow_task_scheduled_event_attributes.attachments
+        )
         for e in (await reader.fetch_history()).events
         if e.HasField("workflow_task_scheduled_event_attributes")
     )

@@ -5,7 +5,8 @@ from __future__ import annotations
 from .models import (
     NexusOperationProgress,
     NexusOperationProgressOperation,
-    NexusOperationProgressOperationScheduledEventId,
+    NexusOperationProgressOperationKey,
+    NexusOperationProgressOperationOperationKey,
     OnCompleteRequest,
     OnCompleteRequestResult,
     OnCompleteRequestResultFailure,
@@ -19,7 +20,8 @@ from .services import NotificationService
 __all__ = [
     "NexusOperationProgress",
     "NexusOperationProgressOperation",
-    "NexusOperationProgressOperationScheduledEventId",
+    "NexusOperationProgressOperationOperationKey",
+    "NexusOperationProgressOperationKey",
     "OnCompleteRequest",
     "OnCompleteRequestResult",
     "OnCompleteRequestResultSuccess",

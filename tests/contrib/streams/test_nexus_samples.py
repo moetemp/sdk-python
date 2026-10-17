@@ -13,17 +13,23 @@ import pytest
 
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
-from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
+from temporalio.api.workflowservice.v1 import (
+    DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
+)
 from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
+from tests.contrib.streams._support import call_workflow_service
 from tests.contrib.streams.samples import nexus_slack_router
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 
 async def _skip_without_notifier(client: Client) -> None:
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -31,7 +37,8 @@ async def _skip_without_notifier(client: Client) -> None:
                     workflow_id=f"probe-{uuid.uuid4()}",
                     topic="probe",
                 ),
-            )
+            ),
+            DescribeStreamNotifierResponse,
         )
     except RPCError as err:
         if err.status == RPCStatusCode.UNIMPLEMENTED:

@@ -11,7 +11,8 @@ import gen_protos
 
 base_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(base_dir))
-wit_input_dir = (
+# The upstream WIT dependencies come from Core's API copy.
+wit_deps_dir = (
     base_dir
     / "temporalio"
     / "bridge"
@@ -21,9 +22,12 @@ wit_input_dir = (
     / "protos"
     / "api_upstream"
     / "nexus"
+    / "deps"
 )
+# The workflow service WIT with the stream notifier operations, and the notification service WIT,
+# come from the temporalio-streams crate, which carries the API they name.
+wit_input_dir = gen_protos.streams_proto_dir.parent / "nexus"
 wit_path = wit_input_dir / "workflow-service.wit"
-wit_deps_dir = wit_input_dir / "deps"
 output_dir = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
 # The service a Worker implements to take NexusHandler callbacks. The server calls
 # it, not a Workflow, so it gets plain definitions and no System Nexus caller.
@@ -47,6 +51,22 @@ notificationservice_request_response_proto = (
     / "notificationservice"
     / "v1"
     / "request_response.proto"
+)
+workflowservice_stream_request_response_proto = (
+    gen_protos.streams_api_proto_dir
+    / "temporal"
+    / "api"
+    / "workflowservice"
+    / "v1"
+    / "stream_request_response.proto"
+)
+notificationservice_progress_proto = (
+    gen_protos.nexus_api_proto_dir
+    / "temporal"
+    / "api"
+    / "notificationservice"
+    / "v1"
+    / "progress.proto"
 )
 # Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
 # released yet. Once they land upstream, this moves back to a released nexgen version.
@@ -89,11 +109,15 @@ def build_descriptor_set(descriptor_path: Path) -> None:
             sys.executable,
             "-mgrpc_tools.protoc",
             f"--proto_path={gen_protos.api_proto_dir}",
+            f"--proto_path={gen_protos.streams_api_proto_dir}",
+            f"--proto_path={gen_protos.nexus_api_proto_dir}",
             f"--proto_path={gen_protos.proto_dir}",
             "--include_imports",
             f"--descriptor_set_out={descriptor_path}",
             str(workflowservice_request_response_proto),
             str(notificationservice_request_response_proto),
+            str(workflowservice_stream_request_response_proto),
+            str(notificationservice_progress_proto),
         ]
     )
 

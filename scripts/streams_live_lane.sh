@@ -9,7 +9,7 @@
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: the Bridge server commit the release names)
+#   SERVER_REF         commit to build (default: moe/bridge/v2/dr40-sdk-streams)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-06db55b791af7aaabce357cc6f60399dc8554f4b}
+SERVER_REF=${SERVER_REF:-f67725104c0322212bb3fa2a9db40dadbd8aa66f}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -85,7 +85,7 @@ callback.allowedAddresses:
         AllowInsecure: true
       - Pattern: "127.0.0.1:$HTTP_PORT"
         AllowInsecure: true
-      # Core's live notifier test takes the notifier's callbacks on this address.
+      # The stream runtime's live notifier test takes the notifier's callbacks on this address.
       - Pattern: "127.0.0.1:7899"
         AllowInsecure: true
 streamnotifier.enabled:
@@ -213,9 +213,12 @@ if [[ -z "${STREAMS_REDIS_URL:-}" ]]; then
 fi
 
 if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
+  # The script comes from the checkout of the temporalio-streams crate the bridge builds against.
+  crate_dir=$(cd "$SDK_DIR" && uv run --no-sync python -c \
+    "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
   # Three primaries with one replica each, as the driver's cluster tests need.
   eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
-    bash "$SDK_DIR/temporalio/bridge/sdk-core/crates/streams/scripts/redis-test-servers.sh" |
+    bash "$crate_dir/scripts/redis-test-servers.sh" |
     grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
 fi
 
@@ -496,17 +499,19 @@ for test_id in gated:
 sys.exit(1 if failed else 0)
 PY
 
-# Core sends the notifications and the closes, so its own live test runs against the server too.
-# It returns early without a server, so the lane checks that it ran.
-core_test=streams::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
-STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" \
+# The stream runtime sends the notifications and the closes, so its own live test runs against the
+# server too. It returns early without a server, so the lane checks that it ran.
+crate_dir=$(uv run --no-sync python -c \
+  "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
+crate_test=connection::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
+STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" STREAMS_NOTIFIER_NEXUS_PROGRESS=1 \
   CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK_DIR/cargo-target}" \
-  cargo test --manifest-path temporalio/bridge/sdk-core/Cargo.toml -p temporalio-sdk-core \
-  --features streams --lib -- "$core_test" --exact --nocapture 2>&1 |
-  tee "$WORK_DIR/core-live.log" || status=$?
-if grep -q "set STREAMS_NOTIFIER_SERVER" "$WORK_DIR/core-live.log" ||
-  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/core-live.log"; then
-  echo "live lane: Core's live notifier test did not run and pass" >&2
+  cargo test --manifest-path "$crate_dir/Cargo.toml" -p temporalio-streams \
+  --lib -- "$crate_test" --exact --nocapture 2>&1 |
+  tee "$WORK_DIR/crate-live.log" || status=$?
+if grep -q "set STREAMS_NOTIFIER" "$WORK_DIR/crate-live.log" ||
+  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/crate-live.log"; then
+  echo "live lane: the stream runtime's live notifier test did not run and pass" >&2
   status=1
 fi
 

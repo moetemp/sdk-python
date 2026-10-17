@@ -53,7 +53,7 @@ client waits for the notifications still out when it stops. A process that
 holds only a client calls `await store.flush_notifications()` before it
 exits.
 
-## When Core notifies
+## When the stream runtime notifies
 
 1. A reader reads and waits up to its idle time, 2 seconds by default. A
    read that finds records returns them at once.
@@ -172,7 +172,7 @@ class Connector:
   replay reads the range from the store again (see below).
 - Each read names the run as the subscriber. Only a read that comes back
   empty attaches the run to the stream's notifier, in the same Local
-  Activity, and Core reads once more after the attach, so it finds a record
+  Activity, and the stream runtime reads once more after the attach, so it finds a record
   that landed before the attach. A reader that never goes idle never
   attaches. While the stream is idle, the reader waits with no Local
   Activity and no timer. The server records each wake on the next Workflow
@@ -184,7 +184,7 @@ class Connector:
 - A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
   replay must give your code the same records. `SupersessionTracker` names
   the records each `SUPERSEDED` withdraws.
-- `batch.position` carries the cursor and Core's read state. Pass it as
+- `batch.position` carries the cursor and the stream runtime's read state. Pass it as
   `after=` in the next run, for example after Continue-as-New.
 - `async with` detaches a reader that stops before the stream ends.
 - A reader that finds records on every read ends its Workflow Task after 100
@@ -206,7 +206,7 @@ A Workflow reader keeps what it read in one of two ways. Choose per use case.
 | | Positions (default) | Recorded |
 |---|---|---|
 | Option | `replay_from_store=True` | `replay_from_store=False` |
-| History per read | The range, a digest and Core's read state | Every record of the batch |
+| History per read | The range, a digest and the stream runtime's read state | Every record of the batch |
 | Replay reads | The store, through the store plugin | History only |
 | Replay needs | The store, and the reader's hold on the range | Nothing outside History |
 | Run length | Continue-as-New before `floor_lease` passes | Bounded by History size |
@@ -221,8 +221,8 @@ or keep past the store's retention, or for a run that waits longer than
 
 The store is the record of a stream, so History does not keep a second copy
 of what a Workflow reader read. By default, `replay_from_store=True`, each
-read's marker holds the read's range, Core's digest of its records, and
-Core's read state after the read. The state holds the newest attempt of
+read's marker holds the read's range, the stream runtime's digest of its records, and
+The stream runtime's read state after the read. The state holds the newest attempt of
 each producer the read saw, up to 16 KiB. A read starts from the state the
 reader's previous read ended with, so its marker leaves that out, and
 replay takes it from the previous marker. A read counts only once it
@@ -292,7 +292,7 @@ wraps the codec the client has and passes every other payload through.
 | Nobody | The owner's run chain ends. The notifier's owner check closes the stream |
 
 `close_workflow_stream` puts the run's `FINISH` in the activation, after
-what the run published before. Core appends it before it starts the close's
+what the run published before. The stream runtime appends it before it starts the close's
 Local Activity, which closes the store and the notifier. A Worker with no
 Workflow cache can rerun the task of a close whose Local Activity was still
 in flight, since an eviction cancels it. Readers then see `SUPERSEDED`
@@ -304,7 +304,7 @@ and a Workflow reader raises it after its last batch. A close with a result
 ends the read with no error.
 
 A close from an Activity or a client is not visible to the owner
-Workflow's writer. Core drops the Workflow's later records on that topic
+Workflow's writer. The stream runtime drops the Workflow's later records on that topic
 and the run goes on. Close from the owner Workflow, or have
 readers check how the stream closed.
 

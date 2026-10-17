@@ -21,6 +21,7 @@ import pytest
 
 import temporalio.nexus
 from temporalio import workflow
+from temporalio.api.nexus.v1 import NexusOperationProgress
 from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib.streams import (
     StreamRef,
@@ -152,7 +153,10 @@ async def lane(client: Client, env: WorkflowEnvironment) -> AsyncIterator[_Lane]
 
 def _deliveries(history: Any) -> int:
     return sum(
-        len(e.workflow_task_scheduled_event_attributes.nexus_operation_progress)
+        sum(
+            a.Is(NexusOperationProgress.DESCRIPTOR)
+            for a in e.workflow_task_scheduled_event_attributes.attachments
+        )
         for e in history.events
         if e.HasField("workflow_task_scheduled_event_attributes")
     )

@@ -4,8 +4,8 @@ The operation stays open while the stream runs. Its start attaches the
 caller's callback to the stream's notifier on the server, so the notifier
 tells the caller when the stream moves (Nexus operation progress) and
 completes the operation when the stream closes. The caller learns which
-stream it is from the operation token. Core resolves the stream's run chain,
-mints the token and attaches the callback.
+stream it is from the operation token. The stream runtime resolves the
+stream's run chain, mints the token and attaches the callback.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def stream_ref_from_token(token: str) -> StreamRef:
 
 
 async def _caller_calls(client: Client) -> StreamNexusService:
-    """Core's caller calls, on the store of the operation Worker's client."""
+    """The stream runtime's caller calls, on the operation Worker's client's store."""
     try:
         return await store_for_client(client)._nexus_service_for(client)
     except ValueError as error:
@@ -90,8 +90,8 @@ class StreamOperationHandler(
     operation.
 
     The client of the Worker that runs the operation must carry a stream
-    store plugin, as the stream service's handler's does, since Core attaches
-    the caller through it.
+    store plugin, as the stream service's handler's does, since the stream
+    runtime attaches the caller through it.
 
     .. warning::
         This API is experimental.
@@ -131,7 +131,7 @@ class StreamOperationHandler(
         first_wake = ctx.headers.get(FIRST_WAKE_HEADER)
         stream = stream_address(client.namespace, ref)
         if ref.kind not in ("workflow", "activity", "workflow_activity"):
-            # Core refuses an owner kind this release doesn't open.
+            # The stream runtime refuses an owner kind this release doesn't open.
             stream.owner_kind = StreamOwnerKind.STREAM_OWNER_KIND_UNSPECIFIED
         request = AttachCallerRequest(
             stream=stream,

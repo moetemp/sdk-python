@@ -11,6 +11,7 @@ import collections.abc
 import sys
 import typing
 
+import google.protobuf.any_pb2
 import google.protobuf.descriptor
 import google.protobuf.duration_pb2
 import google.protobuf.internal.containers
@@ -96,6 +97,7 @@ class WorkflowActivation(google.protobuf.message.Message):
     LAST_SDK_VERSION_FIELD_NUMBER: builtins.int
     SUGGEST_CONTINUE_AS_NEW_REASONS_FIELD_NUMBER: builtins.int
     TARGET_WORKER_DEPLOYMENT_VERSION_CHANGED_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_FIELD_NUMBER: builtins.int
     run_id: builtins.str
     """The id of the currently active run of the workflow. Also used as a cache key. There may
     only ever be one active workflow task (and hence activation) of a run at one time.
@@ -157,6 +159,12 @@ class WorkflowActivation(google.protobuf.message.Message):
     the workflow is Pinned.
     Experimental.
     """
+    @property
+    def workflow_task(self) -> global___WorkflowTaskHistoryInfo:
+        """The Workflow Task this activation belongs to, from History. On replay of a Local Activity
+        heartbeat chain, Core merges the chain into one activation, and this names the chain's last
+        task. Evict-only activations leave it unset.
+        """
     def __init__(
         self,
         *,
@@ -176,6 +184,7 @@ class WorkflowActivation(google.protobuf.message.Message):
         ]
         | None = ...,
         target_worker_deployment_version_changed: builtins.bool = ...,
+        workflow_task: global___WorkflowTaskHistoryInfo | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -184,6 +193,8 @@ class WorkflowActivation(google.protobuf.message.Message):
             b"deployment_version_for_current_task",
             "timestamp",
             b"timestamp",
+            "workflow_task",
+            b"workflow_task",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -213,10 +224,59 @@ class WorkflowActivation(google.protobuf.message.Message):
             b"target_worker_deployment_version_changed",
             "timestamp",
             b"timestamp",
+            "workflow_task",
+            b"workflow_task",
         ],
     ) -> None: ...
 
 global___WorkflowActivation = WorkflowActivation
+
+class WorkflowTaskHistoryInfo(google.protobuf.message.Message):
+    """A History-defined identity for a Workflow Task attempt. All fields are functions of the History
+    events up to the task's own WorkflowTaskStarted event, so a live task, a cache miss and a replay
+    get the same values.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    FAILED_ATTEMPTS_FIELD_NUMBER: builtins.int
+    COMPLETED_STARTED_EVENT_IDS_FIELD_NUMBER: builtins.int
+    started_event_id: builtins.int
+    """The id of the task's WorkflowTaskStarted event."""
+    failed_attempts: builtins.int
+    """Attempts of this task since the last completed task that a Worker started and did not
+    complete. A schedule-to-start timeout does not count.
+    """
+    @property
+    def completed_started_event_ids(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """The WorkflowTaskStarted event ids of the most recent completed tasks, newest first, at most
+        8. Fewer than 8 means the list goes back to the run's start. Eight lets a consumer learn the
+        fate of an attempt it saw up to eight completed tasks later, for 64 bytes.
+        """
+    def __init__(
+        self,
+        *,
+        started_event_id: builtins.int = ...,
+        failed_attempts: builtins.int = ...,
+        completed_started_event_ids: collections.abc.Iterable[builtins.int]
+        | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "completed_started_event_ids",
+            b"completed_started_event_ids",
+            "failed_attempts",
+            b"failed_attempts",
+            "started_event_id",
+            b"started_event_id",
+        ],
+    ) -> None: ...
+
+global___WorkflowTaskHistoryInfo = WorkflowTaskHistoryInfo
 
 class WorkflowActivationJob(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -236,8 +296,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     DO_UPDATE_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_START_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_FIELD_NUMBER: builtins.int
-    RESOLVE_NEXUS_OPERATION_PROGRESS_FIELD_NUMBER: builtins.int
-    RESOLVE_STREAM_WAKE_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_ATTACHMENTS_FIELD_NUMBER: builtins.int
     REMOVE_FROM_CACHE_FIELD_NUMBER: builtins.int
     @property
     def initialize_workflow(self) -> global___InitializeWorkflow:
@@ -298,15 +357,8 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     def resolve_nexus_operation(self) -> global___ResolveNexusOperation:
         """A nexus operation resolved."""
     @property
-    def resolve_nexus_operation_progress(
-        self,
-    ) -> global___ResolveNexusOperationProgress:
-        """A started nexus operation reported progress. Number 17 is left to the external stream
-        replay job.
-        """
-    @property
-    def resolve_stream_wake(self) -> global___ResolveStreamWake:
-        """A stream that one of the Workflow's readers subscribed to moved or closed."""
+    def workflow_task_attachments(self) -> global___WorkflowTaskAttachments:
+        """Attachments from the scheduled events of this Workflow Task."""
     @property
     def remove_from_cache(self) -> global___RemoveFromCache:
         """Remove the workflow identified by the [WorkflowActivation] containing this job from the
@@ -335,9 +387,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
         do_update: global___DoUpdate | None = ...,
         resolve_nexus_operation_start: global___ResolveNexusOperationStart | None = ...,
         resolve_nexus_operation: global___ResolveNexusOperation | None = ...,
-        resolve_nexus_operation_progress: global___ResolveNexusOperationProgress
-        | None = ...,
-        resolve_stream_wake: global___ResolveStreamWake | None = ...,
+        workflow_task_attachments: global___WorkflowTaskAttachments | None = ...,
         remove_from_cache: global___RemoveFromCache | None = ...,
     ) -> None: ...
     def HasField(
@@ -365,22 +415,20 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_child_workflow_execution_start",
             "resolve_nexus_operation",
             b"resolve_nexus_operation",
-            "resolve_nexus_operation_progress",
-            b"resolve_nexus_operation_progress",
             "resolve_nexus_operation_start",
             b"resolve_nexus_operation_start",
             "resolve_request_cancel_external_workflow",
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
-            "resolve_stream_wake",
-            b"resolve_stream_wake",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
             b"update_random_seed",
             "variant",
             b"variant",
+            "workflow_task_attachments",
+            b"workflow_task_attachments",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -408,22 +456,20 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_child_workflow_execution_start",
             "resolve_nexus_operation",
             b"resolve_nexus_operation",
-            "resolve_nexus_operation_progress",
-            b"resolve_nexus_operation_progress",
             "resolve_nexus_operation_start",
             b"resolve_nexus_operation_start",
             "resolve_request_cancel_external_workflow",
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
-            "resolve_stream_wake",
-            b"resolve_stream_wake",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
             b"update_random_seed",
             "variant",
             b"variant",
+            "workflow_task_attachments",
+            b"workflow_task_attachments",
         ],
     ) -> None: ...
     def WhichOneof(
@@ -445,8 +491,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             "do_update",
             "resolve_nexus_operation_start",
             "resolve_nexus_operation",
-            "resolve_nexus_operation_progress",
-            "resolve_stream_wake",
+            "workflow_task_attachments",
             "remove_from_cache",
         ]
         | None
@@ -1478,182 +1523,33 @@ class ResolveNexusOperation(google.protobuf.message.Message):
 
 global___ResolveNexusOperation = ResolveNexusOperation
 
-class ResolveNexusOperationProgress(google.protobuf.message.Message):
-    """The latest progress of a started Nexus operation, as the server folded it onto this Workflow
-    Task's scheduled event.
+class WorkflowTaskAttachments(google.protobuf.message.Message):
+    """The attachments the server put on the scheduled events of a Workflow Task.
 
-    Core issues at most one per operation per Workflow Task, in the task's first activation, with
-    the highest counter recorded since the previous task. It comes from History, so replay issues
-    the same job at the same point. Progress for an operation that is not started, or that has
-    already resolved, is dropped. A counter only grows across the jobs for one operation.
+    Core issues at most one per Workflow Task, in the task's first activation, after the task's
+    other events. It comes from History, so replay issues the same job at the same point.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    class MetadataEntry(google.protobuf.message.Message):
-        DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-        KEY_FIELD_NUMBER: builtins.int
-        VALUE_FIELD_NUMBER: builtins.int
-        key: builtins.str
-        value: builtins.str
-        def __init__(
-            self,
-            *,
-            key: builtins.str = ...,
-            value: builtins.str = ...,
-        ) -> None: ...
-        def ClearField(
-            self,
-            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
-        ) -> None: ...
-
-    SEQ_FIELD_NUMBER: builtins.int
-    POSITION_FIELD_NUMBER: builtins.int
-    COUNTER_FIELD_NUMBER: builtins.int
-    METADATA_FIELD_NUMBER: builtins.int
-    seq: builtins.int
-    """Sequence number as provided by lang in the corresponding ScheduleNexusOperation command"""
-    position: builtins.str
-    """Where the operation's output stands, in the handler's terms, such as a stream cursor."""
-    counter: builtins.int
-    """Orders the progress of one operation."""
+    ATTACHMENTS_FIELD_NUMBER: builtins.int
     @property
-    def metadata(
+    def attachments(
         self,
-    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
-        """Small details from the handler."""
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        google.protobuf.any_pb2.Any
+    ]:
+        """In event order. A failed task's scheduled event and its retry's both count."""
     def __init__(
         self,
         *,
-        seq: builtins.int = ...,
-        position: builtins.str = ...,
-        counter: builtins.int = ...,
-        metadata: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
+        attachments: collections.abc.Iterable[google.protobuf.any_pb2.Any] | None = ...,
     ) -> None: ...
     def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "counter",
-            b"counter",
-            "metadata",
-            b"metadata",
-            "position",
-            b"position",
-            "seq",
-            b"seq",
-        ],
+        self, field_name: typing_extensions.Literal["attachments", b"attachments"]
     ) -> None: ...
 
-global___ResolveNexusOperationProgress = ResolveNexusOperationProgress
-
-class ResolveStreamWake(google.protobuf.message.Message):
-    """A wake for one of the Workflow's stream readers, as the server folded it onto this Workflow
-    Task's scheduled event.
-
-    Core issues at most one per subscription per Workflow Task, in the task's first activation. It
-    comes from History, so replay issues the same job at the same point. A wake says that the
-    stream moved, not what it holds, so the reader reads the stream itself.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    class MetadataEntry(google.protobuf.message.Message):
-        DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-        KEY_FIELD_NUMBER: builtins.int
-        VALUE_FIELD_NUMBER: builtins.int
-        key: builtins.str
-        value: builtins.str
-        def __init__(
-            self,
-            *,
-            key: builtins.str = ...,
-            value: builtins.str = ...,
-        ) -> None: ...
-        def ClearField(
-            self,
-            field_name: typing_extensions.Literal["key", b"key", "value", b"value"],
-        ) -> None: ...
-
-    SUBSCRIPTION_ID_FIELD_NUMBER: builtins.int
-    POSITION_FIELD_NUMBER: builtins.int
-    COUNTER_FIELD_NUMBER: builtins.int
-    METADATA_FIELD_NUMBER: builtins.int
-    RECHECK_FIELD_NUMBER: builtins.int
-    CLOSED_FIELD_NUMBER: builtins.int
-    CLOSE_RESULT_FIELD_NUMBER: builtins.int
-    CLOSE_FAILURE_FIELD_NUMBER: builtins.int
-    RESUBSCRIBE_FIELD_NUMBER: builtins.int
-    subscription_id: builtins.str
-    """The subscription id the reader subscribed with."""
-    position: builtins.str
-    """The position that came with `counter`, in the producer's terms."""
-    counter: builtins.int
-    """The highest counter the stream's notifier has seen. The reader reads when it is above the
-    `wake_after` of its last empty read.
-    """
-    @property
-    def metadata(
-        self,
-    ) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
-        """The metadata that came with `counter`."""
-    recheck: builtins.bool
-    """The notifier asks the reader to read again whatever the counter, after a quiet period."""
-    closed: builtins.bool
-    """The stream closed. The reader reads to its end, then sees the outcome."""
-    @property
-    def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """The result the stream closed with, when it gave one."""
-    @property
-    def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
-        """The failure the stream closed with, when it closed with one."""
-    resubscribe: builtins.bool
-    """The notifier dropped the subscription. The reader subscribes again."""
-    def __init__(
-        self,
-        *,
-        subscription_id: builtins.str = ...,
-        position: builtins.str = ...,
-        counter: builtins.int = ...,
-        metadata: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
-        recheck: builtins.bool = ...,
-        closed: builtins.bool = ...,
-        close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
-        close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
-        resubscribe: builtins.bool = ...,
-    ) -> None: ...
-    def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "close_failure", b"close_failure", "close_result", b"close_result"
-        ],
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "close_failure",
-            b"close_failure",
-            "close_result",
-            b"close_result",
-            "closed",
-            b"closed",
-            "counter",
-            b"counter",
-            "metadata",
-            b"metadata",
-            "position",
-            b"position",
-            "recheck",
-            b"recheck",
-            "resubscribe",
-            b"resubscribe",
-            "subscription_id",
-            b"subscription_id",
-        ],
-    ) -> None: ...
-
-global___ResolveStreamWake = ResolveStreamWake
+global___WorkflowTaskAttachments = WorkflowTaskAttachments
 
 class RemoveFromCache(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

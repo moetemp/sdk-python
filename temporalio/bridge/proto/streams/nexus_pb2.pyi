@@ -36,7 +36,9 @@ class NexusCall(google.protobuf.message.Message):
     """The operation's input, the N0a model in its JSON transfer form."""
     @property
     def deadline(self) -> google.protobuf.timestamp_pb2.Timestamp:
-        """When the Nexus request times out. Core answers a read in time for its answer to travel back."""
+        """When the Nexus request times out. The service answers a read in time for its answer to travel
+        back.
+        """
     @property
     def limits(self) -> global___NexusLimits: ...
     namespace: builtins.str
@@ -103,8 +105,8 @@ class NexusLimits(google.protobuf.message.Message):
 global___NexusLimits = NexusLimits
 
 class NexusStep(google.protobuf.message.Message):
-    """What Core answers a call or a resume with. A codec step comes before the output on a call whose
-    bodies need lang's payload codec, and lang resumes it with the results.
+    """What the service answers a call or a resume with. A codec step comes before the output on a call
+    whose bodies need lang's payload codec, and lang resumes it with the results.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -183,7 +185,7 @@ class CodecWork(google.protobuf.message.Message):
         temporalio.api.common.v1.message_pb2.Payload
     ]: ...
     continuation: builtins.int
-    """Hand back in `NexusResumeRequest`. Core forgets a continuation 60 s after it asked."""
+    """Hand back in `NexusResumeRequest`. The service forgets a continuation 60 s after it asked."""
     owner_kind: temporalio.bridge.proto.streams.streams_pb2.StreamOwnerKind.ValueType
     """The kind of the stream's owner. For a standalone Activity owner, `workflow_id` is empty and
     `activity_id` names the Activity, and the codec context has the namespace and the Activity id

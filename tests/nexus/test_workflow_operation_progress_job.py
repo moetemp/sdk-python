@@ -1,9 +1,9 @@
-"""A Worker that gets a Nexus operation progress job it doesn't act on.
+"""A Worker that gets Nexus operation progress it doesn't act on.
 
-The server folds an operation's progress onto the caller's next Workflow
-Task, and Core hands it to the Workflow as a job. A Worker that doesn't act on
-progress must drop the job, not fail the task, so a server that sends progress
-can't break it.
+The server attaches an operation's progress to the caller's next Workflow
+Task, and Core hands the attachments to the Workflow in one job. A Worker that
+doesn't act on progress must drop it, not fail the task, so a server that sends
+progress can't break it.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import nexusrpc
+from google.protobuf.any_pb2 import Any
 from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -53,6 +54,12 @@ class ResultOnlyCaller:
         return await handle
 
 
+def packed(progress: NexusOperationProgress) -> Any:
+    attachment = Any()
+    attachment.Pack(progress)
+    return attachment
+
+
 def history_with_progress() -> WorkflowHistory:
     events: list[HistoryEvent] = []
     clock = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -79,7 +86,7 @@ def history_with_progress() -> WorkflowHistory:
                 task_queue=TaskQueue(name=TASK_QUEUE),
                 start_to_close_timeout=Duration(seconds=10),
                 attempt=1,
-                nexus_operation_progress=list(progress),
+                attachments=[packed(p) for p in progress],
             ),
         )
         started = add(
@@ -127,7 +134,14 @@ def history_with_progress() -> WorkflowHistory:
     )
     task(
         NexusOperationProgress(
-            scheduled_event_id=scheduled, position="cursor-1", counter=1
+            operation_key=NexusOperationProgress.OperationKey(
+                endpoint=ENDPOINT,
+                service="ProduceService",
+                operation="produce",
+                operation_token="operation-token",
+            ),
+            position="cursor-1",
+            counter=1,
         )
     )
     add(
@@ -147,7 +161,7 @@ def history_with_progress() -> WorkflowHistory:
     return WorkflowHistory(workflow_id="result-only-caller", events=events)
 
 
-async def test_a_progress_job_the_workflow_does_not_act_on_is_dropped() -> None:
+async def test_progress_the_workflow_does_not_act_on_is_dropped() -> None:
     result = await Replayer(
         workflows=[ResultOnlyCaller], workflow_runner=UnsandboxedWorkflowRunner()
     ).replay_workflow(history_with_progress(), raise_on_replay_failure=False)

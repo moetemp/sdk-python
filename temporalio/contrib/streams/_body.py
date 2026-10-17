@@ -1,17 +1,18 @@
-"""What lang owes a record's body between the converter and Core.
+"""What lang owes a record's body between the converter and the stream runtime.
 
 The payload converter turns a value into the body and stops there. Every
 other payload the SDK sends then passes through the payload codec and
 external storage, and a stream body owes the same, or a codec-protected
 deployment would leak plaintext through its streams. On the direct paths, a
-Workflow's writer and the outside handles, Core never sees a plaintext body,
-so both hashes that need one are taken here, before the codec. A codec that
-encrypts with a fresh nonce makes every retry's bytes differ, so a store that
-compared encoded bytes would refuse a retry as a divergent write.
+Workflow's writer and the outside handles, the stream runtime never sees a
+plaintext body, so both hashes that need one are taken here, before the codec.
+A codec that encrypts with a fresh nonce makes every retry's bytes differ, so a
+store that compared encoded bytes would refuse a retry as a divergent write.
 
-The stream service's Nexus path is different (DD-98). Core gets the caller's
-plain bodies, takes both hashes over the bytes the caller sent, and asks the
-handler to run the codec. Only the codec step uses this module there.
+The stream service's Nexus path is different (DD-98). The stream runtime gets
+the caller's plain bodies, takes both hashes over the bytes the caller sent,
+and asks the handler to run the codec. Only the codec step uses this module
+there.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ def content_hash(payload: Payload) -> bytes:
 
     Taken over the deterministic serialization of the whole payload, metadata
     included, so two payloads that differ only in their encoding hash apart.
-    Core stores it on the record as hex under ``temporal.io/content-hash``.
+    The stream runtime stores it on the record as hex under ``temporal.io/content-hash``.
     """
     return hashlib.sha256(payload.SerializeToString(deterministic=True)).digest()
 

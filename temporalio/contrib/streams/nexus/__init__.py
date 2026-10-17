@@ -8,10 +8,11 @@ reads from it through a Nexus endpoint. The endpoint runs the
 ``temporal.sdk.streams.v1.TemporalStreams`` service over the store the
 endpoint's Worker carries, so callers never learn which store that is.
 
-Core serves the service, so it is defined once, in Core's
-``crates/streams/nexus/temporal_streams.nexusrpc.yaml``. Everything in
-:mod:`temporalio.contrib.streams.nexus._generated` is generated from the copy
-in the Core this SDK vendors, by ``scripts/gen_nexus_streams_api.py``:
+The stream runtime serves the service, so it is defined once, in the
+``crates/streams/nexus/temporal_streams.nexusrpc.yaml`` of the sdk-streams
+repository. Everything in :mod:`temporalio.contrib.streams.nexus._generated`
+is generated from the copy in the temporalio-streams crate that this SDK pins,
+by ``scripts/gen_nexus_streams_api.py``:
 
 * :class:`TemporalStreams`, the service definition a handler implements and a
   Workflow's Nexus client calls.
@@ -21,20 +22,21 @@ in the Core this SDK vendors, by ``scripts/gen_nexus_streams_api.py``:
 * :class:`TemporalStreamsHttpClient`, a caller for a process outside any
   Worker, posting to the endpoint over the Nexus HTTP ingress. It depends on
   nothing beyond the standard library.
-* ``TemporalStreamsForwarder``, which hands each operation's input to Core as
-  the contract's JSON transfer form.
+* ``TemporalStreamsForwarder``, which hands each operation's input to the
+  stream runtime as the contract's JSON transfer form.
 
 :class:`TemporalStreamsHandler` is the one hand-written piece. It runs its
 authorizer and the namespace's payload codec, the parts only the SDK has, and
-Core runs every rule of the contract on the store of its Worker's client.
+the stream runtime runs every rule of the contract on the store of its Worker's
+client.
 
 A Nexus operation can also hand its caller a stream.
 :class:`StreamOperationHandler` is such an operation: its start attaches the
 caller to the stream's notifier on the server and puts the
 :class:`StreamRef` in the operation token (:func:`stream_ref_from_token`).
 With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
-on, Core tells the notifier after every append, which the caller sees as
-operation progress.
+on, the stream runtime tells the notifier after every append, which the caller
+sees as operation progress.
 :meth:`temporalio.contrib.streams.StreamStorePlugin.close_stream` completes
 the operation, or :func:`temporalio.contrib.streams.close_workflow_stream`
 from the owning Workflow.

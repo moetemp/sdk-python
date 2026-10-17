@@ -4,12 +4,12 @@ A :class:`StreamReader` built with ``replay_from_store=True`` reads in a Local
 Activity through a :class:`StreamDirectTransport`, not as a Nexus operation of
 the Workflow. The read names a floor holder, so the owner's store holds the
 records it read, and the Activity's result, and so its marker, holds only the
-range that crossed and Core's digest of its records. Before Workflow code sees
-the result, the Worker turns it back into the batch. It takes the batch the
-Activity cached in this process, or else reads the range again through the
-stream service's ``read_range``, which checks it against the digest. So
-Workflow code gets the same records in both modes, and no I/O runs in Workflow
-code.
+range that crossed and the stream runtime's digest of its records. Before
+Workflow code sees the result, the Worker turns it back into the batch. It
+takes the batch the Activity cached in this process, or else reads the range
+again through the stream service's ``read_range``, which checks it against the
+digest. So Workflow code gets the same records in both modes, and no I/O runs
+in Workflow code.
 
 The step runs as part of the client's payload codec, on decode, as for the
 positions-only Workflow reader of :mod:`temporalio.contrib.streams`. The
@@ -19,6 +19,7 @@ Replayer, and every other payload passes through to the codec it wraps.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import dataclasses
 import json
@@ -35,6 +36,8 @@ from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import NexusHandlerErrorRetryBehavior
 from temporalio.api.failure.v1 import Failure
 from temporalio.api.workflowservice.v1 import ExecuteSyncNexusOperationRequest
+from temporalio.bridge.client import RPCError as BridgeRPCError
+from temporalio.bridge.streams import execute_sync_nexus_operation
 from temporalio.common import RawValue
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -349,18 +352,33 @@ class ClientTransport:
         )
         if codec is not None:
             [payload] = await codec.encode([payload])
-        response = await self._client.workflow_service.execute_sync_nexus_operation(
-            ExecuteSyncNexusOperationRequest(
-                namespace=self._client.namespace,
-                identity=self._client.identity,
-                request_id=str(uuid.uuid4()),
-                endpoint=self._endpoint,
-                service=_SERVICE,
-                operation=operation,
-                input=payload,
-            ),
-            timeout=self._timeout,
+        # Core's client has no stub for the RPC, so the call goes through the
+        # stream runtime on the client's own connection.
+        bridge = await cast(Any, self._client.service_client)._connected_client()
+        request = ExecuteSyncNexusOperationRequest(
+            namespace=self._client.namespace,
+            identity=self._client.identity,
+            request_id=str(uuid.uuid4()),
+            endpoint=self._endpoint,
+            service=_SERVICE,
+            operation=operation,
+            input=payload,
         )
+        try:
+            response = await asyncio.wait_for(
+                execute_sync_nexus_operation(bridge, request),
+                self._timeout.total_seconds(),
+            )
+        except BridgeRPCError as err:
+            status, message, details = err.args
+            raise RPCError(message, RPCStatusCode(status), details) from None
+        except asyncio.TimeoutError:
+            # The same error a typed call with this timeout raises.
+            raise RPCError(
+                f"{self._endpoint}/{operation} took longer than {self._timeout}",
+                RPCStatusCode.DEADLINE_EXCEEDED,
+                b"",
+            ) from None
         if response.HasField("failure"):
             raise _failed(response.failure, f"{self._endpoint}/{operation}")
         result = response.result

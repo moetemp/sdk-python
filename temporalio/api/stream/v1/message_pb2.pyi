@@ -212,8 +212,8 @@ class WorkflowWakeTarget(google.protobuf.message.Message):
 global___WorkflowWakeTarget = WorkflowWakeTarget
 
 class StreamWake(google.protobuf.message.Message):
-    """A wake for one reader of a stream in a Workflow. The server records it on the next Workflow
-    Task scheduled event, so it adds no event of its own.
+    """A wake for one reader of a stream in a Workflow. The server records it as one of the
+    `attachments` of the next Workflow Task scheduled event, so it adds no event of its own.
 
     A wake says that the stream moved, not what it holds. The reader reads the stream itself. Wakes
     of one reader are folded, so the reader sees the latest one, with the highest `counter`.

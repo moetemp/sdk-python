@@ -2,9 +2,9 @@
 
 A reader with ``replay_from_store=True``, the default, reads through the same Local
 Activity, but the Activity's result, and so its marker, holds the read's
-range and Core's digest of its records. Before Workflow code sees the
+range and the stream runtime's digest of its records. Before Workflow code sees the
 result, the Worker turns it back into the batch. It takes the batch the
-Activity cached in this process, or else asks Core's ``ReadRange`` for the
+Activity cached in this process, or else asks the stream runtime's ``ReadRange`` for the
 same range, which checks it against the digest. So Workflow code gets the
 same records in both modes, and no I/O runs in Workflow code.
 

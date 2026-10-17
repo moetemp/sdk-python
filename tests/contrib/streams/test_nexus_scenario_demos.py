@@ -24,13 +24,17 @@ import pytest
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference
-from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
+from temporalio.api.workflowservice.v1 import (
+    DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
+)
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.converter import PayloadCodec
 from temporalio.service import RPCError, RPCStatusCode
+from tests.contrib.streams._support import call_workflow_service
 from tests.contrib.streams.samples.scenarios import (
     _nexus,
     n1b_parent_relay,
@@ -71,7 +75,9 @@ def new_store(request: pytest.FixtureRequest) -> Callable[[], StreamStorePlugin]
 async def lane(client: Client) -> Client:
     """``client``, once the server shows it has the stream notifier."""
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -79,7 +85,8 @@ async def lane(client: Client) -> Client:
                     workflow_id=f"probe-{uuid.uuid4()}",
                     topic="probe",
                 ),
-            )
+            ),
+            DescribeStreamNotifierResponse,
         )
     except RPCError as err:
         if err.status == RPCStatusCode.UNIMPLEMENTED:
