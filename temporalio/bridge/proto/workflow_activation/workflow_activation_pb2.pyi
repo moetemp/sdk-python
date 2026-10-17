@@ -96,6 +96,7 @@ class WorkflowActivation(google.protobuf.message.Message):
     LAST_SDK_VERSION_FIELD_NUMBER: builtins.int
     SUGGEST_CONTINUE_AS_NEW_REASONS_FIELD_NUMBER: builtins.int
     TARGET_WORKER_DEPLOYMENT_VERSION_CHANGED_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_FIELD_NUMBER: builtins.int
     run_id: builtins.str
     """The id of the currently active run of the workflow. Also used as a cache key. There may
     only ever be one active workflow task (and hence activation) of a run at one time.
@@ -157,6 +158,12 @@ class WorkflowActivation(google.protobuf.message.Message):
     the workflow is Pinned.
     Experimental.
     """
+    @property
+    def workflow_task(self) -> global___WorkflowTaskHistoryInfo:
+        """The Workflow Task this activation belongs to, from History. On replay of a Local Activity
+        heartbeat chain, Core merges the chain into one activation, and this names the chain's last
+        task. Evict-only activations leave it unset.
+        """
     def __init__(
         self,
         *,
@@ -176,6 +183,7 @@ class WorkflowActivation(google.protobuf.message.Message):
         ]
         | None = ...,
         target_worker_deployment_version_changed: builtins.bool = ...,
+        workflow_task: global___WorkflowTaskHistoryInfo | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -184,6 +192,8 @@ class WorkflowActivation(google.protobuf.message.Message):
             b"deployment_version_for_current_task",
             "timestamp",
             b"timestamp",
+            "workflow_task",
+            b"workflow_task",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -213,10 +223,59 @@ class WorkflowActivation(google.protobuf.message.Message):
             b"target_worker_deployment_version_changed",
             "timestamp",
             b"timestamp",
+            "workflow_task",
+            b"workflow_task",
         ],
     ) -> None: ...
 
 global___WorkflowActivation = WorkflowActivation
+
+class WorkflowTaskHistoryInfo(google.protobuf.message.Message):
+    """A History-defined identity for a Workflow Task attempt. All fields are functions of the History
+    events up to the task's own WorkflowTaskStarted event, so a live task, a cache miss and a replay
+    get the same values.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    FAILED_ATTEMPTS_FIELD_NUMBER: builtins.int
+    COMPLETED_STARTED_EVENT_IDS_FIELD_NUMBER: builtins.int
+    started_event_id: builtins.int
+    """The id of the task's WorkflowTaskStarted event."""
+    failed_attempts: builtins.int
+    """Attempts of this task since the last completed task that a Worker started and did not
+    complete. A schedule-to-start timeout does not count.
+    """
+    @property
+    def completed_started_event_ids(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """The WorkflowTaskStarted event ids of the most recent completed tasks, newest first, at most
+        8. Fewer than 8 means the list goes back to the run's start. Eight lets a consumer learn the
+        fate of an attempt it saw up to eight completed tasks later, for 64 bytes.
+        """
+    def __init__(
+        self,
+        *,
+        started_event_id: builtins.int = ...,
+        failed_attempts: builtins.int = ...,
+        completed_started_event_ids: collections.abc.Iterable[builtins.int]
+        | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "completed_started_event_ids",
+            b"completed_started_event_ids",
+            "failed_attempts",
+            b"failed_attempts",
+            "started_event_id",
+            b"started_event_id",
+        ],
+    ) -> None: ...
+
+global___WorkflowTaskHistoryInfo = WorkflowTaskHistoryInfo
 
 class WorkflowActivationJob(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
