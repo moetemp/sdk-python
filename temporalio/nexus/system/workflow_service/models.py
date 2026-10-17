@@ -15,6 +15,7 @@ import temporalio.api.enums.v1.stream_pb2
 import temporalio.api.sdk.v1.user_metadata_pb2
 import temporalio.api.stream.v1.message_pb2
 import temporalio.api.workflowservice.v1.request_response_pb2
+import temporalio.api.workflowservice.v1.stream_request_response_pb2
 import temporalio.common
 import temporalio.converter
 import temporalio.nexus.system._support as _support
@@ -345,20 +346,20 @@ class AttachStreamCallbackRequest:
 class _AttachStreamCallbackRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         AttachStreamCallbackRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest,
         type_hint: type[AttachStreamCallbackRequest],
     ) -> AttachStreamCallbackRequest:
         if not value.request_id:
@@ -397,8 +398,8 @@ class _AttachStreamCallbackRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: AttachStreamCallbackRequest,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackRequest()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackRequest()
         message.namespace = value.namespace
         if value.stream_ref is not None:
             message.stream_ref.CopyFrom(
@@ -434,6 +435,7 @@ class StreamReference:
     workflow_id: str
     run_id: str | None = None
     topic: str
+    activity_id: str | None = None
 
 
 class _StreamReferenceTransferTypeConverter(
@@ -466,6 +468,7 @@ class _StreamReferenceTransferTypeConverter(
             workflow_id=workflow_id,
             run_id=value.run_id if bool(value.run_id) else None,
             topic=topic,
+            activity_id=value.activity_id if bool(value.activity_id) else None,
         )
 
     @typing_extensions.override
@@ -484,6 +487,8 @@ class _StreamReferenceTransferTypeConverter(
         if value.run_id is not None:
             message.run_id = value.run_id
         message.topic = value.topic
+        if value.activity_id is not None:
+            message.activity_id = value.activity_id
         return message
 
 
@@ -590,20 +595,20 @@ class AttachStreamCallbackResponse:
 class _AttachStreamCallbackResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         AttachStreamCallbackResponse,
-        temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse,
         type_hint: type[AttachStreamCallbackResponse],
     ) -> AttachStreamCallbackResponse:
         return AttachStreamCallbackResponse()
@@ -612,8 +617,8 @@ class _AttachStreamCallbackResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: AttachStreamCallbackResponse,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.AttachStreamCallbackResponse()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.AttachStreamCallbackResponse()
         return message
 
 
@@ -632,20 +637,20 @@ class DetachStreamCallbackRequest:
 class _DetachStreamCallbackRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         DetachStreamCallbackRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest,
         type_hint: type[DetachStreamCallbackRequest],
     ) -> DetachStreamCallbackRequest:
         if not value.request_id:
@@ -667,8 +672,8 @@ class _DetachStreamCallbackRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: DetachStreamCallbackRequest,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackRequest()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackRequest()
         message.namespace = value.namespace
         if value.stream_ref is not None:
             message.stream_ref.CopyFrom(
@@ -693,20 +698,20 @@ class DetachStreamCallbackResponse:
 class _DetachStreamCallbackResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         DetachStreamCallbackResponse,
-        temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse,
         type_hint: type[DetachStreamCallbackResponse],
     ) -> DetachStreamCallbackResponse:
         return DetachStreamCallbackResponse()
@@ -715,8 +720,8 @@ class _DetachStreamCallbackResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: DetachStreamCallbackResponse,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.DetachStreamCallbackResponse()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.DetachStreamCallbackResponse()
         return message
 
 
@@ -740,18 +745,20 @@ class NotifyStreamRequest:
 class _NotifyStreamRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         NotifyStreamRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest]
+        type[
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest
+        ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest,
         type_hint: type[NotifyStreamRequest],
     ) -> NotifyStreamRequest:
         if not value.position:
@@ -780,10 +787,8 @@ class _NotifyStreamRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: NotifyStreamRequest,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest:
-        message = (
-            temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamRequest()
-        )
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamRequest()
         message.namespace = value.namespace
         if value.stream_ref is not None:
             message.stream_ref.CopyFrom(
@@ -820,20 +825,20 @@ class NotifyStreamResponse:
 class _NotifyStreamResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         NotifyStreamResponse,
-        temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse,
         type_hint: type[NotifyStreamResponse],
     ) -> NotifyStreamResponse:
         return NotifyStreamResponse()
@@ -842,8 +847,8 @@ class _NotifyStreamResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: NotifyStreamResponse,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.NotifyStreamResponse()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.NotifyStreamResponse()
         return message
 
 
@@ -863,20 +868,20 @@ class WaitStreamCallbackRequest:
 class _WaitStreamCallbackRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         WaitStreamCallbackRequest,
-        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest,
         type_hint: type[WaitStreamCallbackRequest],
     ) -> WaitStreamCallbackRequest:
         if not value.request_id:
@@ -899,10 +904,8 @@ class _WaitStreamCallbackRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: WaitStreamCallbackRequest,
-    ) -> (
-        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest
-    ):
-        message = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackRequest()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackRequest()
         message.namespace = value.namespace
         if value.stream_ref is not None:
             message.stream_ref.CopyFrom(
@@ -929,20 +932,20 @@ class WaitStreamCallbackResponse:
 class _WaitStreamCallbackResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         WaitStreamCallbackResponse,
-        temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
+        temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse,
     ]
 ):
     transfer_type: (
         type[
-            temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse
+            temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse
         ]
         | None
-    ) = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse
+    ) = temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse,
+        value: temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse,
         type_hint: type[WaitStreamCallbackResponse],
     ) -> WaitStreamCallbackResponse:
         return WaitStreamCallbackResponse()
@@ -951,8 +954,8 @@ class _WaitStreamCallbackResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: WaitStreamCallbackResponse,
-    ) -> temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse:
-        message = temporalio.api.workflowservice.v1.request_response_pb2.WaitStreamCallbackResponse()
+    ) -> temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse:
+        message = temporalio.api.workflowservice.v1.stream_request_response_pb2.WaitStreamCallbackResponse()
         return message
 
 
