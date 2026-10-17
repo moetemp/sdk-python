@@ -3282,7 +3282,6 @@ dependencies = [
  "temporalio-client",
  "temporalio-common",
  "temporalio-macros",
- "temporalio-streams",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -3297,27 +3296,36 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
+source = "git+https://github.com/moetemp/sdk-streams?rev=e62c5b2f28787f460446fa5ea16e3b5eb735fd16#e62c5b2f28787f460446fa5ea16e3b5eb735fd16"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "base64 0.23.1",
+ "bytes",
  "crc16",
  "deadpool-postgres",
  "futures-util",
  "gethostname",
  "lru",
  "object_store",
+ "parking_lot",
  "prost",
+ "prost-wkt-types",
  "redis",
  "rustls",
  "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "temporalio-client",
  "temporalio-common",
  "thiserror",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
+ "tokio-util",
+ "tonic",
+ "tonic-prost-build",
  "tracing",
 ]
 
@@ -3797,9 +3805,9 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 
 [[package]]
 name = "unicode-normalization"
-version = "0.1.25"
+version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
 dependencies = [
  "tinyvec",
 ]

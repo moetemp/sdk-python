@@ -2,9 +2,9 @@
 
 With ``notify_on_append(notification_log=True)``, an append writes a log
 entry in the same store step and the producer sends nothing to Temporal. A
-:class:`StreamDriver` reads that log through Core and calls the server's
+:class:`StreamDriver` reads that log through the stream runtime and calls the server's
 ``NotifyStreams`` for the streams that moved, so readers that sleep on a
-stream wake. Core does the work: it reads the doorbells, sweeps the busy
+stream wake. The stream runtime does the work: it reads the doorbells, sweeps the busy
 slots, takes entries as a consumer group, folds each drain to the newest
 counter per stream, and acks the entries only once the call landed.
 """
@@ -61,10 +61,10 @@ class StreamDriver:
                 one, the host name, the process id and a random suffix.
             sweep_interval: How often the driver looks at every slot that
                 holds entries, which bounds how long a lost doorbell delays
-                a notification. Core's 30 seconds when unset.
+                a notification. The stream runtime's 30 seconds when unset.
             claim_idle: How long another driver's unacked entries wait
-                before this one takes them. Core's 60 seconds when unset.
-            batch: The most entries one read takes. Core's 100 when unset.
+                before this one takes them. The stream runtime's 60 seconds when unset.
+            batch: The most entries one read takes. The stream runtime's 100 when unset.
 
         Raises:
             ValueError: The store doesn't keep a notification log, or

@@ -15,11 +15,11 @@ __all__ = ["StoreCapabilities"]
 
 @dataclass(frozen=True)
 class StoreCapabilities:
-    """The capabilities of a store, as Core reports them.
+    """The capabilities of a store, as the stream runtime reports them.
 
-    Every store keeps an ordered log per topic, and Core applies the same
+    Every store keeps an ordered log per topic, and the stream runtime applies the same
     reader rules on every store. A capability changes what a producer is
-    told and how much the store keeps. Without one, Core takes a fallback,
+    told and how much the store keeps. Without one, the stream runtime takes a fallback,
     with a weaker guarantee.
 
     As a mask for :class:`temporalio.contrib.streams.memory.MemoryStreams`,
@@ -94,7 +94,7 @@ class StoreCapabilities:
         )
 
     def _to_proto(self) -> Any:
-        """The mask as Core takes it.
+        """The mask as the stream runtime takes it.
 
         Raises:
             ValueError: The Core in this SDK can't mask a store.
@@ -128,10 +128,10 @@ _BEFORE_DESCRIBE = StoreCapabilities(conditional_tail=False, conditional_fence=F
 
 
 async def describe(store: StreamStore) -> StoreCapabilities:
-    """What Core reports for ``store``.
+    """What the stream runtime reports for ``store``.
 
     Raises:
-        StreamCallFailure: Core failed the call.
+        StreamCallFailure: the stream runtime failed the call.
     """
     proto = temporalio.bridge.proto.streams
     request = getattr(proto, "DescribeStoreRequest", None)

@@ -1,13 +1,13 @@
 """Reading a stream inside Workflow code, through Local Activities.
 
 Workflow code can't do I/O. :func:`workflow_reader` reads in batches, each
-one a Local Activity that runs Core's read and returns the records with
+one a Local Activity that runs the stream runtime's read and returns the records with
 their bodies through the codec. Replay takes each batch from its marker and
 does no I/O, so user code sees the same records, every kind included.
 
 The reader sleeps while the stream is idle. Each read names the running
 Workflow as the subscriber, under a subscription id that replay gives back.
-When a read that waited ``idle_wait`` comes back empty, Core attaches the
+When a read that waited ``idle_wait`` comes back empty, the stream runtime attaches the
 Workflow to the stream's notifier as an idle wake target, once, and asks the
 notifier for one wake past ``wake_after``, the counter of the read's
 position, all in the read's Local Activity. A read that finds records asks
@@ -123,14 +123,14 @@ class StreamPosition:
 
     Pass it as ``after=`` to :func:`workflow_reader`, for example in the
     input of a Continue-as-New. It carries the cursor of the last record
-    the reader delivered and Core's read state, which holds the producer
+    the reader delivered and the stream runtime's read state, which holds the producer
     attempts the reader saw, so the next run still reports a retry as
     ``SUPERSEDED``.
     """
 
     cursor: str
     state: str = ""
-    """Core's read state, in base64."""
+    """The stream runtime's read state, in base64."""
 
 
 @dataclass(frozen=True)
@@ -183,7 +183,7 @@ class _ReadInput:
     generation: int = 0
     """How many times the reader attached again after a ``resubscribe`` wake."""
     read_run_id: str | None = None
-    """The run the read names to Core, which the first read finds."""
+    """The run the read names to the stream runtime, which the first read finds."""
     unsubscribe: bool = False
     """Detach ``subscription_id`` and read nothing."""
     positions_only: bool = False
@@ -426,7 +426,7 @@ class WorkflowStreamReader(Generic[T]):
                     state.done = True
                     continue
                 if not response.chain_first_run_id:
-                    # The owner hasn't started yet, so Core attached nothing
+                    # The owner hasn't started yet, so the stream runtime attached nothing
                     # and no notifier wakes this reader. It reads again later.
                     await workflow.sleep(self._idle_wait)
                     continue
@@ -477,7 +477,7 @@ class WorkflowStreamReader(Generic[T]):
     async def _wait_for_owner_close(self) -> None:
         """Wait for the notifier's close after an Activity owner ended with no close.
 
-        Core ends the read once the owner ended, with no outcome. The
+        The stream runtime ends the read once the owner ended, with no outcome. The
         notifier's owner check closes the stream with the run's failure a
         little later, and wakes the readers attached to it, so a reader that
         never attached attaches first. Only a reader of an Activity's stream
@@ -765,7 +765,7 @@ def workflow_reader(
             a busy reader doesn't hold back the rest of the Workflow. 100
             commands or 2 seconds by default. ``None`` leaves the task to
             the Local Activity heartbeat.
-        replay_from_store: Record each read's range and Core's digest of
+        replay_from_store: Record each read's range and the stream runtime's digest of
             its records in History, in place of the records. On by default.
             Replay reads the range from the store again, before Workflow
             code sees it, and a store that holds other records fails the

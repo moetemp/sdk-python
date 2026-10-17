@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import temporalio.api.workflowservice.v1
 import temporalio.bridge.proto.streams
 
 if TYPE_CHECKING:
@@ -50,6 +51,16 @@ class StreamService:
             "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
         )
 
+    async def describe_stream_notifier(
+        self, req: temporalio.api.workflowservice.v1.DescribeStreamNotifierRequest
+    ) -> temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse:
+        """Invokes the StreamService.describe_stream_notifier call."""
+        return await self._store.call(
+            "DescribeStreamNotifier",
+            req,
+            temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse,
+        )
+
     async def flush_notifications(
         self, req: temporalio.bridge.proto.streams.FlushNotificationsRequest
     ) -> temporalio.bridge.proto.streams.FlushNotificationsResponse:
@@ -82,6 +93,16 @@ class StreamService:
         """Invokes the StreamService.latest call."""
         return await self._store.call(
             "Latest", req, temporalio.bridge.proto.streams.LatestResponse
+        )
+
+    async def publish_workflow_task(
+        self, req: temporalio.bridge.proto.streams.PublishWorkflowTaskRequest
+    ) -> temporalio.bridge.proto.streams.PublishWorkflowTaskResponse:
+        """Invokes the StreamService.publish_workflow_task call."""
+        return await self._store.call(
+            "PublishWorkflowTask",
+            req,
+            temporalio.bridge.proto.streams.PublishWorkflowTaskResponse,
         )
 
     async def read(
@@ -118,6 +139,14 @@ class StreamService:
             temporalio.bridge.proto.streams.RetireProducerResponse,
         )
 
+    async def run_evicted(
+        self, req: temporalio.bridge.proto.streams.RunEvictedRequest
+    ) -> temporalio.bridge.proto.streams.RunEvictedResponse:
+        """Invokes the StreamService.run_evicted call."""
+        return await self._store.call(
+            "RunEvicted", req, temporalio.bridge.proto.streams.RunEvictedResponse
+        )
+
     async def run_stream_driver(
         self, req: temporalio.bridge.proto.streams.RunStreamDriverRequest
     ) -> temporalio.bridge.proto.streams.RunStreamDriverResponse:
@@ -126,6 +155,16 @@ class StreamService:
             "RunStreamDriver",
             req,
             temporalio.bridge.proto.streams.RunStreamDriverResponse,
+        )
+
+    async def shutdown_worker(
+        self, req: temporalio.bridge.proto.streams.ShutdownWorkerRequest
+    ) -> temporalio.bridge.proto.streams.ShutdownWorkerResponse:
+        """Invokes the StreamService.shutdown_worker call."""
+        return await self._store.call(
+            "ShutdownWorker",
+            req,
+            temporalio.bridge.proto.streams.ShutdownWorkerResponse,
         )
 
     async def subscribe(

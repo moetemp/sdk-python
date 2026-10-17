@@ -62,7 +62,7 @@ class RecordKind(enum.IntEnum):
     the stream. Match the earlier records on ``producer_id`` and an
     ``attempt`` below :attr:`Supersession.attempt`.
 
-    Core's reader synthesizes it from the records it observed. No store
+    The stream runtime's reader synthesizes it from the records it observed. No store
     holds it, so every store reports a retry the same way. Its cursor is the
     position before the new attempt's first record. A reader that resumes
     there gets this record again, then the new attempt, since dropping the
@@ -82,10 +82,11 @@ class RecordKind(enum.IntEnum):
     """The topic in ``topic`` is closed, or every topic of the run chain when empty.
 
     A producer writes it when it closes the topic, or when it learns that the
-    owner ended. The owner's Core writes it when the run chain ends through
-    a Workflow Task. Core's read ends at the first one and doesn't deliver
-    it, and it drops what an append that raced the close wrote after it. So
-    a reader sees one only in records that come from somewhere else.
+    owner ended. The owner's Worker writes it when the run chain ends
+    through a Workflow Task. The stream runtime's read ends at the first one
+    and doesn't deliver it, and it drops what an append that raced the close
+    wrote after it. So a reader sees one only in records that come from
+    somewhere else.
     """
 
     TOPIC = 6

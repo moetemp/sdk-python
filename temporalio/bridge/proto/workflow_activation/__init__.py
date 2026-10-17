@@ -13,15 +13,15 @@ from .workflow_activation_pb2 import (
     ResolveChildWorkflowExecutionStartFailure,
     ResolveChildWorkflowExecutionStartSuccess,
     ResolveNexusOperation,
-    ResolveNexusOperationProgress,
     ResolveNexusOperationStart,
     ResolveRequestCancelExternalWorkflow,
     ResolveSignalExternalWorkflow,
-    ResolveStreamWake,
     SignalWorkflow,
     UpdateRandomSeed,
     WorkflowActivation,
     WorkflowActivationJob,
+    WorkflowTaskAttachments,
+    WorkflowTaskHistoryInfo,
 )
 
 __all__ = [
@@ -39,13 +39,13 @@ __all__ = [
     "ResolveChildWorkflowExecutionStartFailure",
     "ResolveChildWorkflowExecutionStartSuccess",
     "ResolveNexusOperation",
-    "ResolveNexusOperationProgress",
     "ResolveNexusOperationStart",
     "ResolveRequestCancelExternalWorkflow",
     "ResolveSignalExternalWorkflow",
-    "ResolveStreamWake",
     "SignalWorkflow",
     "UpdateRandomSeed",
     "WorkflowActivation",
     "WorkflowActivationJob",
+    "WorkflowTaskAttachments",
+    "WorkflowTaskHistoryInfo",
 ]

@@ -1,13 +1,16 @@
 """The stream wakes a Workflow run has seen, folded per reader.
 
-The server records the wakes of a Workflow's stream readers on the Workflow
-Task scheduled event, and Core hands each one to lang as a
-``ResolveStreamWake`` job, which the Workflow instance queues in order.
-Replay delivers the same jobs at the same points, so a reader that waits on
-this state waits deterministically.
+The server attaches the wakes of a Workflow's stream readers to the Workflow
+Task scheduled event, each one an ``Any`` of ``StreamWake``. Core hands the
+attachments of a task to lang in one ``WorkflowTaskAttachments`` job, and the
+Workflow instance queues the wakes in event order. Replay delivers the same
+job at the same point, so a reader that waits on this state waits
+deterministically.
 
 A wake says that the stream moved, not what it holds. The fold keeps the
 highest counter per reader, and the flags until the reader takes them.
+:func:`fold_stream_wakes` is the fold rule that every SDK shares, and the
+sdk-streams vectors ``testdata/wake_folds.json`` check it.
 """
 
 from __future__ import annotations
@@ -18,8 +21,9 @@ from typing import Any
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.failure.v1 import Failure
+from temporalio.api.stream.v1 import StreamWake
 
-__all__ = ["WakeState", "fold_wake", "wake_state"]
+__all__ = ["WakeState", "fold_stream_wakes", "fold_wake", "wake_state"]
 
 # Held on the run's runtime, so the state goes with the run at eviction and
 # replay builds it again from the same jobs.
@@ -41,8 +45,42 @@ class WakeState:
     close_failure: Failure | None = None
 
 
-def fold_wake(runtime: Any, wake: Any) -> None:
-    """Fold ``wake``, a ``ResolveStreamWake`` or a ``StreamWake``, into its reader's state."""
+def fold_stream_wakes(wakes: list[StreamWake]) -> list[StreamWake]:
+    """Fold ``wakes`` to one wake per subscription, in order of first appearance.
+
+    The wake with the highest counter gives the counter, position and
+    metadata. A recheck, a resubscribe or a close on any wake stays, since each
+    one asks the reader to act whatever the counter. The first close gives the
+    outcome.
+    """
+    folded: dict[str, StreamWake] = {}
+    for wake in wakes:
+        held = folded.get(wake.subscription_id)
+        if held is None:
+            held = StreamWake()
+            held.CopyFrom(wake)
+            folded[wake.subscription_id] = held
+            continue
+        if wake.counter > held.counter:
+            held.counter = wake.counter
+            held.position = wake.position
+            held.ClearField("metadata")
+            held.metadata.update(wake.metadata)
+        held.recheck = held.recheck or wake.recheck
+        held.resubscribe = held.resubscribe or wake.resubscribe
+        if wake.closed and not held.closed:
+            held.closed = True
+            held.ClearField("close_result")
+            held.ClearField("close_failure")
+            if wake.HasField("close_result"):
+                held.close_result.CopyFrom(wake.close_result)
+            if wake.HasField("close_failure"):
+                held.close_failure.CopyFrom(wake.close_failure)
+    return list(folded.values())
+
+
+def fold_wake(runtime: Any, wake: StreamWake) -> None:
+    """Fold ``wake`` into its reader's state."""
     state = _states(runtime).setdefault(wake.subscription_id, WakeState())
     state.counter = max(state.counter, wake.counter)
     state.recheck = state.recheck or wake.recheck
@@ -59,8 +97,8 @@ def fold_wake(runtime: Any, wake: Any) -> None:
 def wake_state(subscription_id: str) -> WakeState | None:
     """The folded wakes of ``subscription_id`` in the running Workflow."""
     runtime = workflow._Runtime.current()
-    queued: list[Any] = getattr(runtime, "_stream_wakes", [])
-    for wake in queued:
+    queued: list[StreamWake] = getattr(runtime, "_stream_wakes", [])
+    for wake in fold_stream_wakes(queued):
         fold_wake(runtime, wake)
     queued.clear()
     return _states(runtime).get(subscription_id)

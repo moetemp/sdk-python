@@ -25,7 +25,7 @@ class StreamArchive:
     need no change. Nothing archives while no driver runs.
 
     The archive needs the store's notification log, so turn it on with
-    ``notify_on_append(notification_log=True)``. Core deletes archived
+    ``notify_on_append(notification_log=True)``. The stream runtime deletes archived
     records only for a stream delete. Set a lifecycle rule on the bucket for
     how long to keep them. A read below what the lifecycle kept fails with
     :class:`temporalio.contrib.streams.StreamExpiredError`.
@@ -54,15 +54,15 @@ class StreamArchive:
                 are archived as the payload codec encoded them. Set bucket
                 encryption for the rest.
             segment_bytes: A segment, one object, ends at the first record
-                that takes it to this many bytes. Core's 4 MiB when unset.
+                that takes it to this many bytes. The stream runtime's 4 MiB when unset.
             segment_idle: How long a stream goes with no write before the
                 driver archives its tail. A stream that keeps taking writes
-                has its tail archived this often too. Core's 5 minutes when
+                has its tail archived this often too. The stream runtime's 5 minutes when
                 unset.
             stall_limit: How long the hot store keeps records the archive
                 does not hold yet, after the archive last moved. When no
                 driver runs for longer, retention trims them again and a
-                read of them fails as expired. Core's 7 days when unset.
+                read of them fails as expired. The stream runtime's 7 days when unset.
 
         Raises:
             ValueError: ``location`` is empty or names another scheme, or a

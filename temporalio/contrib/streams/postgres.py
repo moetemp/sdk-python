@@ -17,7 +17,7 @@ _SCHEMES = ("postgres://", "postgresql://")
 
 
 class PostgresStreams(StreamStorePlugin):
-    """A store in a PostgreSQL database that Core connects to.
+    """A store in a PostgreSQL database that the stream runtime connects to.
 
     One instance per database. Pass it to the client as a plugin, and open
     handles from the client with
@@ -59,9 +59,9 @@ class PostgresStreams(StreamStorePlugin):
             retention: How long a stream keeps a record. A janitor in each
                 process deletes older records, one process at a time.
             max_connections: How many connections the pool keeps. Waiting
-                reads hold none. Core's 16 when unset.
+                reads hold none. The stream runtime's 16 when unset.
             response_timeout: How long a call waits, as the session's
-                ``statement_timeout``. Core's 5 seconds when unset.
+                ``statement_timeout``. The stream runtime's 5 seconds when unset.
             floor_lease: How long a Workflow reader that replays from the
                 store, as ``workflow_reader`` does by default, holds the
                 records it read against retention after its last read.
@@ -77,14 +77,14 @@ class PostgresStreams(StreamStorePlugin):
                 Zero fails at once.
             notify_doorbells: With a notification log, how many channels the
                 log rings when a partition takes a first entry. A driver
-                listens on each one. Core's 16 when unset, at most 64.
+                listens on each one. The stream runtime's 16 when unset, at most 64.
             listen_url: A URL for the one connection that listens for
                 notifications, when ``url`` goes through a pooler in
                 transaction mode, such as PgBouncer. Name the database
                 directly or through a pooler in session mode. ``url`` when
                 unset.
             poll_interval: How often a process looks for new records for its
-                waiting reads, with one query for all of them. Core's 100 ms
+                waiting reads, with one query for all of them. The stream runtime's 100 ms
                 when unset.
             notify_reads: Each append also sends ``NOTIFY``, so a waiting
                 read in another process wakes in milliseconds instead of at
@@ -94,12 +94,12 @@ class PostgresStreams(StreamStorePlugin):
                 never changes the schema. A DBA applies the migrations, and
                 the role in ``url`` needs no ``CREATE``.
             janitor_interval: How often the janitor deletes expired records.
-                Core's one minute when unset.
+                The stream runtime's one minute when unset.
             archive: Object storage that keeps records after ``retention``
                 deletes them. A running
                 :class:`temporalio.contrib.streams.StreamDriver` fills it,
                 and the store needs
-                ``notify_on_append(notification_log=True)``. Core refuses
+                ``notify_on_append(notification_log=True)``. The stream runtime refuses
                 to connect the store without the log.
 
         Raises:

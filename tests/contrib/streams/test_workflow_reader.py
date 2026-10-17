@@ -1,7 +1,8 @@
 """Reading a stream in Workflow code, one Local Activity per batch.
 
-A fake read Activity scripts Core's answers, and a Signal queues each wake
-the way the Workflow instance queues a ``ResolveStreamWake`` job. The live cases need a server
+A fake read Activity scripts the stream runtime's answers, and a Signal queues
+each wake the way the Workflow instance queues a wake from a
+``WorkflowTaskAttachments`` job. The live cases need a server
 with the stream notifier and the Workflow wake target, and run in the
 Jetty lane.
 """
@@ -36,7 +37,6 @@ from temporalio.bridge.proto.streams import (
 )
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
-from temporalio.bridge.proto.workflow_activation import ResolveStreamWake
 from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
 from temporalio.common import RawValue
 from temporalio.contrib.streams import (
@@ -44,6 +44,7 @@ from temporalio.contrib.streams import (
     StreamPosition,
     StreamRecordError,
     StreamRef,
+    StreamRefusedError,
     StreamStorePlugin,
     StreamUnsupportedError,
     _workflow,
@@ -71,11 +72,11 @@ from temporalio.contrib.streams._workflow import (
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ActivityError, ApplicationError
-from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
+    describe_stream_notifier,
     new_workflow_id,
     postgres_streams,
 )
@@ -216,12 +217,10 @@ class ReadsBatches:
 
     @workflow.signal
     def wake(self, wake: StreamWake) -> None:
-        # Queued as the instance queues a ResolveStreamWake job, which has the
-        # same fields as the wake on the scheduled event.
+        # Queued as the instance queues each wake it unpacks from the
+        # attachments of a scheduled event.
         runtime: Any = workflow._Runtime.current()
-        runtime._stream_wakes.append(
-            ResolveStreamWake.FromString(wake.SerializeToString())
-        )
+        runtime._stream_wakes.append(wake)
 
 
 def _failure_type(error: BaseException | None) -> str | None:
@@ -610,8 +609,8 @@ async def test_a_reader_replays_from_its_markers_and_wakes(client: Client):
     history = await handle.fetch_history()
     await Replayer(workflows=[ReadsBatches]).replay_workflow(history)
     # The same run, with the wake on a Workflow Task scheduled event as the
-    # server records it. Core then hands it over as a ResolveStreamWake job,
-    # which wakes the reader with no Signal to run.
+    # server records it. Core then hands it over in a WorkflowTaskAttachments
+    # job, which wakes the reader with no Signal to run.
     await Replayer(workflows=[ReadsBatches]).replay_workflow(
         _signal_as_stream_wake(history)
     )
@@ -641,7 +640,7 @@ def _signal_as_stream_wake(history: WorkflowHistory) -> WorkflowHistory:
         for e in events[index:]
         if e.HasField("workflow_task_scheduled_event_attributes")
     )
-    scheduled.workflow_task_scheduled_event_attributes.stream_wakes.append(wake)
+    scheduled.workflow_task_scheduled_event_attributes.attachments.add().Pack(wake)
     return WorkflowHistory(history.workflow_id, events)
 
 
@@ -711,7 +710,8 @@ class ReadsOnAServerWithoutANotifier:
 
 async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await describe_stream_notifier(
+            client,
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -720,11 +720,12 @@ async def test_a_workflow_reader_needs_the_stream_notifier(client: Client):
                     run_id="probe",
                     topic="tokens",
                 ),
-            )
+            ),
         )
-    except RPCError as error:
-        if error.status != RPCStatusCode.UNIMPLEMENTED:
-            pytest.skip("the server has the stream notifier")
+    except StreamUnsupportedError:
+        pass
+    except StreamRefusedError:
+        pytest.skip("the server has the stream notifier")
     else:
         pytest.skip("the server has the stream notifier")
     streams_client = await connect_with(client, MemoryStreams())
@@ -981,9 +982,7 @@ class ReadsAnActivityRun:
     @workflow.signal
     def wake(self, wake: StreamWake) -> None:
         runtime: Any = workflow._Runtime.current()
-        runtime._stream_wakes.append(
-            ResolveStreamWake.FromString(wake.SerializeToString())
-        )
+        runtime._stream_wakes.append(wake)
 
 
 async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
@@ -1122,9 +1121,7 @@ class ReadsAToolStream:
     @workflow.signal
     def wake(self, wake: StreamWake) -> None:
         runtime: Any = workflow._Runtime.current()
-        runtime._stream_wakes.append(
-            ResolveStreamWake.FromString(wake.SerializeToString())
-        )
+        runtime._stream_wakes.append(wake)
 
 
 @workflow.defn
@@ -1144,9 +1141,7 @@ class SaysWhatAnActivityRunHad:
     @workflow.signal
     def wake(self, wake: StreamWake) -> None:
         runtime: Any = workflow._Runtime.current()
-        runtime._stream_wakes.append(
-            ResolveStreamWake.FromString(wake.SerializeToString())
-        )
+        runtime._stream_wakes.append(wake)
 
 
 async def test_a_reader_of_a_tool_stream_ends_at_the_notifiers_backstop_close(

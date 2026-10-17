@@ -3,9 +3,9 @@
 > This package is experimental and may change in future versions.
 
 Stream records live in your PostgreSQL database. Temporal never sees them,
-so what a stream guarantees is what your database guarantees. Core runs the
+so what a stream guarantees is what your database guarantees. The stream runtime runs the
 store for every SDK, with the SQL in `crates/streams/src/postgres/` of the
-Core repository. This page says what the store promises, how to set it up,
+sdk-streams repository. This page says what the store promises, how to set it up,
 and when to pick it over Redis.
 
 ```python
@@ -18,9 +18,9 @@ client = await Client.connect(
 )
 ```
 
-PostgreSQL 14 or later is required. Core refuses an older server when the
+PostgreSQL 14 or later is required. The stream runtime refuses an older server when the
 client connects the store. Amazon RDS for PostgreSQL and Aurora PostgreSQL
-14 and later work. Core's tests run against PostgreSQL 14 and 17.
+14 and later work. The stream runtime's tests run against PostgreSQL 14 and 17.
 
 ## Postgres or Redis
 
@@ -117,13 +117,13 @@ By default the store makes its tables and functions in `schema`
 (`temporal_streams`) when it connects, and upgrades them on a later
 release. An advisory lock makes many Workers that start at once apply each
 migration once. The store refuses to start when an applied migration
-differs from the one Core holds, or when the database is newer than the
+differs from the one the stream runtime holds, or when the database is newer than the
 release can read.
 
 For a database where applications may not change the schema, pass
 `skip_migrations=True`. The store then only checks that every migration it
 knows is applied. A DBA applies the SQL files in
-`crates/streams/src/postgres/migrations/` of the Core repository, in order,
+`crates/streams/src/postgres/migrations/` of the sdk-streams repository, in order,
 after `SET search_path = <schema>, pg_temp`, and adds a row to
 `schema_migrations` for each. Running the store once with a role that may
 create the schema does the same. Then grant the application's role the
@@ -136,7 +136,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA temporal_streams TO
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA temporal_streams TO streams_app;
 ```
 
-Grant again after a migration adds a table or a function. Core's conformance
+Grant again after a migration adds a table or a function. The stream runtime's conformance
 suite runs once as a role with exactly these grants.
 
 One schema per isolation domain, such as a namespace or a team, with its own
@@ -166,7 +166,7 @@ endpoint refuses writes and `LISTEN`.
 
 The store reads `sslmode` and `sslrootcert` from the URL, as libpq does.
 The default is `prefer`, which falls back to no TLS. For a database on
-another host, use `sslmode=verify-full`. Core logs a warning for a remote
+another host, use `sslmode=verify-full`. The stream runtime logs a warning for a remote
 host with another mode. RDS and Aurora certificates chain to the Amazon RDS
 certificate authorities, which system trust stores do not hold. Download
 the RDS bundle and pass it in the URL.

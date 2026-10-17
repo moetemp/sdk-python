@@ -98,7 +98,7 @@ _MAX_NAME_BYTES = 256
 
 def _check_name(name: str) -> None:
     # The same limit in every SDK: the name goes into store keys, cursor
-    # hashes and Core's manifest budget, and a store may join names with a
+    # hashes and the stream runtime's manifest budget, and a store may join names with a
     # control character.
     if not name:
         raise ValueError("topic name must not be empty")

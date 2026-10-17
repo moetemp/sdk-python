@@ -7,6 +7,7 @@ import builtins
 import collections.abc
 import sys
 
+import google.protobuf.any_pb2
 import google.protobuf.descriptor
 import google.protobuf.duration_pb2
 import google.protobuf.internal.containers
@@ -20,11 +21,9 @@ import temporalio.api.enums.v1.failed_cause_pb2
 import temporalio.api.enums.v1.update_pb2
 import temporalio.api.enums.v1.workflow_pb2
 import temporalio.api.failure.v1.message_pb2
-import temporalio.api.nexus.v1.message_pb2
 import temporalio.api.sdk.v1.event_group_marker_pb2
 import temporalio.api.sdk.v1.task_complete_metadata_pb2
 import temporalio.api.sdk.v1.user_metadata_pb2
-import temporalio.api.stream.v1.message_pb2
 import temporalio.api.taskqueue.v1.message_pb2
 import temporalio.api.update.v1.message_pb2
 import temporalio.api.workflow.v1.message_pb2
@@ -854,8 +853,7 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
     TASK_QUEUE_FIELD_NUMBER: builtins.int
     START_TO_CLOSE_TIMEOUT_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
-    NEXUS_OPERATION_PROGRESS_FIELD_NUMBER: builtins.int
-    STREAM_WAKES_FIELD_NUMBER: builtins.int
+    ATTACHMENTS_FIELD_NUMBER: builtins.int
     @property
     def task_queue(self) -> temporalio.api.taskqueue.v1.message_pb2.TaskQueue:
         """The task queue this workflow task was enqueued in, which could be a normal or sticky queue"""
@@ -869,29 +867,17 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
     attempt: builtins.int
     """Starting at 1, how many attempts there have been to complete this task"""
     @property
-    def nexus_operation_progress(
+    def attachments(
         self,
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
-        temporalio.api.nexus.v1.message_pb2.NexusOperationProgress
+        google.protobuf.any_pb2.Any
     ]:
-        """Progress of the Workflow's Nexus operations that arrived since the previous Workflow Task was
-        scheduled, at most one entry per operation: the one with the highest counter. Recorded here
-        rather than as events of its own, so a burst of progress costs one task and replay sees the
-        same progress the Workflow saw. Its size is bounded by the Workflow's pending Nexus operation
-        limit times the per-entry bounds on `position` and `metadata`, about 3 KiB per operation, and
-        it counts toward the History size limit.
-        """
-    @property
-    def stream_wakes(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
-        temporalio.api.stream.v1.message_pb2.StreamWake
-    ]:
-        """Wakes for the Workflow's stream readers that arrived since the previous Workflow Task was
-        scheduled, at most one entry per reader: the latest one. Recorded here rather than as
-        events of their own, so a burst of wakes costs one task and replay sees the same wakes the
-        Workflow saw. Bounded by `history.maximumStreamWakeSources` readers per execution, and it
-        counts toward the History size limit.
+        """Data the server attaches to this task for the Workflow, such as wakes for its stream
+        readers or progress of its Nexus operations. Opaque to the SDK core. Counts toward the
+        History size limit.
+
+        (-- api-linter: core::0146::any=disabled
+            aip.dev/not-precedent: attachments are meant to hold arbitrary server data. --)
         """
     def __init__(
         self,
@@ -899,14 +885,7 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
         task_queue: temporalio.api.taskqueue.v1.message_pb2.TaskQueue | None = ...,
         start_to_close_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         attempt: builtins.int = ...,
-        nexus_operation_progress: collections.abc.Iterable[
-            temporalio.api.nexus.v1.message_pb2.NexusOperationProgress
-        ]
-        | None = ...,
-        stream_wakes: collections.abc.Iterable[
-            temporalio.api.stream.v1.message_pb2.StreamWake
-        ]
-        | None = ...,
+        attachments: collections.abc.Iterable[google.protobuf.any_pb2.Any] | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -920,14 +899,12 @@ class WorkflowTaskScheduledEventAttributes(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "attachments",
+            b"attachments",
             "attempt",
             b"attempt",
-            "nexus_operation_progress",
-            b"nexus_operation_progress",
             "start_to_close_timeout",
             b"start_to_close_timeout",
-            "stream_wakes",
-            b"stream_wakes",
             "task_queue",
             b"task_queue",
         ],

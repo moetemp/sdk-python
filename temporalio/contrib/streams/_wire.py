@@ -1,7 +1,7 @@
-"""How a record crosses to Core and back: the proto is the record.
+"""How a record crosses to the stream runtime and back: the proto is the record.
 
 ``temporal.sdk.streams.v1.StreamRecord`` is the stored format on every
-store, and Core builds and parses it. ``body`` is the user's payload,
+store, and the stream runtime builds and parses it. ``body`` is the user's payload,
 produced and consumed through the payload converter, so a pre-encoded
 :class:`temporalio.common.RawValue` passes through untouched.
 """
@@ -39,14 +39,14 @@ __all__ = [
     "to_wire_link",
 ]
 
-# The most bytes a link's name and its other strings may take, as Core checks them.
+# The most bytes a link's name and its other strings may take, as the stream runtime checks them.
 _MAX_LINK_NAME_BYTES = 256
 _MAX_LINK_FIELD_BYTES = 1024
 
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
 
-Core stamps it on every record the owning Workflow publishes, because a
+The stream runtime stamps it on every record the owning Workflow publishes, because a
 stream follows the Workflow's run chain and a reader needs the run to tell a
 reset branch or a successor run apart. Its value is a payload with
 ``encoding`` ``binary/plain`` whose data is the run id.
@@ -102,7 +102,7 @@ def to_wire(
 
 
 def to_wire_link(link: StreamLink) -> WireLink:
-    """``link`` as Core stores it.
+    """``link`` as the stream runtime stores it.
 
     Raises:
         ValueError: The name is empty or over 256 bytes, a cursor, the
@@ -143,7 +143,7 @@ def to_wire_link(link: StreamLink) -> WireLink:
 
 
 def from_wire_link(wire: WireLink) -> StreamLink:
-    """The link Core stored in ``wire``."""
+    """The link the stream runtime stored in ``wire``."""
     return StreamLink(
         event=LinkEvent(wire.event),
         ref=from_reference(wire.stream) if wire.HasField("stream") else None,
@@ -160,7 +160,7 @@ async def from_read(
     read: ReadRecord,
     result_type: type | None,
 ) -> StreamRecord[Any]:
-    """The record a reader yields for one record of Core's answer.
+    """The record a reader yields for one record of the stream runtime's answer.
 
     Raises:
         StreamRecordError: The body did not decode or convert, or the record
