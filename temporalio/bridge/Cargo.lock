@@ -3296,10 +3296,11 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
-source = "git+https://github.com/moetemp/sdk-streams?rev=d92346ec309f61b9d493cd18048d395e42f494e5#d92346ec309f61b9d493cd18048d395e42f494e5"
+source = "git+https://github.com/moetemp/sdk-streams?rev=bac9d9f16c41837eba51d9dae265cf1d34946f59#bac9d9f16c41837eba51d9dae265cf1d34946f59"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
+ "bytes",
  "crc16",
  "deadpool-postgres",
  "futures-util",
