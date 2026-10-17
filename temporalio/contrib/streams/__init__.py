@@ -5,8 +5,8 @@
 
 A Workflow owns a stream. Producers outside Workflow code, such as the
 Workflow's Activities and clients, append to it, and outside readers consume
-it from a cursor. Records live in a store the application runs, which
-Core reaches for every SDK. Record bodies never reach the server.
+it from a cursor. Records live in a store the application runs, which the
+stream runtime reaches for every SDK. Record bodies never reach the server.
 
 The contract:
 

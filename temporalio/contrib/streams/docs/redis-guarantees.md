@@ -3,12 +3,13 @@
 > This package is experimental and may change in future versions.
 
 Stream records live in your Redis. Temporal never sees them, so what a
-stream guarantees is what your Redis guarantees. Core runs the store for
-every SDK, with the scripts in `crates/streams/lua/` of the Core repository.
-This page says what the store promises, which Redis settings those promises
-depend on, and who is responsible for what. With `plain=True` the store runs
-no scripts and takes Core's fallbacks. The [store capabilities
-page](store-capabilities.md) says what changes then.
+stream guarantees is what your Redis guarantees. The stream runtime runs the
+store for every SDK, with the scripts in `crates/streams/lua/` of the
+sdk-streams repository. This page says what the store promises, which Redis
+settings those promises depend on, and who is responsible for what. With
+`plain=True` the store runs no scripts and takes the stream runtime's
+fallbacks. The [store capabilities page](store-capabilities.md) says what
+changes then.
 
 ## What an acknowledged append means
 
@@ -47,15 +48,17 @@ Recommended for production: `appendonly yes` with `appendfsync everysec` or
 
 ## Settings the store needs
 
-- **Redis 7.0 or later.** Core refuses an older server when the client
-  connects the store. Core's tests run against Redis 7.
+- **Redis 7.0 or later.** The stream runtime refuses an older server when
+  the client connects the store. The stream runtime's tests run against
+  Redis 7.
 - **`maxmemory-policy noeviction`.** Under memory pressure, an evicting
-  policy drops whole keys: a stream's records or its dedupe state. If it drops a log's metadata, a reader can no
-  longer tell that a cursor expired, and it reads on across the gap. Core
-  logs a warning when it can read another policy. It checks the policy,
-  and the server version, once when it connects, so a later change goes
-  unnoticed. With `noeviction`, a full Redis refuses writes instead,
-  and producers get an error they can retry.
+  policy drops whole keys: a stream's records or its dedupe state. If it
+  drops a log's metadata, a reader can no longer tell that a cursor expired,
+  and it reads on across the gap. The stream runtime logs a warning when it
+  can read another policy. It checks the policy, and the server version,
+  once when it connects, so a later change goes unnoticed. With
+  `noeviction`, a full Redis refuses writes instead, and producers get an
+  error they can retry.
 - **Enough memory for retention.** A stream keeps records for `retention`
   (7 days by default) after they were written. Size Redis for your write
   rate times the retention.
@@ -82,11 +85,12 @@ The store cleans up after itself, with no job to run:
 
 ## When a Workflow closes
 
-Redis cannot see a Workflow close, so Core marks the stream closed. When
-the run chain ends through a Workflow Task, the owner's Core marks it after
-the server accepts that task. When the Workflow is terminated or times out,
-a producer marks it when its owner check sees the end. After the mark,
-appends fail with `StreamClosedError`. Readers never mark it.
+Redis cannot see a Workflow close, so the stream runtime marks the stream
+closed. When the run chain ends through a Workflow Task, the owner's Worker
+marks it once the run's History shows that the task closed the run. When the
+Workflow is terminated or times out, a producer marks it when its owner
+check sees the end. After the mark, appends fail with `StreamClosedError`.
+Readers never mark it.
 
 Between the Workflow's close and that mark there is a closing window in
 which appends are still accepted. After a terminate or a timeout, it lasts
@@ -101,13 +105,13 @@ stream: the next run keeps publishing to it.
 Temporal does not authorize or meter record traffic. Records go straight
 between your applications and your Redis, so access is Redis's job.
 
-Readers write nothing, so a reader needs only read access to Redis, and
-the Temporal permission to describe the Workflow. A read holds one Redis connection while it
-waits, from a pool Core keeps per node, so set `blocking_reads_per_node` on
-`RedisStreams` to the streams a process follows at once. A read that finds
-the pool full waits for a connection until its own poll ends, then answers
-empty, so a process that follows more streams than the pool holds sees
-records late rather than failing.
+Readers write nothing, so a reader needs only read access to Redis, and the
+Temporal permission to describe the Workflow. A read holds one Redis
+connection while it waits, from a pool the stream runtime keeps per node, so
+set `blocking_reads_per_node` on `RedisStreams` to the streams a process
+follows at once. A read that finds the pool full waits for a connection
+until its own poll ends, then answers empty, so a process that follows more
+streams than the pool holds sees records late rather than failing.
 
 Every key of a namespace's streams starts with
 `<prefix>:{<namespace>:`, where `<prefix>` is the store's `key_prefix`
@@ -119,17 +123,18 @@ one namespace's applications:
 ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
 ```
 
-Core's conformance suite runs as a user with exactly these rules, on a single server and on a cluster, so a store change
-that needs another command fails the tests. A cluster client reads the
-topology with `CLUSTER SLOTS` first. An ACL user lives on one node, so on a
-cluster you create the user on every node. The delete helper also needs
-`+scan`. `+config|get` is only used to read `maxmemory-policy`, and the
-store goes on when a server refuses it.
+The stream runtime's conformance suite runs as a user with exactly these
+rules, on a single server and on a cluster, so a store change that needs
+another command fails the tests. A cluster client reads the topology with
+`CLUSTER SLOTS` first. An ACL user lives on one node, so on a cluster you
+create the user on every node. The delete helper also needs `+scan`.
+`+config|get` is only used to read `maxmemory-policy`, and the store goes on
+when a server refuses it.
 
 With `plain=True` the store runs no scripts, so the user above works. A user
 for plain mode alone needs only `+multi +exec +xadd +xread +xrange
 +xrevrange +pexpire +scan +unlink` and the connect rules from `+info` on.
-Core's suite doesn't run plain mode as an ACL user.
+The stream runtime's suite doesn't run plain mode as an ACL user.
 
 What crosses the wire:
 
@@ -163,5 +168,5 @@ and the `maxmemory-policy` check ask every primary, and
 keys that move to another node while it runs, so a delete during a reshard
 can miss some. Run it again once the reshard is done.
 
-Core's conformance suite runs against a Redis 7 cluster too, also as a
-user with exactly the ACL above.
+The stream runtime's conformance suite runs against a Redis 7 cluster too,
+also as a user with exactly the ACL above.
