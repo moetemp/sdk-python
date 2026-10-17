@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import json
+import subprocess
 import uuid
+from pathlib import Path
 from typing import Any
 
 from temporalio.client import Client
@@ -27,6 +31,31 @@ async def connect_with(
         data_converter=converter or client.data_converter,
         plugins=[store] if store is not None else [],
     )
+
+
+@functools.cache
+def streams_crate_dir() -> Path:
+    """The checkout of the temporalio-streams crate the bridge builds against.
+
+    Its vectors and docs are the ones the linked stream runtime follows.
+    """
+    manifest = Path(__file__).parents[3] / "temporalio" / "bridge" / "Cargo.toml"
+    metadata = json.loads(
+        subprocess.check_output(
+            [
+                "cargo",
+                "metadata",
+                "--format-version",
+                "1",
+                "--manifest-path",
+                str(manifest),
+            ]
+        )
+    )
+    for package in metadata["packages"]:
+        if package["name"] == "temporalio-streams":
+            return Path(package["manifest_path"]).parent
+    raise RuntimeError("temporalio-streams is not a dependency of the bridge")
 
 
 def new_workflow_id() -> str:

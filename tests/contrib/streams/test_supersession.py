@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,7 +21,11 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._supersession import _RETRY_BITS
 from temporalio.contrib.streams.memory import MemoryStreams
-from tests.contrib.streams._support import connect_with, new_workflow_id
+from tests.contrib.streams._support import (
+    connect_with,
+    new_workflow_id,
+    streams_crate_dir,
+)
 from tests.contrib.streams.test_workflow_writer import (
     STEPS,
     UNSANDBOXED,
@@ -251,10 +254,7 @@ def test_a_workflow_rerun_withdraws_only_its_own_tasks_records():
     assert tracker.observe(superseded("@run", task_one | 1, task_one | 2)) == []
 
 
-_VECTORS = (
-    Path(__file__).parents[3]
-    / "temporalio/bridge/sdk-core/crates/streams/testdata/workflow_attempts.json"
-)
+_VECTORS = streams_crate_dir() / "testdata/workflow_attempts.json"
 
 
 def test_the_retry_bits_match_cores_vectors():
