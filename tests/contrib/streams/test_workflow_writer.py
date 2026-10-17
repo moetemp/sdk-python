@@ -1,8 +1,8 @@
 """A Workflow publishes to its own stream from its Workflow Task.
 
-Each activation's records go with its completion, and Core appends them
-before it reports the completion. The live tests run on memory, and on Redis
-when ``STREAMS_REDIS_URL`` is set.
+Each activation's records go with its completion, and the Worker appends
+them before it gives the completion to Core. The live tests run on memory,
+and on Redis when ``STREAMS_REDIS_URL`` is set.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ seen_at_start: dict[str, list[str]] = defaultdict(list)
 @activity.defn
 async def wait_until_released() -> None:
     workflow_id = activity.info().workflow_id or ""
-    # Core appends the activation's records before it dispatches this call.
+    # The Worker appends the activation's records before Core dispatches this call.
     seen_at_start[workflow_id].append(
         (await activity_handle().latest(topic=STEPS)).token
     )
@@ -220,7 +220,7 @@ async def test_a_run_publishes_in_order_then_finishes_once(
     assert {r.producer_id for r in records} == {f"@{handle.result_run_id}"}
     assert "already finished" in late
     assert "per-record limit" in oversized
-    # A replay sends nothing to Core, so it needs no connected store.
+    # A replay publishes nothing, so it needs no connected store.
     await Replayer(
         workflows=[PublishesAndFinishes], plugins=[MemoryStreams()]
     ).replay_workflow(await handle.fetch_history())
@@ -304,7 +304,7 @@ class FailsAfterAPublish:
         await workflow.sleep(timedelta(milliseconds=10))
         steps.publish("a")
         steps.publish("b")
-        # Ends the activation, so Core appends a and b, and the task goes on.
+        # Ends the activation, so the Worker appends a and b, and the task goes on.
         await workflow.execute_local_activity(
             tick, start_to_close_timeout=timedelta(seconds=10)
         )
@@ -417,6 +417,62 @@ class PublishesWhenAsked:
     @workflow.signal
     def publish(self) -> None:
         self.go = True
+
+
+@workflow.defn
+class PublishesEachSignal:
+    def __init__(self) -> None:
+        self.values: list[str] = []
+        self.done = False
+
+    @workflow.run
+    async def run(self) -> None:
+        steps = workflow_writer(STEPS)
+        published = 0
+        while not self.done or published < len(self.values):
+            await workflow.wait_condition(
+                lambda: self.done or published < len(self.values)
+            )
+            for value in self.values[published:]:
+                steps.publish(value)
+            published = len(self.values)
+
+    @workflow.signal
+    def publish(self, value: str) -> None:
+        self.values.append(value)
+
+    @workflow.signal
+    def finish(self) -> None:
+        self.done = True
+
+
+async def test_a_worker_restart_in_one_process_keeps_the_stream_whole(
+    streams: Client,
+):
+    # Each Worker keeps its own run state in the stream service, so the old
+    # Worker's shutdown can't drop the state of the Worker that replaces it.
+    workflow_id = new_workflow_id()
+    task_queue = str(uuid.uuid4())
+    stream = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+    async with new_worker(streams, PublishesEachSignal, task_queue=task_queue):
+        handle = await streams.start_workflow(
+            PublishesEachSignal.run, id=workflow_id, task_queue=task_queue
+        )
+        await handle.signal(PublishesEachSignal.publish, "a")
+        assert (await anext(stream)).value == "a"
+    async with new_worker(streams, PublishesEachSignal, task_queue=task_queue):
+        await handle.signal(PublishesEachSignal.publish, "b")
+        assert (await anext(stream)).value == "b"
+    async with new_worker(streams, PublishesEachSignal, task_queue=task_queue):
+        await handle.signal(PublishesEachSignal.publish, "c")
+        await handle.signal(PublishesEachSignal.finish)
+        await handle.result()
+    await stream.aclose()
+    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [r.value for r in records] == ["a", "b", "c"]
+    assert {r.producer_id for r in records} == {f"@{handle.result_run_id}"}
+    # Each record came in a later task, so no record supersedes another.
+    assert [r.attempt for r in records] == sorted({r.attempt for r in records})
 
 
 async def test_a_store_that_refuses_the_append_fails_the_task(client: Client):
