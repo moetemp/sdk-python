@@ -152,6 +152,35 @@ STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamFailureKind.ValueType  # 14
 """
 global___StreamFailureKind = StreamFailureKind
 
+class _ResolvedActivityOutcome:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _ResolvedActivityOutcomeEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _ResolvedActivityOutcome.ValueType
+    ],
+    builtins.type,
+):  # noqa: F821
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    RESOLVED_ACTIVITY_OUTCOME_UNSPECIFIED: _ResolvedActivityOutcome.ValueType  # 0
+    RESOLVED_ACTIVITY_OUTCOME_COMPLETED: _ResolvedActivityOutcome.ValueType  # 1
+    """The streams close with an empty result."""
+    RESOLVED_ACTIVITY_OUTCOME_FAILED: _ResolvedActivityOutcome.ValueType  # 2
+    RESOLVED_ACTIVITY_OUTCOME_CANCELLED: _ResolvedActivityOutcome.ValueType  # 3
+
+class ResolvedActivityOutcome(
+    _ResolvedActivityOutcome, metaclass=_ResolvedActivityOutcomeEnumTypeWrapper
+):
+    """How an owner Activity ended. A Local Activity owns no streams, so a backoff never comes here."""
+
+RESOLVED_ACTIVITY_OUTCOME_UNSPECIFIED: ResolvedActivityOutcome.ValueType  # 0
+RESOLVED_ACTIVITY_OUTCOME_COMPLETED: ResolvedActivityOutcome.ValueType  # 1
+"""The streams close with an empty result."""
+RESOLVED_ACTIVITY_OUTCOME_FAILED: ResolvedActivityOutcome.ValueType  # 2
+RESOLVED_ACTIVITY_OUTCOME_CANCELLED: ResolvedActivityOutcome.ValueType  # 3
+global___ResolvedActivityOutcome = ResolvedActivityOutcome
+
 class _WorkflowTerminalCommand:
     ValueType = typing.NewType("ValueType", builtins.int)
     V: typing_extensions.TypeAlias = ValueType
@@ -2997,6 +3026,7 @@ class PublishWorkflowTaskRequest(google.protobuf.message.Message):
     COMPLETED_STARTED_EVENT_IDS_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
     TERMINAL_COMMAND_FIELD_NUMBER: builtins.int
+    RESOLVED_OWNER_ACTIVITIES_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     worker_id: builtins.str
     """Names the lang Worker. The service keys each run's state by the Worker and the run, so two
@@ -3030,6 +3060,17 @@ class PublishWorkflowTaskRequest(google.protobuf.message.Message):
         """In publish order across topics."""
     terminal_command: global___WorkflowTerminalCommand.ValueType
     """The first terminal command of the completion, which is the one Core keeps."""
+    @property
+    def resolved_owner_activities(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___ResolvedOwnerActivity
+    ]:
+        """The Activities of this activation's `ResolveActivity` jobs that own their streams, in job
+        order. Lang marks an owner Activity with the `__temporal_stream_owner` header when it
+        schedules it. The service closes each one's streams after the records land, in the
+        background.
+        """
     def __init__(
         self,
         *,
@@ -3048,6 +3089,10 @@ class PublishWorkflowTaskRequest(google.protobuf.message.Message):
         | None = ...,
         records: collections.abc.Iterable[global___OutputRecord] | None = ...,
         terminal_command: global___WorkflowTerminalCommand.ValueType = ...,
+        resolved_owner_activities: collections.abc.Iterable[
+            global___ResolvedOwnerActivity
+        ]
+        | None = ...,
     ) -> None: ...
     def ClearField(
         self,
@@ -3066,6 +3111,8 @@ class PublishWorkflowTaskRequest(google.protobuf.message.Message):
             b"namespace",
             "records",
             b"records",
+            "resolved_owner_activities",
+            b"resolved_owner_activities",
             "run_id",
             b"run_id",
             "task_queue",
@@ -3084,6 +3131,42 @@ class PublishWorkflowTaskRequest(google.protobuf.message.Message):
     ) -> None: ...
 
 global___PublishWorkflowTaskRequest = PublishWorkflowTaskRequest
+
+class ResolvedOwnerActivity(google.protobuf.message.Message):
+    """An Activity that owns its streams, as its scheduling Workflow saw it end."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
+    OUTCOME_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    activity_id: builtins.str
+    """The Activity's id in the run that scheduled it."""
+    outcome: global___ResolvedActivityOutcome.ValueType
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """On FAILED and CANCELLED, the failure as the server gave it, before lang decodes it. The
+        store keeps it as the close's outcome, and readers decode it with their own codec. Unset
+        closes with a failure that says the Activity gave none.
+        """
+    def __init__(
+        self,
+        *,
+        activity_id: builtins.str = ...,
+        outcome: global___ResolvedActivityOutcome.ValueType = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["failure", b"failure"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "activity_id", b"activity_id", "failure", b"failure", "outcome", b"outcome"
+        ],
+    ) -> None: ...
+
+global___ResolvedOwnerActivity = ResolvedOwnerActivity
 
 class OutputRecord(google.protobuf.message.Message):
     """One record a Workflow published."""
