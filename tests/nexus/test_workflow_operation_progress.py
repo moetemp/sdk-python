@@ -583,7 +583,7 @@ async def _progress_disabled(client: Client, stream_workflow_id: str) -> bool:
         client,
         DescribeStreamNotifierRequest(
             namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
-        )
+        ),
     )
     return any(c.progress_disabled for c in described.callbacks)
 
@@ -597,7 +597,7 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
             client,
             DescribeStreamNotifierRequest(
                 namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
-            )
+            ),
         )
     except RPCError as err:
         if err.status == RPCStatusCode.UNIMPLEMENTED:
@@ -653,7 +653,7 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
         client,
         DescribeStreamNotifierRequest(
             namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
-        )
+        ),
     )
     for _ in range(100):
         if described.callbacks and described.callbacks[0].delivered_counter == 4:
@@ -664,7 +664,7 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=_stream_ref(stream_workflow_id),
-            )
+            ),
         )
     assert described.callbacks[0].delivered_counter == 4
 

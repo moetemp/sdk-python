@@ -20,8 +20,8 @@ from temporalio.api.workflowservice.v1 import (
 from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
-from tests.contrib.streams.samples import nexus_slack_router
 from tests.contrib.streams._support import call_workflow_service
+from tests.contrib.streams.samples import nexus_slack_router
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 

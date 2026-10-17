@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from google.protobuf.any_pb2 import Any as AnyProto
@@ -83,10 +83,9 @@ class _Handle:
 class _Instance:
     """The instance's state that the attachments job reads, with its real steps."""
 
-    _apply_workflow_task_attachments = (
-        _WorkflowInstanceImpl._apply_workflow_task_attachments
+    _apply_nexus_operation_progress = (
+        _WorkflowInstanceImpl._apply_nexus_operation_progress
     )
-    _apply_nexus_operation_progress = _WorkflowInstanceImpl._apply_nexus_operation_progress
 
     def __init__(self) -> None:
         self._pending_nexus_operations: dict[int, _Handle] = {}
@@ -122,9 +121,10 @@ def test_the_deliveries_give_the_shared_vectors(case: dict[str, Any]):
             instance._pending_nexus_operations.pop(step["resolve"]["seq"])
         else:
             delivered.clear()
-            instance._apply_workflow_task_attachments(  # type: ignore[arg-type]
+            _WorkflowInstanceImpl._apply_workflow_task_attachments(
+                cast(Any, instance),
                 WorkflowTaskAttachments(
                     attachments=[_packed(_progress(p)) for p in step["attachments"]]
-                )
+                ),
             )
             assert delivered == step["delivered"]

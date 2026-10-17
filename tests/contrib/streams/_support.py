@@ -65,7 +65,6 @@ async def describe_stream_notifier(
     return await call(service.describe_stream_notifier(request))
 
 
-
 async def call_workflow_service(
     client: Client, rpc: str, request: Message, response_type: type[ResponseT]
 ) -> ResponseT:
@@ -94,6 +93,7 @@ async def call_workflow_service(
             raise RPCError(
                 err.details() or "", RPCStatusCode(err.code().value[0]), b""
             ) from None
+
 
 def postgres_streams(schema: str | None = None, **settings: Any) -> PostgresStreams:
     """A store on ``STREAMS_POSTGRES_URL``, in a schema of its own unless ``schema`` names one.
@@ -137,10 +137,10 @@ def streams_crate_dir() -> Path:
     raise RuntimeError("temporalio-streams is not a dependency of the bridge")
 
 
-
 def streams_crate_nexus() -> Path:
     """The crate's ``nexus`` directory, with the contract and the token vectors."""
     return streams_crate_dir() / "nexus"
+
 
 def new_workflow_id() -> str:
     return f"streams-{uuid.uuid4().hex}"

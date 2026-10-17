@@ -217,13 +217,13 @@ def direct_history() -> tuple[WorkflowHistory, list[ReadOutput]]:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     # Local Activities resolve within the task, so the reader reads on until
     # an empty answer, then waits for progress.
     again = [h.direct_read(answer(record(1, text="a"), record(2, text="b")))]
     h.direct_read(answer(cursor="cursor-2"))
     recheck = h.timer_started(60)
-    h.task(progress(chat, 2))
+    h.task(progress(2))
     h.timer_canceled(recheck)
     again.append(h.direct_read(answer(record(3, text="c"))))
     h.direct_read(answer(cursor="cursor-3"))
@@ -330,7 +330,7 @@ async def test_an_error_mark_replays_as_the_live_read_saw_it() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     bad = RecordWire(token="cursor-2", record=b"", error="codec: no key")
     again = h.direct_read(answer(record(1, text="a"), bad, record(3, text="c")))
     # The codec works again on replay, but Workflow code must see the error.
@@ -356,7 +356,7 @@ async def test_supersessions_and_stale_records_replay_the_same() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     superseded = RecordWire(
         token="cursor-1",
         record=b"",

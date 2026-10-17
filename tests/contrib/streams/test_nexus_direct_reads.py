@@ -14,6 +14,7 @@ from unittest.mock import Mock
 import nexusrpc
 import pytest
 
+import temporalio.contrib.streams.nexus._direct as direct_module
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import NexusHandlerErrorRetryBehavior
 from temporalio.api.failure.v1 import (
@@ -25,7 +26,6 @@ from temporalio.api.workflowservice.v1 import (
     ExecuteSyncNexusOperationRequest,
     ExecuteSyncNexusOperationResponse,
 )
-import temporalio.contrib.streams.nexus._direct as direct_module
 from temporalio.bridge.client import RPCError as BridgeRPCError
 from temporalio.client import ClientConfig
 from temporalio.contrib.streams import (
