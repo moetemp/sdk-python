@@ -246,7 +246,7 @@ from .request_response_pb2 import (
     ValidateWorkerDeploymentVersionComputeConfigRequest,
     ValidateWorkerDeploymentVersionComputeConfigResponse,
 )
-from .stream_notifier_pb2 import (
+from .stream_request_response_pb2 import (
     AttachStreamCallbackRequest,
     AttachStreamCallbackResponse,
     DescribeStreamNotifierRequest,

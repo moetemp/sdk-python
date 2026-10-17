@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import temporalio.api.workflowservice.v1
 import temporalio.bridge.proto.streams
 
 if TYPE_CHECKING:
@@ -48,6 +49,16 @@ class StreamService:
         """Invokes the StreamService.describe_store call."""
         return await self._store.call(
             "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
+        )
+
+    async def describe_stream_notifier(
+        self, req: temporalio.api.workflowservice.v1.DescribeStreamNotifierRequest
+    ) -> temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse:
+        """Invokes the StreamService.describe_stream_notifier call."""
+        return await self._store.call(
+            "DescribeStreamNotifier",
+            req,
+            temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse,
         )
 
     async def flush_notifications(
