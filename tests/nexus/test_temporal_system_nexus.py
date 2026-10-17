@@ -15,6 +15,7 @@ import temporalio.api.common.v1
 import temporalio.api.failure.v1
 import temporalio.api.stream.v1
 import temporalio.api.workflowservice.v1.request_response_pb2 as workflowservice_pb2
+import temporalio.api.workflowservice.v1.stream_request_response_pb2 as stream_pb2
 import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
@@ -724,12 +725,12 @@ def _field_is_repeated(field: FieldDescriptor) -> bool:
     [
         workflowservice_pb2.SignalWithStartWorkflowExecutionRequest,
         workflowservice_pb2.SignalWithStartWorkflowExecutionResponse,
-        workflowservice_pb2.AttachStreamCallbackRequest,
-        workflowservice_pb2.AttachStreamCallbackResponse,
-        workflowservice_pb2.DetachStreamCallbackRequest,
-        workflowservice_pb2.DetachStreamCallbackResponse,
-        workflowservice_pb2.NotifyStreamRequest,
-        workflowservice_pb2.NotifyStreamResponse,
+        stream_pb2.AttachStreamCallbackRequest,
+        stream_pb2.AttachStreamCallbackResponse,
+        stream_pb2.DetachStreamCallbackRequest,
+        stream_pb2.DetachStreamCallbackResponse,
+        stream_pb2.NotifyStreamRequest,
+        stream_pb2.NotifyStreamResponse,
     ],
 )
 def test_system_nexus_proto_roundtrip(message_type: type[Message]) -> None:
