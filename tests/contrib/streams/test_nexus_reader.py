@@ -24,6 +24,7 @@ from typing import Any
 import nexusrpc
 import nexusrpc.handler
 import pytest
+from google.protobuf.any_pb2 import Any as AnyProto
 from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 
@@ -51,7 +52,10 @@ from temporalio.api.history.v1 import (
 from temporalio.api.nexus.v1 import NexusOperationProgress as ProgressProto
 from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.taskqueue.v1 import TaskQueue
-from temporalio.api.workflowservice.v1 import DescribeStreamNotifierRequest
+from temporalio.api.workflowservice.v1 import (
+    DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
+)
 from temporalio.client import Client, WorkflowHistory
 from temporalio.contrib.streams import (
     StreamRecordError,
@@ -86,12 +90,16 @@ from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+from tests.contrib.streams._support import call_workflow_service
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 ENDPOINT = "chat-endpoint"
 TASK_QUEUE = "reader-task-queue"
 STREAMS_SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
 STREAM = StreamRef(kind="workflow", workflow_id="chat-1", topic="tokens")
+CHAT_TOKEN = StreamOperationToken(
+    ref=STREAM, attach="attach-request", chain="run-id"
+).to_token()
 
 converter = DataConverter.default.payload_converter
 
@@ -195,7 +203,7 @@ class History:
                 task_queue=TaskQueue(name=TASK_QUEUE),
                 start_to_close_timeout=Duration(seconds=10),
                 attempt=1,
-                nexus_operation_progress=list(progress),
+                attachments=[packed(p) for p in progress],
             ),
         )
         started = self.add(
@@ -229,9 +237,7 @@ class History:
             EventType.EVENT_TYPE_NEXUS_OPERATION_STARTED,
             nexus_operation_started_event_attributes=NexusOperationStartedEventAttributes(
                 scheduled_event_id=scheduled_event_id,
-                operation_token=StreamOperationToken(
-                    ref=STREAM, attach="attach-request", chain="run-id"
-                ).to_token(),
+                operation_token=CHAT_TOKEN,
                 request_id="request-chat",
             ),
         )
@@ -336,12 +342,23 @@ def answer(*records: RecordWire, done: bool = False, cursor: str = "") -> ReadOu
     )
 
 
-def progress(scheduled_event_id: int, counter: int) -> ProgressProto:
+def progress(counter: int) -> ProgressProto:
     return ProgressProto(
-        scheduled_event_id=scheduled_event_id,
+        operation_key=ProgressProto.OperationKey(
+            endpoint=ENDPOINT,
+            service="ChatService",
+            operation="chat",
+            operation_token=CHAT_TOKEN,
+        ),
         position=f"cursor-{counter}",
         counter=counter,
     )
+
+
+def packed(progress: ProgressProto) -> AnyProto:
+    attachment = AnyProto()
+    attachment.Pack(progress)
+    return attachment
 
 
 def stream_history() -> WorkflowHistory:
@@ -352,14 +369,14 @@ def stream_history() -> WorkflowHistory:
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
     # The first read covers everything up to the progress the start brought.
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(answer(record(1, text="a"), record(2, text="b")))
     # The reader hands over a and b. The answer had records, so it reads on.
     h.task()
     h.read(answer(cursor="cursor-2"))
     # An empty answer is the tail, so it waits for newer progress.
     h.task()
-    h.task(progress(chat, 2))
+    h.task(progress(2))
     h.read(answer(record(3, text="c")))
     h.task()
     h.read(answer(cursor="cursor-3"))
@@ -435,7 +452,7 @@ async def test_a_full_batch_is_followed_by_a_read_without_waiting() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(answer(*full))
     h.task()
     h.read(answer(record(101, text="101")))
@@ -518,7 +535,7 @@ async def test_a_stream_done_without_a_completion_raises_after_the_drain_limit()
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 2))
+    h.task(progress(2))
     h.read(answer(record(1, text="a"), record(2, RecordKind.FINISH), done=True))
     h.task()
     h.timer_fired(h.timer_started(60), 60)
@@ -535,7 +552,7 @@ async def test_a_completion_after_the_stream_is_done_ends_the_reader() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 2))
+    h.task(progress(2))
     h.read(answer(record(1, text="a"), record(2, RecordKind.FINISH), done=True))
     h.task()
     timer = h.timer_started(60)
@@ -557,7 +574,7 @@ async def test_a_reader_with_no_progress_reads_again_after_a_recheck() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(answer(record(1, text="a")))
     h.task()
     h.read(answer(cursor="cursor-1"))
@@ -589,7 +606,7 @@ async def test_a_record_too_large_to_cross_raises_and_the_reader_goes_on() -> No
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(
         answer(
             record(1, text="a"),
@@ -618,7 +635,7 @@ async def test_a_read_error_raises_from_next() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.failed(h.scheduled(STREAMS_SERVICE, "read"), "read")
     h.task()
     h.workflow_completed()
@@ -632,7 +649,7 @@ async def test_a_failed_operation_raises_after_its_records_are_read() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(answer(record(1, text="a")))
     h.task()
     h.read(answer(cursor="cursor-1"))
@@ -660,7 +677,7 @@ async def test_the_reader_records_where_a_producer_attempt_was_superseded() -> N
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(
         answer(
             record(1, text="a"),
@@ -711,7 +728,7 @@ async def test_a_resumed_reader_takes_the_supersession_at_its_cursor() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 5))
+    h.task(progress(5))
     h.read(
         answer(
             superseded(3, 1, 2),
@@ -748,7 +765,7 @@ async def test_a_stale_record_is_reported_and_kept_out_of_the_batch() -> None:
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 4))
+    h.task(progress(4))
     h.read(
         answer(
             record(1, text="a"),
@@ -795,7 +812,7 @@ async def test_a_stale_record_that_cannot_cross_is_reported_without_a_value() ->
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 4))
+    h.task(progress(4))
     h.read(
         answer(
             record(1, text="a2", attempt=2, sequence=1),
@@ -826,9 +843,7 @@ async def test_a_stale_record_that_cannot_cross_is_reported_without_a_value() ->
 class _CompletedHandle:
     """An operation handle whose operation already completed."""
 
-    operation_token = StreamOperationToken(
-        ref=STREAM, attach="attach-request", chain="run-id"
-    ).to_token()
+    operation_token = CHAT_TOKEN
     latest_progress = None
 
     async def progress(self, *, after_counter: int = 0) -> None:
@@ -1200,7 +1215,9 @@ class LiveTokenOwner:
 
 async def _skip_without_notifier(client: Client, ref: StreamRef) -> None:
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=StreamReference(
@@ -1208,7 +1225,8 @@ async def _skip_without_notifier(client: Client, ref: StreamRef) -> None:
                     workflow_id=ref.workflow_id,
                     topic=ref.topic,
                 ),
-            )
+            ),
+            DescribeStreamNotifierResponse,
         )
     except RPCError as err:
         if err.status == RPCStatusCode.UNIMPLEMENTED:
@@ -2182,7 +2200,7 @@ async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> 
     h.task()
     chat = h.scheduled("ChatService", "chat")
     h.chat_started(chat)
-    h.task(progress(chat, 1))
+    h.task(progress(1))
     h.read(
         answer(
             record(1, text="a"),

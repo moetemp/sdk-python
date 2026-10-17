@@ -17,6 +17,7 @@ from types import MappingProxyType
 
 import nexusrpc
 import pytest
+from google.protobuf.any_pb2 import Any as AnyProto
 from google.protobuf.duration_pb2 import Duration
 from google.protobuf.timestamp_pb2 import Timestamp
 from nexusrpc.handler import (
@@ -49,14 +50,18 @@ from temporalio.api.stream.v1 import StreamReference
 from temporalio.api.taskqueue.v1 import TaskQueue
 from temporalio.api.workflowservice.v1 import (
     AttachStreamCallbackRequest,
+    AttachStreamCallbackResponse,
     DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
     NotifyStreamRequest,
+    NotifyStreamResponse,
 )
 from temporalio.client import Client, WorkflowHistory
 from temporalio.converter import DataConverter
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+from tests.contrib.streams._support import call_workflow_service
 from tests.helpers.nexus import make_nexus_endpoint_name
 
 ENDPOINT = "progress-endpoint"
@@ -142,7 +147,7 @@ class History:
                 task_queue=TaskQueue(name=TASK_QUEUE),
                 start_to_close_timeout=Duration(seconds=10),
                 attempt=1,
-                nexus_operation_progress=list(progress),
+                attachments=[packed(p) for p in progress],
             ),
         )
         self._started = self.add(
@@ -201,13 +206,24 @@ class History:
         )
 
 
-def progress(scheduled_event_id: int, counter: int) -> ProgressProto:
+def progress(counter: int) -> ProgressProto:
     return ProgressProto(
-        scheduled_event_id=scheduled_event_id,
+        operation_key=ProgressProto.OperationKey(
+            endpoint=ENDPOINT,
+            service="ProgressService",
+            operation="produce",
+            operation_token="operation-token",
+        ),
         position=f"cursor-{counter}",
         counter=counter,
         metadata={"records": str(counter)},
     )
+
+
+def packed(progress: ProgressProto) -> AnyProto:
+    attachment = AnyProto()
+    attachment.Pack(progress)
+    return attachment
 
 
 def progress_history() -> WorkflowHistory:
@@ -218,8 +234,8 @@ def progress_history() -> WorkflowHistory:
     h.task()
     scheduled = h.operation_scheduled()
     h.operation_started(scheduled)
-    h.task(progress(scheduled, 1))
-    h.task(progress(scheduled, 3))
+    h.task(progress(1))
+    h.task(progress(3))
     h.operation_completed(scheduled, "done")
     h.task()
     h.workflow_completed()
@@ -296,10 +312,10 @@ async def test_progress_keeps_the_highest_counter_and_answers_from_it() -> None:
     h.task()
     scheduled = h.operation_scheduled()
     h.operation_started(scheduled)
-    h.task(progress(scheduled, 3))
+    h.task(progress(3))
     # After an event-based failover, counters already seen can come back.
-    h.task(progress(scheduled, 2))
-    h.task(progress(scheduled, 3))
+    h.task(progress(2))
+    h.task(progress(3))
     h.operation_completed(scheduled, "done")
     h.task()
     h.workflow_completed()
@@ -438,7 +454,9 @@ class _LiveProgressOperation(OperationHandler[str, str]):
     ) -> StartOperationResultAsync:
         assert ctx.callback_url
         client = nexus.client()
-        await client.workflow_service.attach_stream_callback(
+        await call_workflow_service(
+            client,
+            "AttachStreamCallback",
             AttachStreamCallbackRequest(
                 namespace=client.namespace,
                 stream_ref=_stream_ref(input),
@@ -446,7 +464,8 @@ class _LiveProgressOperation(OperationHandler[str, str]):
                 callback=Callback.Nexus(
                     url=ctx.callback_url, header=dict(ctx.callback_headers)
                 ),
-            )
+            ),
+            AttachStreamCallbackResponse,
         )
         self.started.set()
         return StartOperationResultAsync(token=f"stream-{input}")
@@ -525,7 +544,7 @@ async def _notify(
         request.close_result.CopyFrom(
             DataConverter.default.payload_converter.to_payload(close_result)
         )
-    await client.workflow_service.notify_stream(request)
+    await call_workflow_service(client, "NotifyStream", request, NotifyStreamResponse)
 
 
 async def _wait_for_event(
@@ -551,8 +570,17 @@ async def _wait_for_counters(
     return None
 
 
+async def _describe(
+    client: Client, request: DescribeStreamNotifierRequest
+) -> DescribeStreamNotifierResponse:
+    return await call_workflow_service(
+        client, "DescribeStreamNotifier", request, DescribeStreamNotifierResponse
+    )
+
+
 async def _progress_disabled(client: Client, stream_workflow_id: str) -> bool:
-    described = await client.workflow_service.describe_stream_notifier(
+    described = await _describe(
+        client,
         DescribeStreamNotifierRequest(
             namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
         )
@@ -565,7 +593,8 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
 ) -> None:
     stream_workflow_id = f"live-stream-{uuid.uuid4()}"
     try:
-        await client.workflow_service.describe_stream_notifier(
+        await _describe(
+            client,
             DescribeStreamNotifierRequest(
                 namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
             )
@@ -620,7 +649,8 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
     for counter in (2, 3, 4):
         await _notify(client, stream_workflow_id, counter)
     # The notifier delivers in order, so by now the caller has every counter.
-    described = await client.workflow_service.describe_stream_notifier(
+    described = await _describe(
+        client,
         DescribeStreamNotifierRequest(
             namespace=client.namespace, stream_ref=_stream_ref(stream_workflow_id)
         )
@@ -629,7 +659,8 @@ async def test_live_progress_is_ordered_folded_ended_and_replayed(
         if described.callbacks and described.callbacks[0].delivered_counter == 4:
             break
         await asyncio.sleep(0.1)
-        described = await client.workflow_service.describe_stream_notifier(
+        described = await _describe(
+            client,
             DescribeStreamNotifierRequest(
                 namespace=client.namespace,
                 stream_ref=_stream_ref(stream_workflow_id),

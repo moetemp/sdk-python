@@ -9,9 +9,10 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
+from google.protobuf.message import Message
 
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
@@ -23,6 +24,9 @@ from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.postgres import PostgresStreams
 from temporalio.converter import DataConverter
+from temporalio.service import RPCError, RPCStatusCode
+
+ResponseT = TypeVar("ResponseT", bound=Message)
 
 
 async def connect_with(
@@ -60,6 +64,36 @@ async def describe_stream_notifier(
     service = await store_for_client(client)._service_for(client)
     return await call(service.describe_stream_notifier(request))
 
+
+
+async def call_workflow_service(
+    client: Client, rpc: str, request: Message, response_type: type[ResponseT]
+) -> ResponseT:
+    """Call a workflow service RPC that the client has no stub for, by its method path.
+
+    The stream runtime calls the notifier RPCs this way. A test that plays a
+    producer or a handler calls them over a plain gRPC channel to the client's
+    server, and gets a failure as the ``RPCError`` that a stub raises.
+    """
+    # Imported here, since the Workflow sandbox imports this module again.
+    import grpc
+
+    async with grpc.aio.insecure_channel(
+        client.service_client.config.target_host
+    ) as channel:
+        method = channel.unary_unary(
+            f"/temporal.api.workflowservice.v1.WorkflowService/{rpc}",
+            request_serializer=Message.SerializeToString,
+            response_deserializer=response_type.FromString,
+        )
+        try:
+            return await method(
+                request, metadata=(("temporal-namespace", client.namespace),)
+            )
+        except grpc.aio.AioRpcError as err:
+            raise RPCError(
+                err.details() or "", RPCStatusCode(err.code().value[0]), b""
+            ) from None
 
 def postgres_streams(schema: str | None = None, **settings: Any) -> PostgresStreams:
     """A store on ``STREAMS_POSTGRES_URL``, in a schema of its own unless ``schema`` names one.

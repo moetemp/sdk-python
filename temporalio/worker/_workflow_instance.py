@@ -49,6 +49,7 @@ from typing_extensions import Self, TypedDict, TypeVarTuple, Unpack
 import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.enums.v1
+import temporalio.api.nexus.v1
 import temporalio.api.sdk.v1
 import temporalio.api.stream.v1
 import temporalio.bridge.proto.activity_result
@@ -701,10 +702,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_resolve_nexus_operation_start(job.resolve_nexus_operation_start)
         elif job.HasField("resolve_nexus_operation"):
             self._apply_resolve_nexus_operation(job.resolve_nexus_operation)
-        elif job.HasField("resolve_nexus_operation_progress"):
-            self._apply_resolve_nexus_operation_progress(
-                job.resolve_nexus_operation_progress
-            )
         elif job.HasField("resolve_request_cancel_external_workflow"):
             self._apply_resolve_request_cancel_external_workflow(
                 job.resolve_request_cancel_external_workflow
@@ -1168,25 +1165,33 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         else:
             raise RuntimeError("Nexus operation did not have a result")
 
-    def _apply_resolve_nexus_operation_progress(
-        self,
-        job: temporalio.bridge.proto.workflow_activation.ResolveNexusOperationProgress,
+    def _apply_nexus_operation_progress(
+        self, progress: temporalio.api.nexus.v1.NexusOperationProgress
     ) -> None:
-        handle = self._pending_nexus_operations.get(job.seq)
-        if not handle:
-            # Progress is a hint, and Core only sends it for an operation it
-            # still sees as started, so a handle that is already gone, for
-            # example after a cancel, has no use for it.
+        if not progress.HasField("operation_key"):
             return
-        handle._resolve_progress(
-            temporalio.workflow.NexusOperationProgress(
-                position=job.position,
-                counter=job.counter,
-                # Read-only, so Workflow code can't change what the next reader
-                # of latest_progress sees.
-                metadata=types.MappingProxyType(dict(job.metadata)),
-            )
-        )
+        key = progress.operation_key
+        # Only a started operation that has not resolved has a pending handle
+        # with a token. A resolution in the same task comes before the
+        # attachments, so its progress finds no handle and is dropped. A token
+        # is unique only within one handler, so two operations with one key are
+        # one handler operation, and both get the progress.
+        for handle in self._pending_nexus_operations.values():
+            if (
+                handle._input.endpoint == key.endpoint
+                and handle._input.service == key.service
+                and handle._input.operation_name == key.operation
+                and handle.operation_token == key.operation_token
+            ):
+                handle._resolve_progress(
+                    temporalio.workflow.NexusOperationProgress(
+                        position=progress.position,
+                        counter=progress.counter,
+                        # Read-only, so Workflow code can't change what the next
+                        # reader of latest_progress sees.
+                        metadata=types.MappingProxyType(dict(progress.metadata)),
+                    )
+                )
 
     def _apply_resolve_request_cancel_external_workflow(
         self,
@@ -1290,11 +1295,18 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # Other attachments belong to features this Worker does not run, so
         # they are left alone.
         woke = False
+        progress: list[temporalio.api.nexus.v1.NexusOperationProgress] = []
         for attachment in job.attachments:
             wake = temporalio.api.stream.v1.StreamWake()
             if attachment.Unpack(wake):
                 self._stream_wakes.append(wake)
                 woke = True
+                continue
+            one = temporalio.api.nexus.v1.NexusOperationProgress()
+            if attachment.Unpack(one):
+                progress.append(one)
+        for one in fold_nexus_operation_progress(progress):
+            self._apply_nexus_operation_progress(one)
         if woke:
             # A wake resolves no future, and wait conditions are checked only
             # after a ready callback ran, so give the loop one.
@@ -4091,6 +4103,31 @@ class _ContinueAsNewError(temporalio.workflow.ContinueAsNewError):
                 int(self._input.initial_versioning_behavior),
             )
         command.event_group_markers.extend(self._event_group_markers)
+
+
+def fold_nexus_operation_progress(
+    progress: list[temporalio.api.nexus.v1.NexusOperationProgress],
+) -> list[temporalio.api.nexus.v1.NexusOperationProgress]:
+    """Fold the progress of one Workflow Task to one per operation key.
+
+    The key is the endpoint, service, operation and token. The progress with
+    the highest counter for a key stays, and the first of equal counters
+    stays. Keys keep the order of their first progress. Progress with no key
+    is dropped. This is the fold rule that every SDK shares, and the
+    sdk-streams vectors ``testdata/nexus_progress_folds.json`` check it.
+    """
+    folded: dict[
+        tuple[str, str, str, str], temporalio.api.nexus.v1.NexusOperationProgress
+    ] = {}
+    for one in progress:
+        if not one.HasField("operation_key"):
+            continue
+        key = one.operation_key
+        id = (key.endpoint, key.service, key.operation, key.operation_token)
+        held = folded.get(id)
+        if held is None or one.counter > held.counter:
+            folded[id] = one
+    return list(folded.values())
 
 
 def _encode_search_attributes(
