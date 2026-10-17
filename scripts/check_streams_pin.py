@@ -9,8 +9,9 @@ copy of the sdk-rust crates.
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+
+import tomllib
 
 base_dir = Path(__file__).parent.parent
 bridge_manifest = base_dir / "temporalio" / "bridge" / "Cargo.toml"
