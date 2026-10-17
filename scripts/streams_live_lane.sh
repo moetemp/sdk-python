@@ -85,7 +85,7 @@ callback.allowedAddresses:
         AllowInsecure: true
       - Pattern: "127.0.0.1:$HTTP_PORT"
         AllowInsecure: true
-      # Core's live notifier test takes the notifier's callbacks on this address.
+      # The stream runtime's live notifier test takes the notifier's callbacks on this address.
       - Pattern: "127.0.0.1:7899"
         AllowInsecure: true
 streamnotifier.enabled:
@@ -499,17 +499,19 @@ for test_id in gated:
 sys.exit(1 if failed else 0)
 PY
 
-# Core sends the notifications and the closes, so its own live test runs against the server too.
-# It returns early without a server, so the lane checks that it ran.
-core_test=streams::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
-STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" \
+# The stream runtime sends the notifications and the closes, so its own live test runs against the
+# server too. It returns early without a server, so the lane checks that it ran.
+crate_dir=$(uv run --no-sync python -c \
+  "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
+crate_test=connection::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
+STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" STREAMS_NOTIFIER_NEXUS_PROGRESS=1 \
   CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK_DIR/cargo-target}" \
-  cargo test --manifest-path temporalio/bridge/sdk-core/Cargo.toml -p temporalio-sdk-core \
-  --features streams --lib -- "$core_test" --exact --nocapture 2>&1 |
-  tee "$WORK_DIR/core-live.log" || status=$?
-if grep -q "set STREAMS_NOTIFIER_SERVER" "$WORK_DIR/core-live.log" ||
-  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/core-live.log"; then
-  echo "live lane: Core's live notifier test did not run and pass" >&2
+  cargo test --manifest-path "$crate_dir/Cargo.toml" -p temporalio-streams \
+  --lib -- "$crate_test" --exact --nocapture 2>&1 |
+  tee "$WORK_DIR/crate-live.log" || status=$?
+if grep -q "set STREAMS_NOTIFIER" "$WORK_DIR/crate-live.log" ||
+  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/crate-live.log"; then
+  echo "live lane: the stream runtime's live notifier test did not run and pass" >&2
   status=1
 fi
 
