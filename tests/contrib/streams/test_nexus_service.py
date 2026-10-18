@@ -31,6 +31,16 @@ import temporalio.api.nexus.v1
 import temporalio.api.operatorservice.v1
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.api.failure.v1 import (
+    ApplicationFailureInfo,
+    Failure,
+    NexusHandlerFailureInfo,
+)
+from temporalio.bridge.proto.streams import (
+    CodecWork,
+    NexusFailure,
+    StreamOwnerKind,
+)
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.client import Client
 from temporalio.common import RawValue
@@ -48,19 +58,30 @@ from temporalio.contrib.streams.nexus import (
     HTTPStatusError,
     ReadInput,
     ReadOutput,
+    RecordWire,
     StreamAccess,
     TemporalStreams,
     TemporalStreamsHandler,
     TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._generated import (
+    FollowInput,
+    FollowRangeInput,
+    ReadRangeInput,
+)
 from temporalio.contrib.streams.nexus._generated import client as generated_client
+from temporalio.contrib.streams.nexus._handler import _handler_error, _run_codec
 from temporalio.converter import (
+    ActivitySerializationContext,
     DataConverter,
     PayloadCodec,
+    SerializationContext,
+    WithSerializationContext,
 )
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import PollerBehaviorSimpleMaximum, Worker
 from tests import DEV_SERVER_DOWNLOAD_VERSION
+from tests.contrib.streams.test_outside_handles import WorkflowKeyedCodec
 from tests.helpers import find_free_port, new_worker
 
 _SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
@@ -846,3 +867,574 @@ async def test_a_workflow_reader_gets_plain_bodies_that_stay_encrypted_elsewhere
             await stored.aclose()
         assert record.value is not None
         assert record.value.payload.metadata["encoding"] == b"binary/xor"
+
+
+class SlowCodec(PayloadCodec):
+    """A codec that really awaits, as a KMS-backed one does."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        await asyncio.sleep(0.001)
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        await asyncio.sleep(0.001)
+        return list(payloads)
+
+
+async def test_a_read_that_does_not_wait_answers_with_what_the_store_holds(
+    server: Server, backing: Backing
+):
+    # wait_ms=0 means "do not wait for new records", not "skip a fetch that
+    # needs I/O": every record already in the store comes back.
+    # The same connection as the backing's client, since one store serves one.
+    slow = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=SlowCodec()),
+    )
+    async with serve(server, backing, client=slow) as service:
+        ref = await stream_of(service)
+        for start in range(0, 250, 50):
+            await append(
+                service,
+                ref,
+                *[f"r{n}" for n in range(start, start + 50)],
+                sequence=start + 1,
+            )
+        sizes: list[int] = []
+        after = ""
+        while True:
+            answer = await read(service, ref, after, wait_ms=0, max_records=100)
+            if not answer.records:
+                break
+            sizes.append(len(answer.records))
+            after = answer.next_token
+        assert sizes == [100, 100, 50]
+
+
+def crossing(record: RecordWire) -> int:
+    """The bytes a record takes in a read result, where it crosses as base64."""
+    return 4 * ((len(record.record) + 2) // 3)
+
+
+async def test_a_read_answer_stays_within_its_byte_budget(service: Service):
+    ref = await stream_of(service)
+    big = "x" * (300 * 1024)
+    for n in range(5):
+        await append(service, ref, f"{n}{big}", sequence=n + 1)
+    sizes: list[int] = []
+    after = ""
+    while True:
+        answer = await read(service, ref, after, wait_ms=0)
+        if not answer.records:
+            break
+        # The budget counts what crosses, about 4/3 of the record bytes.
+        assert sum(crossing(record) for record in answer.records) <= 1 << 20
+        sizes.append(len(answer.records))
+        after = answer.next_token
+    assert sizes == [2, 2, 1]
+
+
+async def test_a_record_above_the_budget_still_crosses_alone(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "y" * (1 << 20) + "z", "small")
+    first = await read(service, ref, wait_ms=0)
+    assert len(first.records) == 1
+    second = await read(service, ref, first.next_token, wait_ms=0)
+    assert texts(second) == ["small"]
+
+
+async def test_an_authorizer_sees_each_call_and_can_refuse(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return access.producer_id != "intruder"
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "a")
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "b", producer_id="intruder")
+        answer = await read(service, ref, wait_ms=0)
+
+    assert refused.value.status == 403
+    assert texts(answer) == ["a"]
+    assert [(access.operation, access.producer_id) for access in seen] == [
+        ("append", "p"),
+        ("append", "intruder"),
+        ("read", None),
+    ]
+    assert all(access.stream == ref for access in seen)
+
+
+async def test_a_read_range_answers_the_records_a_holders_read_got(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "a", "b", "c")
+    answer = await service.caller.read(
+        ReadInput(stream=ref, max_records=2, wait_ms=0, floor_holder="ns/run/1")
+    )
+    assert answer.replay is not None
+    again = await service.caller.read_range(
+        ReadRangeInput(
+            stream=ref,
+            chain_first_run_id=answer.replay.chain_first_run_id,
+            after_token=answer.replay.after_token,
+            to_token=answer.next_token,
+            stored_records=answer.replay.stored_records,
+            records_digest=answer.replay.records_digest,
+            floor_holder="ns/run/1",
+        )
+    )
+    assert texts(again) == texts(answer) == ["a", "b"]
+    assert again.next_token == answer.next_token
+
+
+async def test_a_handler_with_no_authorizer_serves_a_read_range(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, authorize=None) as service:
+        ref = await stream_of(service)
+        answer = await service.caller.read(
+            ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+        )
+        assert answer.replay is not None
+        again = await service.caller.read_range(
+            ReadRangeInput(
+                stream=ref,
+                chain_first_run_id=answer.replay.chain_first_run_id,
+                after_token=answer.replay.after_token,
+                to_token=answer.next_token,
+                stored_records=answer.replay.stored_records,
+                records_digest=answer.replay.records_digest,
+                floor_holder="ns/run/1",
+            )
+        )
+    assert not again.records
+
+
+async def test_a_read_range_with_another_digest_is_a_mismatch(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "a")
+    answer = await service.caller.read(
+        ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+    )
+    assert answer.replay is not None
+    with pytest.raises(HTTPStatusError) as refused:
+        await service.caller.read_range(
+            ReadRangeInput(
+                stream=ref,
+                chain_first_run_id=answer.replay.chain_first_run_id,
+                after_token=answer.replay.after_token,
+                to_token=answer.next_token,
+                stored_records=answer.replay.stored_records,
+                records_digest=b"\x00" * len(answer.replay.records_digest),
+            )
+        )
+    assert refused.value.status == 400
+    assert refused_as(refused.value) == "StreamReplayMismatchError"
+
+
+async def test_an_authorizer_sees_the_floor_holder_and_can_refuse_a_read_range(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return access.operation != "read_range"
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "a")
+        answer = await service.caller.read(
+            ReadInput(stream=ref, wait_ms=0, floor_holder="ns/run/1")
+        )
+        assert answer.replay is not None
+        with pytest.raises(HTTPStatusError) as refused:
+            await service.caller.read_range(
+                ReadRangeInput(
+                    stream=ref,
+                    chain_first_run_id=answer.replay.chain_first_run_id,
+                    after_token=answer.replay.after_token,
+                    to_token=answer.next_token,
+                    stored_records=answer.replay.stored_records,
+                    records_digest=answer.replay.records_digest,
+                    floor_holder="ns/run/1",
+                )
+            )
+
+    assert refused.value.status == 403
+    assert [(access.operation, access.floor_holder) for access in seen] == [
+        ("append", None),
+        ("read", "ns/run/1"),
+        ("read_range", "ns/run/1"),
+    ]
+    assert all(access.stream == ref for access in seen)
+
+
+async def test_an_append_above_the_record_limit_is_refused(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, max_record_bytes=4096) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "x" * 5000)
+        answer = await read(service, ref, wait_ms=0)
+
+    assert refused_as(refused.value) == "ValueError"
+    assert "limit" in refused.value.detail
+    assert answer.records == []
+
+
+async def test_a_stored_record_above_the_limit_crosses_as_an_error(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, max_record_bytes=4096) as service:
+        ref = await stream_of(service)
+        # Written to the store directly, as an Activity or a client may.
+        producer = get_stream_handle(service.client, ref).producer(
+            producer_id="direct", attempt=1
+        )
+        await producer.append(RawValue(Payload(data=b"x" * 5000)))
+        await producer.append(RawValue(Payload(data=b"small")))
+        answer = await read(service, ref, wait_ms=0)
+
+    large, small = answer.records
+    # The reader is told why, at the cursor it goes on past.
+    assert large.error and "limit" in large.error
+    assert large.record == b""
+    assert small.error is None
+    assert WireRecord.FromString(small.record).body.data == b"small"
+
+
+@pytest.mark.parametrize(
+    "name, kind, retryable",
+    [
+        ("StreamProducerError", nexusrpc.HandlerErrorType.BAD_REQUEST, False),
+        ("StreamStorageError", nexusrpc.HandlerErrorType.UNAVAILABLE, True),
+    ],
+)
+def test_a_core_failure_crosses_as_its_handler_error(
+    name: str, kind: nexusrpc.HandlerErrorType, retryable: bool
+):
+    # Core maps each stream condition. The handler only hands its failure on.
+    crossed = _handler_error(
+        NexusFailure(
+            handler_error_type=kind.name,
+            retryable=retryable,
+            message=f"{name}: x",
+            failure=Failure(
+                cause=Failure(
+                    message="x",
+                    application_failure_info=ApplicationFailureInfo(
+                        type=name, non_retryable=not retryable
+                    ),
+                ),
+                nexus_handler_failure_info=NexusHandlerFailureInfo(type=kind.name),
+            ),
+        )
+    )
+    assert crossed.type == kind
+    assert crossed.retryable == retryable
+    assert str(crossed) == f"{name}: x"
+    original = crossed.original_failure
+    assert original is not None
+    assert not original.stack_trace
+    details = dict(original.details or {})
+    cause = details["cause"]["applicationFailureInfo"]
+    assert cause["type"] == name
+    assert cause.get("nonRetryable", False) == (not retryable)
+    assert details["nexusHandlerFailureInfo"]["type"] == kind.name
+
+
+@pytest.mark.parametrize("name", ["", "NOT_A_TYPE"])
+def test_an_unknown_handler_error_type_crosses_as_internal(name: str):
+    # Only a Core from another release could send one.
+    crossed = _handler_error(
+        NexusFailure(handler_error_type=name, retryable=True, message="why")
+    )
+    assert crossed.type == nexusrpc.HandlerErrorType.INTERNAL
+    assert str(crossed) == "why"
+
+
+async def test_a_refusal_carries_no_handler_stack_frames(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "one")
+    with pytest.raises(HTTPStatusError) as refused:
+        await append(service, ref, "different")
+    # The caller learns the condition, not the handler's source layout.
+    assert refused_as(refused.value) == "StreamProducerError"
+    assert "File " not in refused.value.detail
+    assert "_handler.py" not in refused.value.detail
+    failure = json.loads(refused.value.detail)
+    assert not failure.get("stackTrace")
+    assert not failure["details"].get("stackTrace")
+
+
+async def test_the_generated_read_loop_ends_when_the_stream_does(service: Service):
+    workflow_id = f"streams-service-{uuid.uuid4().hex}"
+    ref = StreamRef.for_workflow(workflow_id, topic="out")
+    async with new_worker(service.client, StreamOwner) as worker:
+        owner = await service.client.start_workflow(
+            StreamOwner.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        landed = await append(service, ref, "one")
+        await owner.signal(StreamOwner.finish)
+        await owner.result()
+    started = asyncio.get_running_loop().time()
+    answer = await service.caller.read_until_records(
+        ReadInput(stream=ref, after_token=landed.cursor), deadline=10.0
+    )
+    # The stream has ended, so the loop hands back the done answer at once
+    # rather than asking again until its deadline.
+    assert answer.done and answer.records == []
+    assert asyncio.get_running_loop().time() - started < 5.0
+
+
+async def test_the_handler_decodes_with_the_workflows_serialization_context(
+    server: Server, backing: Backing
+):
+    # The handler's append encodes with the stream Workflow's context, as the
+    # Workflow and every producer do, so its read must decode with it too.
+    keyed = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=WorkflowKeyedCodec()),
+    )
+    async with serve(server, backing, client=keyed) as service:
+        ref = await stream_of(service)
+        async with new_worker(keyed, StreamsThroughNexus) as worker:
+            result = await keyed.execute_workflow(
+                StreamsThroughNexus.run,
+                args=[service.endpoint, ref],
+                id=f"streams-keyed-{uuid.uuid4().hex}",
+                task_queue=worker.task_queue,
+            )
+    assert result == ["hi"]
+
+
+async def test_an_activity_stream_appends_and_reads_over_nexus(service: Service):
+    ref = await activity_stream_of(service)
+    await append(service, ref, "a", "b")
+    answer = await read(service, ref, wait_ms=0)
+    assert texts(answer) == ["a", "b"]
+    assert {r.producer_id for r in records_of(answer)} == {"p"}
+
+
+async def test_an_authorizer_sees_an_activity_ref_and_its_refusal_names_the_activity(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return access.operation == "read"
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await activity_stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+        answer = await read(service, ref, wait_ms=0)
+
+    assert refused.value.status == 403
+    assert f"of Activity {ref.activity_id!r}" in refused.value.detail
+    assert texts(answer) == []
+    assert [(a.stream.kind, a.stream.activity_id) for a in seen] == [
+        ("activity", ref.activity_id),
+        ("activity", ref.activity_id),
+    ]
+
+
+async def test_the_codec_step_uses_the_activitys_context():
+    seen: list[SerializationContext] = []
+
+    class Recording(PayloadCodec, WithSerializationContext):
+        def with_context(self, context: SerializationContext) -> Recording:
+            seen.append(context)
+            return self
+
+        async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+        async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+    work = CodecWork(
+        encode=True,
+        namespace="default",
+        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+        activity_id="tool-1",
+        payloads=[Payload(metadata={"encoding": b"binary/test"}, data=b"x")],
+    )
+    results = await _run_codec(DataConverter(payload_codec=Recording()), work)
+
+    assert len(results) == 1
+    assert set(seen) == {
+        ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id=None,
+            workflow_type=None,
+            is_local=False,
+        )
+    }
+
+
+@workflow.defn
+class SchedulesAnUnpolledTool:
+    """Schedules one tool call that no Worker polls, so it stays pending."""
+
+    @workflow.run
+    async def run(self, task_queue: str) -> None:
+        await workflow.execute_activity(
+            "never_polled",
+            activity_id="tool-1",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+
+
+@asynccontextmanager
+async def workflow_activity_stream_of(
+    service: Service, topic: str = "out"
+) -> AsyncIterator[StreamRef]:
+    """A fresh stream of a pending Activity that a running Workflow scheduled."""
+    async with new_worker(service.backing.client, SchedulesAnUnpolledTool) as worker:
+        agent = await service.backing.client.start_workflow(
+            SchedulesAnUnpolledTool.run,
+            f"unpolled-{uuid.uuid4().hex}",
+            id=f"streams-service-{uuid.uuid4().hex}",
+            task_queue=worker.task_queue,
+        )
+        for _ in range(100):
+            described = await agent.describe()
+            if described.raw_description.pending_activities:
+                break
+            await asyncio.sleep(0.1)
+        try:
+            yield StreamRef.for_workflow_activity(
+                agent.id,
+                run_id=agent.result_run_id or "",
+                activity_id="tool-1",
+                topic=topic,
+            )
+        finally:
+            await agent.terminate()
+
+
+async def test_a_workflow_activity_stream_appends_and_reads_over_nexus(
+    service: Service,
+):
+    async with workflow_activity_stream_of(service) as ref:
+        await append(service, ref, "a", "b")
+        answer = await read(service, ref, wait_ms=0)
+    assert texts(answer) == ["a", "b"]
+    assert {r.producer_id for r in records_of(answer)} == {"p"}
+
+
+async def test_an_authorizer_refusal_names_the_activity_and_its_workflow(
+    server: Server, backing: Backing
+):
+    seen: list[StreamAccess] = []
+
+    async def authorize(access: StreamAccess) -> bool:
+        seen.append(access)
+        return False
+
+    async with serve(server, backing, authorize=authorize) as service:
+        async with workflow_activity_stream_of(service) as ref:
+            with pytest.raises(HTTPStatusError) as refused:
+                await append(service, ref, "a")
+
+    assert refused.value.status == 403
+    assert (
+        f"of Activity {ref.activity_id!r} of Workflow {ref.workflow_id!r}"
+        in refused.value.detail
+    )
+    assert [(a.stream.kind, a.stream.chain_run_id) for a in seen] == [
+        ("workflow_activity", ref.chain_run_id)
+    ]
+
+
+async def test_the_codec_step_uses_the_workflow_activitys_context():
+    seen: list[SerializationContext] = []
+
+    class Recording(PayloadCodec, WithSerializationContext):
+        def with_context(self, context: SerializationContext) -> Recording:
+            seen.append(context)
+            return self
+
+        async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+        async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+            return list(payloads)
+
+    work = CodecWork(
+        encode=True,
+        namespace="default",
+        owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+        workflow_id="agent",
+        activity_id="tool-1",
+        payloads=[Payload(metadata={"encoding": b"binary/test"}, data=b"x")],
+    )
+    await _run_codec(DataConverter(payload_codec=Recording()), work)
+
+    assert set(seen) == {
+        ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id="agent",
+            workflow_type=None,
+            is_local=False,
+        )
+    }
+
+
+async def test_a_follow_over_nexus_expands_a_link_and_replays_its_ranges(
+    service: Service,
+):
+    agent, child = await stream_of(service), await stream_of(service)
+    store = service.backing.client
+    await (
+        get_stream_handle(store, child)
+        .producer(producer_id="tool", attempt=1)
+        .append("a1", "a2")
+    )
+    parent = get_stream_handle(store, agent).producer(producer_id="agent", attempt=1)
+    await parent.append("d1")
+    await parent.link(child, name="sub")
+
+    answer = await service.caller.follow(
+        FollowInput(stream=agent, wait_ms=0, floor_holder="caller/run/1")
+    )
+    again = await service.caller.follow_range(
+        FollowRangeInput(
+            stream=agent,
+            ranges=answer.replay.ranges if answer.replay else [],
+            follow_digest=answer.replay.follow_digest if answer.replay else b"",
+            floor_holder="caller/run/1",
+        )
+    )
+
+    by_source = [
+        (f.source, f.link_state.kind if f.link_state else "record")
+        for f in answer.records
+    ]
+    assert by_source[:2] == [(0, "record"), (0, "record")]
+    child_number = by_source[2][0]
+    assert by_source[2:] == [
+        (child_number, "opened"),
+        (child_number, "record"),
+        (child_number, "record"),
+    ]
+    assert {s.number: s.stream.workflow_id for s in answer.sources}[child_number] == (
+        child.workflow_id
+    )
+    assert answer.replay is not None
+    assert [f.source for f in again.records] == [f.source for f in answer.records]
