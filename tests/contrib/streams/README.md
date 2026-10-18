@@ -9,8 +9,9 @@ skip there with "no stream notifier".
 limits, and a Redis Cluster of three primaries with one replica each, unless
 `STREAMS_REDIS_CLUSTER_URL` names one. It then runs the stream tests against them, so the live
 cases run on memory, Redis and the cluster, the driver cases too. Unless
-`STREAMS_ARCHIVE_S3_URL` names a bucket, it starts MinIO in Docker for the archive cases. It
-fails when a live test skips or when a gated test did not pass.
+`STREAMS_ARCHIVE_S3_URL` names a bucket, it starts MinIO in Docker for the archive cases, and
+PostgreSQL 17 for the PostgreSQL cases unless `STREAMS_POSTGRES_URL` names a database. It fails
+when a live test skips or when a gated test did not pass.
 
 ```bash
 SERVER_BIN=/path/to/temporal-server PORT_BASE=7941 \
