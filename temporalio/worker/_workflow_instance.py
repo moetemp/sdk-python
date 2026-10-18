@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import contextvars
 import inspect
 import json
@@ -13,6 +14,7 @@ import sys
 import threading
 import time
 import traceback
+import types
 import warnings
 from abc import ABC, abstractmethod
 from collections import deque
@@ -47,6 +49,7 @@ from typing_extensions import Self, TypedDict, TypeVarTuple, Unpack
 import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.enums.v1
+import temporalio.api.nexus.v1
 import temporalio.api.sdk.v1
 import temporalio.api.stream.v1
 import temporalio.bridge.proto.activity_result
@@ -1184,6 +1187,34 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         else:
             raise RuntimeError("Nexus operation did not have a result")
 
+    def _apply_nexus_operation_progress(
+        self, progress: temporalio.api.nexus.v1.NexusOperationProgress
+    ) -> None:
+        if not progress.HasField("operation_key"):
+            return
+        key = progress.operation_key
+        # Only a started operation that has not resolved has a pending handle
+        # with a token. A resolution in the same task comes before the
+        # attachments, so its progress finds no handle and is dropped. A token
+        # is unique only within one handler, so two operations with one key are
+        # one handler operation, and both get the progress.
+        for handle in self._pending_nexus_operations.values():
+            if (
+                handle._input.endpoint == key.endpoint
+                and handle._input.service == key.service
+                and handle._input.operation_name == key.operation
+                and handle.operation_token == key.operation_token
+            ):
+                handle._resolve_progress(
+                    temporalio.workflow.NexusOperationProgress(
+                        position=progress.position,
+                        counter=progress.counter,
+                        # Read-only, so Workflow code can't change what the next
+                        # reader of latest_progress sees.
+                        metadata=types.MappingProxyType(dict(progress.metadata)),
+                    )
+                )
+
     def _apply_resolve_request_cancel_external_workflow(
         self,
         job: temporalio.bridge.proto.workflow_activation.ResolveRequestCancelExternalWorkflow,
@@ -1286,11 +1317,18 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # Other attachments belong to features this Worker does not run, so
         # they are left alone.
         woke = False
+        progress: list[temporalio.api.nexus.v1.NexusOperationProgress] = []
         for attachment in job.attachments:
             wake = temporalio.api.stream.v1.StreamWake()
             if attachment.Unpack(wake):
                 self._stream_wakes.append(wake)
                 woke = True
+                continue
+            one = temporalio.api.nexus.v1.NexusOperationProgress()
+            if attachment.Unpack(one):
+                progress.append(one)
+        for one in fold_nexus_operation_progress(progress):
+            self._apply_nexus_operation_progress(one)
         if woke:
             # A wake resolves no future, and wait conditions are checked only
             # after a ready callback ran, so give the loop one.
@@ -3894,6 +3932,13 @@ class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
         self._payload_converter = payload_converter
         self._failure_converter = failure_converter
         self._event_group_markers = _capture_event_group_markers(input.event_groups)
+        self._latest_progress: temporalio.workflow.NexusOperationProgress | None = None
+        self._progress_waiters: list[
+            tuple[
+                int, asyncio.Future[temporalio.workflow.NexusOperationProgress | None]
+            ]
+        ] = []
+        self._result_fut.add_done_callback(lambda _: self._end_progress_waits())
 
     @property
     def operation_token(self) -> str | None:
@@ -3901,6 +3946,56 @@ class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
             return self._start_fut.result()
         except BaseException:
             return None
+
+    @property
+    def latest_progress(self) -> temporalio.workflow.NexusOperationProgress | None:
+        return self._latest_progress
+
+    async def progress(
+        self, *, after_counter: int = 0
+    ) -> temporalio.workflow.NexusOperationProgress | None:
+        latest = self._latest_progress
+        if latest is not None and latest.counter > after_counter:
+            return latest
+        if self._result_fut.done():
+            return None
+        waiter: asyncio.Future[temporalio.workflow.NexusOperationProgress | None] = (
+            self._instance.create_future()
+        )
+        entry = (after_counter, waiter)
+        self._progress_waiters.append(entry)
+        try:
+            return await waiter
+        finally:
+            # A wait given up on, such as one under a timeout in a loop, would
+            # otherwise stay in the list until the next progress arrives.
+            with contextlib.suppress(ValueError):
+                self._progress_waiters.remove(entry)
+
+    def _resolve_progress(
+        self, progress: temporalio.workflow.NexusOperationProgress
+    ) -> None:
+        if (
+            self._latest_progress is not None
+            and progress.counter <= self._latest_progress.counter
+        ):
+            return
+        self._latest_progress = progress
+        still_waiting = []
+        for after_counter, waiter in self._progress_waiters:
+            if waiter.done():
+                continue
+            if progress.counter > after_counter:
+                waiter.set_result(progress)
+            else:
+                still_waiting.append((after_counter, waiter))
+        self._progress_waiters = still_waiting
+
+    def _end_progress_waits(self) -> None:
+        for _, waiter in self._progress_waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+        self._progress_waiters = []
 
     def __await__(self) -> Generator[Any, Any, OutputT]:
         return self._task.__await__()
@@ -4030,6 +4125,31 @@ class _ContinueAsNewError(temporalio.workflow.ContinueAsNewError):
                 int(self._input.initial_versioning_behavior),
             )
         command.event_group_markers.extend(self._event_group_markers)
+
+
+def fold_nexus_operation_progress(
+    progress: list[temporalio.api.nexus.v1.NexusOperationProgress],
+) -> list[temporalio.api.nexus.v1.NexusOperationProgress]:
+    """Fold the progress of one Workflow Task to one per operation key.
+
+    The key is the endpoint, service, operation and token. The progress with
+    the highest counter for a key stays, and the first of equal counters
+    stays. Keys keep the order of their first progress. Progress with no key
+    is dropped. This is the fold rule that every SDK shares, and the
+    sdk-streams vectors ``testdata/nexus_progress_folds.json`` check it.
+    """
+    folded: dict[
+        tuple[str, str, str, str], temporalio.api.nexus.v1.NexusOperationProgress
+    ] = {}
+    for one in progress:
+        if not one.HasField("operation_key"):
+            continue
+        key = one.operation_key
+        id = (key.endpoint, key.service, key.operation, key.operation_token)
+        held = folded.get(id)
+        if held is None or one.counter > held.counter:
+            folded[id] = one
+    return list(folded.values())
 
 
 def _encode_search_attributes(
