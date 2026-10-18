@@ -125,8 +125,6 @@ chain unless `chain_run_id=` names a run of another one. An Activity's
 To resume later, keep the last `record.cursor` and pass it back as
 `read(after=cursor)`.
 
-The sample runs in full in `tests/contrib/streams/samples/`.
-
 ## A Local Activity streams to its Workflow
 
 A Local Activity calls `activity_handle()` the same way, and its records
@@ -252,8 +250,6 @@ Known limits:
 - **Workflow Activities.** A Workflow Activity writes to its Workflow's
   stream unless the Workflow started it to own one. See the next section.
 
-The sample runs in full in `tests/contrib/streams/samples/activity_owned_stream.py`.
-
 ## Streams owned by a Workflow Activity
 
 An Activity that a Workflow schedules can own a stream too, for example a
@@ -337,8 +333,6 @@ Known limits:
 - **Not over Nexus.** The Nexus stream service does not serve these
   streams.
 
-The sample runs in full in `tests/contrib/streams/samples/tool_call_streams.py`.
-
 ## Link records and followers
 
 A stream can hold a reference to another stream, as a `LINK` record. A
@@ -417,8 +411,6 @@ Known limits:
   default bounds it stays below 64 KiB.
 - **Workflow followers.** A Workflow follower with more open sources than
   its free wake sources gets `SKIPPED` with reason `limit` for the rest.
-
-The sample runs in full in `tests/contrib/streams/samples/agent_with_links.py`.
 
 ## A Workflow publishes to its own stream
 
