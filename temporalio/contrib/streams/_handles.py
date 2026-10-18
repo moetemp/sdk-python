@@ -14,9 +14,9 @@ of the id because a stream outlives a run, and Activity ids repeat across the
 runs of a chain. A standalone Activity has no scheduling Workflow. It owns a
 stream of its own and writes it as ``<Activity id>@<Activity run id>``. A
 Local Activity writes as ``__temporal_local_<call number>@<scheduling run id>``,
-with an attempt that grows across its reruns (see ``_local_activity``). Its
-attempt doesn't fit the Activity form's 32 bits, so it writes as a named
-producer.
+with an attempt that grows across its reruns and the task facts its Workflow
+stamped (see ``_local_activity``). Its attempt doesn't fit the Activity form's
+32 bits, so it writes as a named producer.
 
 Any process holding a client reaches a Workflow's stream by Workflow id and
 writes with a producer id and attempt of its own.
@@ -131,11 +131,7 @@ class StreamProducer(Generic[T]):
 
     @property
     def attempt(self) -> int:
-        """The attempt this producer writes.
-
-        In a Local Activity it is 0 until the first append asks the server
-        for it.
-        """
+        """The attempt this producer writes."""
         return self._attempt
 
     async def append(self, *values: T) -> Cursor:
@@ -223,8 +219,6 @@ class StreamProducer(Generic[T]):
     async def _write(
         self, kind: RecordKind, values: Any, link: StreamLink | None = None
     ) -> Cursor:
-        if self._local_call is not None:
-            self._attempt = await self._local_call.attempt(self._handle._client)
         converter = self._handle._converter
         wires = [
             to_wire(
@@ -251,6 +245,13 @@ class StreamProducer(Generic[T]):
             request.named.CopyFrom(
                 NamedProducer(producer_id=self._producer_id, attempt=self._attempt)
             )
+            if self._local_call is not None:
+                request.named.task_started_event_id = (
+                    self._local_call.task_started_event_id
+                )
+                request.named.completed_started_event_ids.extend(
+                    self._local_call.completed_started_event_ids
+                )
         service = await self._handle._plugin._service_for(self._handle._client)
         response = await call(service.append(request))
         self._sequence += len(wires)
@@ -768,12 +769,14 @@ class ActivityStreamHandle:
 
         In a Local Activity the producer id is
         ``__temporal_local_<call number>@<scheduling run id>``, where the number counts
-        the run's Local Activity calls in order. Before the first append the
-        producer asks the server for the run's History length ``h`` and the
-        pending Workflow Task's attempt ``t``, and with the Local Activity's
-        attempt ``a`` writes attempt ``(h * 100_000 + t) * 10_000 + a``. So a
+        the run's Local Activity calls in order. The attempt is ``task attempt
+        << 14 | min(a, 16383)``. The task attempt is ``prefix << 16 | retry``
+        of the Workflow Task that scheduled the call, as the Workflow's own
+        records write it, and ``a`` is the Local Activity's attempt. So a
         rerun after a Worker crash or a failed Workflow Task, and a local
-        retry, each write a higher attempt.
+        retry, each write a higher attempt. The records carry the task's
+        started event id and the run's last completed tasks, so a reader
+        withdraws them when the task never completed.
 
         Every call in one attempt returns the same producer for a topic, so
         two parts of the Activity that each ask for it number their records
@@ -788,7 +791,7 @@ class ActivityStreamHandle:
                     self._inner,
                     name,
                     f"{local_call.producer_id_prefix}@{identity.run_id}",
-                    0,
+                    local_call.attempt(identity.attempt),
                     local_call=local_call,
                 )
             else:
@@ -840,17 +843,17 @@ def activity_handle(
 
     A Local Activity writes the Workflow's stream too, while the Workflow
     Task that runs it is still open. Its attempt is not durable, so the
-    store plugin's Worker interceptor numbers each call for a producer id
-    that survives a rerun, and its first append asks the server for an
-    attempt that grows across reruns. See :meth:`ActivityStreamHandle.producer`.
+    store plugin's Worker interceptor stamps each call with a number for a
+    producer id that survives a rerun, and with the facts of its Workflow
+    Task for an attempt that grows across reruns. See
+    :meth:`ActivityStreamHandle.producer`.
 
     Raises:
         StreamUnsupportedError: A standalone Activity got no run id from
             the server, or asked for ``scope="workflow"``. A Local Activity
             asked for ``scope="activity"``, since it has no server state
             that could end its stream. Or it is a Local Activity that the
-            Worker's stream interceptor did not number. Its first append
-            raises it when its History or attempts are too long to encode.
+            Worker's stream interceptor did not stamp.
         ValueError: ``scope`` is not ``"activity"``, ``"workflow"`` or
             ``None``, or no stream store is registered on the Worker's
             client.
