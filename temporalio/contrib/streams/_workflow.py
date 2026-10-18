@@ -774,11 +774,16 @@ def workflow_reader(
             Replay reads the range from the store again, before Workflow
             code sees it, and a store that holds other records fails the
             Workflow Task as nondeterministic. The store holds the records
-            the reader read against retention for ``floor_lease`` after the
-            reader's last read or replay, and the reader never ends the hold
-            itself. A run that goes longer than that with no read and no
-            replay can't replay its reads, and its Workflow Task fails on
-            each retry, so such a run should Continue-as-New first. Replay
+            the reader read against retention for ``floor_lease`` (the
+            retention, 7 days, by default) after the reader's last read or
+            replay, and the reader never ends the hold itself. Only a read
+            or a replay moves the hold, so a reader that read to the end
+            moves it no more. A run must Continue-as-New within
+            ``floor_lease`` of its last read. Past that it can't replay its
+            reads, and its Workflow Task fails on each retry. The hold keeps
+            every record after the reader's first read, with no bound on
+            their size, so on a busy topic Continue-as-New when
+            :meth:`WorkflowStreamReader.continue_as_new_suggested` says so. Replay
             needs the store, so a ``Replayer`` needs the store plugin and a
             client in its process that connected the same store. A store
             with neither holds nor a replay horizon (see
