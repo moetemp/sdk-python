@@ -22,25 +22,31 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.common.v1 import Payloads
 from temporalio.api.enums.v1 import EventType, StreamOwnerKind
 from temporalio.api.stream.v1 import StreamReference, StreamWake
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,
 )
-from temporalio.client import Client
+from temporalio.bridge.proto.streams import ReadRangeRequest
+from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import (
     RecordKind,
+    StreamPosition,
     StreamRefusedError,
     StreamStorePlugin,
     StreamUnsupportedError,
+    close_workflow_stream,
     get_stream_handle,
     topic,
     workflow_reader,
+    workflow_writer,
 )
+from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE, ReadStates
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
@@ -505,3 +511,377 @@ async def _completed_tasks(handle: Any) -> int:
         e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED
         for e in history.events
     )
+
+
+async def test_live_a_workflow_reader_on_an_empty_stream_wakes_on_the_first_append(
+    notifying: Client,
+):
+    async with new_worker(notifying, Waits, Reads) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        reader_id = new_workflow_id()
+        reader = await notifying.start_workflow(
+            Reads.run, args=[owner, 1], id=reader_id, task_queue=worker.task_queue
+        )
+        await _sleeping(notifying, reader_id, owner)
+        await (
+            get_stream_handle(notifying, owner, topic=TOKENS)
+            .producer(producer_id="p", attempt=1)
+            .append("only")
+        )
+        assert await asyncio.wait_for(reader.result(), 20) == ["only"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_live_two_readers_wake_from_one_notification(notifying: Client):
+    async with new_worker(notifying, Waits, Reads) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        ids = [new_workflow_id(), new_workflow_id()]
+        readers = [
+            await notifying.start_workflow(
+                Reads.run, args=[owner, 1], id=i, task_queue=worker.task_queue
+            )
+            for i in ids
+        ]
+        for i in ids:
+            await _sleeping(notifying, i, owner)
+        handle = get_stream_handle(notifying, owner, topic=TOKENS)
+        client_records = handle.read()
+        client_first = asyncio.ensure_future(client_records.__anext__())
+        await asyncio.sleep(3)
+        await handle.producer(producer_id="p", attempt=1).append("all")
+        for reader in readers:
+            assert await asyncio.wait_for(reader.result(), 20) == ["all"]
+        assert (await asyncio.wait_for(client_first, 10)).value == "all"
+        await client_records.aclose()
+        notifier = await describe_notifier(notifying, owner)
+        assert notifier is not None and notifier.counter > 0
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+
+
+@workflow.defn
+class PublishesAndCloses:
+    def __init__(self) -> None:
+        self.how: str | None = None
+
+    @workflow.run
+    async def run(self) -> None:
+        writer = workflow_writer(TOKENS)
+        writer.publish("a")
+        writer.publish("b")
+        await workflow.wait_condition(lambda: self.how is not None)
+        if self.how == "error":
+            await close_workflow_stream(
+                TOKENS, error=ApplicationError("the agent gave up", type="GaveUp")
+            )
+        else:
+            await close_workflow_stream(TOKENS, result="done")
+        await workflow.wait_condition(lambda: self.how == "end")
+
+    @workflow.signal
+    def end(self, how: str) -> None:
+        self.how = how
+
+
+@pytest.mark.parametrize("how", ["result", "error"])
+async def test_live_a_workflow_close_ends_both_readers_with_its_outcome(
+    notifying: Client, how: str
+):
+    async with new_worker(notifying, PublishesAndCloses, Reads) as worker:
+        owner_id = new_workflow_id()
+        owner = await notifying.start_workflow(
+            PublishesAndCloses.run, id=owner_id, task_queue=worker.task_queue
+        )
+        reader_id = new_workflow_id()
+        reader = await notifying.start_workflow(
+            Reads.run, args=[owner_id, 0], id=reader_id, task_queue=worker.task_queue
+        )
+        await _sleeping(notifying, reader_id, owner_id)
+        client_read = asyncio.ensure_future(
+            _read_to_the_end(get_stream_handle(notifying, owner_id, topic=TOKENS))
+        )
+        await owner.signal(PublishesAndCloses.end, how)
+        records, ended_with = await asyncio.wait_for(client_read, 30)
+        assert [r.kind for r in records] == [
+            RecordKind.DATA,
+            RecordKind.DATA,
+            RecordKind.FINISH,
+        ]
+        if how == "error":
+            assert isinstance(ended_with, ApplicationError)
+            assert ended_with.type == "GaveUp"
+        else:
+            assert ended_with is None
+        if how == "error":
+            with pytest.raises(WorkflowFailureError) as raised:
+                await asyncio.wait_for(reader.result(), 30)
+            cause = raised.value.cause
+            assert isinstance(cause, ApplicationError) and cause.type == "GaveUp"
+        else:
+            assert await asyncio.wait_for(reader.result(), 30) == ["a", "b", "FINISH"]
+        await owner.signal(PublishesAndCloses.end, "end")
+        await owner.result()
+
+
+async def _read_to_the_end(handle: Any) -> tuple[list[Any], BaseException | None]:
+    """The records of a client read, and the error it ended with, if any."""
+    records: list[Any] = []
+    try:
+        async for record in handle.read():
+            records.append(record)
+    except ApplicationError as error:
+        return records, error
+    return records, None
+
+
+@workflow.defn
+class ReadsAcrossContinueAsNew:
+    @workflow.run
+    async def run(
+        self, owner: str, seen: list[str], after: StreamPosition | None
+    ) -> list[str]:
+        reader = workflow_reader(owner, topic=TOKENS, after=after or StreamPosition(""))
+        async with reader:
+            batch = await reader.__anext__()
+            seen = seen + [str(r.value) for r in batch.records]
+            position = batch.position
+        if len(seen) >= 2:
+            return seen
+        workflow.continue_as_new(args=[owner, seen, position])
+
+
+async def test_live_a_position_resumes_the_reader_after_continue_as_new(
+    notifying: Client,
+):
+    async with new_worker(notifying, Waits, ReadsAcrossContinueAsNew) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+            producer_id="p", attempt=1
+        )
+        await producer.append("one")
+        reader = await notifying.start_workflow(
+            ReadsAcrossContinueAsNew.run,
+            args=[owner, [], None],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(4)
+        await producer.append("two")
+        assert await asyncio.wait_for(reader.result(), 30) == ["one", "two"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+
+
+async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
+    client: Client,
+):
+    # The producer's process never notifies, so only the notifier's recheck
+    # (streamnotifier.recheckInitial, a few seconds in the lane) wakes the reader.
+    reading, silent = await two_processes(client)
+    async with new_worker(reading, Waits, Reads) as worker:
+        owner = await running_owner(reading, worker.task_queue)
+        reader_id = new_workflow_id()
+        reader = await reading.start_workflow(
+            Reads.run, args=[owner, 1], id=reader_id, task_queue=worker.task_queue
+        )
+        await _sleeping(reading, reader_id, owner)
+        await (
+            get_stream_handle(silent, owner, topic=TOKENS)
+            .producer(producer_id="p", attempt=1)
+            .append("found")
+        )
+        assert await asyncio.wait_for(reader.result(), 30) == ["found"]
+        await reading.get_workflow_handle(owner).signal(Waits.finish)
+
+
+# Positions-only Workflow readers.
+
+
+@workflow.defn
+class ReadsFromTheStore:
+    """Reads with replay_from_store until the stream ends, then says what it saw."""
+
+    @workflow.run
+    async def run(self, owner: str) -> list[str]:
+        seen: list[str] = []
+        async with workflow_reader(
+            owner, topic=TOKENS, replay_from_store=True
+        ) as reader:
+            async for batch in reader:
+                seen.extend(
+                    str(r.value) if r.kind is RecordKind.DATA else r.kind.name
+                    for r in batch.records
+                )
+        return seen
+
+
+def _positions_payloads(history: Any) -> list[Any]:
+    out = []
+    for event in history.events:
+        if not event.HasField("marker_recorded_event_attributes"):
+            continue
+        for payloads in event.marker_recorded_event_attributes.details.values():
+            for payload in payloads.payloads:
+                if payload.metadata.get("messageType") == POSITIONS_TYPE:
+                    out.append(payload)
+    return out
+
+
+async def _read_from_the_store(client: Client) -> tuple[Any, str, Any]:
+    """Run a positions-only reader over an owner that publishes and closes."""
+    # The owner runs on a Worker with a cache. With none, an eviction can
+    # cancel its close's Local Activity, and the task's rerun shows readers a
+    # SUPERSEDED before the second FINISH.
+    async with (
+        new_worker(client, PublishesAndCloses) as owners,
+        new_worker(client, ReadsFromTheStore, max_cached_workflows=0) as worker,
+    ):
+        owner_id = new_workflow_id()
+        owner = await client.start_workflow(
+            PublishesAndCloses.run, id=owner_id, task_queue=owners.task_queue
+        )
+        reader = await client.start_workflow(
+            ReadsFromTheStore.run,
+            owner_id,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(3)
+        await owner.signal(PublishesAndCloses.end, "result")
+        # With no cache, every task replays the reads before it, through the stream runtime.
+        assert await asyncio.wait_for(reader.result(), 30) == ["a", "b", "FINISH"]
+        await owner.signal(PublishesAndCloses.end, "end")
+        await owner.result()
+    return await reader.fetch_history(), owner_id, reader
+
+
+async def test_live_a_positions_only_reader_records_ranges_and_replays_from_the_store(
+    notifying: Client,
+):
+    history, _, _ = await _read_from_the_store(notifying)
+    positions = _positions_payloads(history)
+    assert positions and all(p.ByteSize() < 2000 for p in positions)
+    store = store_for(notifying)
+    store._batches.clear()
+    await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+        history
+    )
+
+
+async def test_live_a_replay_that_finds_other_records_is_nondeterminism(
+    notifying: Client,
+):
+    history, _, _ = await _read_from_the_store(notifying)
+    store = store_for(notifying)
+    store._batches.clear()
+    for payload in _positions_payloads(history):
+        parts = Payloads.FromString(payload.data)
+        range = ReadRangeRequest.FromString(parts.payloads[0].data)
+        if range.stored_records:
+            range.records_digest = bytes(32)
+            parts.payloads[0].data = range.SerializeToString()
+            payload.data = parts.SerializeToString()
+    # The task fails with the nondeterminism cause. The Replayer reports a
+    # failure that the SDK found as a failed activation, not as Core's
+    # NondeterminismError.
+    with pytest.raises(Exception) as raised:
+        await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+            history
+        )
+    assert "replayed other records" in str(raised.value)
+    assert "NonDeterministicError" in str(raised.value)
+
+
+async def test_live_a_replay_of_a_lost_range_fails_the_task(notifying: Client):
+    history, owner_id, _ = await _read_from_the_store(notifying)
+    store = store_for(notifying)
+    store._batches.clear()
+    await store.delete_workflow_streams(notifying.namespace, owner_id)
+    with pytest.raises(Exception) as raised:
+        await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
+            history
+        )
+    # A lost range fails the task for a retry, not as nondeterminism.
+    assert "StreamReplayRangeLostError" in str(raised.value)
+    assert "NonDeterministicError" not in str(raised.value)
+
+
+def _values(batch: Any) -> list[str]:
+    return [str(r.value) for r in batch.records if r.kind is RecordKind.DATA]
+
+
+@workflow.defn
+class ReadsThroughATimeout:
+    """Reads one batch, times out a read on the idle stream, then reads again."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    @workflow.run
+    async def run(self, owner: str) -> list[str]:
+        reader = workflow_reader(owner, topic=TOKENS, idle_wait=timedelta(seconds=5))
+        async with reader:
+            self.seen.extend(_values(await anext(reader)))
+            try:
+                await asyncio.wait_for(anext(reader), 1)
+            except (asyncio.TimeoutError, ActivityError):
+                self.seen.append("timed out")
+            self.seen.extend(_values(await anext(reader)))
+        return self.seen
+
+    @workflow.query
+    def progress(self) -> list[str]:
+        return self.seen
+
+
+async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
+    notifying: Client,
+):
+    async with new_worker(notifying, Waits, ReadsThroughATimeout) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        await stream.producer(producer_id="p", attempt=1).append("a")
+        reader = await notifying.start_workflow(
+            ReadsThroughATimeout.run,
+            owner,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+
+        async def timed_out() -> bool:
+            return "timed out" in await reader.query(ReadsThroughATimeout.progress)
+
+        await until(timed_out)
+        # A new attempt reads as a SUPERSEDED and then "b".
+        await stream.producer(producer_id="p", attempt=2).append("b")
+        assert await asyncio.wait_for(reader.result(), 30) == ["a", "timed out", "b"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
+    # A Worker that never ran the reader replays it with no batch cached and
+    # no answer state kept.
+    store = store_for(notifying)
+    store._batches.clear()
+    store._read_states = ReadStates()
+    await Replayer(workflows=[ReadsThroughATimeout], plugins=[store]).replay_workflow(
+        await reader.fetch_history()
+    )
+
+
+async def test_live_a_workflow_reader_waits_for_an_owner_that_starts_later(
+    notifying: Client,
+):
+    # Inside the owner start grace, the stream runtime answers an idle read with no chain
+    # and attaches nothing, so the reader reads again on a timer.
+    async with new_worker(notifying, Waits, Reads) as worker:
+        owner = new_workflow_id()
+        reader = await notifying.start_workflow(
+            Reads.run,
+            args=[owner, 1],
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+        await asyncio.sleep(3)
+        await notifying.start_workflow(
+            Waits.run, id=owner, task_queue=worker.task_queue
+        )
+        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        await stream.producer(producer_id="p", attempt=1).append("first")
+        assert await asyncio.wait_for(reader.result(), 30) == ["first"]
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
