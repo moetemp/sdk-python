@@ -15,8 +15,8 @@ from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.contrib.streams import (
     RecordKind,
-    activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
 )
 from temporalio.exceptions import ApplicationError
@@ -27,7 +27,7 @@ TOKENS = topic("tokens", str)
 
 @activity.defn
 async def generate(prompt: str) -> str:
-    producer = activity_handle().producer(topic=TOKENS)
+    producer = stream_producer(TOKENS)
     words = f"an answer to {prompt}".split()
     if activity.info().attempt == 1:
         # The first attempt fails halfway, as a model call might.
@@ -65,7 +65,7 @@ async def main(
             Answer.run, "streams", id=workflow_id, task_queue=task_queue
         )
         text: list[str] = []
-        async for record in get_stream_handle(client, handle.id).read(topic=TOKENS):
+        async for record in stream_handle(client, handle.id).read(topic=TOKENS):
             if record.kind is RecordKind.SUPERSEDED:
                 # A retry started over, so what the failed attempt wrote goes.
                 # This topic has one producer. With several, keep the text

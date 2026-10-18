@@ -25,14 +25,14 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
 
 ## The demos
 
-- **1a, `s1a_order_tracking`.** The `Order` Workflow publishes `placed` with `workflow_writer`. The
+- **1a, `s1a_order_tracking`.** The `Order` Workflow publishes `placed` with `stream_producer`. The
   courier appends two stages through a client producer, and the Workflow publishes `delivered`.
   The app reads every stage in order. Left out: a push to the app.
 - **2, `s2_dashcam_reference`.** The courier appends a `Segment` with a URL for each segment. The
   backend fetches each one from an object store, which a dict stands in for. Left out: live video
   and storage that Temporal manages.
 - **3a to 3c, `s3_chat_turn`.** `Chat` publishes the turn's start and end on `turns` with
-  `workflow_writer`. Its Activity appends tokens on `tokens`, and attempt 1 fails after two. The
+  `stream_producer`. Its Activity appends tokens on `tokens`, and attempt 1 fails after two. The
   UI reads `tokens` through `track_supersession`, takes back the two tokens at `SUPERSEDED`, and
   shows only attempt 2's answer. Left out: a model, and server fencing and retraction.
 - **5a, `s5a_late_dashboard`.** The courier appends two stages before anyone reads. A late
@@ -46,12 +46,12 @@ STREAMS_REDIS_URL=redis://localhost:6379 pytest tests/contrib/streams/test_scena
 - **7b, `s7b_retried_courier`.** Activity attempt 1 appends and stalls past its 2 s timeout. Attempt
   2 appends after `SUPERSEDED`. Attempt 1 then appends late, and the record arrives marked `stale`.
   Left out: fencing and a retraction at the timeout.
-- **8, `s8_publisher_replay`.** `Publisher` publishes with `workflow_writer`, and a `Replayer`
+- **8, `s8_publisher_replay`.** `Publisher` publishes with `stream_producer`, and a `Replayer`
   replays its History with a store at a port where nothing listens. History holds no marker for
   the publishes, and the replay sends nothing to the store. Left out: a Workflow that reads a
   stream.
 
-This release publishes from Workflow code with `workflow_writer`, and Core appends each
+This release publishes from Workflow code with `stream_producer`, and Core appends each
 activation's records when the activation completes. The demos of 5a, 6 and 7a publish from a
 client or an Activity. 5b
 has no demo of its own: its dashboard half is 5a, and its relay half needs a Workflow reader.

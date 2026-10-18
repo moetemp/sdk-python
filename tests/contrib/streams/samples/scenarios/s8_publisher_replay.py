@@ -1,10 +1,10 @@
 """Scenario 8: a publisher Workflow replays with no store I/O.
 
-``Publisher`` publishes three stages with ``workflow_writer`` and finishes
+``Publisher`` publishes three stages with ``stream_producer`` and finishes
 its topic. Core appends each activation's records when the activation
 completes, and History holds no marker for them. The demo then replays the
 History with a ``Replayer``. The Replayer needs the store plugin, which
-adds the interceptor that ``workflow_writer`` replays with. The plugin
+adds the interceptor that ``stream_producer`` replays with. The plugin
 connects nothing, so the demo gives the Replayer a Redis store at a port
 where nothing listens. The replay sends nothing to the store and passes.
 
@@ -22,9 +22,9 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamRecord,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.worker import Replayer, Worker
@@ -46,11 +46,11 @@ class Outcome:
 class Publisher:
     @workflow.run
     async def run(self) -> None:
-        stages = workflow_writer(STAGES)
-        stages.publish("placed")
+        stages = stream_producer(STAGES)
+        stages.append("placed")
         await stages.flush()
-        stages.publish("packed")
-        stages.publish("shipped")
+        stages.append("packed")
+        stages.append("shipped")
         await stages.finish()
 
 
@@ -67,9 +67,7 @@ async def main(
         )
         await handle.result()
     seen: list[StreamRecord[str]] = []
-    await follow(
-        "backend", get_stream_handle(client, workflow_id).read(topic=STAGES), seen
-    )
+    await follow("backend", stream_handle(client, workflow_id).read(topic=STAGES), seen)
     history = await handle.fetch_history()
     markers = sum(
         event.HasField("marker_recorded_event_attributes") for event in history.events

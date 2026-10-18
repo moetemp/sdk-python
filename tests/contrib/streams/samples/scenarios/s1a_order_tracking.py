@@ -1,6 +1,6 @@
 """Scenario 1a: an order Workflow publishes stages, a courier adds stages, and the app shows each.
 
-The ``Order`` Workflow publishes ``placed`` with ``workflow_writer``. Once
+The ``Order`` Workflow publishes ``placed`` with ``stream_producer``. Once
 the app shows it, the courier appends ``picked up`` and ``out for
 delivery`` through a client producer. When the courier reports the
 delivery, the Workflow publishes ``delivered`` and finishes its topic. The
@@ -20,9 +20,9 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamRecord,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.worker import Worker
 from tests.contrib.streams.samples.scenarios._common import follow, run, values
@@ -37,10 +37,10 @@ class Order:
 
     @workflow.run
     async def run(self) -> None:
-        stages = workflow_writer(ORDER)
-        stages.publish("placed")
+        stages = stream_producer(ORDER)
+        stages.append("placed")
         await workflow.wait_condition(lambda: self._delivered)
-        stages.publish("delivered")
+        stages.append("delivered")
         await stages.finish()
 
     @workflow.signal
@@ -59,7 +59,7 @@ async def main(
         handle = await client.start_workflow(
             Order.run, id=workflow_id, task_queue=task_queue
         )
-        stream = get_stream_handle(client, workflow_id, topic=ORDER)
+        stream = stream_handle(client, workflow_id, topic=ORDER)
         placed = asyncio.Event()
 
         def show(record: StreamRecord[str]) -> None:

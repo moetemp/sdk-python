@@ -22,8 +22,8 @@ from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.contrib.streams import (
     StreamRecord,
-    activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
 )
 from temporalio.worker import Worker
@@ -47,7 +47,7 @@ _gate = _Gate()
 @activity.defn
 async def track() -> str:
     gate = _gate
-    positions = activity_handle().producer(topic=POSITIONS)
+    positions = stream_producer(POSITIONS)
     if activity.info().attempt == 1:
         await positions.append("attempt 1 at the depot")
         while not gate.released.is_set():
@@ -94,7 +94,7 @@ async def main(
         seen: list[StreamRecord[str]] = []
         await follow(
             "backend",
-            get_stream_handle(client, workflow_id).read(topic=POSITIONS),
+            stream_handle(client, workflow_id).read(topic=POSITIONS),
             seen,
         )
         print(f"[backend] the Activity's result came from {await handle.result()}")

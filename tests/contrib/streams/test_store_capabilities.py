@@ -22,7 +22,7 @@ from temporalio.contrib.streams import (
     StreamProducerError,
     StreamStorePlugin,
     StreamUnsupportedError,
-    get_stream_handle,
+    stream_handle,
     topic,
 )
 from temporalio.contrib.streams._capabilities import describe
@@ -96,7 +96,7 @@ async def test_a_reader_sees_one_copy_of_each_batch(streams: Client):
     has_state = capabilities_of(streams).producer_state
     async with new_worker(streams, Waits) as worker:
         workflow_id = await running_owner(streams, worker.task_queue)
-        stream = get_stream_handle(streams, workflow_id, topic=TOKENS)
+        stream = stream_handle(streams, workflow_id, topic=TOKENS)
         first = await stream.producer(producer_id="p", attempt=1).append("a", "b")
         # A second object for the same session repeats the batch, as a retry
         # after a lost answer does.
