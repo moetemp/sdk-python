@@ -5,7 +5,7 @@
 A stream is an ordered log that a Workflow owns. The Workflow publishes to
 it from Workflow code, and its Activities and any client append to it.
 Outside readers follow it from a cursor. Records live in the application's
-Redis and never pass through Temporal or its History. The
+Redis or PostgreSQL and never pass through Temporal or its History. The
 stream runtime, the `temporalio-streams` crate from the sdk-streams
 repository, runs the store for every SDK, so Python reads what any other SDK
 writes. Publishes and
@@ -37,6 +37,22 @@ evicting Redis drops whole stream keys under memory pressure, and the stream
 runtime logs a warning when it sees another policy. For tests and local
 development, `temporalio.contrib.streams.memory.MemoryStreams` keeps streams
 in the process.
+
+To keep streams in PostgreSQL 14 or later, register
+`temporalio.contrib.streams.postgres.PostgresStreams` instead. It makes its
+tables when it connects, and keeps records on disk, so a long retention
+costs disk, not memory. See
+[PostgreSQL store: guarantees and setup](docs/postgres-guarantees.md) for
+when to pick it over Redis.
+
+```python
+from temporalio.contrib.streams.postgres import PostgresStreams
+
+client = await Client.connect(
+    "localhost:7233",
+    plugins=[PostgresStreams("postgresql://app:secret@db:5432/app")],
+)
+```
 
 ## Path B: an Activity streams to its Workflow
 
@@ -541,7 +557,7 @@ yet. See [Direct reads](docs/nexus.md#direct-reads).
   producer state, such as `RedisStreams(plain=True)`, the copy lands and
   every reader drops it. `StreamStorePlugin.capabilities` says which.
 - **Retention.** A stream keeps records for `retention` (7 days by default,
-  set on `RedisStreams`) and dies that long after its
+  set on `RedisStreams` or `PostgresStreams`) and dies that long after its
   last write. A cursor
   past dropped records raises `StreamExpiredError`.
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
@@ -554,7 +570,7 @@ yet. See [Direct reads](docs/nexus.md#direct-reads).
   no reader delivers it, since every read ends at the first `CLOSE` record.
 - **Readers before the owner.** A read of a Workflow that Temporal doesn't
   know yet waits for `owner_start_grace` (60 seconds by default, set on
-  `RedisStreams` or `MemoryStreams`), counted from the read's first owner
+  `RedisStreams`, `PostgresStreams` or `MemoryStreams`), counted from the read's first owner
   check. So a reader can start before the Workflow does. After the grace,
   the read raises `StreamNotFoundError`, so a wrong Workflow id fails after
   the grace, not at once. Appends and `latest()` don't wait. Zero turns the
@@ -570,6 +586,7 @@ yet. See [Direct reads](docs/nexus.md#direct-reads).
 - [Readers that sleep](docs/notifications.md)
 - [Store capabilities and guarantees](docs/store-capabilities.md)
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
+- [PostgreSQL store: guarantees and setup](docs/postgres-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
 - [Moving from Workflow Streams](docs/migration.md)
 - [Streams over Nexus](docs/nexus.md)

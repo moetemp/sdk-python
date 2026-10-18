@@ -58,7 +58,8 @@ T = TypeVar("T")
 class StreamStorePlugin(SimplePlugin):
     """The base class of the store configuration classes.
 
-    Use :class:`temporalio.contrib.streams.redis.RedisStreams` or
+    Use :class:`temporalio.contrib.streams.redis.RedisStreams`,
+    :class:`temporalio.contrib.streams.postgres.PostgresStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
     is one store, on one client connection, since the stream runtime asks about each
     stream's owner over the connection that connected the store. A second

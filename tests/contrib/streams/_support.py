@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import subprocess
 import uuid
 from pathlib import Path
 from typing import Any, TypeVar
 
+import pytest
 from google.protobuf.message import Message
 
 from temporalio.api.workflowservice.v1 import (
@@ -20,6 +22,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams._plugin import call, store_for_client
 from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.contrib.streams.postgres import PostgresStreams
 from temporalio.converter import DataConverter
 from temporalio.service import RPCError, RPCStatusCode
 
@@ -94,6 +97,23 @@ async def call_workflow_service(
             raise RPCError(
                 err.details() or "", RPCStatusCode(err.code().value[0]), b""
             ) from None
+
+
+def postgres_streams(schema: str | None = None, **settings: Any) -> PostgresStreams:
+    """A store on ``STREAMS_POSTGRES_URL``, in a schema of its own unless ``schema`` names one.
+
+    Skips the test when the variable is unset.
+    """
+    url = os.environ.get("STREAMS_POSTGRES_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_POSTGRES_URL to run on PostgreSQL")
+    # The test process keeps every store it connects, so each pool stays small.
+    settings.setdefault("max_connections", 4)
+    return PostgresStreams(url, schema=schema or new_schema(), **settings)
+
+
+def new_schema() -> str:
+    return f"streams_{uuid.uuid4().hex}"
 
 
 @functools.cache

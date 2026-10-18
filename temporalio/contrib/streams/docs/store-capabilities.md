@@ -83,8 +83,9 @@ Y means the store has it, and N means the stream runtime takes the fallback.
 | `MemoryStreams()` | Y | N | Y | Y | N | Y | Y | Y | Y |
 | `RedisStreams(...)` | Y | N | Y | Y | N | Y | Y | Y | Y |
 | `RedisStreams(..., plain=True)` | N | N | N | N | N | Y | Y | Y | Y |
+| `PostgresStreams(...)` | Y | N | Y | Y | N | Y | Y | Y | Y |
 
-Memory and Redis have a change feed once
+Memory, Redis and PostgreSQL have a change feed once
 `notify_on_append(notification_log=True)` turns the notification log on.
 `RedisStreams(plain=True)` refuses the notification log and an archive when
 the client connects it.

@@ -1,10 +1,11 @@
-"""An archive behind a Redis store keeps the records it trimmed readable.
+"""An archive behind a Redis or Postgres store keeps the records it trimmed readable.
 
 A StreamDriver fills the archive, and it runs only on a server with the
 stream notifier, so the live cases run in the Jetty lane. Each live case
 runs on a local directory and on the S3 server that
 ``STREAMS_ARCHIVE_S3_URL`` names, with the ``AWS_*`` settings Core reads.
-The lane starts MinIO in Docker for it.
+The lane starts MinIO in Docker for it. The Postgres cases need
+``STREAMS_POSTGRES_URL``.
 """
 
 from __future__ import annotations
@@ -35,7 +36,11 @@ from temporalio.contrib.streams import (
 from temporalio.contrib.streams.archive import StreamArchive
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import connect_with
+from tests.contrib.streams._support import (
+    connect_with,
+    new_schema,
+    postgres_streams,
+)
 from tests.contrib.streams.test_live_notifications import (
     TOKENS,
     Reads,
@@ -113,26 +118,37 @@ def archive_for(kind: str, tmp_path: Path) -> StreamArchive:
     params=[
         ("redis", "local"),
         ("redis", "s3"),
+        ("postgres", "local"),
+        ("postgres", "s3"),
     ],
     ids=lambda p: "-".join(p),
 )
 async def tiers(
     request: pytest.FixtureRequest, client: Client, tmp_path: Path
 ) -> AsyncIterator[Tiers]:
-    _, where = request.param
+    kind, where = request.param
     # A Workflow reader's hold lapses at once, so only the archive holds records.
     settings: dict[str, Any] = {
         "retention": RETENTION,
         "floor_lease": timedelta(milliseconds=100),
         "floor_release_grace": timedelta(milliseconds=100),
     }
-    url = os.environ.get("STREAMS_REDIS_URL", "")
-    if not url:
-        pytest.skip("set STREAMS_REDIS_URL to run on Redis")
-    settings["key_prefix"] = f"archive-{uuid.uuid4().hex}"
+    if kind == "postgres":
+        # The janitor trims, so it runs often here.
+        settings["janitor_interval"] = timedelta(milliseconds=100)
+        schema = new_schema()
 
-    def hot(archive: StreamArchive | None) -> StreamStorePlugin:
-        return RedisStreams(url, archive=archive, **settings)
+        def hot(archive: StreamArchive | None) -> StreamStorePlugin:
+            return postgres_streams(schema, archive=archive, **settings)
+
+    else:
+        url = os.environ.get("STREAMS_REDIS_URL", "")
+        if not url:
+            pytest.skip("set STREAMS_REDIS_URL to run on Redis")
+        settings["key_prefix"] = f"archive-{uuid.uuid4().hex}"
+
+        def hot(archive: StreamArchive | None) -> StreamStorePlugin:
+            return RedisStreams(url, archive=archive, **settings)
 
     await skip_without_notifier(client)
     archive = archive_for(where, tmp_path)
@@ -173,7 +189,7 @@ async def trim_past(tiers: Tiers, owner: str, after: Cursor, producer: StreamPro
             await records.aclose()
         if time.monotonic() > deadline:
             raise AssertionError("the store did not trim the archived records")
-        # Redis trims on appends past the retention.
+        # Redis trims on appends past the retention, and Postgres in its janitor.
         await asyncio.sleep(RETENTION.total_seconds())
         filler += 1
         await producer.append(f"filler-{filler}")
