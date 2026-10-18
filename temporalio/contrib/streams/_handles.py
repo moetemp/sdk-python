@@ -12,9 +12,9 @@ producer attempt, so a retry is reported to readers as ``SUPERSEDED``. The
 run is part of the id because a stream outlives a run, and Activity ids
 repeat across the runs of a chain. A Local Activity writes as
 ``__temporal_local_<call number>@<scheduling run id>``, with an attempt that grows
-across its reruns and the task facts its Workflow stamped (see
-``_local_activity``). Its attempt doesn't fit the Activity form's 32 bits, so
-it writes as a named producer.
+across its reruns and the facts of the Workflow Task that Core dispatched it
+in (see ``_local_activity``). Its attempt doesn't fit the Activity form's 32
+bits, so it writes as a named producer.
 
 Any process holding a client reaches a Workflow's stream by Workflow id and
 writes with a producer id and attempt of its own.
@@ -579,8 +579,9 @@ def activity_handle() -> ActivityStreamHandle:
     A Local Activity writes too, while the Workflow Task that runs it is
     still open. Its attempt is not durable, so the store plugin's Worker
     interceptor stamps each call with a number for a producer id that
-    survives a rerun, and with the facts of its Workflow Task for an attempt
-    that grows across reruns. See :meth:`ActivityStreamHandle.producer`.
+    survives a rerun. Core gives it the facts of the Workflow Task it was
+    dispatched in, for an attempt that grows across reruns. See
+    :meth:`ActivityStreamHandle.producer`.
 
     Raises:
         StreamUnsupportedError: The Activity was not scheduled by a
