@@ -221,6 +221,8 @@ class StreamStoreConfig(google.protobuf.message.Message):
     NOTIFY_ON_APPEND_FIELD_NUMBER: builtins.int
     MAX_NOTIFIERS_FIELD_NUMBER: builtins.int
     OWNER_START_GRACE_FIELD_NUMBER: builtins.int
+    NOTIFICATION_LOG_FIELD_NUMBER: builtins.int
+    ARCHIVE_FIELD_NUMBER: builtins.int
     @property
     def redis(self) -> global___RedisStoreConfig: ...
     @property
@@ -242,6 +244,17 @@ class StreamStoreConfig(google.protobuf.message.Message):
         owner does. After it the read fails as NOT_FOUND. Unset waits 60 seconds, and zero fails at
         once.
         """
+    notification_log: builtins.bool
+    """Each append writes a notification entry in the same store step, and producers send no
+    notifications. A `StreamDriver` reads the entries and notifies the server, so readers wake
+    only while one runs. Off by default. A store without a notification log refuses it.
+    """
+    @property
+    def archive(self) -> global___ArchiveConfig:
+        """Keeps streams in object storage after the store drops them, so they stay readable for longer
+        than the store's retention. Reads cross from the archive to the store with no gap, with the
+        same cursors. A `StreamDriver` writes the archive, so it needs `notification_log`.
+        """
     def __init__(
         self,
         *,
@@ -250,10 +263,14 @@ class StreamStoreConfig(google.protobuf.message.Message):
         notify_on_append: builtins.bool = ...,
         max_notifiers: builtins.int = ...,
         owner_start_grace: google.protobuf.duration_pb2.Duration | None = ...,
+        notification_log: builtins.bool = ...,
+        archive: global___ArchiveConfig | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
+            "archive",
+            b"archive",
             "memory",
             b"memory",
             "owner_start_grace",
@@ -267,10 +284,14 @@ class StreamStoreConfig(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "archive",
+            b"archive",
             "max_notifiers",
             b"max_notifiers",
             "memory",
             b"memory",
+            "notification_log",
+            b"notification_log",
             "notify_on_append",
             b"notify_on_append",
             "owner_start_grace",
@@ -287,6 +308,66 @@ class StreamStoreConfig(google.protobuf.message.Message):
 
 global___StreamStoreConfig = StreamStoreConfig
 
+class ArchiveConfig(google.protobuf.message.Message):
+    """Where and how a stream archive keeps streams."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    URL_FIELD_NUMBER: builtins.int
+    SEGMENT_BYTES_FIELD_NUMBER: builtins.int
+    SEGMENT_IDLE_FIELD_NUMBER: builtins.int
+    STALL_LIMIT_FIELD_NUMBER: builtins.int
+    url: builtins.str
+    """`s3://<bucket>/<prefix>` or `file:///<directory>`. S3 credentials, the region and the
+    endpoint come from the environment, as `AWS_ACCESS_KEY_ID`, `AWS_REGION` and
+    `AWS_ENDPOINT_URL`. The archive deletes nothing but an owner's delete, so a bucket lifecycle
+    rule sets how long it keeps streams.
+    """
+    segment_bytes: builtins.int
+    """A segment ends at the first record that takes it to this many bytes or more. Zero uses
+    4 MiB.
+    """
+    @property
+    def segment_idle(self) -> google.protobuf.duration_pb2.Duration:
+        """How long a stream goes without a write before the driver archives its tail. A stream that
+        keeps taking writes has its tail archived this often too. Unset uses five minutes.
+        """
+    @property
+    def stall_limit(self) -> google.protobuf.duration_pb2.Duration:
+        """How long the store holds records that the archive doesn't hold yet, after the archive last
+        moved. When the driver stops for longer, the store's retention goes on and readers find the
+        gap as expired. Unset uses seven days.
+        """
+    def __init__(
+        self,
+        *,
+        url: builtins.str = ...,
+        segment_bytes: builtins.int = ...,
+        segment_idle: google.protobuf.duration_pb2.Duration | None = ...,
+        stall_limit: google.protobuf.duration_pb2.Duration | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "segment_idle", b"segment_idle", "stall_limit", b"stall_limit"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "segment_bytes",
+            b"segment_bytes",
+            "segment_idle",
+            b"segment_idle",
+            "stall_limit",
+            b"stall_limit",
+            "url",
+            b"url",
+        ],
+    ) -> None: ...
+
+global___ArchiveConfig = ArchiveConfig
+
 class RedisStoreConfig(google.protobuf.message.Message):
     """Streams in a Redis or Redis Cluster that the service connects to itself."""
 
@@ -300,6 +381,7 @@ class RedisStoreConfig(google.protobuf.message.Message):
     RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
     FLOOR_LEASE_FIELD_NUMBER: builtins.int
     FLOOR_RELEASE_GRACE_FIELD_NUMBER: builtins.int
+    NOTIFY_DOORBELLS_FIELD_NUMBER: builtins.int
     PLAIN_FIELD_NUMBER: builtins.int
     @property
     def urls(
@@ -331,6 +413,10 @@ class RedisStoreConfig(google.protobuf.message.Message):
     @property
     def floor_release_grace(self) -> google.protobuf.duration_pb2.Duration:
         """How long a hold lasts after its reader released it. Unset keeps one day."""
+    notify_doorbells: builtins.int
+    """With `StreamStoreConfig.notification_log`, how many doorbell streams the log rings, each one
+    a driver blocks on. Zero uses 16.
+    """
     plain: builtins.bool
     """Runs with no Lua, so the store keeps no producer state and no last position, and the service
     takes their fallbacks. For tests of the fallbacks on a real store.
@@ -346,6 +432,7 @@ class RedisStoreConfig(google.protobuf.message.Message):
         response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         floor_lease: google.protobuf.duration_pb2.Duration | None = ...,
         floor_release_grace: google.protobuf.duration_pb2.Duration | None = ...,
+        notify_doorbells: builtins.int = ...,
         plain: builtins.bool = ...,
     ) -> None: ...
     def HasField(
@@ -374,6 +461,8 @@ class RedisStoreConfig(google.protobuf.message.Message):
             b"floor_release_grace",
             "key_prefix",
             b"key_prefix",
+            "notify_doorbells",
+            b"notify_doorbells",
             "plain",
             b"plain",
             "response_timeout",
@@ -2184,6 +2273,66 @@ class WaitForNotificationResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___WaitForNotificationResponse = WaitForNotificationResponse
+
+class RunStreamDriverRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    CONSUMER_FIELD_NUMBER: builtins.int
+    SWEEP_INTERVAL_FIELD_NUMBER: builtins.int
+    CLAIM_IDLE_FIELD_NUMBER: builtins.int
+    BATCH_FIELD_NUMBER: builtins.int
+    consumer: builtins.str
+    """The driver's name in the log's consumer group, unique among the store's drivers."""
+    @property
+    def sweep_interval(self) -> google.protobuf.duration_pb2.Duration:
+        """How often the driver looks at every slot that holds entries. Unset uses 30 seconds."""
+    @property
+    def claim_idle(self) -> google.protobuf.duration_pb2.Duration:
+        """How long another driver's unacked entries wait before this one takes them. Unset uses 60
+        seconds.
+        """
+    batch: builtins.int
+    """The most entries one read takes, and so the most streams one notify call names. Zero uses
+    100.
+    """
+    def __init__(
+        self,
+        *,
+        consumer: builtins.str = ...,
+        sweep_interval: google.protobuf.duration_pb2.Duration | None = ...,
+        claim_idle: google.protobuf.duration_pb2.Duration | None = ...,
+        batch: builtins.int = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "claim_idle", b"claim_idle", "sweep_interval", b"sweep_interval"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "batch",
+            b"batch",
+            "claim_idle",
+            b"claim_idle",
+            "consumer",
+            b"consumer",
+            "sweep_interval",
+            b"sweep_interval",
+        ],
+    ) -> None: ...
+
+global___RunStreamDriverRequest = RunStreamDriverRequest
+
+class RunStreamDriverResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    def __init__(
+        self,
+    ) -> None: ...
+
+global___RunStreamDriverResponse = RunStreamDriverResponse
 
 class DeleteOwnerRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

@@ -91,9 +91,9 @@ url = "2.2"
 # makes it use the submodule's crates, so the bridge sees one `Connection` type.
 [dependencies.temporalio-streams]
 git = "https://github.com/moetemp/sdk-streams"
-rev = "472e700f2ed59e599d62c6572252978767c6f858"
+rev = "74c98be7a47b287d1224f559095569778b0228d8"
 default-features = false
-features = ["envconfig", "redis"]
+features = ["archive", "envconfig", "redis"]
 
 # The key must match the sdk-rust URL in the sdk-streams manifest byte for byte, or Cargo
 # ignores the patch with only a warning.
