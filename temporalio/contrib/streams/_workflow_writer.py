@@ -18,26 +18,61 @@ Replay publishes nothing, since the records are in the store already.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Generic, TypeVar, overload
 
+import temporalio.activity
 from temporalio import workflow
-from temporalio.bridge.proto.streams import OutputRecord
+from temporalio.api.common.v1 import Payload
+from temporalio.bridge.proto.streams import CloseRequest, OutputRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
-from temporalio.contrib.streams._body import content_hash
-from temporalio.contrib.streams._errors import StreamError, StreamUnsupportedError
-from temporalio.contrib.streams._local_activity import _WorkflowInbound
+from temporalio.common import RawValue, RetryPolicy
+from temporalio.contrib.streams._body import content_hash, encode_bodies
+from temporalio.contrib.streams._errors import (
+    StreamClosedError,
+    StreamError,
+    StreamNotFoundError,
+    StreamProducerError,
+    StreamUnsupportedError,
+)
+from temporalio.contrib.streams._handles import activity_handle
+from temporalio.contrib.streams._local_activity import (
+    _WorkflowInbound,
+    require_local_activity,
+)
+from temporalio.contrib.streams._plugin import call
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
+from temporalio.converter._payload_codec import _apply_to_failure_payloads
+from temporalio.exceptions import ApplicationError
 
 __all__ = [
+    "CLOSE_ACTIVITY",
     "WorkflowStreamWriter",
+    "close_activity",
+    "close_workflow_stream",
     "workflow_writer",
 ]
 
 T = TypeVar("T")
 
+CLOSE_ACTIVITY = "__temporal_streams_close"
+"""The name the built-in close Activity is registered under."""
+
+_DEFAULT_START_TO_CLOSE = timedelta(seconds=10)
+
 # The same per-record limit the stream service keeps, checked in the Workflow
 # so an oversized value fails at the call.
 _MAX_RECORD_BYTES = 3 << 19
+_PAYLOADS_ENCODING = b"binary/protobuf"
+_CLOSE_TYPE = CloseRequest.DESCRIPTOR.full_name.encode()
+# Errors that the same close raises again on every attempt.
+_FINAL_ERRORS = (
+    ValueError,
+    StreamClosedError,
+    StreamNotFoundError,
+    StreamProducerError,
+    StreamUnsupportedError,
+)
 
 
 class _RunWriters:
@@ -46,6 +81,8 @@ class _RunWriters:
     def __init__(self) -> None:
         # FINISH is a statement about the topic, not about a writer object.
         self.finished: set[str] = set()
+        # Topics this run closed, which no writer may publish on again.
+        self.closed: set[str] = set()
 
     def add(self, record: OutputRecord) -> None:
         """Add ``record`` to this activation's output.
@@ -131,6 +168,7 @@ class WorkflowStreamWriter(Generic[T]):
                 an update validator.
         """
         _check_writable("publish to")
+        # A close finishes the topic first, so this covers a closed topic too.
         if self._topic in self._writers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
         payload = workflow.payload_converter().to_payloads([value])[0]
@@ -208,7 +246,8 @@ def workflow_writer(
             :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
 
     Raises:
-        ValueError: ``topic`` is empty.
+        ValueError: ``topic`` is empty, or :func:`close_workflow_stream`
+            closed the topic in this run.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
@@ -218,4 +257,156 @@ def workflow_writer(
     name, _ = resolve_topic(topic)
     writers = _run_writers(create=True)
     assert writers is not None
+    if name in writers.closed:
+        raise ValueError(f"topic {name!r} was already closed in this run")
     return WorkflowStreamWriter(writers, name)
+
+
+def _closer(run_id: str | None) -> str:
+    """The ``closed_by`` a Workflow run's close names it with."""
+    return f"@{run_id or ''}"
+
+
+async def close_workflow_stream(
+    topic: str | StreamTopic[Any] | None = None,
+    *,
+    result: Any = None,
+    error: BaseException | None = None,
+    start_to_close_timeout: timedelta | None = _DEFAULT_START_TO_CLOSE,
+    retry_policy: RetryPolicy | None = None,
+) -> None:
+    """Close ``topic`` of the running Workflow's own stream, with ``result`` or ``error``.
+
+    Call it from Workflow code, before the run ends. The run's ``FINISH`` on
+    the topic goes with this activation, after what the run published
+    before. The stream runtime appends it before it runs the close's Local Activity, which
+    closes the stream in the store and on the server. Without the store's
+    Worker interceptor, that Local Activity writes ``FINISH`` itself. Every
+    read ends after the last record, and each reader that sleeps on the
+    stream wakes and sees the outcome: a Workflow reader raises ``error``
+    after its last batch.
+
+    ``result`` goes through the Workflow's payload converter here and the
+    codec in the Local Activity. ``error`` goes through the Workflow's
+    failure converter. Without a close, a stream closes when its owner's run
+    chain ends: the server's notifier checks the owner and completes its
+    readers, and a client reader ends at its next read.
+
+    The close names the run as its ``closed_by``, ``@<run id>``, which is
+    also the run's producer id. After a failed Workflow Task, the task runs
+    again and publishes again, and the store refuses those appends as closed
+    by this run. Everything the run published before the close landed before
+    it, so the stream runtime drops those records, and the close's rerun takes the
+    refusal as done. The first close's outcome stays.
+
+    Args:
+        topic: The topic to close. Without one,
+            :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        result: What the stream closes with. Without one, a null result.
+        error: A failure to close the stream with, instead of a result.
+        start_to_close_timeout: How long one attempt of the close may run.
+            10 seconds by default.
+        retry_policy: How the close retries. Without one, it is Temporal's
+            default for Activities.
+
+    Raises:
+        ValueError: Both ``result`` and ``error`` are set.
+        temporalio.workflow.ReadOnlyContextError: Called from a query or an
+            update validator.
+        BaseException: The close's Local Activity failure.
+
+    .. warning::
+        This API is experimental.
+    """
+    _check_writable("close")
+    if result is not None and error is not None:
+        raise ValueError("a stream closes with a result or an error, not both")
+    name, _ = resolve_topic(topic)
+    outcome = CloseRequest()
+    if error is not None:
+        runtime: Any = workflow._Runtime.current()
+        runtime._workflow_context_failure_converter.to_failure(
+            error, workflow.payload_converter(), outcome.failure
+        )
+    elif result is not None:
+        outcome.result.CopyFrom(workflow.payload_converter().to_payloads([result])[0])
+    # Without the interceptor no writer can open, so none has to be refused.
+    writers = _run_writers(create=_has_streams_interceptor(workflow._Runtime.current()))
+    if writers is not None:
+        await WorkflowStreamWriter(writers, name).finish()
+        writers.closed.add(name)
+    await workflow.execute_local_activity(
+        CLOSE_ACTIVITY,
+        args=[
+            name,
+            writers is None,
+            RawValue(
+                Payload(
+                    metadata={
+                        "encoding": _PAYLOADS_ENCODING,
+                        "messageType": _CLOSE_TYPE,
+                    },
+                    data=outcome.SerializeToString(),
+                )
+            ),
+        ],
+        start_to_close_timeout=start_to_close_timeout,
+        retry_policy=retry_policy,
+        summary=f"stream close {name}"
+        + (
+            " with a failure"
+            if error is not None
+            else " with a result"
+            if result is not None
+            else ""
+        ),
+    )
+
+
+@temporalio.activity.defn(name=CLOSE_ACTIVITY)
+async def close_activity(topic: str, finish: bool, outcome: RawValue) -> None:
+    """Close a Workflow's own stream, as :func:`close_workflow_stream` asks.
+
+    It writes ``FINISH`` first when asked, as this Local Activity's
+    producer. Then it sends the stream runtime's close with the outcome through the
+    codec, which closes the store and then the stream's notifier.
+    """
+    try:
+        require_local_activity("the stream close Activity")
+    except StreamUnsupportedError as error:
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
+    if outcome.payload.metadata.get("messageType") != _CLOSE_TYPE:
+        raise ApplicationError(
+            "the stream close input is not a CloseRequest", non_retryable=True
+        )
+    request = CloseRequest.FromString(outcome.payload.data)
+    stream = activity_handle()
+    handle = stream._inner
+    try:
+        if finish:
+            try:
+                await stream.producer(topic=topic).finish()
+            except StreamClosedError as closed:
+                # A rerun after a failed Workflow Task finds its own close.
+                if closed.closed_by != _closer(
+                    temporalio.activity.info().workflow_run_id
+                ):
+                    raise
+        converter = handle._converter
+        if request.HasField("result"):
+            [payload] = await encode_bodies(converter, [request.result])
+            request.result.CopyFrom(payload)
+        if request.HasField("failure"):
+            await _apply_to_failure_payloads(
+                request.failure, converter._transform_outbound_payloads
+            )
+        request.stream.CopyFrom(handle._address(topic))
+        request.closed_by = _closer(temporalio.activity.info().workflow_run_id)
+        service = await handle._plugin._service_for(handle._client)
+        await call(service.close(request))
+    except _FINAL_ERRORS as error:
+        raise ApplicationError(
+            str(error), type=type(error).__name__, non_retryable=True
+        ) from error
