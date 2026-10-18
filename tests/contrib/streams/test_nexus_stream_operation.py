@@ -701,7 +701,7 @@ class OwnerThatEndsAsTold:
 
     @workflow.run
     async def run(self) -> None:
-        workflow_writer(TOKENS_TOPIC).publish("token")
+        stream_producer(TOKENS_TOPIC).append("token")
         await workflow.wait_condition(lambda: self._how is not None)
         if self._how == "fail":
             raise ApplicationError(
