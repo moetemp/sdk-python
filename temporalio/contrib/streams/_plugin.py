@@ -7,7 +7,7 @@ client's handles and to every Worker built from the client, so a Workflow's
 publish, an Activity's append and an outside read meet in the same place.
 
 On a Worker the plugin hands the Worker the store, and the Worker appends
-what :func:`temporalio.contrib.streams.workflow_writer` publishes before it
+what :func:`temporalio.contrib.streams.stream_producer` publishes before it
 completes the activation. It adds the interceptor that gives a Local Activity a
 producer identity and tells Workflow code the Worker has a store. On a
 Replayer it adds the interceptor only, since a replay stores nothing.
@@ -275,10 +275,10 @@ class StreamStorePlugin(SimplePlugin):
             await call(self._service.flush_notifications(FlushNotificationsRequest()))
 
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
-        """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.
+        """Add the interceptor a Workflow that uses ``stream_producer`` replays with.
 
         The Replayer needs no store, since a replay publishes no records.
-        Without the interceptor, ``workflow_writer`` raises
+        Without the interceptor, ``stream_producer`` raises
         :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
         A ``workflow_reader`` with ``replay_from_store=True``, the default, reads its batches
         from the store again, so it needs a client in this process that

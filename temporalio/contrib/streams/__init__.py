@@ -41,15 +41,16 @@ A store is configured as a plugin:
 client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
-- Workflow code publishes to its own stream with :func:`workflow_writer`.
+- Workflow code publishes to its own stream with :func:`stream_producer`.
   The Worker appends each activation's records before it completes the
   activation, and nothing goes to History.
-- An Activity reaches the stream of the Workflow that scheduled it with
-  :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and its Temporal attempt. A Local Activity writes as
-  its call number in the run, with an attempt that grows across its reruns.
+- An Activity writes to the stream of the Workflow that scheduled it with
+  :func:`stream_producer` too, and reads it with :func:`activity_handle`.
+  It writes as itself: its Activity id with the scheduling run id, and its
+  Temporal attempt. A Local Activity writes as its call number in the run,
+  with an attempt that grows across its reruns.
 - Any process holding a client reaches a Workflow's stream with
-  :func:`get_stream_handle`, and writes with a producer id and an attempt of
+  :func:`stream_handle`, and writes with a producer id and an attempt of
   its own.
 
 Every read follows the Workflow's run chain across Continue-as-New and ends
@@ -86,7 +87,7 @@ from temporalio.contrib.streams._handles import (
     StreamHandle,
     StreamProducer,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
@@ -110,9 +111,9 @@ from temporalio.contrib.streams._workflow import (
     WorkflowStreamReader,
     workflow_reader,
 )
-from temporalio.contrib.streams._workflow_writer import (
-    WorkflowStreamWriter,
-    workflow_writer,
+from temporalio.contrib.streams._workflow_producer import (
+    WorkflowStreamProducer,
+    stream_producer,
 )
 
 __all__ = [
@@ -151,11 +152,11 @@ __all__ = [
     "SupersessionTracker",
     "TaskCutoff",
     "WorkflowStreamReader",
-    "WorkflowStreamWriter",
+    "WorkflowStreamProducer",
     "activity_handle",
-    "get_stream_handle",
+    "stream_handle",
+    "stream_producer",
     "topic",
     "track_supersession",
     "workflow_reader",
-    "workflow_writer",
 ]
