@@ -22,6 +22,7 @@ from temporalio.contrib.streams import (
     stream_handle,
     track_supersession,
 )
+from temporalio.contrib.streams._local_activity import _LOCAL_BITS, producer_attempt
 from temporalio.contrib.streams._supersession import _RETRY_BITS
 from temporalio.contrib.streams.memory import MemoryStreams
 from tests.contrib.streams._support import (
@@ -287,6 +288,43 @@ def test_a_workflow_supersession_withdraws_what_cores_vectors_say(
         else []
     )
     tracker.observe(data("@run", next, "next"))
+    assert [r.value for r in withdrawn] == (["previous"] if case["superseded"] else [])
+
+
+def test_a_local_activity_attempt_matches_cores_vectors():
+    vectors = json.loads(_VECTORS.read_text())
+    for case in vectors["local_attempts"]:
+        assert (
+            producer_attempt(case["task_attempt"], case["attempt"])
+            == case["local_attempt"]
+        ), case
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads(_VECTORS.read_text())["local_supersession"],
+    ids=lambda case: case["label"],
+)
+def test_a_local_activity_supersession_withdraws_what_cores_vectors_say(
+    case: dict[str, Any],
+):
+    previous, next = case["previous"], case["next"]
+    tracker: SupersessionTracker[str] = SupersessionTracker()
+    tracker.observe(data(previous["producer"], previous["attempt"], "previous"))
+    withdrawn = []
+    if case["superseded"]:
+        if next["producer"] == previous["producer"]:
+            attempt = next["attempt"]
+        else:
+            # Another record of the run names its task attempt, with no local attempt.
+            task = next["attempt"]
+            if not next["producer"].startswith("@"):
+                task >>= _LOCAL_BITS
+            attempt = task << _LOCAL_BITS
+        withdrawn = tracker.observe(
+            superseded(previous["producer"], previous["attempt"], attempt)
+        )
+    tracker.observe(data(next["producer"], next["attempt"], "next"))
     assert [r.value for r in withdrawn] == (["previous"] if case["superseded"] else [])
 
 
