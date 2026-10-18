@@ -40,7 +40,7 @@ from temporalio.contrib.streams import (
     StreamPosition,
     StreamRefusedError,
     StreamUnsupportedError,
-    get_stream_handle,
+    stream_handle,
     topic,
     workflow_reader,
 )
@@ -649,7 +649,7 @@ async def test_the_read_activity_reads_and_decodes_through_core(
     async with new_worker(streams_client, Waits) as worker:
         owner = await running_owner(streams_client, worker.task_queue)
         handle = streams_client.get_workflow_handle(owner)
-        stream = get_stream_handle(streams_client, owner, topic=TOKENS)
+        stream = stream_handle(streams_client, owner, topic=TOKENS)
         await stream.producer(producer_id="w", attempt=1).append("one", "two")
         env = ActivityEnvironment(client=streams_client)
         env.info = dataclasses.replace(env.info, is_local=True)
