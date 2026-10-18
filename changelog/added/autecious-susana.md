@@ -1,0 +1,1 @@
+Experimental: `ClientTransport` calls `WorkflowService.ExecuteSyncNexusOperation` through the stream runtime by its method path, since Core's client has no stub for it. The call runs one synchronous Nexus operation for a caller namespace and persists nothing.

@@ -1,0 +1,1 @@
+Experimental: `StreamReader(..., replay_from_store=True)` reads in a Local Activity through the transport `StreamDirectReads` maps its endpoint to. History keeps each read's range and digest, a few hundred bytes, in place of its records, and a replay reads the range again from the owner's store. The default, `False`, records each answer as before.

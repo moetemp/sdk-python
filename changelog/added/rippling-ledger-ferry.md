@@ -1,0 +1,1 @@
+Experimental: the streams over Nexus guide and the package README cover direct reads, and the live lane runs a demo where a caller in another namespace reads directly over the HTTP ingress, replays after a Worker restart, and keeps or loses its range by the floor lease.

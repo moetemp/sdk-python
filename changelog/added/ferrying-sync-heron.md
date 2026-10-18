@@ -1,0 +1,1 @@
+Experimental: `temporalio.contrib.streams.nexus.ClientTransport` reads a stream behind an endpoint through `ExecuteSyncNexusOperation` with the caller's own client, for a direct `StreamReader` or a `StreamFollowerService`. `StreamAccess.caller_namespace` carries the caller namespace the server set.

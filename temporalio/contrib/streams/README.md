@@ -230,6 +230,9 @@ async def follow(workflow_id: str) -> int:
 
 Known limits:
 
+- **Over Nexus.** A `StreamOperationHandler` can hand out an Activity's
+  stream, and the Nexus stream service serves it. See
+  [Streams over Nexus](docs/nexus.md).
 - **Clock skew.** The attempt uses the server's attempt start time. After a
   failover to a cluster whose clock is behind by more than the retry
   interval, a new attempt can look older, and its records are `stale`.
@@ -316,6 +319,9 @@ Known limits:
   Activities. A run with thousands of them makes each check larger.
 - **Codec keys.** A codec that keys on the Activity type or task queue
   can't decode the close outcome.
+- **Over Nexus.** A `StreamOperationHandler` can hand out a tool call's
+  stream, and the Nexus stream service serves it, as for a standalone
+  Activity. See [Streams over Nexus](docs/nexus.md).
 
 ## Link records and followers
 
@@ -489,6 +495,22 @@ A Workflow closes its own stream with `close_workflow_stream(topic,
 result=..., error=...)`, and each sleeping reader sees the outcome. See
 [Readers that sleep](docs/notifications.md).
 
+## Streams in another namespace
+
+A caller Workflow in another namespace reads a stream through a Nexus
+endpoint with `temporalio.contrib.streams.nexus.StreamReader`. By default
+each read is a Nexus operation of the Workflow, so History keeps each read's
+answer, records included, and a replay needs nothing else. This works on
+Temporal Cloud too. `StreamReader(..., replay_from_store=True)` keeps only
+each read's range and digest, as `workflow_reader` does, and a replay reads
+the range again through the endpoint. That needs `StreamDirectReads` on the
+caller Worker's client with a transport for the endpoint, and a read
+without one fails at once with a `StreamUnsupportedError` that names the
+option. `HttpTransport` works on a self-hosted server only and takes a
+write credential on the handler's namespace. `ClientTransport` needs a
+server with `ExecuteSyncNexusOperation`, which Temporal Cloud doesn't serve
+yet. See [Direct reads](docs/nexus.md#direct-reads).
+
 ## What to know
 
 - **Retries deduplicate.** An append that fails with
@@ -528,3 +550,4 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 - [Redis store: guarantees and setup](docs/redis-guarantees.md)
 - [Stream wire contract](docs/wire-contract.md)
 - [Moving from Workflow Streams](docs/migration.md)
+- [Streams over Nexus](docs/nexus.md)
