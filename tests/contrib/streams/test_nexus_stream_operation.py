@@ -36,8 +36,8 @@ from temporalio.contrib.streams import (
     StreamStorePlugin,
     StreamUnsupportedError,
     close_workflow_stream,
-    get_stream_handle,
-    workflow_writer,
+    stream_handle,
+    stream_producer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
@@ -317,7 +317,7 @@ def _store_for(backing: str) -> StreamStorePlugin:
 async def _values(client: Client, ref: StreamRef) -> list[Any]:
     return [
         record.value
-        async for record in get_stream_handle(client, ref).read()
+        async for record in stream_handle(client, ref).read()
         if record.kind is RecordKind.DATA
     ]
 
@@ -372,7 +372,7 @@ async def test_a_caller_sees_appends_as_progress_and_the_close_as_the_result(
             )
 
         assert await _wait_for(operation_started)
-        producer = get_stream_handle(streams_client, ref).producer(
+        producer = stream_handle(streams_client, ref).producer(
             producer_id="writer", attempt=1
         )
         await producer.append("a")
@@ -407,9 +407,9 @@ class StreamOwnerThatPublishes:
 
     @workflow.run
     async def run(self, tokens: list[str]) -> None:
-        writer = workflow_writer(TOKENS_TOPIC)
+        writer = stream_producer(TOKENS_TOPIC)
         for token in tokens:
-            writer.publish(token)
+            writer.append(token)
             await workflow.sleep(timedelta(milliseconds=200))
         await writer.finish()
         await workflow.wait_condition(lambda: self._done)
@@ -482,9 +482,9 @@ class StreamOwnerThatCloses:
 
     @workflow.run
     async def run(self, tokens: list[str]) -> None:
-        writer = workflow_writer(TOKENS_TOPIC)
+        writer = stream_producer(TOKENS_TOPIC)
         for token in tokens:
-            writer.publish(token)
+            writer.append(token)
             await workflow.sleep(timedelta(milliseconds=200))
         await close_workflow_stream(TOKENS_TOPIC, result=f"{len(tokens)} tokens")
         # A second close of the topic keeps the first outcome.
@@ -549,9 +549,9 @@ class OwnerThatClosesInOneTask:
 
     @workflow.run
     async def run(self, count: int) -> None:
-        writer = workflow_writer(TOKENS_TOPIC)
+        writer = stream_producer(TOKENS_TOPIC)
         for n in range(count):
-            writer.publish(f"t{n}")
+            writer.append(f"t{n}")
         await close_workflow_stream(TOKENS_TOPIC, result=f"{count} tokens")
         await workflow.wait_condition(lambda: self._done)
 
