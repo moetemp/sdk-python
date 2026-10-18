@@ -108,6 +108,7 @@ from temporalio.contrib.streams._workflow import (
     StreamPosition,
     TaskCutoff,
     WorkflowStreamReader,
+    start_activity_with_stream,
     workflow_reader,
 )
 from temporalio.contrib.streams._workflow_writer import (
@@ -156,6 +157,7 @@ __all__ = [
     "activity_handle",
     "close_workflow_stream",
     "get_stream_handle",
+    "start_activity_with_stream",
     "topic",
     "track_supersession",
     "workflow_reader",

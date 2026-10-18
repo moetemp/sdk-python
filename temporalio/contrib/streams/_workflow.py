@@ -54,6 +54,7 @@ from temporalio.contrib.streams._errors import (
 from temporalio.contrib.streams._handles import StreamHandle
 from temporalio.contrib.streams._local_activity import (
     require_local_activity,
+    start_owning_activity,
 )
 from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
@@ -828,6 +829,64 @@ def workflow_reader(
         replay_from_store,
         max_bytes=max_bytes,
     )
+
+
+def start_activity_with_stream(
+    activity: Any,
+    *args: Any,
+    topic: str | StreamTopic[Any] | None = None,
+    **kwargs: Any,
+) -> tuple[workflow.ActivityHandle[Any], StreamRef]:
+    """Start an Activity that owns a stream, and return its handle and the stream's ref.
+
+    It calls :func:`temporalio.workflow.start_activity` with ``activity``,
+    ``args`` and the keyword arguments, and marks the Activity in a header.
+    In the Activity, :func:`temporalio.contrib.streams.activity_handle` is
+    then the Activity's own stream. Every attempt writes to it. When this
+    run sees the Activity end, the Worker closes each topic the Activity
+    wrote: with a null result when it completed, else with the failure
+    that History holds. A reader can open the ref at once, before the
+    Activity starts.
+
+    The ref names this Workflow, this run and the Activity's id, which is
+    ``activity_id`` when given, else the id the SDK gave the call. An
+    Activity id names one stream per run. A second Activity with the same
+    id in the same run writes to a closed stream, so its first append raises
+    :class:`temporalio.contrib.streams.StreamClosedError`.
+
+    Args:
+        activity: The Activity, as for
+            :func:`temporalio.workflow.start_activity`.
+        args: The Activity's arguments.
+        topic: The topic of the ref. Without one,
+            :data:`temporalio.contrib.streams.DEFAULT_TOPIC`. The Activity
+            may write other topics too.
+        kwargs: The other arguments of
+            :func:`temporalio.workflow.start_activity`.
+
+    Raises:
+        StreamUnsupportedError: The Worker has no stream store interceptor,
+            so the header can't be set.
+        temporalio.workflow.ReadOnlyContextError: Called from a query or an
+            update validator.
+
+    .. warning::
+        This API is experimental.
+    """
+    if workflow.unsafe.is_read_only():
+        raise workflow.ReadOnlyContextError(
+            "cannot start an Activity in a query or an update validator"
+        )
+    if args:
+        kwargs["args"] = list(args)
+    handle, activity_id = start_owning_activity(
+        lambda: workflow.start_activity(activity, **kwargs)
+    )
+    info = workflow.info()
+    ref = StreamRef.for_workflow_activity(
+        info.workflow_id, run_id=info.run_id, activity_id=activity_id, topic=topic
+    )
+    return handle, ref
 
 
 @temporalio.activity.defn(name=READ_ACTIVITY)
