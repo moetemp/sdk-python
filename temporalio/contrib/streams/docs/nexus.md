@@ -216,6 +216,7 @@ The caller Workflow starts the operation as usual and reads it with a
 from temporalio.contrib.streams.nexus import StreamReader
 
 handle = await nexus_client.start_operation(ConversationService.respond, request)
+# Reads directly by default, so the Worker needs a transport (see Direct reads).
 reader = StreamReader(handle, item_type=Message, endpoint=ENDPOINT)
 while (batch := await reader.next()) is not None:
     for message in batch:
@@ -288,10 +289,11 @@ and a read's bodies after the codec decodes them. The stream runtime never
 stores or logs them, and sends them only in the read's answer. The store
 keeps only encoded bodies.
 
-By default each read is a synchronous Nexus operation of the Workflow, so
-History records it and a replay reads the same records. When a read finds no new
-record, the reader waits on the operation's progress, which is also on the
-handle:
+By default History keeps each read's range and digest, and a replay reads
+the same records again from the owner's store (see Direct reads). With
+`replay_from_store=False` each read is a synchronous Nexus operation of the
+Workflow, so History records it. When a read finds no new record, the
+reader waits on the operation's progress, which is also on the handle:
 
 ```python
 progress = await handle.progress()          # waits for the first progress
@@ -307,11 +309,11 @@ values at the same points.
 
 Reading a stream adds to the caller's History in two ways.
 
-- By default each read is a synchronous Nexus operation, about three
-  events, and its answer holds up to 1 MiB of records. With
-  `replay_from_store=True` a read is a direct read, one marker of about
-  1 KiB. A gap in the stream shorter than `idle_wait` costs one read. A
-  longer gap costs one empty read, then one progress task.
+- By default a read is a direct read, one marker of about 1 KiB. With
+  `replay_from_store=False` each read is a synchronous Nexus operation,
+  about three events, and its answer holds up to 1 MiB of records. A gap in
+  the stream shorter than `idle_wait` costs one read. A longer gap costs one
+  empty read, then one progress task.
 - Each progress delivery costs at most one Workflow Task, three events,
   and up to about 3 KiB on its scheduled event. The server schedules a task
   for progress no sooner than `nexusoperation.progressMinInterval` (1 second
@@ -354,8 +356,8 @@ Two cases stop a reader that would otherwise read for ever.
 
 ### Direct reads
 
-With `replay_from_store=True` a reader keeps the records out of its
-History. It's the opt-in. Each read runs in a Local Activity, not as a Nexus operation of the
+By default, `replay_from_store=True`, a reader keeps the records out of its
+History. Each read runs in a Local Activity, not as a Nexus operation of the
 Workflow. History keeps one marker per read, with the range of records that
 crossed and the stream runtime's digest of them, not the records. The marker
 is about 1 KiB. Most of it is the stream service's read state, which grows
@@ -373,12 +375,13 @@ stream service's `read_range`, which checks the records against the digest.
 It needs a way to reach the endpoint outside the Workflow. Register
 `StreamDirectReads` on the caller Worker's client, and on any `Replayer`,
 with a transport for each endpoint. Without one, every read fails at once
-with `StreamUnsupportedError`, which names this option. Build the reader
-with `replay_from_store=True`:
+with `StreamUnsupportedError`, which names the opt-out. To read through
+Nexus operations instead, with each answer in History and no transport,
+build the reader with `replay_from_store=False`:
 
 ```python
 reader = StreamReader(
-    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=True
+    handle, item_type=Message, endpoint=ENDPOINT, replay_from_store=False
 )
 ```
 
@@ -438,7 +441,7 @@ worker_client = await Client.connect(
 - It needs a server with the RPC turned on
   (`frontend.enableExecuteSyncNexusOperation`, off by default). Temporal Cloud
   doesn't serve it yet. So on Temporal Cloud no transport works today, and a
-  reader there keeps the default, `replay_from_store=False`.
+  reader there needs `replay_from_store=False`.
 - It encodes the input and decodes the answer with the client's payload
   codec, under the wrappers that turn reads back into batches. So the
   handler's namespace must use the same codec.
@@ -464,7 +467,7 @@ A replay that misses the cache needs the endpoint and the records:
 | Other records, cursor or count | The Workflow Task fails as nondeterminism |
 | The records gone, after the floor lease lapsed | The Workflow Task fails with `StreamReplayRangeLostError` and is retried |
 | The store down, the endpoint gone, 401, 403, 429, 5xx, `NotFound`, `NamespaceNotActive` or a timeout | The Workflow Task fails and is retried |
-| No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names `replay_from_store`. The Workflow Task fails and is retried |
+| No `StreamDirectReads`, or no transport for the endpoint | `StreamUnsupportedError`, which names the opt-out. The Workflow Task fails and is retried |
 
 A live read whose credential the endpoint refuses, 401 or 403, retries its
 Local Activity with backoff and logs an error, so a key that expired fails no
