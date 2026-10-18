@@ -257,10 +257,11 @@ async def two_processes(client: Client, kind: str) -> tuple[Client, Client]:
     await skip_without_notifier(client)
     if kind == "postgres":
         schema = new_schema()
-        reading = await connect_with(
-            client, postgres_streams(schema).notify_on_append()
+        reading = await connect_with(client, postgres_streams(schema))
+        silent = await connect_with(
+            client, postgres_streams(schema).notify_on_append(False)
         )
-        return reading, await connect_with(client, postgres_streams(schema))
+        return reading, silent
     url = os.environ.get("STREAMS_REDIS_URL", "")
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to share a store across two clients")
