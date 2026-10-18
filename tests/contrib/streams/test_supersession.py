@@ -16,7 +16,7 @@ from temporalio.contrib.streams import (
     StreamRecord,
     Supersession,
     SupersessionTracker,
-    get_stream_handle,
+    stream_handle,
     track_supersession,
 )
 from temporalio.contrib.streams._supersession import _RETRY_BITS
@@ -26,7 +26,7 @@ from tests.contrib.streams._support import (
     new_workflow_id,
     streams_crate_dir,
 )
-from tests.contrib.streams.test_workflow_writer import (
+from tests.contrib.streams.test_workflow_producer import (
     STEPS,
     UNSANDBOXED,
     FailsAfterAPublish,
@@ -342,7 +342,7 @@ async def test_a_reader_sees_each_value_once_after_a_task_reruns(client: Client)
             FailsAfterAPublish.run, id=workflow_id, task_queue=worker.task_queue
         )
     shown: list[str | None] = []
-    read = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+    read = stream_handle(streams, workflow_id).read(topic=STEPS)
     async for record, withdrawn in track_supersession(read):
         for old in withdrawn:
             shown.remove(old.value)
