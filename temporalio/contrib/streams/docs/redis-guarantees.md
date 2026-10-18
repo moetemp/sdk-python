@@ -107,7 +107,8 @@ between your applications and your Redis, so access is Redis's job.
 
 Readers write nothing, so a reader needs only read access to Redis, and the
 Temporal permission to describe the Workflow. A read holds one Redis
-connection while it waits, from a pool the stream runtime keeps per node, so
+connection while it waits, for up to the read's `idle_wait` (2 seconds by
+default), from a pool the stream runtime keeps per node, so
 set `blocking_reads_per_node` on `RedisStreams` to the streams a process
 follows at once. A read that finds the pool full waits for a connection
 until its own poll ends, then answers empty, so a process that follows more
