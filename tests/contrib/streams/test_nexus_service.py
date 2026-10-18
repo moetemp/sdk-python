@@ -48,7 +48,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     StreamStorePlugin,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -859,7 +859,7 @@ async def test_a_workflow_reader_gets_plain_bodies_that_stay_encrypted_elsewhere
         assert all(result.metadata["encoding"] == b"binary/xor" for result in results)
 
         # Read through a handle with no codec: the stored body is the codec's.
-        plain = get_stream_handle(backing.client, ref)
+        plain = stream_handle(backing.client, ref)
         stored = plain.read(after=BEGINNING, result_type=RawValue)
         try:
             record = await asyncio.wait_for(anext(stored), 5)
@@ -1094,7 +1094,7 @@ async def test_a_stored_record_above_the_limit_crosses_as_an_error(
     async with serve(server, backing, max_record_bytes=4096) as service:
         ref = await stream_of(service)
         # Written to the store directly, as an Activity or a client may.
-        producer = get_stream_handle(service.client, ref).producer(
+        producer = stream_handle(service.client, ref).producer(
             producer_id="direct", attempt=1
         )
         await producer.append(RawValue(Payload(data=b"x" * 5000)))
@@ -1402,11 +1402,11 @@ async def test_a_follow_over_nexus_expands_a_link_and_replays_its_ranges(
     agent, child = await stream_of(service), await stream_of(service)
     store = service.backing.client
     await (
-        get_stream_handle(store, child)
+        stream_handle(store, child)
         .producer(producer_id="tool", attempt=1)
         .append("a1", "a2")
     )
-    parent = get_stream_handle(store, agent).producer(producer_id="agent", attempt=1)
+    parent = stream_handle(store, agent).producer(producer_id="agent", attempt=1)
     await parent.append("d1")
     await parent.link(child, name="sub")
 
