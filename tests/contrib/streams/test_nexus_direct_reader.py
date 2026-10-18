@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -36,6 +38,7 @@ from temporalio.contrib.streams.nexus import (
     StreamDirectReads,
     StreamReader,
 )
+from temporalio.contrib.streams.nexus import _reader as reader_module
 from temporalio.contrib.streams.nexus._direct import (
     DIRECT_READ_ACTIVITY,
     positions_payload,
@@ -80,7 +83,6 @@ class DirectChatReader:
     async def run(self) -> None:
         client = workflow.create_nexus_client(service=ChatService, endpoint=ENDPOINT)
         handle = await client.start_operation(ChatService.chat, "hello")
-        # The default reads directly.
         reader = StreamReader(
             handle, item_type=Token, endpoint=ENDPOINT, replay_from_store=True
         )
@@ -403,3 +405,47 @@ async def test_a_recorded_history_replays_with_the_plugin_on() -> None:
         [Token("a"), Token("b")],
         [Token("c")],
     ]
+
+
+class _Cut(Exception):
+    pass
+
+
+class _Runtime:
+    def __init__(self, commands: int) -> None:
+        self.commands = commands
+        self.heartbeats = 0
+
+    def _task_progress(self) -> tuple[int, float]:
+        return self.commands, 0.0
+
+    def _request_task_heartbeat(self) -> None:
+        self.heartbeats += 1
+
+
+@pytest.mark.parametrize("commands", [0, 100])
+async def test_a_direct_read_cuts_its_task_at_the_command_bound(
+    monkeypatch: pytest.MonkeyPatch, commands: int
+) -> None:
+    runtime = _Runtime(commands)
+
+    async def local_activity(*_args: Any, **_kwargs: Any) -> Any:
+        # The cut comes before the read's Local Activity.
+        raise _Cut(runtime.heartbeats)
+
+    monkeypatch.setattr(reader_module.workflow._Runtime, "current", lambda: runtime)
+    monkeypatch.setattr(
+        reader_module.workflow, "execute_local_activity", local_activity
+    )
+    monkeypatch.setattr(
+        reader_module.workflow, "info", lambda: SimpleNamespace(run_id="run-id")
+    )
+    reader = StreamReader(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        replay_from_store=True,
+    )
+    with pytest.raises(_Cut) as raised:
+        await reader._direct_read(ReadInput(stream=STREAM, max_records=1))
+    assert raised.value.args == ((1 if commands else 0),)

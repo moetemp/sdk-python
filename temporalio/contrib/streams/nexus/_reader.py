@@ -94,6 +94,20 @@ class _RecheckDue(Exception):
     pass
 
 
+def _cut_task() -> None:
+    # Reads and follow steps run one after another in Local Activities, which
+    # keep the Workflow Task open, so the reader ends the task as a Workflow
+    # reader does. Otherwise the run's state shows only at the Local Activity
+    # heartbeat.
+    runtime: Any = workflow._Runtime.current()
+    commands, seconds = runtime._task_progress()
+    if (
+        commands >= _TASK_CUTOFF.commands
+        or seconds >= _TASK_CUTOFF.time.total_seconds()
+    ):
+        runtime._request_task_heartbeat()
+
+
 class StreamIncompleteError(StreamError):
     """The stream and its operation didn't both end within the drain limit.
 
@@ -733,17 +747,7 @@ class StreamReader(Generic[T]):
             follow_answer_of,
         )
 
-        # Steps follow each other while a link is open, and Local Activities
-        # keep the Workflow Task open, so the reader ends the task as a
-        # Workflow reader does. Otherwise the run's state shows only at the
-        # Local Activity heartbeat.
-        runtime: Any = workflow._Runtime.current()
-        commands, seconds = runtime._task_progress()
-        if (
-            commands >= _TASK_CUTOFF.commands
-            or seconds >= _TASK_CUTOFF.time.total_seconds()
-        ):
-            runtime._request_task_heartbeat()
+        _cut_task()
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
@@ -778,6 +782,7 @@ class StreamReader(Generic[T]):
             chain_run_of,
         )
 
+        _cut_task()
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
