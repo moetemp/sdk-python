@@ -186,7 +186,7 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
 async def test_live_a_sleeping_client_wakes_through_the_driver(driven: Client):
     async with new_worker(driven, Waits) as worker:
         owner = await running_owner(driven, worker.task_queue)
-        handle = get_stream_handle(driven, owner, topic=TOKENS)
+        handle = stream_handle(driven, owner, topic=TOKENS)
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
         # Past the idle wait, the read came back empty and the reader waits
@@ -208,12 +208,12 @@ async def test_live_streams_on_many_slots_all_wake_through_the_driver(
     # entries land on that slot's primary, and the driver drains them all.
     async with new_worker(driven, Waits) as worker:
         owners = [await running_owner(driven, worker.task_queue) for _ in range(8)]
-        reads = [get_stream_handle(driven, o, topic=TOKENS).read() for o in owners]
+        reads = [stream_handle(driven, o, topic=TOKENS).read() for o in owners]
         firsts = [asyncio.ensure_future(r.__anext__()) for r in reads]
         await asyncio.sleep(3)
         for owner in owners:
             await (
-                get_stream_handle(driven, owner, topic=TOKENS)
+                stream_handle(driven, owner, topic=TOKENS)
                 .producer(producer_id="p", attempt=1)
                 .append(owner)
             )
@@ -407,7 +407,7 @@ async def test_live_a_workflow_reader_wakes_through_the_driver(driven: Client):
             id=reader_id,
             task_queue=worker.task_queue,
         )
-        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
+        producer = stream_handle(driven, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
