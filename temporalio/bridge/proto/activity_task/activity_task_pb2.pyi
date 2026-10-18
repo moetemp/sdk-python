@@ -18,6 +18,7 @@ import google.protobuf.message
 import google.protobuf.timestamp_pb2
 
 import temporalio.api.common.v1.message_pb2
+import temporalio.bridge.proto.workflow_activation.workflow_activation_pb2
 
 if sys.version_info >= (3, 10):
     import typing as typing_extensions
@@ -160,6 +161,7 @@ class Start(google.protobuf.message.Message):
     PRIORITY_FIELD_NUMBER: builtins.int
     IS_LOCAL_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_FIELD_NUMBER: builtins.int
     workflow_namespace: builtins.str
     """The namespace the workflow lives in"""
     workflow_type: builtins.str
@@ -227,6 +229,14 @@ class Start(google.protobuf.message.Message):
     """
     run_id: builtins.str
     """Run ID of this activity execution. Only set for standalone activities."""
+    @property
+    def workflow_task(
+        self,
+    ) -> temporalio.bridge.proto.workflow_activation.workflow_activation_pb2.WorkflowTaskHistoryInfo:
+        """For a local activity, the Workflow Task in which Core dispatched this execution, from
+        History. A rerun after a failed task dispatches in a later task, so lang can key the side
+        effects of each execution by it. Unset for other activities.
+        """
     def __init__(
         self,
         *,
@@ -258,6 +268,8 @@ class Start(google.protobuf.message.Message):
         priority: temporalio.api.common.v1.message_pb2.Priority | None = ...,
         is_local: builtins.bool = ...,
         run_id: builtins.str = ...,
+        workflow_task: temporalio.bridge.proto.workflow_activation.workflow_activation_pb2.WorkflowTaskHistoryInfo
+        | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -280,6 +292,8 @@ class Start(google.protobuf.message.Message):
             b"started_time",
             "workflow_execution",
             b"workflow_execution",
+            "workflow_task",
+            b"workflow_task",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -321,6 +335,8 @@ class Start(google.protobuf.message.Message):
             b"workflow_execution",
             "workflow_namespace",
             b"workflow_namespace",
+            "workflow_task",
+            b"workflow_task",
             "workflow_type",
             b"workflow_type",
         ],
