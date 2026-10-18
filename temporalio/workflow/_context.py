@@ -22,6 +22,7 @@ from ._exceptions import _NotInWorkflowEventLoopError
 
 if TYPE_CHECKING:
     import temporalio.bridge.proto.streams
+    import temporalio.bridge.proto.workflow_activation
 
     from ._activities import ActivityCancellationType, ActivityHandle
     from ._event_groups import EventGroup
@@ -371,6 +372,11 @@ class _Runtime(ABC):
     def workflow_stream_records(
         self,
     ) -> list[temporalio.bridge.proto.streams.OutputRecord]: ...
+
+    @abstractmethod
+    def workflow_task_history_info(
+        self,
+    ) -> temporalio.bridge.proto.workflow_activation.WorkflowTaskHistoryInfo: ...
 
     @abstractmethod
     def workflow_memo(self) -> Mapping[str, Any]: ...
