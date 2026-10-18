@@ -17,6 +17,15 @@ import temporalio.bridge.temporal_sdk_bridge
 
 ProtoMessage = TypeVar("ProtoMessage", bound=google.protobuf.message.Message)
 
+STREAM_OWNER_HEADER = "__temporal_stream_owner"
+"""The header that marks an Activity as the owner of its own stream.
+
+When the scheduling Workflow sees a marked Activity end, the Worker passes
+the resolution in its publish call, and the stream runtime closes the
+Activity's streams. Only the key counts, since a header codec may encode the
+value.
+"""
+
 
 class StreamCallFailure(Exception):
     """A stream call that failed, with Core's account of why."""

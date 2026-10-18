@@ -1001,15 +1001,13 @@ def _record_stream_owners(
 ) -> None:
     # Replayed completions count too, so a run that comes back into the cache knows its owners
     # again before a live resolution arrives.
-    from temporalio.contrib.streams._local_activity import STREAM_OWNER_HEADER
-
     if not completion.HasField("successful"):
         return
     for command in completion.successful.commands:
         if not command.HasField("schedule_activity"):
             continue
         schedule = command.schedule_activity
-        if STREAM_OWNER_HEADER in schedule.headers:
+        if temporalio.bridge.streams.STREAM_OWNER_HEADER in schedule.headers:
             workflow.stream_owner_activities[schedule.seq] = schedule.activity_id
 
 

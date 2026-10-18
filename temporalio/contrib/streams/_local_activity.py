@@ -39,20 +39,12 @@ import temporalio.activity
 import temporalio.worker
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.streams import STREAM_OWNER_HEADER
 from temporalio.client import Client
 from temporalio.contrib.streams._errors import StreamUnsupportedError
 
 LOCAL_ACTIVITY_HEADER = "__temporal_streams_local_activity"
 """The header that carries a Local Activity call's number."""
-
-STREAM_OWNER_HEADER = "__temporal_stream_owner"
-"""The header that marks an Activity as the owner of its own stream.
-
-When the scheduling Workflow sees a marked Activity end, the Worker passes
-the resolution in its publish call, and the stream runtime closes the
-Activity's streams. Only the key counts, since a header codec may encode the
-value.
-"""
 
 LOCAL_ATTEMPTS = 10_000
 """How many Local Activity attempts a producer attempt has room for."""
