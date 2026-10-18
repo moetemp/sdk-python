@@ -13,14 +13,17 @@ over. Each yields a :class:`Backing`.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import json
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+import nexusrpc
 import pytest
 import pytest_asyncio
 
@@ -30,10 +33,14 @@ from temporalio import workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.client import Client
+from temporalio.common import RawValue
 from temporalio.contrib.streams import (
+    RecordKind,
     StreamRef,
     StreamStorePlugin,
+    get_stream_handle,
 )
+from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     AppendInput,
@@ -42,16 +49,19 @@ from temporalio.contrib.streams.nexus import (
     ReadInput,
     ReadOutput,
     StreamAccess,
+    TemporalStreams,
     TemporalStreamsHandler,
     TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.converter import (
     DataConverter,
+    PayloadCodec,
 )
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import PollerBehaviorSimpleMaximum, Worker
 from tests import DEV_SERVER_DOWNLOAD_VERSION
-from tests.helpers import find_free_port
+from tests.helpers import find_free_port, new_worker
 
 _SERVICE = "temporal.sdk.streams.v1.TemporalStreams"
 
@@ -325,3 +335,514 @@ def refused_as(error: HTTPStatusError) -> str:
     cause_type = failure["details"]["cause"]["applicationFailureInfo"]["type"]
     assert failure["message"].startswith(f"{cause_type}: "), failure["message"]
     return cause_type
+
+
+async def test_an_append_reads_back_as_the_stored_record(service: Service):
+    ref = await stream_of(service)
+    landed = await append(service, ref, "one", "two")
+    answer = await read(service, ref)
+    stored = records_of(answer)
+    assert [
+        (r.topic, r.kind, r.producer_id, r.attempt, r.sequence) for r in stored
+    ] == [
+        ("out", RecordKind.DATA, "p", 1, 1),
+        ("out", RecordKind.DATA, "p", 1, 2),
+    ]
+    # With no codec on the handler, the body comes back as the writer sent it.
+    assert stored[0].body == Payload.FromString(body("one"))
+    assert answer.records[-1].token == landed.cursor
+    assert answer.next_token == landed.cursor
+    assert answer.done is False
+
+
+async def test_a_batch_lands_in_order_and_a_cursor_resumes_strictly_after(
+    service: Service,
+):
+    ref = await stream_of(service)
+    first = await append(service, ref, "one")
+    await append(service, ref, "two", "three", sequence=2)
+    assert texts(await read(service, ref, first.cursor)) == ["two", "three"]
+    answer = await read(service, ref)
+    # A cursor a reader saw resumes the same way as one an append returned.
+    resumed = await read(service, ref, answer.records[1].token)
+    assert texts(resumed) == ["three"]
+    assert [r.sequence for r in records_of(answer)] == [1, 2, 3]
+
+
+async def test_max_records_caps_an_answer_and_the_next_call_continues(
+    service: Service,
+):
+    ref = await stream_of(service)
+    await append(service, ref, "a", "b", "c", "d", "e")
+    first = await read(service, ref, max_records=2)
+    second = await read(service, ref, first.next_token, max_records=2)
+    third = await read(service, ref, second.next_token, max_records=2)
+    assert [texts(first), texts(second), texts(third)] == [
+        ["a", "b"],
+        ["c", "d"],
+        ["e"],
+    ]
+
+
+async def test_a_read_that_collects_nothing_answers_with_the_callers_cursor(
+    service: Service,
+):
+    ref = await stream_of(service)
+    landed = await append(service, ref, "one")
+    answer = await read(service, ref, landed.cursor, wait_ms=200)
+    assert answer.records == []
+    assert answer.next_token == landed.cursor
+    assert answer.done is False
+
+
+async def test_a_parked_read_answers_when_a_record_arrives(service: Service):
+    ref = await stream_of(service)
+    landed = await append(service, ref, "one")
+    parked = asyncio.ensure_future(read(service, ref, landed.cursor, wait_ms=10000))
+    await asyncio.sleep(0.3)
+    assert not parked.done()
+    await append(service, ref, "two", sequence=2)
+    answer = await asyncio.wait_for(parked, 5)
+    assert texts(answer) == ["two"]
+
+
+async def test_latest_only_positions_a_reader_at_the_end(service: Service):
+    ref = await stream_of(service)
+    empty = await service.caller.read(ReadInput(stream=ref, latest_only=True))
+    assert (empty.records, empty.next_token) == ([], "")
+    landed = await append(service, ref, "one")
+    latest = await service.caller.read(ReadInput(stream=ref, latest_only=True))
+    assert latest.next_token == landed.cursor
+    await append(service, ref, "two", sequence=2)
+    assert texts(await read(service, ref, latest.next_token)) == ["two"]
+    with pytest.raises(HTTPStatusError) as refused:
+        await service.caller.read(
+            ReadInput(stream=ref, latest_only=True, after_token=landed.cursor)
+        )
+    assert refused.value.status == 400
+    assert refused_as(refused.value) == "ValueError"
+
+
+async def test_a_retried_append_is_written_once(service: Service):
+    ref = await stream_of(service)
+    first = await append(service, ref, "one", "two")
+    # The caller lost the answer and sends the same call again.
+    assert await append(service, ref, "one", "two") == first
+    answer = await read(service, ref)
+    assert texts(answer) == ["one", "two"]
+    assert texts(await read(service, ref, first.cursor, wait_ms=200)) == []
+
+
+async def test_a_divergent_or_stale_retry_is_refused(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "one")
+    with pytest.raises(HTTPStatusError) as divergent:
+        await append(service, ref, "different")
+    assert divergent.value.status == 400
+    assert not divergent.value.retryable
+    assert refused_as(divergent.value) == "StreamProducerError"
+    await append(service, ref, "two", sequence=2)
+    with pytest.raises(HTTPStatusError) as stale:
+        await append(service, ref, "one")
+    assert refused_as(stale.value) == "StreamProducerError"
+    assert texts(await read(service, ref)) == ["one", "two"]
+
+
+async def test_a_new_attempt_crosses_as_a_supersession_at_its_cursor(
+    service: Service,
+):
+    ref = await stream_of(service)
+    old = await append(service, ref, "old", producer_id="model")
+    await append(service, ref, "new", producer_id="model", attempt=2)
+    answer = await read(service, ref)
+    superseded = [r.superseded for r in answer.records if r.superseded]
+    assert [(s.producer_id, s.previous_attempt, s.attempt) for s in superseded] == [
+        ("model", 1, 2)
+    ]
+    assert [(r.kind, r.attempt) for r in records_of(answer)] == [
+        (RecordKind.DATA, 1),
+        (RecordKind.DATA, 2),
+    ]
+    # A read that resumes after the old attempt's record has seen no attempt of
+    # its own, so only the store's reader knows the new one supersedes it.
+    resumed = await read(service, ref, old.cursor)
+    assert resumed.records[0].superseded is not None
+    assert resumed.records[0].token == old.cursor
+    assert texts(resumed) == ["new"]
+
+
+async def test_an_append_counts_the_producer_id_toward_the_record_limit(
+    server: Server, backing: Backing
+):
+    # The stored record holds the topic and the producer id beside the body,
+    # and a record no read can carry would be lost to every reader.
+    async with serve(server, backing, max_record_bytes=4096) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "x" * 2600, producer_id="p" * 600)
+    assert refused_as(refused.value) == "ValueError"
+    assert "limit" in refused.value.detail
+
+
+async def test_an_authorizer_that_raises_crosses_as_an_internal_error(
+    server: Server, backing: Backing
+):
+    async def authorize(_access: StreamAccess) -> bool:
+        raise RuntimeError("the policy lookup timed out")
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+    assert refused.value.status == 500
+    assert "File " not in refused.value.detail
+
+
+async def test_an_authorizers_own_handler_error_crosses_as_it_is(
+    server: Server, backing: Backing
+):
+    # The authorizer's reason reaches the caller, which doesn't retry it.
+    async def authorize(_access: StreamAccess) -> bool:
+        raise nexusrpc.HandlerError(
+            "the caller's token expired",
+            type=nexusrpc.HandlerErrorType.UNAUTHORIZED,
+        )
+
+    async with serve(server, backing, authorize=authorize) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+    assert refused.value.status == 403
+    assert not refused.value.retryable
+    assert "the caller's token expired" in refused.value.detail
+
+
+async def test_a_handler_with_no_authorizer_refuses_appends_and_serves_reads(
+    server: Server, backing: Backing
+):
+    async with serve(server, backing, authorize=None) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "a")
+        assert refused.value.status == 403
+        assert not refused.value.retryable
+        assert "authorize" in refused.value.detail
+        answer = await service.caller.read(ReadInput(stream=ref, wait_ms=0))
+        assert not answer.records
+
+
+async def test_finish_is_a_call_of_its_own(service: Service):
+    ref = await stream_of(service)
+    await append(service, ref, "one")
+    finished = await service.caller.append(
+        AppendInput(stream=ref, producer_id="p", attempt=1, sequence=2, finish=True)
+    )
+    stored = records_of(await read(service, ref))
+    assert [(r.kind, r.sequence) for r in stored] == [
+        (RecordKind.DATA, 1),
+        (RecordKind.FINISH, 2),
+    ]
+    assert not stored[1].HasField("body")
+    for payloads, finish in (([body("x")], True), ([], False)):
+        with pytest.raises(HTTPStatusError) as refused:
+            await service.caller.append(
+                AppendInput(
+                    stream=ref,
+                    producer_id="p",
+                    attempt=1,
+                    sequence=3,
+                    payloads=payloads,
+                    finish=finish,
+                )
+            )
+        assert refused_as(refused.value) == "ValueError"
+    assert finished.cursor == (await read(service, ref)).next_token
+
+
+async def test_a_foreign_cursor_is_refused(service: Service):
+    ref = await stream_of(service)
+    other = await stream_of(service)
+    await append(service, ref, "one")
+    theirs = await append(service, other, "one")
+    for cursor in (theirs.cursor, "elsewhere:0000abcd:1", "not a cursor"):
+        with pytest.raises(HTTPStatusError) as refused:
+            await read(service, ref, cursor)
+        assert refused.value.status == 400
+        assert not refused.value.retryable
+        assert refused_as(refused.value) == "StreamCursorError"
+    # Another topic of the same owner is another stream too.
+    with pytest.raises(HTTPStatusError) as refused:
+        await read(service, ref.with_topic("other"), theirs.cursor)
+    assert refused_as(refused.value) == "StreamCursorError"
+
+
+async def test_argument_mistakes_are_bad_requests(service: Service):
+    ref = await stream_of(service)
+    with pytest.raises(HTTPStatusError) as refused:
+        await append(service, ref, "one", producer_id="")
+    assert refused.value.status == 400
+    assert refused_as(refused.value) == "ValueError"
+    with pytest.raises(HTTPStatusError) as refused:
+        await service.caller.append(
+            AppendInput(
+                stream=ref, producer_id="p", attempt=1, sequence=1, payloads=[b"\xff"]
+            )
+        )
+    assert refused_as(refused.value) == "ValueError"
+
+
+async def test_a_reference_this_release_cannot_open_is_refused(service: Service):
+    # The SDK cannot build a ref of another owner kind, so the body is raw.
+    body_ = json.dumps(
+        {"stream": {"kind": "nexus", "workflow_id": "wf", "topic": "t"}}
+    ).encode()
+    with pytest.raises(HTTPStatusError) as refused:
+        await asyncio.to_thread(
+            generated_client._post, f"{service.caller._base_url}/read", body_, {}, 10.0
+        )
+    # The reference decodes, and the handler refuses it where it opens the
+    # stream, as not implemented in this release.
+    assert refused.value.status == 501
+    assert not refused.value.retryable
+    assert refused_as(refused.value) == "StreamUnsupportedError"
+    assert "nexus" in refused.value.detail
+
+
+async def test_a_read_says_done_once_the_owner_closes(service: Service):
+    workflow_id = f"streams-service-{uuid.uuid4().hex}"
+    ref = StreamRef.for_workflow(workflow_id, topic="out")
+    async with new_worker(service.client, StreamOwner) as worker:
+        owner = await service.client.start_workflow(
+            StreamOwner.run, id=workflow_id, task_queue=worker.task_queue
+        )
+        await append(service, ref, "one")
+        await owner.signal(StreamOwner.finish)
+        await owner.result()
+    collected: list[str] = []
+    answer = await read(service, ref, wait_ms=5000)
+    collected.extend(texts(answer))
+    while not answer.done:
+        answer = await read(service, ref, answer.next_token, wait_ms=5000)
+        collected.extend(texts(answer))
+    assert collected == ["one"]
+
+
+async def test_two_readers_on_one_stream_keep_their_own_places(
+    service: Service,
+):
+    ref = await stream_of(service)
+    await append(service, ref, "a", "b", "c", "d")
+    # The readers interleave their calls; each resumes where it left off, so
+    # neither takes over the other's read.
+    one = await read(service, ref, max_records=1)
+    two = await read(service, ref, max_records=3)
+    one = await read(service, ref, one.next_token, max_records=1)
+    two = await read(service, ref, two.next_token, max_records=3)
+    assert texts(one) == ["b"]
+    assert texts(two) == ["d"]
+    # Both park on the tail, at the same place, and both are answered.
+    parked = [
+        asyncio.ensure_future(read(service, ref, two.next_token, wait_ms=10000))
+        for _ in range(2)
+    ]
+    await asyncio.sleep(0.3)
+    await append(service, ref, "e", sequence=5)
+    answers = await asyncio.wait_for(asyncio.gather(*parked), 5)
+    assert [texts(answer) for answer in answers] == [["e"], ["e"]]
+
+
+@workflow.defn
+class StreamsThroughNexus:
+    """Appends and reads through the service from Workflow code."""
+
+    @workflow.run
+    async def run(self, endpoint: str, ref: StreamRef) -> list[str]:
+        streams = workflow.create_nexus_client(
+            service=TemporalStreams, endpoint=endpoint
+        )
+        payload = Payload(metadata={"encoding": b"binary/test"}, data=b"hi")
+        await streams.execute_operation(
+            TemporalStreams.append,
+            AppendInput(
+                stream=ref,
+                producer_id="wf",
+                attempt=1,
+                sequence=1,
+                payloads=[payload.SerializeToString()],
+            ),
+        )
+        answer = await streams.execute_operation(
+            TemporalStreams.read, ReadInput(stream=ref, wait_ms=1000)
+        )
+        return [
+            WireRecord.FromString(record.record).body.data.decode()
+            for record in answer.records
+        ]
+
+
+async def test_a_workflow_calls_the_service_through_its_nexus_client(
+    service: Service,
+):
+    ref = await stream_of(service)
+    async with new_worker(service.client, StreamsThroughNexus) as worker:
+        result = await service.client.execute_workflow(
+            StreamsThroughNexus.run,
+            args=[service.endpoint, ref],
+            id=f"streams-through-nexus-{uuid.uuid4().hex}",
+            task_queue=worker.task_queue,
+        )
+    assert result == ["hi"]
+
+
+class RefusingCodec(PayloadCodec):
+    """A codec whose key for one body is gone."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if any(payload.data == b"poison" for payload in payloads):
+            raise ValueError("the key for this body is gone")
+        return list(payloads)
+
+
+async def test_a_body_the_codec_cannot_decode_crosses_as_an_error(
+    server: Server, backing: Backing
+):
+    worker_client = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=RefusingCodec()),
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "poison", "fine")
+        answer = await read(service, ref)
+    # Each body decodes on its own, so the reader goes on past the bad one.
+    bad, good = answer.records
+    assert bad.error and "the key for this body is gone" in bad.error
+    assert bad.record == b""
+    assert good.error is None
+    assert WireRecord.FromString(good.record).body.data == b"fine"
+
+
+class CountingCodec(PayloadCodec):
+    """Counts the decode calls that carry stream bodies, as a remote codec's
+    round trips."""
+
+    def __init__(self) -> None:
+        self.body_calls: list[int] = []
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        bodies = [p for p in payloads if p.metadata.get("encoding") == b"binary/test"]
+        if bodies:
+            self.body_calls.append(len(bodies))
+        return list(payloads)
+
+
+async def test_a_read_page_decodes_in_one_codec_call(server: Server, backing: Backing):
+    codec = CountingCodec()
+    worker_client = with_converter(
+        backing.client, dataclasses.replace(DataConverter.default, payload_codec=codec)
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        await append(service, ref, "one", "two", "three")
+        assert texts(await read(service, ref)) == ["one", "two", "three"]
+    assert codec.body_calls == [3]
+
+
+class FailingEncodeCodec(PayloadCodec):
+    """A codec whose key service is down, so nothing encodes."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        if any(p.metadata.get("encoding") == b"binary/test" for p in payloads):
+            raise RuntimeError("the key service is down")
+        return list(payloads)
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return list(payloads)
+
+
+async def test_an_append_the_codec_cannot_encode_writes_nothing(
+    server: Server, backing: Backing
+):
+    worker_client = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=FailingEncodeCodec()),
+    )
+    async with serve(server, backing, client=worker_client) as service:
+        ref = await stream_of(service)
+        with pytest.raises(HTTPStatusError) as refused:
+            await append(service, ref, "one", "two")
+        answer = await read(service, ref, wait_ms=0)
+    # Nothing was written, so a retry is safe, and the caller is told to retry.
+    assert refused.value.status == 500
+    assert refused.value.retryable
+    assert "File " not in refused.value.detail
+    assert answer.records == []
+
+
+class XorCodec(PayloadCodec):
+    """Encrypts a payload by XOR, the way a namespace's codec would."""
+
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={"encoding": b"binary/xor"},
+                data=bytes(b ^ 0x5A for b in payload.SerializeToString()),
+            )
+            for payload in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload.FromString(bytes(b ^ 0x5A for b in payload.data))
+            if payload.metadata.get("encoding") == b"binary/xor"
+            else payload
+            for payload in payloads
+        ]
+
+
+async def test_a_workflow_reader_gets_plain_bodies_that_stay_encrypted_elsewhere(
+    server: Server, backing: Backing
+):
+    # The handler and the caller share the namespace's codec. The store keeps
+    # each body encrypted, the read result crosses encrypted as a whole, and
+    # Workflow code sees the plain body.
+    # The same connection as the backing's client, since one store serves one.
+    coded = with_converter(
+        backing.client,
+        dataclasses.replace(DataConverter.default, payload_codec=XorCodec()),
+    )
+    async with serve(server, backing, client=coded) as service:
+        ref = await stream_of(service)
+        async with new_worker(coded, StreamsThroughNexus) as worker:
+            handle = await coded.start_workflow(
+                StreamsThroughNexus.run,
+                args=[service.endpoint, ref],
+                id=f"streams-coded-{uuid.uuid4().hex}",
+                task_queue=worker.task_queue,
+            )
+            assert await handle.result() == ["hi"]
+
+        history = await handle.fetch_history()
+        results = [
+            event.nexus_operation_completed_event_attributes.result
+            for event in history.events
+            if event.HasField("nexus_operation_completed_event_attributes")
+        ]
+        assert len(results) == 2
+        assert all(result.metadata["encoding"] == b"binary/xor" for result in results)
+
+        # Read through a handle with no codec: the stored body is the codec's.
+        plain = get_stream_handle(backing.client, ref)
+        stored = plain.read(after=BEGINNING, result_type=RawValue)
+        try:
+            record = await asyncio.wait_for(anext(stored), 5)
+        finally:
+            await stored.aclose()
+        assert record.value is not None
+        assert record.value.payload.metadata["encoding"] == b"binary/xor"
