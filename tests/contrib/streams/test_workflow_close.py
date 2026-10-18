@@ -2,7 +2,7 @@
 
 The writer's buffer lands first and its last flush writes ``FINISH``. Then
 the close's Local Activity closes the store and the stream's notifier
-through Core. On the stock test server there is no notifier, so these
+through the stream runtime. On the stock test server there is no notifier, so these
 cases check the store side. The Jetty lane checks the outcome on the
 server.
 """
@@ -218,8 +218,8 @@ async def test_a_rerun_after_the_close_finds_its_flushes_landed(
     assert result == "closed"
     assert workflow_id in _failed_once
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
-    # The first run of the task wrote everything once. Core dropped the
-    # rerun's records, since the run's own close came after them.
+    # The first run of the task wrote everything once. The stream runtime dropped
+    # the rerun's records, since the run's own close came after them.
     assert [(r.kind, r.value) for r in records] == [
         (RecordKind.DATA, "one"),
         (RecordKind.DATA, "two"),
@@ -237,7 +237,7 @@ class PublishesAfterAnOutsideClose:
         await workflow.wait_condition(lambda: self.go)
         writer = workflow_writer(STEPS)
         writer.publish("late")
-        # Ends the activation, so Core tries the append before the run ends.
+        # Ends the activation, so the Worker tries the append before the run ends.
         await workflow.sleep(timedelta(milliseconds=10))
         return "went on"
 
@@ -257,7 +257,7 @@ async def test_a_publish_after_a_close_by_someone_else_is_dropped(streams: Clien
         await get_stream_handle(streams, workflow_id).close(topic=STEPS)
         await handle.signal(PublishesAfterAnOutsideClose.publish)
         said = await asyncio.wait_for(handle.result(), 30)
-    # A retry could never land on a closed topic, so Core drops the records
+    # A retry could never land on a closed topic, so the stream runtime drops the records
     # and the run goes on.
     assert said == "went on"
     records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))

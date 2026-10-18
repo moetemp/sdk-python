@@ -176,7 +176,9 @@ async def test_a_wake_close_failure_decodes_in_the_owner_context():
         ),
     )
     attachments = act.jobs[0].workflow_task_attachments.attachments
-    [payload] = unpacked(attachments[0]).close_failure.application_failure_info.details.payloads
+    [payload] = unpacked(
+        attachments[0]
+    ).close_failure.application_failure_info.details.payloads
     assert DataConverter.default.payload_converter.from_payloads([payload]) == ["why"]
     # A wake whose subscription registered no context keeps its failure encoded.
     assert unpacked(attachments[1]) == other

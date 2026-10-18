@@ -593,7 +593,7 @@ async def owns_a_keyed_stream() -> None:
     stream = activity_handle()
     await stream.producer(topic=TOKENS).append("keyed")
     # The close is part of what the codec must decode. It also ends the read,
-    # which would otherwise wait for Core's next owner check.
+    # which would otherwise wait for the stream runtime's next owner check.
     await stream.close(topic=TOKENS, error=ApplicationError("keyed close"))
 
 

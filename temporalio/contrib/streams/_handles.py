@@ -493,8 +493,6 @@ class StreamHandle:
         ends when the root is done and every segment ended. The root's close
         failure raises after its last item.
 
-        Follow needs a Core with link records and ``Follow``.
-
         Raises:
             ValueError: A bound is below one, or ``result_type`` was passed
                 with a topic definition.

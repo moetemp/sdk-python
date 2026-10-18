@@ -229,5 +229,5 @@ async def test_a_flush_before_any_connect_returns_at_once():
 async def test_a_flush_reaches_core(client: Client):
     store = MemoryStreams()
     await connect_with(client, store)
-    # Nothing is out, so Core answers at once.
+    # Nothing is out, so the stream runtime answers at once.
     await store.flush_notifications()
