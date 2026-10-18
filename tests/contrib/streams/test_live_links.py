@@ -31,11 +31,11 @@ from temporalio.contrib.streams import (
     StreamRef,
     StreamStorePlugin,
     activity_handle,
-    get_stream_handle,
     start_activity_with_stream,
+    stream_handle,
+    stream_producer,
     topic,
     workflow_follower,
-    workflow_writer,
 )
 from temporalio.contrib.streams import _follow as follow_module
 from temporalio.contrib.streams._record import Cursor
@@ -99,7 +99,7 @@ def describe(item: FollowedItem[Any]) -> str:
 async def follow_all(
     client: Client, workflow_id: str, after: Any = None, timeout: float = 60
 ) -> list[FollowedItem[Any]]:
-    handle = get_stream_handle(client, workflow_id, topic=EVENTS)
+    handle = stream_handle(client, workflow_id, topic=EVENTS)
     items: list[FollowedItem[Any]] = []
 
     async def pull() -> None:
@@ -145,12 +145,12 @@ class ChildAgent:
 
     @workflow.run
     async def run(self, turns: int) -> None:
-        events = workflow_writer(EVENTS)
-        events.publish("c0")
+        events = stream_producer(EVENTS)
+        events.append("c0")
         for turn in range(1, turns + 1):
             await workflow.wait_condition(lambda: self.turns >= turn)
-            events.publish(f"c{2 * turn - 1}")
-            events.publish(f"c{2 * turn}")
+            events.append(f"c{2 * turn - 1}")
+            events.append(f"c{2 * turn}")
 
     @workflow.signal
     def turn(self) -> None:
@@ -164,8 +164,8 @@ class Agent:
 
     @workflow.run
     async def run(self, child_id: str, after: str) -> None:
-        events = workflow_writer(EVENTS)
-        events.publish("d1")
+        events = stream_producer(EVENTS)
+        events.append("d1")
         tool, tool_ref = start_activity_with_stream(
             streams_tokens,
             ["a1", "a2", "a3"],
@@ -179,14 +179,14 @@ class Agent:
             name="child",
             after=Cursor(after),
         )
-        events.publish("d2")
+        events.append("d2")
         await tool
         events.join(name="tool-a")
-        events.publish("d3")
+        events.append("d3")
         await workflow.wait_condition(lambda: self.until is not None)
         assert self.until is not None
         events.join(name="child", until=Cursor(self.until))
-        events.publish("d4")
+        events.append("d4")
 
     @workflow.signal
     def child_turn_ended(self, cursor: str) -> None:
@@ -244,7 +244,7 @@ async def test_live_both_followers_keep_the_gates_of_an_agent(linked: Client):
 
 
 async def _cursor_of_first(client: Client, workflow_id: str, value: str) -> str:
-    handle = get_stream_handle(client, workflow_id, topic=EVENTS)
+    handle = stream_handle(client, workflow_id, topic=EVENTS)
     records = handle.read()
     try:
         async for record in records:
@@ -269,7 +269,7 @@ async def fails_with_boom() -> None:
 class LinksTheHardCases:
     @workflow.run
     async def run(self, missing_id: str) -> None:
-        events = workflow_writer(EVENTS)
+        events = stream_producer(EVENTS)
         tool, tool_ref = start_activity_with_stream(
             fails_with_boom,
             activity_id="tool-boom",
@@ -286,16 +286,16 @@ class LinksTheHardCases:
         events.link(StreamRef.for_workflow(cycle_id, topic=EVENTS), name="cycle")
         with contextlib.suppress(Exception):
             await tool
-        events.publish("after")
+        events.append("after")
 
 
 @workflow.defn
 class LinksBack:
     @workflow.run
     async def run(self, parent_id: str) -> None:
-        events = workflow_writer(EVENTS)
+        events = stream_producer(EVENTS)
         events.link(StreamRef.for_workflow(parent_id, topic=EVENTS), name="parent")
-        events.publish("cycled")
+        events.append("cycled")
 
 
 async def test_live_a_failed_tool_a_missing_child_and_a_cycle_go_on(linked: Client):

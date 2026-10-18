@@ -26,7 +26,7 @@ from temporalio.contrib.streams import (
     StreamError,
     StreamReplayRangeLostError,
     StreamStorePlugin,
-    get_stream_handle,
+    stream_handle,
     topic,
 )
 from temporalio.contrib.streams._replay_reads import (
@@ -133,7 +133,7 @@ async def test_the_marker_holds_the_range_not_the_records(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a" * 1000, "b" * 1000)
         )
@@ -153,7 +153,7 @@ async def test_replay_reads_the_same_batch_from_the_store(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a", "b")
         )
@@ -173,7 +173,7 @@ async def test_other_records_in_the_range_are_nondeterminism(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a")
         )
@@ -194,7 +194,7 @@ async def test_a_range_the_store_lost_fails_for_a_retry(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a")
         )
@@ -231,7 +231,7 @@ async def test_a_store_with_a_replay_horizon_serves_positions_only_reads(
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a")
         )
@@ -243,7 +243,7 @@ async def test_the_batch_names_the_run_that_read(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         await (
-            get_stream_handle(streams, owner, topic=TOKENS)
+            stream_handle(streams, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("a")
         )
@@ -263,7 +263,7 @@ async def test_the_batch_names_the_run_that_read(streams: Client):
 async def test_a_read_from_the_end_replays_as_it_read(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
-        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        handle = stream_handle(streams, owner, topic=TOKENS)
         await handle.producer(producer_id="p", attempt=1).append("first")
         read = asyncio.create_task(
             read_positions(streams, owner, after=END.token, wait_ms=5000)
@@ -289,7 +289,7 @@ async def test_a_later_read_replays_from_the_previous_reads_state(
 ):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
-        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        handle = stream_handle(streams, owner, topic=TOKENS)
         await handle.producer(producer_id="p", attempt=1).append("a")
         run_id = f"reader-{uuid.uuid4()}"
         first = await read_positions(streams, owner, read_seq=1, run_id=run_id)
@@ -330,7 +330,7 @@ async def test_a_later_read_replays_from_the_previous_reads_state(
 async def test_two_runs_of_one_workflow_chain_their_reads_apart(streams: Client):
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
-        handle = get_stream_handle(streams, owner, topic=TOKENS)
+        handle = stream_handle(streams, owner, topic=TOKENS)
         a = await handle.producer(producer_id="p", attempt=1).append("a")
         await handle.producer(producer_id="q", attempt=1).append("x")
         # Both runs have reader 1, but the second run starts past "a", so its
@@ -402,7 +402,7 @@ async def test_a_first_range_trimmed_past_its_hold_is_lost_not_other_records(
     streams = await connect_with(client, store)
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
-        producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
+        producer = stream_handle(streams, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("a", "b")

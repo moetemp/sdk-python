@@ -15,10 +15,10 @@ This page maps one to the other.
 | Workflow Streams | Streams |
 |---|---|
 | `WorkflowStream()` in `@workflow.init` | Nothing to construct. Register `RedisStreams` once, on the client. |
-| `stream.topic("events", type=E).publish(e)` in the Workflow | `workflow_writer(topic("events", E)).publish(e)`, which the Worker appends before it completes the activation |
-| `WorkflowStreamClient.from_within_activity()` and `topic(...).publish(...)` in an Activity | `activity_handle().producer(topic=...).append(...)` |
-| `WorkflowStreamClient.create(client, workflow_id)` and `topic(...).publish(...)` | `get_stream_handle(client, workflow_id).producer(topic=..., producer_id=..., attempt=...).append(...)` |
-| `client.subscribe(["events"], result_type=E)` | `get_stream_handle(client, workflow_id).read(topic=topic("events", E))` |
+| `stream.topic("events", type=E).publish(e)` in the Workflow | `stream_producer(topic("events", E)).append(e)`, which the Worker appends before it completes the activation |
+| `WorkflowStreamClient.from_within_activity()` and `topic(...).publish(...)` in an Activity | `await stream_producer(...).append(...)` |
+| `WorkflowStreamClient.create(client, workflow_id)` and `topic(...).publish(...)` | `stream_handle(client, workflow_id).producer(topic=..., producer_id=..., attempt=...).append(...)` |
+| `client.subscribe(["events"], result_type=E)` | `stream_handle(client, workflow_id).read(topic=topic("events", E))` |
 | Integer offsets, `from_offset=` | Opaque cursors: keep `record.cursor`, pass `after=cursor` |
 | Publisher dedupe by publisher id and sequence | Producer id, attempt and sequence. A retry of the newest batch is written once. |
 | `stream.continue_as_new(...)` and `prior_state` | Nothing. The stream follows the run chain. |
@@ -47,7 +47,7 @@ Differences to plan for:
   stream notifier. On a server without it, keep that part on Workflow
   Streams, or send the Workflow what it needs, for example as a Signal.
 - **A server-sent events bridge.** Streams ships none. Serve readers from
-  your own endpoint with `get_stream_handle(...).read(...)`.
+  your own endpoint with `stream_handle(...).read(...)`.
 - **Records already published.** They stay where they are, in the
   Workflow's state and History. Nothing copies them to Redis. A reader that
   needs both must read the old stream to its end, then the new one.
@@ -60,13 +60,13 @@ Differences to plan for:
    both libraries is two streams.
 3. For Workflows already running, switch at a natural boundary, such as the
    next run after Continue-as-New, or let them finish on Workflow Streams.
-   A publish with `workflow_writer` adds no command. Gate the switch with
+   A publish with `stream_producer` adds no command. Gate the switch with
    Workflow versioning where the code it replaces sends commands. For
    example:
 
    ```python
    if workflow.patched("publish-to-streams"):
-       workflow_writer(TOKENS).publish(token)
+       stream_producer(TOKENS).append(token)
    else:
        stream.topic("tokens").publish(token)
    ```
