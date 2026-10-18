@@ -230,7 +230,7 @@ class WorkflowStreamProducer(Generic[T]):
 
     def _add_link(self, link: StreamLink, value: Any) -> None:
         _check_writable("link on")
-        if self._topic in self._writers.finished:
+        if self._topic in self._producers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
         record = OutputRecord(
             topic=self._topic,
@@ -246,7 +246,7 @@ class WorkflowStreamProducer(Generic[T]):
                 )
             record.body.CopyFrom(payload)
             record.content_hash = content_hash(payload)
-        self._writers.add(record)
+        self._producers.add(record)
 
     async def flush(self) -> None:
         """Return at once, since each record goes with its activation.
