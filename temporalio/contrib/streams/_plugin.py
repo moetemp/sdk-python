@@ -313,7 +313,8 @@ class StreamStorePlugin(SimplePlugin):
         An admin helper for cleanup and compliance requests. Deleting a
         Workflow does not delete its streams. Their retention bounds what is
         left, and this removes it at once, across every run chain of the
-        Workflow id. It asks Temporal nothing, so it can run after the
+        Workflow id, and the streams of every Activity that a run of the
+        Workflow scheduled. It asks Temporal nothing, so it can run after the
         Workflow is gone. On Redis it walks the keyspace, so run it rarely,
         not on a hot path.
 
@@ -337,6 +338,29 @@ class StreamStorePlugin(SimplePlugin):
             namespace=namespace,
             owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
             workflow_id=workflow_id,
+        )
+        return (await call(self._service.delete_owner(request))).deleted
+
+    async def delete_activity_streams(self, namespace: str, activity_id: str) -> int:
+        """Delete every stream of standalone Activity ``activity_id`` in ``namespace``.
+
+        The same admin helper as :meth:`delete_workflow_streams`, for the
+        streams of every run of the Activity id.
+
+        Returns:
+            How many store keys were deleted.
+
+        Raises:
+            ValueError: No client connected this store yet.
+            temporalio.contrib.streams.StreamStorageError: The store failed;
+                some keys may be deleted.
+        """
+        if self._service is None:
+            raise ValueError(f"no client has connected stream store {self.name()!r}")
+        request = DeleteOwnerRequest(
+            namespace=namespace,
+            owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+            activity_id=activity_id,
         )
         return (await call(self._service.delete_owner(request))).deleted
 
