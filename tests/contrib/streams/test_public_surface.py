@@ -8,11 +8,15 @@ import temporalio.contrib.streams as streams
 # but they are not part of the public surface.
 _PRIVATE = {
     "batch_digest",
+    "close_activity",
     "content_hash",
     "decode_body",
     "encode_bodies",
     "error_from_failure",
+    "owner_context",
+    "read_activity",
     "resolve_topic",
+    "stream_address",
 }
 
 
