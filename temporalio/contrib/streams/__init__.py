@@ -56,8 +56,8 @@ Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't pin one run.
 
 In this release only a Workflow owns a stream, and only Activities and
-clients read one. Reading inside a Workflow (:func:`workflow_reader`) and
-the other owner kinds raise :class:`StreamUnsupportedError`.
+clients read one. The other owner kinds raise
+:class:`StreamUnsupportedError`.
 
 The stored record is ``temporal.sdk.streams.v1.StreamRecord``, in
 :mod:`temporalio.bridge.proto.streams.v1`, with the user's value in ``body``
@@ -99,7 +99,6 @@ from temporalio.contrib.streams._supersession import (
     track_supersession,
 )
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
-from temporalio.contrib.streams._workflow import workflow_reader
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     workflow_writer,
@@ -138,6 +137,5 @@ __all__ = [
     "get_stream_handle",
     "topic",
     "track_supersession",
-    "workflow_reader",
     "workflow_writer",
 ]

@@ -42,9 +42,9 @@ Differences to plan for:
 ## What does not map
 
 - **Reading inside the Workflow.** A Workflow cannot read a stream in this
-  release (`workflow_reader` raises `StreamUnsupportedError`). If a
-  Workflow reads its own Workflow Stream today, keep that part on Workflow
-  Streams, or send the Workflow what it needs, for example as a Signal.
+  release. If a Workflow reads its own Workflow Stream today, keep that
+  part on Workflow Streams, or send the Workflow what it needs, for example
+  as a Signal.
 - **Activity-owned and standalone streams.** Only a Workflow owns a stream
   in this release.
 - **A server-sent events bridge.** Streams ships none. Serve readers from

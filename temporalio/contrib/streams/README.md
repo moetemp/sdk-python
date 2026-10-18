@@ -253,8 +253,8 @@ Known limits:
   grace off.
 - **Deleting.** Deleting a Workflow does not delete its streams.
   `RedisStreams.delete_workflow_streams` removes them at once.
-- **Not in this release.** Reading a stream inside a Workflow, and streams
-  owned by an Activity or by no one, raise `StreamUnsupportedError`.
+- **Not in this release.** A Workflow can't read a stream. Streams owned
+  by an Activity or by no one raise `StreamUnsupportedError`.
 
 ## Further reading
 
