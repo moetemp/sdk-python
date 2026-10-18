@@ -600,3 +600,275 @@ for any standalone operation, stream or not. The service and its models are
 generated from api's `nexus/notification-service.wit`. The Worker decodes the
 callback's `source_context` and the operation's result with its data
 converter, so a handler gets the values, not payloads.
+
+## A Nexus operation that returns a standalone Activity's stream
+
+A stream-returning operation can name a stream that a standalone Activity
+owns. `open_stream` starts the Activity and returns its ref. This fits a tool
+call, where the tool runs as an Activity and streams its output while it
+runs.
+
+```python
+from temporalio.common import ActivityIDConflictPolicy, RetryPolicy
+from temporalio.contrib.streams import StreamRef, activity_handle, topic
+
+TOKENS = topic("tokens", str)
+
+@activity.defn
+async def run_tool(call: str) -> str:
+    stream = activity_handle()
+    out = stream.producer(topic=TOKENS)
+    async for token in tool(call):
+        await out.append(token)
+    await stream.close(topic=TOKENS, result="done")
+    return "ok"
+
+async def open_tool_stream(ctx, call: str) -> StreamRef:
+    handle = await temporalio.nexus.client().start_activity(
+        run_tool, call, id=f"tool-{ctx.request_id}", task_queue="tools",
+        start_to_close_timeout=timedelta(minutes=5),
+        retry_policy=RetryPolicy(maximum_attempts=3),
+        id_conflict_policy=ActivityIDConflictPolicy.USE_EXISTING,
+    )
+    return StreamRef.for_activity(handle.id, run_id=handle.run_id, topic=TOKENS)
+
+@nexusrpc.handler.service_handler(service=Tools)
+class ToolsHandler:
+    @nexusrpc.handler.operation_handler
+    def call_tool(self) -> nexusrpc.handler.OperationHandler[str, str]:
+        return StreamOperationHandler(open_tool_stream)
+```
+
+- **Which Worker serves it.** `TemporalStreamsHandler` runs on any Worker of
+  the Activity's namespace whose client carries the stream store. It needs
+  no tie to the Activity's task queue or Worker. Its client needs
+  `DescribeActivityExecution` in that namespace, since the stream runtime
+  checks the owner.
+- **A retried start.** A retried start has the same request id. With an
+  Activity id derived from it and `USE_EXISTING`, it reaches the same run,
+  and the caller attaches once.
+- **The token.** The operation token names the Activity and its run. A
+  `StreamReader`, a `StreamFollowerService` and `follow_stream` take the ref
+  from the token, so the caller side is the same as for a Workflow owner.
+- **Retries.** Each attempt of the Activity writes a new producer attempt,
+  so a reader gets the retry in `supersessions`. Its low 11 bits are the
+  Temporal attempt.
+- **The end.** The operation completes with the stream's close. When the
+  Activity ends with no close, the stream's notifier closes the stream with
+  the Activity's outcome: a null result when it completed, its failure
+  otherwise.
+- **Codec.** The stream service decodes an Activity stream's bodies with
+  `ActivitySerializationContext` that holds only the namespace and the
+  Activity id.
+- **Authorization.** `StreamAccess.stream.kind` is `"activity"`, with
+  `activity_id` set and `workflow_id` empty. An authorizer that reads
+  `workflow_id` must check `kind` first.
+- **Server.** The server runs standalone Activities
+  (`activity.enableStandalone`) besides the settings above.
+
+## Follow links over Nexus
+
+A stream can hold link records that open other streams, such as one per tool
+call of an agent (see [Link records and followers](../README.md)). A caller
+follows them all through the stream service's `follow` operation, which
+The stream runtime serves on the owner's Worker.
+
+```python
+reader = StreamReader(handle, item_type=Event, endpoint="agents", follow_links=True)
+while (items := await reader.next_followed()) is not None:
+    for item in items:
+        if item.link_state is not None:
+            ...                     # OPENED, DONE, UNAVAILABLE or SKIPPED
+        elif item.record is not None:
+            ...                     # a record of item.source
+```
+
+- **Reader.** `StreamReader(..., follow_links=True)` reads with
+  `next_followed()`. Each item names its source stream and its depth. The
+  root's records decode into `item_type`, and a linked stream's records with
+  the default rules. The last item of each batch carries the position after
+  it. With `replay_from_store=True` each step runs in a Local Activity, and a
+  replay reads the step's ranges again with `follow_range` through the same
+  transport.
+- **Follower service.** A `StreamFollower` that sets `follow_links = True`
+  gets `FollowerBatch.items` in follow order, and `FollowerBatch.records` holds
+  the data records of every source. The receiver state holds the follow
+  position, which holds every open link. A position larger than
+  `max_receiver_state_bytes` fails the call, so raise the server's
+  `callback.nexusHandler.receiverStateMaxSize` for a follower with many open
+  links.
+- **Authorization.** `authorize` sees one `follow` access for the root. The
+  stream runtime opens the linked streams in the same namespace with no
+  further check, so allowing a follow allows every stream its links reach.
+- **Limits.** A link to another namespace or to a stream behind another
+  endpoint is not expanded. It comes as `SKIPPED` with reason `endpoint`,
+  and the caller may follow it on its own. `append` takes no links. A
+  `DONE` report over Nexus carries no close outcome.
+
+## Limits and timeouts
+
+- A notification's `position` is at most 1 KiB of UTF-8, and its metadata
+  at most 2 KiB. The server refuses larger ones.
+- A stream's notifier holds at most `streamnotifier.maxCallbacks` callers
+  (2,000 by default), and callbacks of at most
+  `streamnotifier.maxCallbackBytes` in total (4 MiB by default). A full
+  notifier first drops its oldest callbacks that already completed. If that
+  does not make room, it refuses the attach.
+- A read answer holds about 1 MiB of records past the first record
+  (`TemporalStreamsHandler(..., max_answer_bytes=...)`). The first record can
+  be up to 1.5 MiB. The reader goes on with the next read.
+- If a stream gets no attach and no notification for
+  `streamnotifier.idleTimeout` (7 days by default), the notifier fails the
+  callers waiting on it. The stream stays open, and later attaches and
+  notifications work as before. The stream runtime sends a busy stream's
+  last counter again once a day, so a stream that gets appends keeps its
+  notifier.
+- While callers are attached, the notifier checks the owner Workflow every
+  `streamnotifier.ownerCheckInterval` (30 seconds by default). If the owner's
+  run chain closed without closing the stream, the notifier closes it by the
+  owner's close status, as the table below says.
+- A closed stream's notifier completes late attaches right away for
+  `streamnotifier.closedRetention` (7 days by default, the store's
+  retention), then refuses them. Keep it at least as long as the store
+  keeps a stream's records.
+- Once a Workflow id is reused by a new run chain, a late start for the
+  earlier chain's stream (a stream reference that names one of its runs)
+  fails: the server refuses its attach with `InvalidArgument` instead of
+  completing it with that stream's close result. The server attaches only
+  to the chain that holds the id now. A reference that names no run
+  attaches to the new chain.
+- A producer that dies between its append and its notify sends no
+  progress. A Workflow `StreamReader` that waits for progress reads again
+  once a minute passes with none, then after 2 and 4 minutes, and then
+  every 5 minutes while the stream stays quiet, on Workflow timers. So such
+  a record reaches the reader at the latest 5 minutes later. Each recheck
+  adds a timer and a read to the caller's History, about 290 a day for an
+  idle stream.
+- If a caller answers a progress delivery with 404, its operation is
+  already closed, and the notifier drops that caller. Any other refusal
+  turns progress off for that caller, and it still gets the completion.
+- A reader reads the run chain the owner's Workflow id has at each read,
+  not the chain its operation started on. If the chain ends and the same id
+  starts a new one while a reader still drains, the reader can hand over
+  the new chain's records. Give each stream owner its own Workflow id, or
+  reuse an id only after its readers finish.
+- `close_workflow_stream` closes the store first, then the notifier, from
+  one Local Activity. The stream runtime tries a failed notifier close again
+  with backoff, from 1 second up to 1 minute. A close the server refuses for
+  good, such as one for a stream it doesn't know, isn't retried. The Local
+  Activity's retries cover the rest.
+- No Worker closes a stream when its owner's run chain ends. A stream that
+  the owner never closed is closed by the notifier's owner check, by the
+  owner's close status, as the table below says. Close explicitly, so the
+  callers get your result and not an outcome the check makes up.
+
+### An owner that ends without closing its stream
+
+The owner's close status decides how its open streams' operations complete,
+as for an operation that runs a Workflow. The notifier's owner check uses
+it.
+
+| Owner's close status | The operations | The reader raises |
+|---|---|---|
+| Completed | Complete with an empty result | Nothing. It returns `None`. |
+| Failed | Fail with an `ApplicationError` of type `StreamOwnerFailed` | `NexusOperationError`, with that `ApplicationError` as the cause |
+| Canceled | Are canceled | `NexusOperationError`, with a `CancelledError` cause |
+| Terminated | Fail as terminated | `NexusOperationError`, with a `TerminatedError` cause |
+| Timed out | Fail as timed out | `NexusOperationError`, with a `TimeoutError` cause |
+| Not found, or the id moved to another chain | Fail with "the owner Workflow ended without closing the stream" | `NexusOperationError`, with an `ApplicationError` cause |
+
+The check closes a terminated or timed-out owner's streams after up to
+`streamnotifier.ownerCheckInterval`. It leaves a completed, failed or
+canceled owner alone until `streamnotifier.ownerCloseGrace` (1 minute by
+default) after it closed, so a close that the owner sent on its way out
+comes first. The owner check reads no History, so a failed owner that it
+closes gives an `ApplicationError` of type `StreamOwnerFailed` rather than
+the Workflow's own failure. For the callers to see the real failure, close
+the stream with it before the Workflow fails:
+
+```python
+except Exception as err:
+    await close_workflow_stream(MESSAGES, error=err)
+    raise
+```
+
+A stream server from before this release
+ignores a close's failure and completes the operations with an empty
+result.
+
+## Guarantees
+
+- **Highest counter wins.** Each progress has a counter. The caller keeps
+  the highest one and drops any lower or repeated one, so deliveries may
+  arrive out of order.
+- **A burst folds.** Progress that arrives while the caller is between
+  Workflow Tasks waits for the next task. The server also holds progress
+  until `nexusoperation.progressMinInterval` (1 second by default) has
+  passed since the caller Workflow's last task that carried progress. So a
+  burst of any size costs the caller at most two tasks: the one it rides,
+  and one follow-up when newer progress folded in after that task was
+  already scheduled. The Workflow then sees the highest counter of the
+  burst. Intermediate counters may be skipped, which is why the reader
+  reads records and does not count progress.
+- **No History event per delivery.** Progress rides the caller's next
+  Workflow Task scheduled event. History is still the record, so replay
+  sees the same progress.
+- **Completion never waits for progress.** The operation completes when the
+  stream closes, whether or not a progress delivery is in flight. Progress
+  for a closed operation is dropped.
+- **Progress before the start is dropped.** The reader reads from its
+  cursor when the start arrives, so nothing is lost.
+- **A completion names the operation even when it beats the start.** The
+  handler gives the notifier its operation token and start time when it
+  attaches, and the notifier sends them with every delivery. A stream that
+  is already closed when the caller starts still hands over its reference.
+- **Old receivers degrade.** A caller on a server without progress refuses
+  it, and the notifier stops sending progress to that caller. The
+  completion still arrives.
+
+## Do not pass store claims across Nexus
+
+The stream reference names a stream: its owner and its topic. It carries no
+credential for the store. Do not put a Redis URL, a key prefix or any store
+credential in the operation's input, result or token, and do not build a
+caller that reads the handler's store directly. The caller reads through
+the stream service on the handler's endpoint, so it needs no access to the
+handler's store.
+
+The stream service writes and reads with its Worker's client and store
+credentials, whatever caller sent the call. So by default every caller that
+can reach the endpoint can read every stream of the handler's namespace.
+Without `authorize`, the handler refuses every append, since an append could
+write as any producer. Limit who reaches the endpoint with its allowed
+caller namespaces, and pass `authorize` to `TemporalStreamsHandler` to check
+each call. It gets a `StreamAccess` (`operation`, `stream`, the Nexus
+`context` with the caller's headers, for an append `producer_id` and
+`attempt`, and for a direct read or its `read_range` the `floor_holder`) and
+answers whether to serve it. The caller picks the holder, so treat it as a
+claim. A call through `ExecuteSyncNexusOperation` also carries
+`caller_namespace`, which the server vouches for, so a rule can key on it.
+Then the handler also refuses a holder that is not under
+`<caller namespace>/`, whatever `authorize` says. A refused call fails as
+unauthorized.
+
+Parked reads hold Nexus task slots on the handler's Worker for up to a few
+seconds each. With many readers, give that Worker more Nexus pollers
+(`nexus_task_poller_behavior`), and serve appends and reads on separate
+task queues or endpoints, so an append doesn't wait behind parked reads.
+
+## Live tests
+
+The stock dev server has no stream notifier and takes no NexusHandler
+callbacks on a standalone operation, so the reader,
+progress, stream operation and follower lifecycle tests skip there.
+`scripts/streams_live_lane.sh` builds a server that has the notifier, starts
+it with the settings above and a scratch Redis, and runs those tests against
+it, along with the stream runtime's live notifier test. It fails unless each
+test on its gated list passes. A release of streams over Nexus needs a green
+run of it, until CI has a lane with such a server.
+
+The push cases in `tests/contrib/streams/test_nexus_push.py` run producer
+notifications on memory, standalone Redis and a Redis Cluster that the lane
+starts unless `STREAMS_REDIS_CLUSTER_URL` names one. A sleeping caller wakes
+through them, and a busy stream delivers at most two progress notifications
+per debounce window.
