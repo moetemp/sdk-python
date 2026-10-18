@@ -20,9 +20,9 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamNotFoundError,
     StreamStorePlugin,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
@@ -47,7 +47,7 @@ def store(kind: str, grace: timedelta) -> StreamStorePlugin:
 class PublishesOnce:
     @workflow.run
     async def run(self) -> None:
-        workflow_writer(STEPS).publish("first")
+        stream_producer(STEPS).append("first")
 
 
 @pytest.mark.parametrize("kind", ["memory", "redis"])
@@ -56,7 +56,7 @@ async def test_a_read_that_starts_first_gets_the_owners_first_record(
 ):
     streams = await connect_with(client, store(kind, timedelta(seconds=30)))
     workflow_id = new_workflow_id()
-    read = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+    read = stream_handle(streams, workflow_id).read(topic=STEPS)
     first = asyncio.create_task(anext(read))
     await asyncio.sleep(5)
     # The read is still waiting, not failed.
@@ -75,7 +75,7 @@ async def test_a_read_of_an_owner_that_never_starts_fails_after_the_grace(
     client: Client, kind: str
 ):
     streams = await connect_with(client, store(kind, timedelta(seconds=2)))
-    read = get_stream_handle(streams, new_workflow_id()).read(topic=STEPS)
+    read = stream_handle(streams, new_workflow_id()).read(topic=STEPS)
     started = time.monotonic()
     with pytest.raises(StreamNotFoundError):
         await asyncio.wait_for(anext(read), 30)
@@ -84,7 +84,7 @@ async def test_a_read_of_an_owner_that_never_starts_fails_after_the_grace(
 
 async def test_a_zero_grace_fails_at_once(client: Client):
     streams = await connect_with(client, MemoryStreams(owner_start_grace=timedelta(0)))
-    read = get_stream_handle(streams, new_workflow_id()).read(topic=STEPS)
+    read = stream_handle(streams, new_workflow_id()).read(topic=STEPS)
     started = time.monotonic()
     with pytest.raises(StreamNotFoundError):
         await asyncio.wait_for(anext(read), 10)
