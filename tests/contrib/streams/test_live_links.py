@@ -71,7 +71,7 @@ def _store(kind: str) -> StreamStorePlugin:
 async def linked(request: pytest.FixtureRequest, client: Client) -> Client:
     """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
-    return await connect_with(client, _store(request.param).notify_on_append())
+    return await connect_with(client, _store(request.param))
 
 
 def describe(item: FollowedItem[Any]) -> str:

@@ -359,7 +359,7 @@ class StreamHandle:
         caller that stops early calls ``aclose()`` on it.
 
         With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
-        on, an idle read sleeps on the stream's notifier on the server. A read
+        on, the default, an idle read sleeps on the stream's notifier on the server. A read
         that waits 2 seconds and finds nothing comes back empty, and the
         reader waits until a producer notifies, the stream closes, or the server's wait
         limit (60 seconds by default) passes, and then reads again. That read

@@ -1303,7 +1303,7 @@ async def test_an_attach_without_notifications_warns_once(
     client: Client, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(_workflow, "_warned_no_notify", False)
-    streams_client = await connect_with(client, MemoryStreams())
+    streams_client = await connect_with(client, MemoryStreams().notify_on_append(False))
     env = ActivityEnvironment(client=streams_client)
     env.info = dataclasses.replace(env.info, is_local=True)
     input = _ReadInput(
@@ -1321,7 +1321,7 @@ async def test_an_attach_without_notifications_warns_once(
             # The read itself may fail here, with no owner and no notifier.
             with contextlib.suppress(Exception):
                 await env.run(read_activity, input)
-    warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
+    warned = [r for r in caplog.records if "notify_on_append" in r.getMessage()]
     assert len(warned) == 1
 
 

@@ -40,15 +40,22 @@ deployments:
 | `streamnotifier.ownerCheckInterval` | 30 s | How often the notifier checks a stream's owner |
 | `streamnotifier.idleTimeoutNoCallbacks` | 1 h | How long a notifier with no reader stays |
 
-## Turn notifications on
+## Notifications are on by default
+
+Every store notifies after each append. An append answers only after its
+notification went, or after a few failed tries, so a producer that stops
+before then gets no answer, and its retry notifies again. Keep it on in
+every process that appends or reads. A client reader sleeps on the notifier
+only when its own store has it on. A process whose streams have no sleeping
+reader can turn it off:
 
 ```python
-store = RedisStreams("redis://localhost:6379").notify_on_append()
+store = RedisStreams("redis://localhost:6379").notify_on_append(False)
 client = await Client.connect("localhost:7233", plugins=[store])
 ```
 
-Turn it on in every process that appends or reads. A client reader sleeps
-on the notifier only when its own store has it on. A Worker built from the
+On a server without the stream notifier, the first notification fails and
+the process stops notifying. A Worker built from the
 client waits for the notifications still out when it stops. A process that
 holds only a client calls `await store.flush_notifications()` before it
 exits.

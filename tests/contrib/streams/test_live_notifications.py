@@ -124,7 +124,7 @@ def store(kind: str) -> StreamStorePlugin:
 async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
-    return await connect_with(client, store(request.param).notify_on_append())
+    return await connect_with(client, store(request.param))
 
 
 async def until(check: Any, timeout: float = 15.0) -> None:
@@ -190,16 +190,16 @@ async def two_processes(client: Client, kind: str) -> tuple[Client, Client]:
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to share a store across two clients")
     prefix = f"live-silent-{uuid.uuid4().hex}"
-    reading = await connect_with(
-        client, RedisStreams(url, key_prefix=prefix).notify_on_append()
+    reading = await connect_with(client, RedisStreams(url, key_prefix=prefix))
+    silent = await connect_with(
+        client, RedisStreams(url, key_prefix=prefix).notify_on_append(False)
     )
-    silent = await connect_with(client, RedisStreams(url, key_prefix=prefix))
     return reading, silent
 
 
 async def test_live_every_append_notifies(client: Client):
     await skip_without_notifier(client)
-    streams = await connect_with(client, MemoryStreams().notify_on_append())
+    streams = await connect_with(client, MemoryStreams())
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         # A notification for a stream with no notifier is dropped, so a

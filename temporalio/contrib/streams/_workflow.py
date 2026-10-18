@@ -724,9 +724,10 @@ def workflow_reader(
     appends that land while the reader works add no Workflow Task. The
     notifier also asks for a read after a quiet period (1 minute, doubling
     to 1 hour), which finds records whose notification was lost. It needs a
-    server with the stream notifier, and producers that notify, which
+    server with the stream notifier, and producers that notify, which they
+    do unless
     :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
-    turns on.
+    turns it off.
 
     The reader follows the owner's run chain across Continue-as-New, as
     every read does. On the stream of a standalone Activity it reads the

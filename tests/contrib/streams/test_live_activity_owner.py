@@ -54,7 +54,7 @@ OWNER_CHECK = 30.0
 async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
-    return await connect_with(client, store(request.param).notify_on_append())
+    return await connect_with(client, store(request.param))
 
 
 @workflow.defn

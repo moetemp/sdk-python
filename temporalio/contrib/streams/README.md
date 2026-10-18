@@ -26,6 +26,12 @@ client = await Client.connect(
 )
 ```
 
+The store tells the server's stream notifier after each append, which is
+what wakes a reader that sleeps on the stream. An append answers once its
+notification went. Keep it on in every process that appends. In a process
+whose streams have no sleeping reader, `RedisStreams(...).notify_on_append(False)`
+turns it off.
+
 Redis 7.0 or later is required. Use `maxmemory-policy noeviction`: an
 evicting Redis drops whole stream keys under memory pressure, and the stream
 runtime logs a warning when it sees another policy. For tests and local
@@ -477,8 +483,7 @@ Known limits:
 
 ## A reader sleeps while the stream is idle
 
-With `notify_on_append()` on the store and a server with the stream
-notifier, an idle reader sleeps instead of holding a store read open. A
+On a server with the stream notifier, an idle reader sleeps instead of holding a store read open. A
 client's `StreamHandle.read()` waits on the notifier with a long poll.
 Workflow code reads with `workflow_reader()`, one Local Activity per batch,
 and wakes on a Workflow Task when a producer appends:
