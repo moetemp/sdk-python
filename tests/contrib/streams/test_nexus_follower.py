@@ -9,10 +9,13 @@ doesn't. The streams live lane fails on those skips.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
+import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 
 import nexusrpc
@@ -22,11 +25,15 @@ import pytest
 import temporalio.api.workflowservice.v1
 import temporalio.converter
 from temporalio.api.common.v1 import Payload
+from temporalio.bridge.proto.streams.v1 import StreamLink as StreamLinkProto
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamRef
+from temporalio.contrib.streams import StreamRef, get_stream_handle
+from temporalio.contrib.streams._ref import to_reference
+from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
+    ClientTransport,
     FollowerBatch,
     FollowOutcome,
     ReadInput,
@@ -34,22 +41,43 @@ from temporalio.contrib.streams.nexus import (
     RecordWire,
     StoreTransport,
     StreamFollowerService,
+    StreamOperationHandler,
+    TemporalStreamsHandler,
     follow_stream,
 )
 from temporalio.contrib.streams.nexus._generated import (
+    FollowedWire,
+    FollowedWireLinkState,
+    FollowedWireRecord,
+    FollowInput,
+    FollowOutput,
+    FollowSourceWire,
     StreamOperationToken,
 )
 from temporalio.contrib.streams.nexus._generated.models import RecordWireSuperseded
 from temporalio.exceptions import ApplicationError
 from temporalio.nexus.system.notification_service import (
     NexusOperationProgress,
+    NotificationService,
     OnCompleteRequest,
     OnCompleteRequestResultFailure,
     OnCompleteRequestResultSuccess,
     OnProgressRequest,
+    OnProgressResponse,
 )
-from temporalio.service import ServiceClient
+from temporalio.service import RPCError, RPCStatusCode, ServiceClient
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
 from temporalio.worker._nexus import _NexusTaskCancellation
+from tests.contrib.streams._support import connect_with
+from tests.contrib.streams.test_nexus_stream_operation import (
+    OwnerUntilDone,
+    _skip_without_notifier,
+    connect,
+)
+from tests.contrib.streams.test_outside_handles import Waits, running_owner
+from tests.helpers import new_worker
+from tests.helpers.nexus import end_standalone_operation, make_nexus_endpoint_name
 
 REF = StreamRef.for_workflow("owner-1", topic="tokens")
 CONVERTER = temporalio.converter.DataConverter.default
@@ -537,3 +565,564 @@ class _LiveFollower(_Collector):
 
     def ordered(self) -> list[str]:
         return list(self.seen.values())
+
+
+@dataclass
+class _Lane:
+    client: Client
+    store: MemoryStreams
+    task_queue: str
+    endpoint: str
+    ref: StreamRef
+    followed: list[Any] = field(default_factory=list)
+    transport: Any = None
+    """How the follower reads. Its client's store when ``None``."""
+    service_class: type[StreamFollowerService] = StreamFollowerService
+    """The follower service the Worker runs, so a test can count its calls."""
+
+    def handler(self) -> Any:
+        ref = self.ref
+
+        async def open_stream(_ctx: Any, _arg: str) -> StreamRef:
+            # The test starts the owner with own(), since an append needs it.
+            return ref
+
+        @nexusrpc.handler.service_handler(service=FollowedOrders)
+        class Orders:
+            @nexusrpc.handler.operation_handler
+            def order_stream(self) -> nexusrpc.handler.OperationHandler[str, str]:
+                return StreamOperationHandler(open_stream)
+
+        return Orders()
+
+    @contextlib.asynccontextmanager
+    async def worker(
+        self, follower: _LiveFollower, *, hands_over: bool = False
+    ) -> AsyncIterator[None]:
+        """A Worker that follows with ``follower``.
+
+        Unless the block ``hands_over`` the operations to a later Worker, they
+        end before the Worker stops, so a test that skips or fails leaves no
+        callback retried against a task queue no one polls.
+        """
+        async with Worker(
+            self.client,
+            task_queue=self.task_queue,
+            workflows=[OwnerUntilDone],
+            nexus_service_handlers=[
+                self.handler(),
+                self.service(follower),
+                # The stream service, for a transport that reads through the endpoint.
+                TemporalStreamsHandler(),
+            ],
+        ):
+            try:
+                yield
+            except BaseException:
+                await self.end(follower)
+                raise
+            if not hands_over:
+                await self.end(follower)
+
+    def service(self, follower: _LiveFollower) -> StreamFollowerService:
+        return self.service_class(
+            {"orders": follower},
+            client=self.client,
+            transport=self.transport,
+            max_records=follower.max_records,
+        )
+
+    async def end(self, follower: _LiveFollower) -> None:
+        for handle in self.followed:
+            await end_standalone_operation(self.client, handle, follower.closed.is_set)
+
+    async def own(self) -> None:
+        # The notifier is keyed by the owner's run chain, so the owner runs.
+        await self.client.start_workflow(
+            OwnerUntilDone.run, id=self.ref.workflow_id, task_queue=self.task_queue
+        )
+
+    async def follow(self) -> Any:
+        try:
+            handle = await follow_stream(
+                self.client,
+                endpoint=self.endpoint,
+                service=FollowedOrders,
+                operation=FollowedOrders.order_stream,
+                arg="order-1",
+                follower="orders",
+                task_queue=self.task_queue,
+                schedule_to_close_timeout=timedelta(minutes=2),
+            )
+        except RPCError as err:
+            if err.status == RPCStatusCode.INVALID_ARGUMENT and "allback" in str(err):
+                pytest.skip(f"{NO_HANDLER_CALLBACKS}: {err}")
+            raise
+        self.followed.append(handle)
+        return handle
+
+    async def close(
+        self, result: Any = None, error: BaseException | None = None
+    ) -> None:
+        await self.store.close_stream(self.client, self.ref, result, error=error)
+        await self.client.get_workflow_handle(self.ref.workflow_id).signal(
+            OwnerUntilDone.done
+        )
+
+
+async def _lane(client: Client, env: WorkflowEnvironment) -> _Lane:
+    if env.supports_time_skipping:
+        pytest.skip("Standalone Nexus Operation tests don't work with time-skipping")
+    ref = StreamRef.for_workflow(f"owner-{uuid.uuid4()}", topic="tokens")
+    await _skip_without_notifier(client, ref)
+    task_queue = f"follower-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    store = MemoryStreams().notify_on_append()
+    return _Lane(await connect(client, store), store, task_queue, endpoint, ref)
+
+
+async def _closed(follower: _LiveFollower, timeout: float = 30) -> None:
+    try:
+        await asyncio.wait_for(follower.closed.wait(), timeout)
+    except asyncio.TimeoutError:
+        pytest.skip(f"{NO_HANDLER_CALLBACKS}: the follower never closed")
+
+
+async def _until(predicate: Any, timeout: float = 30) -> None:
+    for _ in range(int(timeout * 10)):
+        if predicate():
+            return
+        await asyncio.sleep(0.1)
+    pytest.skip(f"{NO_HANDLER_CALLBACKS}: no progress reached the follower")
+
+
+async def test_live_a_follower_gets_each_batch_then_the_close(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append("a")
+        await _until(lambda: "a" in follower.ordered())
+        await producer.append("b", "c")
+        await _until(lambda: "c" in follower.ordered())
+        await lane.close("done")
+        await _closed(follower)
+
+    assert follower.ordered() == ["a", "b", "c"]
+    [outcome] = follower.outcomes
+    assert outcome.result == "done"
+    assert outcome.stream == lane.ref
+
+
+async def test_live_a_follower_reads_through_the_client_transport(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    lane.transport = ClientTransport(lane.client, lane.endpoint)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append("a")
+        await _until(lambda: "a" in follower.ordered())
+        await producer.append("b", "c")
+        await _until(lambda: "c" in follower.ordered())
+        await lane.close("done")
+        await _closed(follower)
+
+    assert follower.ordered() == ["a", "b", "c"]
+    [outcome] = follower.outcomes
+    assert outcome.result == "done"
+
+
+async def test_live_a_follower_resumes_on_another_worker(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    first, second = _LiveFollower(), _LiveFollower()
+    producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer_id="writer", attempt=1
+    )
+    async with lane.worker(first, hands_over=True):
+        await lane.own()
+        await lane.follow()
+        await producer.append("a", "b")
+        await _until(lambda: "b" in first.ordered())
+        # The call answers after its last read waited a second and found
+        # nothing. A Worker that stops before that loses the answer, and the
+        # server sends the progress again from the earlier position.
+        await asyncio.sleep(3)
+    # The read position lives on the server's callback, so another Worker,
+    # with nothing of the first one's, goes on from it.
+    async with lane.worker(second):
+        await producer.append("c")
+        await _until(lambda: "c" in second.ordered())
+        await lane.close("done")
+        await _closed(second)
+
+    assert first.ordered() == ["a", "b"]
+    assert second.ordered() == ["c"]
+    assert second.outcomes[0].result == "done"
+
+
+async def test_live_a_late_follower_reads_the_backlog_in_pages(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    follower = _LiveFollower(max_records=7)
+    producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer_id="writer", attempt=1
+    )
+    async with lane.worker(follower):
+        await lane.own()
+        await producer.append(*[f"r{n}" for n in range(50)])
+        await lane.follow()
+        await _until(lambda: len(follower.ordered()) == 50)
+        await lane.close("done")
+        await _closed(follower)
+
+    assert follower.ordered() == [f"r{n}" for n in range(50)]
+    assert max(len(b.records) for b in follower.batches) <= 7
+    assert len(follower.batches) >= 8
+
+
+async def test_live_a_failed_owner_reaches_on_close_as_a_failure(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append("a")
+        await _until(lambda: "a" in follower.ordered())
+        await lane.close(error=RuntimeError("the owner gave up"))
+        await _closed(follower)
+
+    [outcome] = follower.outcomes
+    assert not outcome.succeeded
+    assert "the owner gave up" in str(outcome.error)
+    assert follower.ordered() == ["a"]
+
+
+async def test_each_progress_read_carries_the_wake_token() -> None:
+    """An empty read with the operation's token asks the notifier to wake the
+    callback after its position, so the follower hears of the next append."""
+    transport, collector = _FakeTransport(_stored(3)), _Collector()
+
+    answer = await _service(transport, collector, max_records=2).on_progress(
+        _context(), _progress("c3")
+    )
+
+    assert collector.values == ["v1", "v2", "v3"]
+    assert {r.wake_token for r in transport.requests} == {_token()}
+    # The token rides on the read only, not in the state the server keeps.
+    state = CONVERTER.payload_converter.from_payload(
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
+        ReadInput,
+    )
+    assert state.wake_token is None
+
+
+async def test_the_completion_drain_sends_no_wake_token() -> None:
+    transport, collector = _FakeTransport(_stored(1), closed=True), _Collector()
+
+    await _service(transport, collector).on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultSuccess("finished"),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                ReadInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    assert [r.wake_token for r in transport.requests] == [None]
+
+
+async def test_follow_stream_asks_for_the_first_wake_from_the_start() -> None:
+    started: dict[str, Any] = {}
+
+    class FakeNexusClient:
+        async def start_operation(self, *_args: Any, **kwargs: Any) -> Any:
+            started.update(kwargs)
+            return object()
+
+    client = Mock(create_nexus_client=Mock(return_value=FakeNexusClient()))
+    await follow_stream(
+        client,
+        endpoint="orders",
+        service=FollowedOrders,
+        operation=FollowedOrders.order_stream,
+        arg="order-1",
+        follower="orders",
+        task_queue="followers",
+    )
+    # The follower reads only when woken, so its idle callback asks for the
+    # first wake at the attach.
+    assert started["headers"] == {"temporal-stream-first-wake-after": "0"}
+
+
+_progress_calls: list[str] = []
+
+
+@nexusrpc.handler.service_handler(service=NotificationService)
+class _CountingFollowerService(StreamFollowerService):
+    @nexusrpc.handler.sync_operation
+    async def on_progress(
+        self, ctx: nexusrpc.handler.StartOperationContext, input: OnProgressRequest
+    ) -> OnProgressResponse:
+        _progress_calls.append(ctx.request_id)
+        return await super().on_progress(ctx, input)
+
+
+async def test_live_a_follower_on_an_empty_stream_hears_the_first_append(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        await lane.follow()
+        # Nothing is there yet, so the first wake waits for the first append.
+        await asyncio.sleep(2)
+        assert follower.ordered() == []
+        await (
+            get_stream_handle(lane.client, lane.ref)
+            .producer(producer_id="writer", attempt=1)
+            .append("first")
+        )
+        await _until(lambda: "first" in follower.ordered())
+        await lane.close("done")
+        await _closed(follower)
+    assert follower.ordered() == ["first"]
+
+
+async def test_live_a_follower_that_reads_a_burst_gets_no_extra_progress(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    lane = await _lane(client, env)
+    lane.service_class = _CountingFollowerService
+    _progress_calls.clear()
+    follower = _LiveFollower()
+    async with lane.worker(follower):
+        await lane.own()
+        producer = get_stream_handle(lane.client, lane.ref).producer(
+            producer_id="writer", attempt=1
+        )
+        texts = [f"t{n}" for n in range(20)]
+        for text in texts:
+            await producer.append(text)
+        await lane.follow()
+        await _until(lambda: "t19" in follower.ordered())
+        # The callback waits only after a read found nothing, so the burst
+        # costs the one first wake, not a delivery per append.
+        await asyncio.sleep(3)
+        calls = len(_progress_calls)
+        await lane.close("done")
+        await _closed(follower)
+    assert follower.ordered() == texts
+    assert calls == 1, _progress_calls
+
+
+async def test_a_follower_decodes_a_tool_stream_with_the_activity_and_its_workflow() -> (
+    None
+):
+    seen: list[temporalio.converter.SerializationContext] = []
+    converter = dataclasses.replace(
+        CONVERTER, payload_codec=_ContextRecordingCodec(seen)
+    )
+    collector = _Collector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=converter, namespace="default"),
+        transport=_FakeTransport(_stored(2)),
+    )
+    ref = StreamRef.for_workflow_activity(
+        "agent", run_id="run-1", activity_id="tool-1", topic="tokens"
+    )
+
+    await service.on_progress(
+        _context(),
+        OnProgressRequest(
+            progress=NexusOperationProgress(position="c2", counter=1),
+            source_context=_source_context(),
+            operation_token=_token(ref),
+        ),
+    )
+
+    assert collector.values == ["v1", "v2"]
+    assert set(seen) == {
+        temporalio.converter.ActivitySerializationContext(
+            namespace="default",
+            activity_id="tool-1",
+            activity_type=None,
+            activity_task_queue=None,
+            workflow_id="agent",
+            workflow_type=None,
+            is_local=False,
+        )
+    }
+
+
+class _FakeFollowTransport:
+    """A stream service that answers follow with two scripted pages."""
+
+    def __init__(self) -> None:
+        self.requests: list[FollowInput] = []
+        child = StreamRef.for_workflow_activity(
+            "agent", run_id="run-1", activity_id="tool-1", topic="tokens"
+        )
+        link = StreamLinkProto(
+            event=StreamLinkProto.Event.EVENT_OPEN,
+            name="tool-1",
+            stream=to_reference(child),
+        ).SerializeToString()
+        self.pages = [
+            FollowOutput(
+                records=[
+                    FollowedWire(
+                        source=0,
+                        record=FollowedWireRecord(token="r1", record=_wire("d1")),
+                    ),
+                    FollowedWire(
+                        source=1,
+                        link_state=FollowedWireLinkState(kind="opened", link=link),
+                    ),
+                    FollowedWire(
+                        source=1,
+                        record=FollowedWireRecord(token="t1", record=_wire("a1")),
+                    ),
+                ],
+                done=False,
+                state=b"follow-state-1",
+                sources=[
+                    FollowSourceWire(
+                        number=1, parent=0, depth=1, stream=child, name="tool-1"
+                    )
+                ],
+            ),
+            FollowOutput(records=[], done=False, state=b"follow-state-2", sources=[]),
+        ]
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        raise AssertionError(f"a follower with follow_links follows, not {request}")
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        self.requests.append(request)
+        return self.pages.pop(0)
+
+
+class _LinkCollector(_Collector):
+    follow_links = True
+
+
+async def test_a_follower_that_asks_for_links_gets_every_source_in_order() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    answer = await service.on_progress(_context(), _progress("c1"))
+
+    [batch] = collector.batches
+    assert [r.value for r in batch.records] == ["d1", "a1"]
+    assert [
+        (
+            i.depth,
+            i.link_state.kind.name if i.link_state else i.record and i.record.value,
+        )
+        for i in batch.items
+    ] == [(0, "d1"), (1, "OPENED"), (1, "a1")]
+    assert batch.items[1].source.activity_id == "tool-1"
+    assert batch.items[-1].position is not None
+    assert batch.cursor.token == "r1"
+    state = CONVERTER.payload_converter.from_payload(
+        Payload(
+            metadata={"encoding": b"json/plain"}, data=answer.receiver_state or b""
+        ),
+        FollowInput,
+    )
+    # The follow state holds every open link, so it carries the position.
+    assert state.state == b"follow-state-2"
+    assert transport.requests[1].state == b"follow-state-1"
+
+
+async def test_a_canceled_follow_of_links_closes_with_the_stream_still_open() -> None:
+    transport, collector = _FakeFollowTransport(), _LinkCollector()
+    service = StreamFollowerService(
+        {"orders": collector},
+        client=Mock(data_converter=CONVERTER, namespace="default"),
+        transport=cast(Any, transport),
+    )
+
+    await service.on_complete(
+        _context(),
+        OnCompleteRequest(
+            result=OnCompleteRequestResultFailure(
+                ApplicationError("canceled", type="Canceled")
+            ),
+            source_context=_source_context(),
+            receiver_state=CONVERTER.payload_converter.to_payload(
+                FollowInput(stream=REF)
+            ).data,
+        ),
+    )
+
+    # Both scripted pages are read, the second one empty, and none is done.
+    assert [r.value for b in collector.batches for r in b.records] == ["d1", "a1"]
+    [outcome] = collector.outcomes
+    assert outcome.error is not None and "canceled" in str(outcome.error)
+
+
+async def test_the_store_transport_follows_links_through_core(client: Client) -> None:
+    streams = await connect_with(client, MemoryStreams())
+    async with new_worker(streams, Waits) as worker:
+        agent = await running_owner(streams, worker.task_queue)
+        child = await running_owner(streams, worker.task_queue)
+        child_ref = StreamRef.for_workflow(child, topic="tokens")
+        await (
+            get_stream_handle(streams, child_ref)
+            .producer(producer_id="tool", attempt=1)
+            .append("a1", "a2")
+        )
+        parent = get_stream_handle(streams, agent, topic="tokens").producer(
+            producer_id="agent", attempt=1
+        )
+        await parent.append("d1")
+        await parent.link(child_ref, name="sub")
+        answer = await StoreTransport(streams).follow(
+            FollowInput(stream=StreamRef.for_workflow(agent, topic="tokens"), wait_ms=0)
+        )
+        for owner in (agent, child):
+            await streams.get_workflow_handle(owner).signal(Waits.finish)
+    sources = {s.number: s.stream for s in answer.sources}
+    seen = [
+        (f.source, f.link_state.kind if f.link_state else f.record and f.record.token)
+        for f in answer.records
+    ]
+    assert seen[0][0] == 0 and seen[1][0] == 0
+    assert [s for s, _ in seen].count(0) == 2
+    child_items = [f for f in answer.records if f.source != 0]
+    assert child_items[0].link_state is not None
+    assert child_items[0].link_state.kind == "opened"
+    assert [f.record is not None for f in child_items[1:]] == [True, True]
+    assert sources[child_items[0].source].workflow_id == child
