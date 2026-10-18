@@ -1015,8 +1015,6 @@ class StoreCapabilities(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     PRODUCER_STATE_FIELD_NUMBER: builtins.int
-    CONDITIONAL_TAIL_FIELD_NUMBER: builtins.int
-    CONDITIONAL_FENCE_FIELD_NUMBER: builtins.int
     KEPT_LAST_FIELD_NUMBER: builtins.int
     HOLDS_FIELD_NUMBER: builtins.int
     CHANGE_FEED_FIELD_NUMBER: builtins.int
@@ -1030,10 +1028,6 @@ class StoreCapabilities(google.protobuf.message.Message):
     MAX_BATCH_BYTES_FIELD_NUMBER: builtins.int
     producer_state: builtins.bool
     """The append checks the producer attempt's dedupe entry and the close flags in the same step."""
-    conditional_tail: builtins.bool
-    """The append can fail unless the log's next position is the expected one."""
-    conditional_fence: builtins.bool
-    """The append can fail unless the stream's fence token is the expected one."""
     kept_last: builtins.bool
     """The store knows a topic's newest position after retention dropped every record."""
     holds: builtins.bool
@@ -1061,8 +1055,6 @@ class StoreCapabilities(google.protobuf.message.Message):
         self,
         *,
         producer_state: builtins.bool = ...,
-        conditional_tail: builtins.bool = ...,
-        conditional_fence: builtins.bool = ...,
         kept_last: builtins.bool = ...,
         holds: builtins.bool = ...,
         change_feed: builtins.bool = ...,
@@ -1085,10 +1077,6 @@ class StoreCapabilities(google.protobuf.message.Message):
             b"change_feed",
             "cheap_logs",
             b"cheap_logs",
-            "conditional_fence",
-            b"conditional_fence",
-            "conditional_tail",
-            b"conditional_tail",
             "delete_owner",
             b"delete_owner",
             "dense_positions",
