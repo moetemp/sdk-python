@@ -28,7 +28,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
     topic,
     track_supersession,
     workflow_reader,
@@ -83,7 +83,7 @@ async def _read(client: Client, ref: StreamRef) -> tuple[list[str], list[str]]:
     """What a client read sees, and what each ``SUPERSEDED`` withdrew."""
     seen: list[str] = []
     withdrawn: list[str] = []
-    read = track_supersession(get_stream_handle(client, ref).read())
+    read = track_supersession(stream_handle(client, ref).read())
     async for record, gone in read:
         withdrawn.extend(str(r.value) for r in gone)
         assert not record.stale
@@ -161,7 +161,7 @@ async def follow(workflow_id: str) -> int:
     after = Cursor(details[0]) if details else BEGINNING
     seen: list[str] = []
     _followed.append(seen)
-    stream = get_stream_handle(activity.client(), workflow_id, topic=TOKENS)
+    stream = stream_handle(activity.client(), workflow_id, topic=TOKENS)
     async for record in stream.read(after=after):
         seen.append(str(record.value))
         activity.heartbeat(record.cursor.token)
@@ -176,7 +176,7 @@ async def test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat(
     _followed.clear()
     async with new_worker(notifying, Waits, activities=[follow]) as worker:
         workflow_id = await running_owner(notifying, worker.task_queue)
-        stream = get_stream_handle(notifying, workflow_id, topic=TOKENS)
+        stream = stream_handle(notifying, workflow_id, topic=TOKENS)
         producer = stream.producer(producer_id="p", attempt=1)
         await producer.append("p1", "p2", "p3")
         follower = await notifying.start_activity(
