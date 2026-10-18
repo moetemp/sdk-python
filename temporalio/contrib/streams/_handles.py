@@ -1,7 +1,7 @@
 """Reaching a stream from an Activity or from client code.
 
-Every call goes to the stream service, which checks the owner, mints and
-checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
+Every call goes to the stream runtime's service, which checks the owner, mints
+and checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
 needs the plaintext or the user's types: converting values, the two hashes
 taken before the codec, and the codec itself.
 
@@ -120,7 +120,7 @@ class StreamProducer(Generic[T]):
         self._local_call = local_call
         self._sequence = 1
         self._last = BEGINNING
-        # A batch reads the sequence, then awaits the codec and the stream runtime, then
+        # A batch reads the sequence, then awaits the codec and the store, then
         # moves it on; calls one at a time keep each batch's sequences.
         self._lock = asyncio.Lock()
 
@@ -616,7 +616,7 @@ class StreamHandle:
         )
 
     async def _read_run_id(self) -> str:
-        """The run a read names to the stream runtime, which ends a read when that run closes.
+        """The run a read names to the store, which ends a read when that run closes.
 
         A read must end only with its chain. While the chain that holds
         ``chain_run_id`` is the Workflow id's newest, the read names no run

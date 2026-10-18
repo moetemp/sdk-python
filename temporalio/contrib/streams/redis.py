@@ -54,13 +54,14 @@ class RedisStreams(StreamStorePlugin):
             retention: How long a stream keeps a record, and how long after
                 its last write the stream itself lives.
             blocking_reads_per_node: How many reads may wait on one node at
-                once, each on a connection of its own. The stream runtime's default when
-                unset.
+                once, each on a connection of its own. The stream runtime's
+                default when unset.
             response_timeout: How long a short call waits for its reply.
                 The stream runtime's default when unset.
             floor_lease: How long a Workflow reader that replays from the
-                store, as ``workflow_reader`` does by default, holds the records it read against
-                retention after its last read. ``retention`` when unset.
+                store, as ``workflow_reader`` does by default, holds the
+                records it read against retention after its last read.
+                ``retention`` when unset.
             floor_release_grace: How long such a hold lasts after a reader
                 releases it. One day when unset. A Python Workflow reader
                 never releases, since its run may replay its reads until it
@@ -70,9 +71,9 @@ class RedisStreams(StreamStorePlugin):
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
-            plain: Run no Lua scripts, for a Redis that refuses them. The
-                store then has no producer state, no kept last position, no
-                holds and no change feed, and the stream runtime takes the fallback of
+            plain: Run no Lua scripts, for a Redis that refuses them. The store
+                then has no producer state, no kept last position, no holds and
+                no change feed, and the stream runtime takes the fallback of
                 each (see :attr:`capabilities`).
 
         Raises:
@@ -89,7 +90,7 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"retention must be at least a millisecond, got {retention}"
             )
-        # Set only when asked for, so the config also fits a Core without it.
+        # Set only when asked for, so the config also fits a runtime without it.
         extra: dict[str, Any] = {"plain": True} if plain else {}
         config = RedisStoreConfig(
             urls=urls,

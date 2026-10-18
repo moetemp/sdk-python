@@ -17,6 +17,10 @@ Register the store once, on the client, with `Client.connect`. Connecting
 the client connects the store, and every Worker built from that client
 publishes and appends through it. There's nothing extra to install.
 
+A Worker refuses a store passed only to `Worker(plugins=[...])`, or one on a
+client made without `Client.connect`, with `ValueError`. The stream runtime
+needs the client's connection to check a stream's owner.
+
 ```python
 from temporalio.client import Client
 from temporalio.contrib.streams.redis import RedisStreams
@@ -127,10 +131,10 @@ an identity of its own:
 
 - **Producer id.** `__temporal_local_<n>@<scheduling run id>`, where `n`
   counts the run's Local Activity calls in order. The `__temporal` prefix is
-  reserved, so no user Activity id writes as the same producer. The store plugin's Worker interceptor
-  stamps the number on each call in a header, so it stays the same across
-  reruns, and across a retry that backs off longer than
-  `local_retry_threshold`, which gets a new Activity id.
+  reserved, so no user Activity id writes as the same producer. The store
+  plugin's Worker interceptor stamps the number on each call in a header, so
+  it stays the same across reruns, and across a retry that backs off longer
+  than `local_retry_threshold`, which gets a new Activity id.
 - **Attempt.** Before the first append, the producer asks the server for
   the run's History length `h` and the pending Workflow Task's attempt `t`.
   With the Local Activity's attempt `a`, it writes attempt
@@ -151,9 +155,6 @@ Known limits:
   describe the Workflow (`DescribeWorkflowExecution` on its namespace), both
   for the attempt and for the stream runtime's owner check. Without it, the
   first append fails.
-- **A later Core change removes the call.** Workflow code doesn't see the
-  Workflow Task attempt, so the server is asked for it. A later Core change
-  can supply the Workflow Task attempt, which removes the call.
 - **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
@@ -476,10 +477,6 @@ Known limits:
 - **No check on replay.** Replay doesn't compare the records the run
   publishes with the store, so a Workflow change that publishes other
   records replays without an error.
-- **Histories of the Local Activity writer.** An earlier version of
-  `workflow_writer` sent records through Local Activities. Its Histories
-  have a marker per flush, and they fail replay on this version with a
-  nondeterminism error.
 
 ## A reader sleeps while the stream is idle
 

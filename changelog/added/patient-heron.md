@@ -1,1 +1,0 @@
-Core: Experimental: a read of a Workflow that Temporal doesn't know yet answers empty for `StreamStoreConfig.owner_start_grace` (60 seconds unless set, counted from the read's first owner check), so a reader can start before its owner. After the grace it fails as `NOT_FOUND` as before. Zero turns the grace off.

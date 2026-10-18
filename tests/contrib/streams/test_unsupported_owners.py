@@ -1,4 +1,4 @@
-"""Owners and readers this release does not support say so.
+"""Owners this release does not support say so.
 
 Only a Workflow or an Activity owns a stream in this release.
 Every other owner raises ``StreamUnsupportedError``.

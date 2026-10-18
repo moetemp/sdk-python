@@ -295,7 +295,7 @@ _READER_RULES = _VECTORS.with_name("reader_rules.json")
 
 @pytest.mark.parametrize(
     "case",
-    # A Core from before the reader rules has no vectors for them.
+    # A crate from before the reader rules has no vectors for them.
     json.loads(_READER_RULES.read_text())["cases"] if _READER_RULES.exists() else [],
     ids=lambda case: case["label"],
 )
