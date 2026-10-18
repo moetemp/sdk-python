@@ -108,7 +108,9 @@ start a new chain after the old one closed, and a handle opens the newest
 chain unless `chain_run_id=` names a run of another one. An Activity's
 `record.producer_id` names the run that scheduled it.
 To resume later, keep the last `record.cursor` and pass it back as
-`read(after=cursor)`.
+`read(after=cursor)`. An idle read waits `idle_wait` (2 seconds by default)
+in the store before it sleeps on the stream's notifier, so a longer
+`read(idle_wait=...)` holds a store connection longer and sleeps less often.
 
 The sample runs in full in `tests/contrib/streams/samples/`.
 
