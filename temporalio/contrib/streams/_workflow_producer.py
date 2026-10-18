@@ -18,7 +18,7 @@ Replay publishes nothing, since the records are in the store already.
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar, cast
 
 import temporalio.activity
 from temporalio import workflow
@@ -186,8 +186,11 @@ class WorkflowStreamProducer(Generic[T]):
 
 
 # The result's type depends on the calling context, which a static type can't name.
-def stream_producer(topic: str | StreamTopic[Any] | None = None) -> Any:
-    """A producer on ``topic`` of the running Workflow's own stream.
+def stream_producer(
+    topic: str | StreamTopic[Any] | None = None,
+    scope: Literal["activity", "workflow"] | None = None,
+) -> Any:
+    """A producer on ``topic`` of the running Workflow's or Activity's stream.
 
     Call it from Workflow code or from Activity code. In a Workflow it
     returns a :class:`WorkflowStreamProducer`, whose ``append`` returns at
@@ -196,7 +199,7 @@ def stream_producer(topic: str | StreamTopic[Any] | None = None) -> Any:
     the Workflow Task, which retries. A topic the store reports closed drops
     the activation's records on it, since no retry could land.
 
-    In an Activity it returns ``activity_handle().producer(topic=topic)``, a
+    In an Activity it returns ``activity_handle(scope).producer(topic=topic)``, a
     :class:`temporalio.contrib.streams.StreamProducer` whose ``append`` is
     awaited. See :meth:`temporalio.contrib.streams.ActivityStreamHandle.producer`.
 
@@ -205,19 +208,27 @@ def stream_producer(topic: str | StreamTopic[Any] | None = None) -> Any:
             value type the producer's ``append`` takes, or a plain string.
             Without one, the producer is on
             :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        scope: In an Activity, which stream it writes, as
+            :func:`temporalio.contrib.streams.activity_handle` picks it. In a
+            Workflow only ``"workflow"`` or ``None``.
 
     Raises:
-        ValueError: ``topic`` is empty.
+        ValueError: ``topic`` is empty, or ``scope`` is not one the context
+            has.
         RuntimeError: Called outside both Workflow code and an Activity.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
-            stream store interceptor.
+            stream store interceptor, or the Activity has no stream in
+            ``scope``.
     """
     if not workflow.in_workflow():
         if not temporalio.activity.in_activity():
             raise RuntimeError("stream_producer needs Workflow code or an Activity")
-        return activity_handle().producer(topic=topic)
+        return activity_handle(scope).producer(topic=topic)
+    # A caller without a type checker can pass any value.
+    if cast(Any, scope) not in (None, "workflow"):
+        raise ValueError(f"a Workflow writes only its own stream, not scope={scope!r}")
     _check_writable("open a producer on")
     name, _ = resolve_topic(topic)
     producers = _run_producers(create=True)

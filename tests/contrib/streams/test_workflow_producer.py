@@ -564,6 +564,27 @@ async def test_a_worker_without_the_store_cannot_write(client: Client):
 
 
 @workflow.defn
+class WritesAnActivityScope:
+    @workflow.run
+    async def run(self) -> str:
+        try:
+            stream_producer(STEPS, scope="activity")
+        except ValueError as error:
+            return str(error)
+        return "opened"
+
+
+async def test_a_workflow_producer_refuses_the_activity_scope(client: Client):
+    async with new_worker(client, WritesAnActivityScope) as worker:
+        said = await client.execute_workflow(
+            WritesAnActivityScope.run,
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert "a Workflow writes only its own stream" in said
+
+
+@workflow.defn
 class FlushesOnce:
     @workflow.run
     async def run(self) -> None:

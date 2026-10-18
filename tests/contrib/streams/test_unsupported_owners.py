@@ -18,6 +18,7 @@ from temporalio.contrib.streams import (
     StreamUnsupportedError,
     activity_handle,
     stream_handle,
+    stream_producer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.testing import ActivityEnvironment
@@ -80,3 +81,15 @@ async def test_a_standalone_activity_with_no_run_id_has_no_stream(client: Client
 
     with pytest.raises(StreamUnsupportedError, match="no run id"):
         await _standalone_env(streams_client, None).run(standalone)
+
+
+async def test_a_standalone_activity_producer_takes_its_scope(client: Client):
+    streams_client = await connect_with(client, MemoryStreams())
+
+    async def standalone() -> None:
+        assert stream_producer("out", scope="activity").producer_id == "act@run"
+        assert stream_producer("out").producer_id == "act@run"
+        with pytest.raises(StreamUnsupportedError, match="no scheduling Workflow"):
+            stream_producer("out", scope="workflow")
+
+    await _standalone_env(streams_client, "run").run(standalone)
