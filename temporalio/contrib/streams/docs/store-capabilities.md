@@ -43,7 +43,6 @@ application kept.
 | Capability | Field | With it | Without it |
 |---|---|---|---|
 | Producer state | `producer_state` | A retry of the newest batch writes nothing and answers the first positions. A changed batch, or one with an old sequence, fails with `StreamProducerError`. An append after a close fails with `StreamClosedError`. | A retry can land a second copy, which readers drop. The producer can get the second copy's positions. A changed or stale batch lands with no error, and readers keep the first copy. An append that races a close can answer success, and no reader delivers it. A Workflow then gets no `workflow_stream_output_dropped` metric for it. |
-| Conditional append | `conditional_tail`, `conditional_fence` | The append checks a condition the store holds. A fence stops every append after a close. A tail check gives exact positions after a lost answer. | As without producer state. |
 | Kept last position | `kept_last` | The store knows a log's last position after retention dropped all of it, for 30 days. So a read tells an expired cursor from an empty stream. | The stream runtime decides expiry from the cursor's own record. Retention drops only the oldest records, so if that record is still there, nothing after it is lost. If it is gone, the read fails with `StreamExpiredError`, also when nothing after it was lost. |
 | Retention holds | `holds` | A holder keeps records from retention. | No holder can keep records. |
 | Change feed | `change_feed` | One consumer reads every append in order. | Producers notify after each append. |
@@ -78,11 +77,11 @@ Continue-as-New does not close a stream.
 
 Y means the store has it, and N means the stream runtime takes the fallback.
 
-| Store | Producer state | Conditional | Kept last | Holds | Change feed | Cheap logs | Delete | Listing | Long poll |
-|---|---|---|---|---|---|---|---|---|---|
-| `MemoryStreams()` | Y | N | Y | N | N | Y | Y | Y | Y |
-| `RedisStreams(...)` | Y | N | Y | N | N | Y | Y | Y | Y |
-| `RedisStreams(..., plain=True)` | N | N | N | N | N | Y | Y | Y | Y |
+| Store | Producer state | Kept last | Holds | Change feed | Cheap logs | Delete | Listing | Long poll |
+|---|---|---|---|---|---|---|---|---|
+| `MemoryStreams()` | Y | Y | N | N | Y | Y | Y | Y |
+| `RedisStreams(...)` | Y | Y | N | N | Y | Y | Y | Y |
+| `RedisStreams(..., plain=True)` | N | N | N | N | Y | Y | Y | Y |
 
 `RedisStreams(plain=True)` runs no Lua scripts. Use it on a Redis that
 refuses scripts. It also runs the fallbacks on a real network store.

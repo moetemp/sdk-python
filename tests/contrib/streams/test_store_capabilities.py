@@ -146,7 +146,6 @@ async def test_a_core_without_describe_serves_every_capability(
     capabilities = await describe(unknown)  # type: ignore[arg-type]
     assert capabilities.producer_state and capabilities.kept_last
     assert capabilities.delete_owner and capabilities.topic_listing
-    assert not (capabilities.conditional_tail or capabilities.conditional_fence)
     # Any other failure is the store's, not a missing call.
     failing = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
     with pytest.raises(StreamCallFailure):

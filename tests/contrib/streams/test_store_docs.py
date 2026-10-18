@@ -39,9 +39,6 @@ def _offered(capabilities: StoreCapabilities) -> dict[str, str]:
 
     return {
         "Producer state": yn(capabilities.producer_state),
-        "Conditional": yn(
-            capabilities.conditional_tail or capabilities.conditional_fence
-        ),
         "Kept last": yn(capabilities.kept_last),
         "Holds": yn(capabilities.holds),
         "Change feed": yn(capabilities.change_feed),

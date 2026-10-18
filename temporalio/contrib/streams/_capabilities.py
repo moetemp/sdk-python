@@ -34,10 +34,6 @@ class StoreCapabilities:
     Without it, a retry can land a second copy, which readers drop, and an
     append that races a close can answer success, which no reader delivers.
     """
-    conditional_tail: bool = True
-    """An append can require the log's next position."""
-    conditional_fence: bool = True
-    """An append can require the stream's fence token."""
     kept_last: bool = True
     """The store knows a log's last position after retention dropped it all.
 
@@ -76,8 +72,6 @@ class StoreCapabilities:
     def _from_proto(proto: Any) -> StoreCapabilities:
         return StoreCapabilities(
             producer_state=proto.producer_state,
-            conditional_tail=proto.conditional_tail,
-            conditional_fence=proto.conditional_fence,
             kept_last=proto.kept_last,
             holds=proto.holds,
             change_feed=proto.change_feed,
@@ -104,8 +98,6 @@ class StoreCapabilities:
             raise ValueError("this SDK's Core can't mask a store's capabilities")
         proto = proto_type(
             producer_state=self.producer_state,
-            conditional_tail=self.conditional_tail,
-            conditional_fence=self.conditional_fence,
             kept_last=self.kept_last,
             holds=self.holds,
             change_feed=self.change_feed,
@@ -123,8 +115,8 @@ class StoreCapabilities:
 
 
 # What a Core from before DescribeStore serves. Its Redis and memory stores have
-# every capability that Core knew of, and none had a conditional append.
-_BEFORE_DESCRIBE = StoreCapabilities(conditional_tail=False, conditional_fence=False)
+# every capability that Core knew of.
+_BEFORE_DESCRIBE = StoreCapabilities()
 
 
 async def describe(store: StreamStore) -> StoreCapabilities:
