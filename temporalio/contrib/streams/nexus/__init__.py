@@ -40,6 +40,18 @@ sees as operation progress.
 :meth:`temporalio.contrib.streams.StreamStorePlugin.close_stream` completes
 the operation, or :func:`temporalio.contrib.streams.close_workflow_stream`
 from the owning Workflow.
+
+A caller Workflow reads such a stream with :class:`StreamReader`: it waits on
+the operation's progress and reads through this service. By default each
+read is a Nexus operation of the Workflow, so History records each batch and
+a replay hands over the same batches with no store at hand. This works on
+any server, Temporal Cloud included. ``replay_from_store=True`` is the
+opt-in. It reads in a Local Activity through a
+:class:`StreamDirectTransport` that :class:`StreamDirectReads` maps the
+endpoint to, and History keeps only each read's range and digest.
+:class:`ClientTransport` calls ``ExecuteSyncNexusOperation`` with the
+caller's own client, and :class:`HttpTransport` the HTTP ingress of a
+self-hosted server.
 """
 
 from temporalio.contrib.streams import StreamRef
@@ -64,6 +76,13 @@ from temporalio.contrib.streams.nexus._operation import (
     StreamOperationHandler,
     stream_ref_from_token,
 )
+from temporalio.contrib.streams.nexus._reader import (
+    ReadPosition,
+    ReadStaleRecord,
+    ReadSupersession,
+    StreamIncompleteError,
+    StreamReader,
+)
 
 __all__ = [
     "AppendInput",
@@ -71,10 +90,15 @@ __all__ = [
     "HTTPStatusError",
     "ReadInput",
     "ReadOutput",
+    "ReadStaleRecord",
+    "ReadPosition",
+    "ReadSupersession",
     "RecordWire",
     "StreamAccess",
     "StreamCursor",
+    "StreamIncompleteError",
     "StreamOperationHandler",
+    "StreamReader",
     "StreamRef",
     "TemporalStreams",
     "TemporalStreamsHandler",
