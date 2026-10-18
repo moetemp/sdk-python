@@ -1,7 +1,7 @@
 """Positions-only Workflow reads: the marker holds the range, and replay reads it again.
 
 These cases drive the read Activity and the client's codec directly, so they
-run on the stock dev server with Core's real store. The cases that run a
+run on the stock dev server with the stream runtime's real store. The cases that run a
 Workflow reader end to end need the stream notifier and are in the live
 lane.
 """

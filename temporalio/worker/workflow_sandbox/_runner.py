@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -129,6 +129,9 @@ class _Instance(WorkflowInstance):
         self._stream_records: Sequence[
             temporalio.bridge.proto.streams.OutputRecord
         ] = []
+        self._stream_wake_contexts: Mapping[
+            str, temporalio.converter.SerializationContext
+        ] = {}
 
         # Create the instance
         self.globals_and_locals = {
@@ -180,12 +183,18 @@ class _Instance(WorkflowInstance):
             self._run_code(
                 "with __temporal_importer.applied():\n"
                 "  __temporal_completion = __temporal_in_sandbox.activate(__temporal_activation)\n"
-                "  __temporal_stream_records = __temporal_in_sandbox.instance.stream_records()\n",
+                "  __temporal_stream_records = __temporal_in_sandbox.instance.stream_records()\n"
+                "  __temporal_stream_wake_contexts = (\n"
+                "    __temporal_in_sandbox.instance.stream_wake_contexts()\n"
+                "  )\n",
                 __temporal_importer=self.importer,
                 __temporal_activation=act,
             )
             self._stream_records = self.globals_and_locals.pop(
                 "__temporal_stream_records", []
+            )  # type: ignore
+            self._stream_wake_contexts = self.globals_and_locals.pop(
+                "__temporal_stream_wake_contexts", {}
             )  # type: ignore
             return self.globals_and_locals.pop("__temporal_completion")  # type: ignore
         finally:
@@ -213,6 +222,11 @@ class _Instance(WorkflowInstance):
 
     def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
         return self._stream_records
+
+    def stream_wake_contexts(
+        self,
+    ) -> Mapping[str, temporalio.converter.SerializationContext]:
+        return self._stream_wake_contexts
 
     def get_serialization_context(
         self,

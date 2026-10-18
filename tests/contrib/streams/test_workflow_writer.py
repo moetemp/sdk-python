@@ -645,7 +645,7 @@ async def test_a_history_of_the_local_activity_writer_does_not_replay():
 
 @activity.defn
 async def latest_link() -> str:
-    # Core appends the activation's records before it dispatches this call.
+    # The Worker appends the activation's records before Core dispatches this call.
     return (await activity_handle().latest(topic=STEPS)).token
 
 

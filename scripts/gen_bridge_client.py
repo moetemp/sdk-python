@@ -282,12 +282,12 @@ def generate_python_stream_service(
         """Invokes the $service_name.$method_name call."""
         return await self._store.call("$rpc_name", req, $response_type)
 ''')
-    # Every service's calls go through the store's one entry, which Core
-    # dispatches by name, so each service is a class over the same store.
+    # Every service's calls go through the store's one entry, which the stream
+    # runtime dispatches by name, so each service is a class over the same store.
     class_template = Template('''
 
 class $service_name:
-    """Calls for the $service_name, which Core dispatches in process."""
+    """Calls for the $service_name, which the stream runtime serves in process."""
 
     def __init__(self, store: StreamStore) -> None:
         """Initialize service with the provided store."""
@@ -310,7 +310,7 @@ $method_calls''')
         for service_descriptor in service_descriptors
     ]
     file_template = Template('''# Generated file. DO NOT EDIT
-"""Generated calls for Core's in-process stream services."""
+"""Generated calls for the stream runtime's in-process stream services."""
 
 from __future__ import annotations
 

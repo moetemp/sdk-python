@@ -160,7 +160,7 @@ async def from_read(
     read: ReadRecord,
     result_type: type | None,
 ) -> StreamRecord[Any]:
-    """The record a reader yields for one record of the stream runtime's answer.
+    """The record a reader yields for one record of the store's answer.
 
     Raises:
         StreamRecordError: The body did not decode or convert, or the record

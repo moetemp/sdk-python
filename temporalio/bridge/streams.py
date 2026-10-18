@@ -29,16 +29,16 @@ value.
 
 
 class StreamCallFailure(Exception):
-    """A stream call that failed, with Core's account of why."""
+    """A stream call that failed, with the stream runtime's account of why."""
 
     def __init__(self, failure: temporalio.bridge.proto.streams.StreamFailure) -> None:
-        """Wrap Core's failure."""
+        """Wrap the stream runtime's failure."""
         super().__init__(failure.message)
         self.failure = failure
 
 
 class StreamStore:
-    """The stream store Core serves to this process."""
+    """The stream store the stream runtime serves to this process."""
 
     @staticmethod
     async def connect(
@@ -47,10 +47,10 @@ class StreamStore:
     ) -> StreamStore:
         """Connect to the store ``config`` names.
 
-        Core asks ``client``'s server about streams' owners.
+        The stream runtime asks ``client``'s server about streams' owners.
 
         Raises:
-            StreamCallFailure: Core could not reach the store.
+            StreamCallFailure: The stream runtime could not reach the store.
         """
         try:
             ref = await temporalio.bridge.temporal_sdk_bridge.connect_stream_store(
