@@ -525,17 +525,18 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 
 A caller Workflow in another namespace reads a stream through a Nexus
 endpoint with `temporalio.contrib.streams.nexus.StreamReader`. By default
-each read is a Nexus operation of the Workflow, so History keeps each read's
-answer, records included, and a replay needs nothing else. This works on
-Temporal Cloud too. `StreamReader(..., replay_from_store=True)` keeps only
-each read's range and digest, as `workflow_reader` does, and a replay reads
-the range again through the endpoint. That needs `StreamDirectReads` on the
-caller Worker's client with a transport for the endpoint, and a read
-without one fails at once with a `StreamUnsupportedError` that names the
-option. `HttpTransport` works on a self-hosted server only and takes a
-write credential on the handler's namespace. `ClientTransport` needs a
-server with `ExecuteSyncNexusOperation`, which Temporal Cloud doesn't serve
-yet. See [Direct reads](docs/nexus.md#direct-reads).
+History keeps only each read's range and digest, as `workflow_reader` does,
+and a replay reads the range again through the endpoint. That needs
+`StreamDirectReads` on the caller Worker's client with a transport for the
+endpoint, and a read without one fails at once with a
+`StreamUnsupportedError` that names the opt-out. `HttpTransport` works on a
+self-hosted server only and takes a write credential on the handler's
+namespace. `ClientTransport` needs a server with
+`ExecuteSyncNexusOperation`, which Temporal Cloud doesn't serve yet.
+`StreamReader(..., replay_from_store=False)` keeps each read's answer in
+History, records included, so a replay needs nothing else. On Temporal
+Cloud, pass `replay_from_store=False`. See
+[Direct reads](docs/nexus.md#direct-reads).
 
 ## What to know
 
