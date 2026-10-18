@@ -14,7 +14,6 @@ import pytest
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamDriver,
-    StreamStorePlugin,
     StreamUnsupportedError,
     get_stream_handle,
 )
@@ -61,13 +60,10 @@ async def test_a_driver_takes_its_settings(client: Client):
         StreamDriver(streams, batch=0)
 
 
-def log_store(kind: str) -> StreamStorePlugin:
-    return MemoryStreams().notify_on_append(notification_log=True)
-
-
-@pytest.mark.parametrize("kind", ["memory"])
-async def test_a_driver_on_a_server_without_notifiers_fails(client: Client, kind: str):
-    streams = await connect_with(client, log_store(kind))
+async def test_a_driver_on_a_server_without_notifiers_fails(client: Client):
+    streams = await connect_with(
+        client, MemoryStreams().notify_on_append(notification_log=True)
+    )
     async with new_worker(streams, Waits) as worker:
         owner = await running_owner(streams, worker.task_queue)
         # An entry in the log, so the driver has a notification to send.
