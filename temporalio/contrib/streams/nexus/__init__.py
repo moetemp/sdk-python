@@ -52,9 +52,26 @@ endpoint to, and History keeps only each read's range and digest.
 :class:`ClientTransport` calls ``ExecuteSyncNexusOperation`` with the
 caller's own client, and :class:`HttpTransport` the HTTP ingress of a
 self-hosted server.
+
+A Worker follows such a stream with no Workflow. :func:`follow_stream` starts
+the operation as a standalone operation with a callback to the Worker, and
+:class:`StreamFollowerService` on that Worker hands each new batch to a
+:class:`StreamFollower`, then the close. It reads through
+:class:`StoreTransport` on its client's store, or through
+:class:`ClientTransport` or :class:`TemporalStreamsHttpClient` for a stream
+in another namespace or store.
 """
 
 from temporalio.contrib.streams import StreamRef
+from temporalio.contrib.streams.nexus._follower import (
+    FollowerBatch,
+    FollowOutcome,
+    StoreTransport,
+    StreamFollower,
+    StreamFollowerService,
+    StreamReadTransport,
+    follow_stream,
+)
 from temporalio.contrib.streams.nexus._generated import (
     AppendInput,
     AppendOutput,
@@ -87,6 +104,8 @@ from temporalio.contrib.streams.nexus._reader import (
 __all__ = [
     "AppendInput",
     "AppendOutput",
+    "FollowerBatch",
+    "FollowOutcome",
     "HTTPStatusError",
     "ReadInput",
     "ReadOutput",
@@ -94,14 +113,19 @@ __all__ = [
     "ReadPosition",
     "ReadSupersession",
     "RecordWire",
+    "StoreTransport",
     "StreamAccess",
     "StreamCursor",
+    "StreamFollower",
+    "StreamFollowerService",
     "StreamIncompleteError",
     "StreamOperationHandler",
+    "StreamReadTransport",
     "StreamReader",
     "StreamRef",
     "TemporalStreams",
     "TemporalStreamsHandler",
     "TemporalStreamsHttpClient",
+    "follow_stream",
     "stream_ref_from_token",
 ]
