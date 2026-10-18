@@ -48,7 +48,7 @@ from temporalio.contrib.streams._record import (
 )
 from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._wire import WireRecord, from_wire_link, to_record
-from temporalio.contrib.streams._workflow import TaskCutoff
+from temporalio.contrib.streams._workflow import TaskCutoff, cut_task
 from temporalio.contrib.streams.nexus._generated import (
     FollowedWire,
     FollowInput,
@@ -86,26 +86,12 @@ _MAX_RECHECK = timedelta(minutes=5)
 # leaves room for the call around it.
 _DIRECT_READ_SLACK = timedelta(seconds=10)
 _READERS_ATTRIBUTE = "_temporal_stream_nexus_readers"
-# When a following reader ends the Workflow Task it steps in.
+# When a reader that reads directly ends the Workflow Task it reads in.
 _TASK_CUTOFF = TaskCutoff()
 
 
 class _RecheckDue(Exception):
     pass
-
-
-def _cut_task() -> None:
-    # Reads and follow steps run one after another in Local Activities, which
-    # keep the Workflow Task open, so the reader ends the task as a Workflow
-    # reader does. Otherwise the run's state shows only at the Local Activity
-    # heartbeat.
-    runtime: Any = workflow._Runtime.current()
-    commands, seconds = runtime._task_progress()
-    if (
-        commands >= _TASK_CUTOFF.commands
-        or seconds >= _TASK_CUTOFF.time.total_seconds()
-    ):
-        runtime._request_task_heartbeat()
 
 
 class StreamIncompleteError(StreamError):
@@ -747,7 +733,10 @@ class StreamReader(Generic[T]):
             follow_answer_of,
         )
 
-        _cut_task()
+        # Reads and follow steps run one after another in Local Activities,
+        # which keep the Workflow Task open, so the reader ends the task as a
+        # Workflow reader does.
+        cut_task(_TASK_CUTOFF)
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
@@ -782,7 +771,10 @@ class StreamReader(Generic[T]):
             chain_run_of,
         )
 
-        _cut_task()
+        # Reads and follow steps run one after another in Local Activities,
+        # which keep the Workflow Task open, so the reader ends the task as a
+        # Workflow reader does.
+        cut_task(_TASK_CUTOFF)
         wait = timedelta(milliseconds=max(self._idle_wait_ms, _DRAIN_WAIT_MS))
         try:
             raw = await workflow.execute_local_activity(
