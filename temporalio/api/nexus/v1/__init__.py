@@ -16,6 +16,7 @@ from .message_pb2 import (
     StartOperationResponse,
     UnsuccessfulOperationError,
 )
+from .progress_pb2 import NexusOperationProgress
 
 __all__ = [
     "CancelOperationRequest",
@@ -29,6 +30,7 @@ __all__ = [
     "NexusOperationExecutionCancellationInfo",
     "NexusOperationExecutionInfo",
     "NexusOperationExecutionListInfo",
+    "NexusOperationProgress",
     "Request",
     "Response",
     "StartOperationRequest",

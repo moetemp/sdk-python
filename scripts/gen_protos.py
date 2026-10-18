@@ -50,6 +50,8 @@ streams_proto_dir = find_streams_proto_dir()
 # The stream API that the crate carries until it lands upstream. Core's api_upstream does not have
 # it, so its modules go into temporalio.api from here.
 streams_api_proto_dir = streams_proto_dir / "api_stream"
+# The Nexus progress and sync call API, which the crate carries for the same reason.
+nexus_api_proto_dir = streams_proto_dir / "api_nexus"
 
 # Exclude testsrv dependencies protos
 proto_paths = [
@@ -62,6 +64,7 @@ proto_paths = [
 # The crate's api_include copy is left out, since api_upstream generates those modules.
 proto_paths.extend((streams_proto_dir / "temporal").glob("**/*.proto"))
 proto_paths.extend(streams_api_proto_dir.glob("**/*.proto"))
+proto_paths.extend(nexus_api_proto_dir.glob("**/*.proto"))
 proto_paths.extend(test_proto_dir.glob("**/*.proto"))
 proto_paths.extend(additional_proto_dir.glob("**/*.proto"))
 
@@ -221,6 +224,7 @@ def generate_protos(output_dir: Path):
             "-mgrpc_tools.protoc",
             f"--proto_path={api_proto_dir}",
             f"--proto_path={streams_api_proto_dir}",
+            f"--proto_path={nexus_api_proto_dir}",
             f"--proto_path={api_cloud_proto_dir}",
             f"--proto_path={core_proto_dir}",
             f"--proto_path={testsrv_proto_dir}",

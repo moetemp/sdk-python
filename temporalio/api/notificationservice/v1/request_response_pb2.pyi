@@ -34,6 +34,7 @@ class OnCompleteRequest(google.protobuf.message.Message):
     SUCCESS_FIELD_NUMBER: builtins.int
     FAILURE_FIELD_NUMBER: builtins.int
     SOURCE_CONTEXT_FIELD_NUMBER: builtins.int
+    RECEIVER_STATE_FIELD_NUMBER: builtins.int
     @property
     def success(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """The operation was successful, and resulted in the given payload."""
@@ -43,12 +44,17 @@ class OnCompleteRequest(google.protobuf.message.Message):
     @property
     def source_context(self) -> temporalio.api.common.v1.message_pb2.Payload:
         """User-supplied data which was added to the source invocation. (As applicable.)"""
+    receiver_state: builtins.bytes
+    """The `receiver_state` of the last OnProgressResponse that the server accepted for this
+    callback. Empty when no progress was accepted.
+    """
     def __init__(
         self,
         *,
         success: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
         source_context: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        receiver_state: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -68,6 +74,8 @@ class OnCompleteRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "failure",
             b"failure",
+            "receiver_state",
+            b"receiver_state",
             "result",
             b"result",
             "source_context",

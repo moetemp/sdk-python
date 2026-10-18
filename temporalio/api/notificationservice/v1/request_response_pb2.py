@@ -22,7 +22,7 @@ from temporalio.api.failure.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n:temporal/api/notificationservice/v1/request_response.proto\x12#temporal.api.notificationservice.v1\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto"\xbf\x01\n\x11OnCompleteRequest\x12\x32\n\x07success\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x33\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x12\x37\n\x0esource_context\x18\x03 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadB\x08\n\x06result"\x14\n\x12OnCompleteResponseB\xd2\x01\n&io.temporal.api.notificationservice.v1B\x14RequestResponseProtoP\x01Z=go.temporal.io/api/notificationservice/v1;notificationservice\xaa\x02%Temporalio.Api.NotificationService.V1\xea\x02(Temporalio::Api::NotificationService::V1b\x06proto3'
+    b'\n:temporal/api/notificationservice/v1/request_response.proto\x12#temporal.api.notificationservice.v1\x1a$temporal/api/common/v1/message.proto\x1a%temporal/api/failure/v1/message.proto"\xd7\x01\n\x11OnCompleteRequest\x12\x32\n\x07success\x18\x01 \x01(\x0b\x32\x1f.temporal.api.common.v1.PayloadH\x00\x12\x33\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x12\x37\n\x0esource_context\x18\x03 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x16\n\x0ereceiver_state\x18\x04 \x01(\x0c\x42\x08\n\x06result"\x14\n\x12OnCompleteResponseB\xd2\x01\n&io.temporal.api.notificationservice.v1B\x14RequestResponseProtoP\x01Z=go.temporal.io/api/notificationservice/v1;notificationservice\xaa\x02%Temporalio.Api.NotificationService.V1\xea\x02(Temporalio::Api::NotificationService::V1b\x06proto3'
 )
 
 
@@ -54,7 +54,7 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = b"\n&io.temporal.api.notificationservice.v1B\024RequestResponseProtoP\001Z=go.temporal.io/api/notificationservice/v1;notificationservice\252\002%Temporalio.Api.NotificationService.V1\352\002(Temporalio::Api::NotificationService::V1"
     _ONCOMPLETEREQUEST._serialized_start = 177
-    _ONCOMPLETEREQUEST._serialized_end = 368
-    _ONCOMPLETERESPONSE._serialized_start = 370
-    _ONCOMPLETERESPONSE._serialized_end = 390
+    _ONCOMPLETEREQUEST._serialized_end = 392
+    _ONCOMPLETERESPONSE._serialized_start = 394
+    _ONCOMPLETERESPONSE._serialized_end = 414
 # @@protoc_insertion_point(module_scope)

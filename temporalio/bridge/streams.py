@@ -11,6 +11,7 @@ from typing import TypeVar
 
 import google.protobuf.message
 
+import temporalio.api.workflowservice.v1
 import temporalio.bridge.client
 import temporalio.bridge.proto.streams
 import temporalio.bridge.temporal_sdk_bridge
@@ -83,6 +84,26 @@ class StreamStore:
         resp = resp_type()
         resp.ParseFromString(data)
         return resp
+
+
+async def execute_sync_nexus_operation(
+    client: temporalio.bridge.client.Client,
+    req: temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationRequest,
+) -> temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationResponse:
+    """Run one synchronous Nexus operation through ``client``'s server.
+
+    Core's client has no stub for the RPC, so the stream runtime calls it by
+    its method path.
+
+    Raises:
+        temporalio.bridge.client.RPCError: The call failed.
+    """
+    data = await temporalio.bridge.temporal_sdk_bridge.execute_sync_nexus_operation(
+        client._ref, req.SerializeToString()
+    )
+    resp = temporalio.api.workflowservice.v1.ExecuteSyncNexusOperationResponse()
+    resp.ParseFromString(data)
+    return resp
 
 
 def _call_failure(

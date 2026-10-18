@@ -1,3 +1,7 @@
+from .nexus_request_response_pb2 import (
+    ExecuteSyncNexusOperationRequest,
+    ExecuteSyncNexusOperationResponse,
+)
 from .request_response_pb2 import (
     CountActivityExecutionsRequest,
     CountActivityExecutionsResponse,
@@ -330,6 +334,8 @@ __all__ = [
     "DetachStreamCallbackResponse",
     "ExecuteMultiOperationRequest",
     "ExecuteMultiOperationResponse",
+    "ExecuteSyncNexusOperationRequest",
+    "ExecuteSyncNexusOperationResponse",
     "FetchWorkerConfigRequest",
     "FetchWorkerConfigResponse",
     "GetClusterInfoRequest",

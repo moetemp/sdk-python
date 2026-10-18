@@ -4,9 +4,15 @@ use std::sync::Arc;
 
 use prost::Message;
 use pyo3::{create_exception, exceptions::PyException, exceptions::PyValueError, prelude::*};
-use temporalio_streams::{connect_stream_service, proto, StreamService};
+use temporalio_streams::{
+    connect_stream_service, execute_sync_nexus_operation as execute_sync_nexus, proto,
+    protos::temporal::api::workflowservice::v1::ExecuteSyncNexusOperationRequest, StreamService,
+};
 
-use crate::{client::ClientRef, runtime};
+use crate::{
+    client::{rpc_resp, ClientRef},
+    runtime,
+};
 
 // Carries a serialized `coresdk.streams.StreamFailure`, so Python maps every failure the same way
 // whatever store raised it.
@@ -42,6 +48,27 @@ pub fn connect_stream_store<'p>(
             .await
             .map_err(|err| failure_error(proto::StreamFailure::from(err)))?;
         Ok(StreamStoreRef { service, runtime })
+    })
+}
+
+/// Runs one synchronous Nexus operation through `client`'s server with a serialized
+/// `ExecuteSyncNexusOperationRequest`, answering with the serialized response. Core's client has no
+/// stub for the RPC, so the stream runtime calls it by its method path.
+#[pyfunction]
+pub fn execute_sync_nexus_operation<'p>(
+    py: Python<'p>,
+    client: &ClientRef,
+    request: Vec<u8>,
+) -> PyResult<Bound<'p, PyAny>> {
+    let request = ExecuteSyncNexusOperationRequest::decode(&*request)
+        .map_err(|err| PyValueError::new_err(format!("Invalid proto: {err}")))?;
+    let connection = client.connection.clone();
+    client.runtime.future_into_py(py, async move {
+        rpc_resp(
+            execute_sync_nexus(&connection, request)
+                .await
+                .map(tonic::Response::new),
+        )
     })
 }
 

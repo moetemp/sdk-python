@@ -2926,10 +2926,11 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
-source = "git+https://github.com/moetemp/sdk-streams?rev=9250d6c7003b6deedf8222972ccbebcfc8efa1c7#9250d6c7003b6deedf8222972ccbebcfc8efa1c7"
+source = "git+https://github.com/moetemp/sdk-streams?rev=472e700f2ed59e599d62c6572252978767c6f858#472e700f2ed59e599d62c6572252978767c6f858"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
+ "base64 0.23.1",
  "bytes",
  "crc16",
  "gethostname",
@@ -2938,6 +2939,8 @@ dependencies = [
  "prost",
  "prost-wkt-types",
  "redis",
+ "serde",
+ "serde_json",
  "sha2",
  "temporalio-client",
  "temporalio-common",
