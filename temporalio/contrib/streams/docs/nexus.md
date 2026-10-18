@@ -756,10 +756,11 @@ in a new run from its position, and replays.
   attaches to the new chain.
 - A producer that dies between its append and its notify sends no
   progress. A Workflow `StreamReader` that waits for progress reads again
-  once a minute passes with none, then after 2, 4 and so on up to 1 hour
-  while the stream stays quiet, on Workflow timers. So such a record
-  reaches the reader at the latest one recheck later. Each recheck adds a
-  timer and a read to the caller's History.
+  once a minute passes with none, then after 2 and 4 minutes, and then
+  every 5 minutes while the stream stays quiet, on Workflow timers. So such
+  a record reaches the reader at the latest 5 minutes later. Each recheck
+  adds a timer and a read to the caller's History, about 290 a day for an
+  idle stream.
 - If a caller answers a progress delivery with 404, its operation is
   already closed, and the notifier drops that caller. Any other refusal
   turns progress off for that caller, and it still gets the completion.

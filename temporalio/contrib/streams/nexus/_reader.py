@@ -78,9 +78,10 @@ _BATCH = 100
 _DRAIN_WAIT_MS = 2000
 # How long a reader waits for progress before it reads again anyway. A
 # producer that dies between its append and its notify sends no progress, so
-# only a read finds that record. The wait doubles while nothing arrives.
+# only a read finds that record. The wait doubles while nothing arrives, up to
+# the same 5 minutes as the server's recheck of a Workflow reader.
 _FIRST_RECHECK = timedelta(minutes=1)
-_MAX_RECHECK = timedelta(hours=1)
+_MAX_RECHECK = timedelta(minutes=5)
 # A direct read's Local Activity waits at most its read's wait, and this
 # leaves room for the call around it.
 _DIRECT_READ_SLACK = timedelta(seconds=10)
@@ -234,10 +235,11 @@ class StreamReader(Generic[T]):
     its own, or let the reader finish before the id is reused.
 
     A reader that waits for progress reads again once a minute passes with
-    none, then after 2, 4 and so on up to 1 hour while the stream stays
-    quiet. A producer that dies between its append and its notify sends no
-    progress, so this read is what finds its record. Each such read costs a
-    timer and a read in History.
+    none, then after 2 and 4 minutes, and then every 5 minutes while the
+    stream stays quiet. A producer that dies between its append and its
+    notify sends no progress, so this read is what finds its record. Each
+    such read costs a timer and a read in History, about 290 a day for an
+    idle stream.
 
     By default a read is one Local Activity marker of a few hundred bytes, as
     below. With ``replay_from_store=False`` every read is a Nexus operation
