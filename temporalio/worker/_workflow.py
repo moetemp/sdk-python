@@ -357,6 +357,9 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         workflow = None
         data_converter = self._data_converter
         download_metrics = temporalio.converter._extstore.StorageOperationMetrics()
+        owner_activities: list[
+            temporalio.bridge.proto.streams.ResolvedOwnerActivity
+        ] = []
         try:
             if LOG_PROTOS:
                 logger.debug("Received workflow activation:\n%s", act)
@@ -402,11 +405,24 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                     workflow_context_dc=data_converter,
                     workflow_context=workflow_context,
                 )
+            if workflow and self._stream_store:
+                owner_activities = _take_owner_resolutions(act, workflow)
+            wake_contexts = workflow.instance.stream_wake_contexts() if workflow else {}
+
+            def stream_wake_converter(
+                subscription_id: str,
+            ) -> temporalio.converter.DataConverter | None:
+                context = wake_contexts.get(subscription_id)
+                if context is None:
+                    return None
+                return self._data_converter.with_context(context)
+
             download_metrics = await temporalio.bridge.worker.decode_activation(
                 act,
                 data_converter,
                 decode_headers=self._encode_headers,
                 storage_concurrency_limit=self._max_workflow_task_external_storage_concurrency,
+                stream_wake_converter=stream_wake_converter,
             )
             if not workflow:
                 assert init_job
@@ -485,6 +501,13 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                     )
             else:
                 completion.failed.failure.SetInParent()
+                if isinstance(err, temporalio.workflow.NondeterminismError):
+                    # The SDK found it before Workflow code ran, for example
+                    # while turning a recorded result back into its value.
+                    cause = temporalio.api.enums.v1.WorkflowTaskFailedCause
+                    completion.failed.force_cause = (
+                        cause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
+                    )
                 try:
                     data_converter.failure_converter.to_failure(
                         err,
@@ -531,7 +554,10 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             completion.failed.failure.message = f"Failed encoding completion: {err}"
 
         if workflow and self._stream_store:
-            await self._publish_stream_output(act, workflow, completion)
+            _record_stream_owners(workflow, completion)
+            await self._publish_stream_output(
+                act, workflow, completion, owner_activities
+            )
 
         # Reported on the completion so core can include them in its workflow-task duration
         # log; core measures the duration itself.
@@ -696,6 +722,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         act: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
         workflow: _RunningWorkflow,
         completion: temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion,
+        owner_activities: list[temporalio.bridge.proto.streams.ResolvedOwnerActivity],
     ) -> None:
         # Replay publishes nothing, since the records are in the store already. A query can't
         # publish, and its completion never ends the run.
@@ -705,7 +732,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             return
         records = list(workflow.instance.stream_records())
         terminal = _terminal_command(completion.successful)
-        if not records and not terminal:
+        if not records and not terminal and not owner_activities:
             return
         info = workflow.get_info()
         request = temporalio.bridge.proto.streams.PublishWorkflowTaskRequest(
@@ -722,6 +749,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             failed_attempts=act.workflow_task.failed_attempts,
             completed_started_event_ids=act.workflow_task.completed_started_event_ids,
             terminal_command=terminal,
+            resolved_owner_activities=owner_activities,
         )
         try:
             # The stream is the Workflow's, so the bodies encode with its context.
@@ -981,6 +1009,61 @@ def _terminal_command(
     return _Terminal.WORKFLOW_TERMINAL_COMMAND_UNSPECIFIED
 
 
+def _record_stream_owners(
+    workflow: _RunningWorkflow,
+    completion: temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion,
+) -> None:
+    # Replayed completions count too, so a run that comes back into the cache knows its owners
+    # again before a live resolution arrives.
+    if not completion.HasField("successful"):
+        return
+    for command in completion.successful.commands:
+        if not command.HasField("schedule_activity"):
+            continue
+        schedule = command.schedule_activity
+        if temporalio.bridge.streams.STREAM_OWNER_HEADER in schedule.headers:
+            workflow.stream_owner_activities[schedule.seq] = schedule.activity_id
+
+
+def _take_owner_resolutions(
+    act: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
+    workflow: _RunningWorkflow,
+) -> list[temporalio.bridge.proto.streams.ResolvedOwnerActivity]:
+    # Taken before the decode pass, so a failure stays as the server gave it. The store keeps it
+    # as the close outcome, and each reader decodes it with its own codec.
+    resolved: list[temporalio.bridge.proto.streams.ResolvedOwnerActivity] = []
+    for job in act.jobs:
+        if not job.HasField("resolve_activity"):
+            continue
+        activity_id = workflow.stream_owner_activities.pop(
+            job.resolve_activity.seq, None
+        )
+        # Replay closes nothing, since the live run closed the streams already.
+        if activity_id is None or act.is_replaying or job.resolve_activity.is_local:
+            continue
+        result = job.resolve_activity.result
+        status = result.WhichOneof("status")
+        owner = temporalio.bridge.proto.streams.ResolvedOwnerActivity(
+            activity_id=activity_id
+        )
+        if status == "completed":
+            owner.outcome = _Outcome.RESOLVED_ACTIVITY_OUTCOME_COMPLETED
+        elif status == "failed":
+            owner.outcome = _Outcome.RESOLVED_ACTIVITY_OUTCOME_FAILED
+            if result.failed.HasField("failure"):
+                owner.failure.CopyFrom(result.failed.failure)
+        elif status == "cancelled":
+            owner.outcome = _Outcome.RESOLVED_ACTIVITY_OUTCOME_CANCELLED
+            if result.cancelled.HasField("failure"):
+                owner.failure.CopyFrom(result.cancelled.failure)
+        else:
+            # A backoff does not end the Activity.
+            continue
+        resolved.append(owner)
+    return resolved
+
+
+_Outcome = temporalio.bridge.proto.streams.ResolvedActivityOutcome
 _Terminal = temporalio.bridge.proto.streams.WorkflowTerminalCommand
 _TERMINAL_COMMANDS = {
     "complete_workflow_execution": _Terminal.WORKFLOW_TERMINAL_COMMAND_COMPLETE,
@@ -1003,6 +1086,9 @@ class _RunningWorkflow:
         self.first_execution_run_id = init_job.first_execution_run_id
         self.cron = bool(init_job.cron_schedule)
         self.has_retry_policy = init_job.HasField("retry_policy")
+        # The Activities this run marked as owners of their streams, by command seq, until each
+        # one resolves.
+        self.stream_owner_activities: dict[int, str] = {}
         self.deadlocked_activation_task: Awaitable | None = None
         self._deadlock_can_be_interrupted_lock = threading.Lock()
         self._deadlock_can_be_interrupted = False

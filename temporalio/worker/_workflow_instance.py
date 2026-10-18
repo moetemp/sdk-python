@@ -11,6 +11,7 @@ import logging
 import random
 import sys
 import threading
+import time
 import traceback
 import warnings
 from abc import ABC, abstractmethod
@@ -47,6 +48,7 @@ import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.enums.v1
 import temporalio.api.sdk.v1
+import temporalio.api.stream.v1
 import temporalio.bridge.proto.activity_result
 import temporalio.bridge.proto.child_workflow
 import temporalio.bridge.proto.common
@@ -262,6 +264,20 @@ class WorkflowInstance(ABC):
         """
         return []
 
+    def stream_wake_contexts(
+        self,
+    ) -> Mapping[str, temporalio.converter.SerializationContext]:
+        """Return the codec context of each stream reader's wakes, by subscription id.
+
+        Not an abstractmethod because it is not mandatory to implement. The
+        Worker decodes a wake's close failure in its reader's context before
+        the next activation, and leaves the failure of any other wake encoded.
+
+        Returns:
+            The contexts the run's stream readers registered.
+        """
+        return {}
+
 
 class UnsandboxedWorkflowRunner(WorkflowRunner):
     """Workflow runner that does not do any sandboxing."""
@@ -350,6 +366,23 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         self._seed_callbacks: list[Callable[[int], None]] = []
         self._read_only = False
         self._in_query_or_validator = False
+
+        # The Workflow Task the activations belong to, known by the History
+        # length its activations carry, with the commands lang sent in it and
+        # when its first activation came. Only a task heartbeat request reads
+        # them, and Core ignores that while replaying.
+        self._task_history_length = -1
+        self._task_started = 0.0
+        self._task_commands = 0
+        self._task_heartbeat_requested = False
+
+        # Stream wakes for the run's stream readers, in the order they came.
+        # The stream reader takes them from here, so this module knows nothing
+        # of what a wake means.
+        self._stream_wakes: list[temporalio.api.stream.v1.StreamWake] = []
+        self._stream_wake_contexts: dict[
+            str, temporalio.converter.SerializationContext
+        ] = {}
 
         # Patches we have been notified of and memoized patch responses
         self._patches_notified: set[str] = set()
@@ -461,6 +494,11 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
         return self._stream_records
 
+    def stream_wake_contexts(
+        self,
+    ) -> Mapping[str, temporalio.converter.SerializationContext]:
+        return self._stream_wake_contexts
+
     #### Activation functions ####
     # These are in alphabetical order and besides "activate", and
     # "_make_workflow_input", all other calls are "_apply_" + the job field
@@ -481,6 +519,10 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             act.deployment_version_for_current_task
         )
         self._current_history_length = act.history_length
+        if act.history_length != self._task_history_length:
+            self._task_history_length = act.history_length
+            self._task_started = time.monotonic()
+            self._task_commands = 0
         self._current_history_size = act.history_size_bytes
         self._continue_as_new_suggested = act.continue_as_new_suggested
         self._target_worker_deployment_version_changed = (
@@ -623,7 +665,32 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         if any(map(is_completion, self._current_completion.successful.commands)):
             self._warn_if_unfinished_handlers()
 
+        if self._current_completion.HasField("successful"):
+            self._task_commands += len(self._current_completion.successful.commands)
+            if self._task_heartbeat_requested:
+                self._current_completion.successful.heartbeat_task = True
+        self._task_heartbeat_requested = False
+
         return self._current_completion
+
+    def _task_progress(self) -> tuple[int, float]:
+        """The commands sent in the current Workflow Task, and its seconds so far.
+
+        The commands of the running activation count too.
+        """
+        commands = self._task_commands
+        if self._current_completion.HasField("successful"):
+            commands += len(self._current_completion.successful.commands)
+        return commands, time.monotonic() - self._task_started
+
+    def _request_task_heartbeat(self) -> None:
+        """Ask Core to complete the Workflow Task with this activation.
+
+        Local Activities still running then go on in the next task, as at a
+        Local Activity heartbeat. User code never waits on this, so a choice
+        made from the clock changes no command.
+        """
+        self._task_heartbeat_requested = True
 
     def _apply(
         self, job: temporalio.bridge.proto.workflow_activation.WorkflowActivationJob
@@ -668,6 +735,8 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             self._apply_initialize_workflow(job.initialize_workflow)
         elif job.HasField("update_random_seed"):
             self._apply_update_random_seed(job.update_random_seed)
+        elif job.HasField("workflow_task_attachments"):
+            self._apply_workflow_task_attachments(job.workflow_task_attachments)
         else:
             raise RuntimeError(f"Unrecognized job: {job.WhichOneof('variant')}")
 
@@ -1210,6 +1279,22 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         if self._cancel_primary_task_pending:
             self._cancel_primary_task_pending = False
             self.call_soon(self._primary_task.cancel)
+
+    def _apply_workflow_task_attachments(
+        self, job: temporalio.bridge.proto.workflow_activation.WorkflowTaskAttachments
+    ) -> None:
+        # Other attachments belong to features this Worker does not run, so
+        # they are left alone.
+        woke = False
+        for attachment in job.attachments:
+            wake = temporalio.api.stream.v1.StreamWake()
+            if attachment.Unpack(wake):
+                self._stream_wakes.append(wake)
+                woke = True
+        if woke:
+            # A wake resolves no future, and wait conditions are checked only
+            # after a ready callback ran, so give the loop one.
+            self.call_soon(lambda: None)
 
     def _apply_update_random_seed(
         self, job: temporalio.bridge.proto.workflow_activation.UpdateRandomSeed

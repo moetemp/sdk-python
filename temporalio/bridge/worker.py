@@ -22,6 +22,7 @@ import temporalio.bridge.temporal_sdk_bridge
 import temporalio.converter
 import temporalio.converter._extstore
 from temporalio.api.common.v1.message_pb2 import Payload
+from temporalio.api.stream.v1.message_pb2 import StreamWake
 from temporalio.bridge._visitor_functions import PayloadSequence, VisitorFunctions
 from temporalio.bridge.temporal_sdk_bridge import (
     CustomSlotSupplier as BridgeCustomSlotSupplier,
@@ -309,8 +310,19 @@ async def decode_activation(
     data_converter: temporalio.converter.DataConverter,
     decode_headers: bool,
     storage_concurrency_limit: int,
+    stream_wake_converter: Callable[[str], temporalio.converter.DataConverter | None]
+    | None = None,
 ) -> temporalio.converter._extstore.StorageOperationMetrics:
     """Decode all payloads in the activation.
+
+    Args:
+        activation: The activation to decode in place.
+        data_converter: The converter of the activation's payloads.
+        decode_headers: Whether to decode headers too.
+        storage_concurrency_limit: How many external storage reads run at once.
+        stream_wake_converter: The converter of the close failure of each
+            stream wake, by the wake's subscription id. A wake it gives none
+            for keeps its failure encoded.
 
     Returns:
         Metrics from any external storage retrieval operations that occurred.
@@ -330,7 +342,51 @@ async def decode_activation(
         skip_headers=not decode_headers,
     ).visit(_Visitor(data_converter._decode_payload_sequence), activation)
 
+    if stream_wake_converter is not None:
+        with metrics.track():
+            await _visit_stream_wakes(
+                activation,
+                stream_wake_converter,
+                lambda c: _Visitor(c._external_retrieve_payload_sequence),
+            )
+        await _visit_stream_wakes(
+            activation,
+            stream_wake_converter,
+            lambda c: _Visitor(c._decode_payload_sequence),
+        )
+
     return metrics
+
+
+async def _visit_stream_wakes(
+    activation: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
+    converter_for: Callable[[str], temporalio.converter.DataConverter | None],
+    functions: Callable[[temporalio.converter.DataConverter], VisitorFunctions],
+) -> None:
+    """Visit the close failure of each stream wake the activation attaches.
+
+    The server packs each wake in an ``Any``, and the payload visitor does not
+    open an ``Any``. The failure holds what the stream owner's codec encoded,
+    so it decodes in the owner's context, as a read of the same close does.
+    """
+    visitor = CommandAwarePayloadVisitor(skip_search_attributes=True)
+    for job in activation.jobs:
+        if not job.HasField("workflow_task_attachments"):
+            continue
+        for attachment in job.workflow_task_attachments.attachments:
+            if not attachment.Is(StreamWake.DESCRIPTOR):
+                continue
+            wake = StreamWake()
+            attachment.Unpack(wake)
+            if not wake.HasField("close_failure"):
+                continue
+            converter = converter_for(wake.subscription_id)
+            if converter is None:
+                continue
+            await visitor._visit_temporal_api_failure_v1_Failure(
+                functions(converter), wake.close_failure
+            )
+            attachment.Pack(wake)
 
 
 async def encode_completion(
