@@ -60,7 +60,7 @@ from temporalio.contrib.streams import (
     StreamRef,
     StreamStorePlugin,
     Supersession,
-    workflow_writer,
+    stream_producer,
 )
 from temporalio.contrib.streams._record import Cursor, RecordKind
 from temporalio.contrib.streams._wire import WireRecord, to_wire
@@ -1198,9 +1198,9 @@ class LiveTokenOwner:
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in texts:
-            writer.publish(Token(text))
+            writer.append(Token(text))
             await workflow.sleep(timedelta(milliseconds=100))
         await writer.finish()
         await workflow.wait_condition(lambda: self._done)
@@ -1353,9 +1353,9 @@ class LiveEndingOwner:
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in texts:
-            writer.publish(Token(text))
+            writer.append(Token(text))
             await workflow.sleep(timedelta(milliseconds=100))
         await writer.finish()
         await workflow.wait_condition(lambda: bool(self._end))
