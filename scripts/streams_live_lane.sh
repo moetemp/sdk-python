@@ -9,7 +9,7 @@
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: 6e611c45, moe/bridge/v2/dr40-nexus-progress)
+#   SERVER_REF         commit to build (default: 6e611c45, moe/bridge/v2/dr40-sdk-streams)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
