@@ -84,13 +84,12 @@ class StreamStorePlugin(SimplePlugin):
         # Imported here, since that module imports this one.
         from temporalio.contrib.streams._replay_reads import (
             BatchCache,
-            ByteCache,
             ReadStates,
         )
 
         self._batches = BatchCache()
         self._read_states = ReadStates()
-        self._follows = ByteCache()
+        self._follows = BatchCache()
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.

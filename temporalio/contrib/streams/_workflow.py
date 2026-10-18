@@ -69,6 +69,7 @@ from temporalio.contrib.streams._replay_reads import (
     is_chained,
     is_positions,
     positions_payload,
+    range_key,
 )
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 from temporalio.contrib.streams._wakes import register_wake_context, wake_state
@@ -1003,7 +1004,7 @@ async def _read_batch(input: _ReadInput) -> RawValue:
     )
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
-    store._batches.put(range, response)
+    store._batches.put(range_key(range), response.SerializeToString())
     chain = ReadChain(f"{info.workflow_run_id}/{input.reader_id}", input.read_seq)
     if input.chained:
         # The input is the previous read's answer state, which that read's
