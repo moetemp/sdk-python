@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -29,7 +29,7 @@ from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,
 )
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
@@ -39,12 +39,14 @@ from temporalio.contrib.streams import (
     get_stream_handle,
     workflow_writer,
 )
+from temporalio.contrib.streams._plugin import store_for_client
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     StreamOperationHandler,
     stream_ref_from_token,
 )
 from temporalio.contrib.streams.nexus._operation import FIRST_WAKE_HEADER
+from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
@@ -615,3 +617,327 @@ async def test_a_close_right_after_the_last_publishes_comes_after_them(
     await Replayer(
         workflows=[OwnerThatClosesInOneTask], plugins=[MemoryStreams()]
     ).replay_workflow(history)
+
+
+async def test_a_worker_without_notifications_still_delivers_the_close_result(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    # Notifications only gate progress. A close reaches the notifier whatever
+    # the store config says, so the caller completes with its result.
+    owner_id = f"owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=TOKENS_TOPIC)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-closer-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    streams_client = await connect(client, MemoryStreams())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            OwnerThatClosesInOneTask.run, 3, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    async with Worker(
+        streams_client,
+        task_queue=task_queue,
+        workflows=[StreamOperationCaller, OwnerThatClosesInOneTask],
+        nexus_service_handlers=[ChatServiceHandler()],
+    ):
+        observed = await asyncio.wait_for(
+            streams_client.execute_workflow(
+                StreamOperationCaller.run,
+                endpoint,
+                id=f"stream-closer-caller-{uuid.uuid4()}",
+                task_queue=task_queue,
+            ),
+            30,
+        )
+        owner = streams_client.get_workflow_handle(owner_id)
+        await owner.signal(OwnerThatClosesInOneTask.done)
+        await owner.result()
+
+    assert observed.result == "3 tokens"
+
+
+# A close with an error, and an owner that ends without completing, fail the
+# caller's operation as a Workflow-run operation fails.
+
+
+@workflow.defn(name="StreamFailureCaller")
+class StreamFailureCaller:
+    """Starts the operation and says how it ended."""
+
+    @workflow.run
+    async def run(self, endpoint: str) -> list[str]:
+        nexus_client = workflow.create_nexus_client(
+            service=ChatService, endpoint=endpoint
+        )
+        handle = await nexus_client.start_operation(ChatService.chat, "hello")
+        try:
+            result = await handle
+        except NexusOperationError as err:
+            cause = err.cause
+            return [
+                type(cause).__name__,
+                getattr(cause, "type", None) or "",
+                getattr(cause, "message", str(cause)),
+            ]
+        return ["succeeded", str(result)]
+
+
+@workflow.defn(name="OwnerThatEndsAsTold")
+class OwnerThatEndsAsTold:
+    """Publishes once, then ends as its signal says: fail, close with an error, or finish."""
+
+    def __init__(self) -> None:
+        self._how: str | None = None
+
+    @workflow.run
+    async def run(self) -> None:
+        workflow_writer(TOKENS_TOPIC).publish("token")
+        await workflow.wait_condition(lambda: self._how is not None)
+        if self._how == "fail":
+            raise ApplicationError(
+                "the owner gave up", type="OwnerGaveUp", non_retryable=True
+            )
+        if self._how == "close-with-error":
+            await close_workflow_stream(
+                TOKENS_TOPIC,
+                error=ApplicationError("the agent gave up", type="AgentGaveUp"),
+            )
+            await workflow.wait_condition(lambda: self._how == "finish")
+
+    @workflow.signal
+    def end(self, how: str) -> None:
+        self._how = how
+
+
+async def _caller_outcome(
+    client: Client,
+    env: WorkflowEnvironment,
+    end_owner: Callable[[Client, StreamRef], Awaitable[None]],
+) -> list[str]:
+    """Runs a caller against a stream of an `OwnerThatEndsAsTold`, ends the owner with
+    `end_owner` once the caller's operation started, and returns how the operation ended.
+    """
+    owner_id = f"owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=TOKENS_TOPIC)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-failure-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    streams_client = await connect(client, MemoryStreams())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            OwnerThatEndsAsTold.run, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    async with Worker(
+        streams_client,
+        task_queue=task_queue,
+        workflows=[StreamFailureCaller, OwnerThatEndsAsTold],
+        nexus_service_handlers=[ChatServiceHandler()],
+    ):
+        handle = await streams_client.start_workflow(
+            StreamFailureCaller.run,
+            endpoint,
+            id=f"stream-failure-caller-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+
+        async def operation_started() -> bool:
+            history = await handle.fetch_history()
+            return any(
+                event.HasField("nexus_operation_started_event_attributes")
+                for event in history.events
+            )
+
+        assert await _wait_for(operation_started)
+        await end_owner(streams_client, ref)
+        outcome = await asyncio.wait_for(handle.result(), 30)
+        owner = streams_client.get_workflow_handle(owner_id)
+        if (await owner.describe()).status == WorkflowExecutionStatus.RUNNING:
+            await owner.signal(OwnerThatEndsAsTold.end, "finish")
+    return outcome
+
+
+async def test_live_a_failed_owner_fails_the_operation(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    async def fail(c: Client, ref: StreamRef) -> None:
+        await c.get_workflow_handle(ref.workflow_id).signal(
+            OwnerThatEndsAsTold.end, "fail"
+        )
+
+    outcome = await _caller_outcome(client, env, fail)
+    # No Worker closes the stream when its owner fails. The notifier's owner
+    # check does, and it reads no History, so it has no failure of the run's.
+    assert outcome == [
+        "ApplicationError",
+        "StreamOwnerFailed",
+        "the owner Workflow failed",
+    ]
+
+
+async def test_live_a_close_with_an_error_fails_the_operation(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    async def close_with_error(c: Client, ref: StreamRef) -> None:
+        await c.get_workflow_handle(ref.workflow_id).signal(
+            OwnerThatEndsAsTold.end, "close-with-error"
+        )
+
+    outcome = await _caller_outcome(client, env, close_with_error)
+    assert outcome == ["ApplicationError", "AgentGaveUp", "the agent gave up"]
+
+
+async def test_live_an_outside_close_with_an_error_fails_the_operation(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    async def close_from_outside(c: Client, ref: StreamRef) -> None:
+        store = store_for_client(c)
+        await store.close_stream(
+            c, ref, error=ApplicationError("the moderator stopped it", type="Moderated")
+        )
+
+    outcome = await _caller_outcome(client, env, close_from_outside)
+    assert outcome == ["ApplicationError", "Moderated", "the moderator stopped it"]
+
+
+async def test_live_a_terminated_owner_fails_the_operation(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    # No Worker runs a final task for a terminated owner, so the server's
+    # owner check closes the stream, every streamnotifier.ownerCheckInterval.
+    async def terminate(c: Client, ref: StreamRef) -> None:
+        await c.get_workflow_handle(ref.workflow_id).terminate("stop")
+
+    outcome = await _caller_outcome(client, env, terminate)
+    assert outcome[0] == "TerminatedError", outcome
+
+
+async def test_live_a_retried_start_on_an_activity_stream_attaches_once(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+    activity_id = f"tool-{uuid.uuid4().hex}"
+    # No Worker polls the task queue, so the Activity run stays open.
+    owner = await store_client.start_activity(
+        "never_polled",
+        id=activity_id,
+        task_queue=f"unpolled-{uuid.uuid4().hex}",
+        start_to_close_timeout=timedelta(minutes=5),
+    )
+    ref = StreamRef.for_activity(activity_id, run_id=owner.run_id, topic="tokens")
+    await _skip_without_notifier(client, StreamRef.for_workflow("probe"))
+
+    async def open_tool_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    handler: StreamOperationHandler[str, Any] = StreamOperationHandler(open_tool_stream)
+    first = await handler.start(start_context(), "hi")
+    again = await handler.start(start_context(), "hi")
+
+    assert again.token == first.token
+    assert stream_ref_from_token(first.token) == ref
+    described = await call_workflow_service(
+        client,
+        "DescribeStreamNotifier",
+        DescribeStreamNotifierRequest(
+            namespace=client.namespace,
+            stream_ref=StreamReference(
+                owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_ACTIVITY,
+                activity_id=activity_id,
+                run_id=owner.run_id or "",
+                topic="tokens",
+            ),
+        ),
+        DescribeStreamNotifierResponse,
+    )
+    assert len(described.callbacks) == 1
+    await owner.terminate(reason="done")
+
+
+@workflow.defn
+class SchedulesAToolNoOnePolls:
+    @workflow.run
+    async def run(self, task_queue: str) -> None:
+        await workflow.execute_activity(
+            "never_polled",
+            activity_id="tool-1",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+
+
+async def test_live_a_retried_start_on_a_tool_stream_attaches_once(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_client = await connect(client, MemoryStreams())
+    monkeypatch.setattr("temporalio.nexus.client", lambda: store_client)
+    await _skip_without_notifier(client, StreamRef.for_workflow("probe"))
+    task_queue = f"agent-{uuid.uuid4().hex}"
+    async with Worker(
+        store_client, task_queue=task_queue, workflows=[SchedulesAToolNoOnePolls]
+    ):
+        agent = await store_client.start_workflow(
+            SchedulesAToolNoOnePolls.run,
+            f"unpolled-{uuid.uuid4().hex}",
+            id=f"agent-{uuid.uuid4().hex}",
+            task_queue=task_queue,
+        )
+        for _ in range(100):
+            if (await agent.describe()).raw_description.pending_activities:
+                break
+            await asyncio.sleep(0.1)
+        ref = StreamRef.for_workflow_activity(
+            agent.id,
+            run_id=agent.result_run_id or "",
+            activity_id="tool-1",
+            topic="tokens",
+        )
+
+        async def open_tool_stream(_ctx: Any, _prompt: str) -> StreamRef:
+            return ref
+
+        handler: StreamOperationHandler[str, Any] = StreamOperationHandler(
+            open_tool_stream
+        )
+        first = await handler.start(start_context(), "hi")
+        again = await handler.start(start_context(), "hi")
+
+        assert again.token == first.token
+        assert stream_ref_from_token(first.token) == ref
+        described = await call_workflow_service(
+            client,
+            "DescribeStreamNotifier",
+            DescribeStreamNotifierRequest(
+                namespace=client.namespace,
+                stream_ref=StreamReference(
+                    owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW_ACTIVITY,
+                    workflow_id=agent.id,
+                    run_id=agent.result_run_id or "",
+                    activity_id="tool-1",
+                    topic="tokens",
+                ),
+            ),
+            DescribeStreamNotifierResponse,
+        )
+        assert len(described.callbacks) == 1
+        await agent.terminate()
