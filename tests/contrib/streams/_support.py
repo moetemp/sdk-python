@@ -10,8 +10,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from temporalio.api.workflowservice.v1 import (
+    DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
+)
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
+from temporalio.contrib.streams._plugin import call, store_for_client
+from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter
 
 
@@ -31,6 +37,24 @@ async def connect_with(
         data_converter=converter or client.data_converter,
         plugins=[store] if store is not None else [],
     )
+
+
+async def describe_stream_notifier(
+    client: Client, request: DescribeStreamNotifierRequest
+) -> DescribeStreamNotifierResponse:
+    """Describe a stream's notifier through the stream service.
+
+    The stream runtime holds the notifier client, so the service client has no
+    such call. A client with no store gets one in memory, since the call reads
+    no store. A server with no notifier fails it with ``StreamUnsupportedError``,
+    and one with no such notifier with ``StreamRefusedError``.
+    """
+    try:
+        store_for_client(client)
+    except ValueError:
+        client = await connect_with(client, MemoryStreams())
+    service = await store_for_client(client)._service_for(client)
+    return await call(service.describe_stream_notifier(request))
 
 
 @functools.cache

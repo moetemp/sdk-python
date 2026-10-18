@@ -32,12 +32,16 @@ from temporalio.bridge.proto.streams import (
     ActivityProducer,
     AppendRecord,
     AppendRequest,
+    CloseRequest,
     LatestRequest,
     NamedProducer,
     ReadRequest,
+    ReadResponse,
     StreamAddress,
     StreamOwnerKind,
+    WaitForNotificationRequest,
 )
+from temporalio.bridge.streams_generated import StreamService
 from temporalio.client import Client
 from temporalio.contrib.streams._body import batch_digest, content_hash, encode_bodies
 from temporalio.contrib.streams._cursor import BEGINNING
@@ -70,6 +74,8 @@ __all__ = [
 T = TypeVar("T")
 
 _READ_WAIT = timedelta(seconds=30)
+# How long a read that sleeps on the notifier waits in the store before it sleeps.
+_IDLE_WAIT = timedelta(seconds=2)
 
 
 class StreamProducer(Generic[T]):
@@ -287,9 +293,21 @@ class StreamHandle:
         producers are not known to it. A ``SUPERSEDED`` record withdraws only
         what its producer wrote in earlier attempts. The other producers'
         records on the topic stay valid. The read ends when the owner's run
-        chain is closed and every retained record has been delivered. The
-        result is a generator, so a caller that stops early calls
-        ``aclose()`` on it.
+        chain is closed and every retained record has been delivered, or
+        when the topic was closed and read to its end. A topic closed with
+        an ``error=`` raises that error, through the client's failure
+        converter, after its last record. The result is a generator, so a
+        caller that stops early calls ``aclose()`` on it.
+
+        With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
+        on, the default, an idle read sleeps on the stream's notifier on the server. A read
+        that waits 2 seconds and finds nothing comes back empty, and the
+        reader waits until a producer notifies, the stream closes, or the server's wait
+        limit (60 seconds by default) passes, and then reads again. That read
+        also finds records whose notification was lost. Without
+        notifications, or on a server without the stream notifier, an idle
+        read waits in the store instead, which holds a store connection while
+        it waits.
 
         The read starts when the generator first runs, not when this call
         returns, and ``END`` is resolved then. A reader that must not miss
@@ -315,6 +333,8 @@ class StreamHandle:
                 read waits.
             StreamStorageError: The store failed or couldn't be reached, as
                 a Redis blip during a long read does.
+            BaseException: The error the topic was closed with, after its
+                last record.
 
         Any of these ends the generator. Start a new read after the last
         cursor you handled. It reads on from there, though it no longer knows
@@ -329,15 +349,53 @@ class StreamHandle:
         service = await self._plugin._service_for(self._client)
         address = self._address(topic, run_id=await self._read_run_id())
         request = ReadRequest(stream=address, after=after.token)
-        request.wait.FromTimedelta(_READ_WAIT)
+        sleep = self._plugin._waits_on_notifier()
+        self._set_wait(request, sleep)
         while True:
             response = await call(service.read(request))
             for record in response.records:
                 yield await from_read(self._converter, record, result_type)
             if response.done:
+                if response.HasField("close_failure"):
+                    raise await self._converter.decode_failure(response.close_failure)
                 return
             request.after = response.cursor
             request.state = response.state
+            if sleep and not response.records:
+                sleep = await self._wait_for_notification(service, request, response)
+
+    @staticmethod
+    def _set_wait(request: ReadRequest, sleep: bool) -> None:
+        # A read that sleeps on the notifier waits only its idle time in the
+        # store before it sleeps.
+        request.wait.FromTimedelta(_IDLE_WAIT if sleep else _READ_WAIT)
+
+    async def _wait_for_notification(
+        self, service: StreamService, request: ReadRequest, empty: ReadResponse
+    ) -> bool:
+        """Wait until the stream moves past an empty read, closes, or the poll ends.
+
+        Every answer leads to another read. After the server's wait limit,
+        that read finds records whose notification was lost, or comes back
+        empty and sleeps again. Returns whether the read can sleep on the
+        notifier again.
+        """
+        wait = WaitForNotificationRequest(
+            stream=request.stream, after_counter=empty.wake_after
+        )
+        try:
+            await call(service.wait_for_notification(wait))
+        except StreamUnsupportedError:
+            # The server has no stream notifier, so the store's blocking read is
+            # the only way to wait, for this read and the process's later ones.
+            self._plugin._notifier_unsupported = True
+            self._set_wait(request, False)
+            return False
+        except StreamNotFoundError:
+            # The owner hasn't started yet. The next read waits out the owner
+            # start grace, and fails once it ends.
+            pass
+        return True
 
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """The cursor of the newest record on ``topic``, or ``BEGINNING`` when empty.
@@ -350,6 +408,58 @@ class StreamHandle:
         service = await self._plugin._service_for(self._client)
         response = await call(service.latest(LatestRequest(stream=self._address(name))))
         return Cursor(response.cursor)
+
+    async def close(
+        self,
+        result: Any = None,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """Close ``topic`` with ``result``, or with ``error`` as a failure.
+
+        The store refuses appends from then on, and every read ends after
+        the last record. The stream runtime then closes the stream's notifier on the
+        server, so each reader that sleeps on it wakes and sees the outcome.
+        ``result`` goes through the client's data converter and codec, and
+        ``error`` through its failure converter. A close with neither ends
+        the stream with a null result.
+
+        A close of a stream that is already closed is accepted, and the
+        first close's outcome stays, so a retried close is safe. On a server
+        without the stream notifier, the close ends the stream in the store
+        only.
+
+        Raises:
+            ValueError: Both ``result`` and ``error`` are set.
+            StreamError: The store or the notifier refused the close.
+
+        .. warning::
+            This API is experimental.
+        """
+        await self._close(result, topic=topic, error=error)
+
+    async def _close(
+        self,
+        result: Any,
+        *,
+        topic: str | StreamTopic[Any] | None,
+        error: BaseException | None,
+        closed_by: str = "",
+    ) -> None:
+        if result is not None and error is not None:
+            raise ValueError("a stream closes with a result or an error, not both")
+        name, _ = self._resolve(topic, None)
+        request = CloseRequest(stream=self._address(name), closed_by=closed_by)
+        if error is not None:
+            await self._converter.encode_failure(error, request.failure)
+        elif result is not None:
+            [payload] = await encode_bodies(
+                self._converter, self._converter.payload_converter.to_payloads([result])
+            )
+            request.result.CopyFrom(payload)
+        service = await self._plugin._service_for(self._client)
+        await call(service.close(request))
 
     @overload
     def producer(
@@ -505,6 +615,25 @@ class ActivityStreamHandle:
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """See :meth:`temporalio.contrib.streams.StreamHandle.latest`."""
         return await self._inner.latest(topic=topic)
+
+    async def close(
+        self,
+        result: Any = None,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """See :meth:`temporalio.contrib.streams.StreamHandle.close`.
+
+        The close names this Activity's producer id as its ``closed_by``.
+        """
+        identity = self._identity
+        await self._inner._close(
+            result,
+            topic=topic,
+            error=error,
+            closed_by=f"{identity.activity_id}@{identity.run_id}",
+        )
 
     @overload
     def producer(self, *, topic: StreamTopic[T]) -> StreamProducer[T]: ...

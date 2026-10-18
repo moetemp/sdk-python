@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 import temporalio.bridge.client
 from temporalio.bridge.proto.streams import (
     DeleteOwnerRequest,
+    FlushNotificationsRequest,
     StreamOwnerKind,
     StreamStoreConfig,
 )
@@ -34,10 +35,13 @@ from temporalio.converter import DataConverter
 from temporalio.plugin import SimplePlugin
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from temporalio.bridge.temporal_sdk_bridge import StreamStoreRef
     from temporalio.client import Client, ClientConfig
+    from temporalio.contrib.streams._ref import StreamRef
     from temporalio.service import ConnectConfig, ServiceClient
-    from temporalio.worker import ReplayerConfig, WorkerConfig
+    from temporalio.worker import ReplayerConfig, Worker, WorkerConfig
 
 __all__ = ["StreamStorePlugin"]
 
@@ -60,6 +64,8 @@ class StreamStorePlugin(SimplePlugin):
         """Name the plugin and the store the stream runtime connects to."""
         super().__init__(name)
         self._config = config
+        # On by default, since a sleeping reader wakes only on a notification or the recheck.
+        self._config.notify_on_append = True
         self._service: StreamService | None = None
         self._store: StreamStore | None = None
         self._capabilities: StoreCapabilities | None = None
@@ -149,6 +155,117 @@ class StreamStorePlugin(SimplePlugin):
             interceptors.append(StreamsInterceptor())
         config["interceptors"] = interceptors
         return config
+
+    async def run_worker(
+        self,
+        worker: Worker,
+        next: Callable[[Worker], Awaitable[None]],
+    ) -> None:
+        """Run the Worker, then wait for the notifications the stream runtime still has out.
+
+        The Worker's Activities append and close through this store, and the stream runtime
+        tells each stream's notifier in the background. A Worker that stops
+        right after its last Activity would otherwise drop a notification a
+        sleeping reader waits for.
+        """
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            await self.flush_notifications()
+
+    def notify_on_append(
+        self, enabled: bool = True, *, max_notifiers: int | None = None
+    ) -> Self:
+        """Set whether each stream's notifier on the server hears when the stream moves.
+
+        That is what wakes a reader that sleeps on the stream: a client
+        reader that waits on the notifier, or a Workflow reader. The stream
+        runtime tells the notifier after every append, and folds the
+        notifications of one stream into one call in flight. An append
+        answers only after its notification went, or after a few failed
+        tries, so a producer that stops before then gets no answer, and its
+        retry notifies. On by default. On a server without the stream
+        notifier it costs one call, and then the process stops notifying.
+
+        Turn it off only in a process whose streams have no sleeping reader.
+        A client reader sleeps on the notifier only with it on, and a
+        Workflow reader that no producer notifies wakes only on the
+        notifier's recheck, up to 5 minutes late. Set it before a client
+        connects the store.
+
+        Args:
+            enabled: Whether to notify. ``False`` turns notifications off.
+            max_notifiers: How many streams the stream runtime keeps a
+                notifier for, dropping the least recently used. The stream
+                runtime's default when unset.
+
+        Raises:
+            ValueError: A client already connected this store, or
+                ``max_notifiers`` is below one.
+
+        .. warning::
+            This API is experimental.
+        """
+        if self._store is not None:
+            raise ValueError(
+                "set notifications before a client connects the stream store"
+            )
+        if max_notifiers is not None and max_notifiers < 1:
+            raise ValueError(f"max_notifiers must be at least 1, got {max_notifiers}")
+        self._config.notify_on_append = enabled
+        if max_notifiers is not None:
+            self._config.max_notifiers = max_notifiers
+        return self
+
+    def _waits_on_notifier(self) -> bool:
+        """Whether a client reader sleeps on the stream's notifier when the stream is idle.
+
+        Only with notifications on, since without them no producer in the
+        deployment tells the notifier, and a sleeping reader would wake only
+        at the server's wait limit.
+        """
+        return self._config.notify_on_append and not self._notifier_unsupported
+
+    async def close_stream(
+        self,
+        client: Client,
+        ref: StreamRef,
+        result: Any = None,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        """Close the stream ``ref`` names, with ``result`` or ``error`` as its outcome.
+
+        See :meth:`temporalio.contrib.streams.StreamHandle.close`.
+
+        Raises:
+            ValueError: Both ``result`` and ``error`` are set.
+            temporalio.contrib.streams.StreamError: The store or the
+                notifier refused the close.
+
+        .. warning::
+            This API is experimental.
+        """
+        # Imported here, since the handles reach the store through this module.
+        from temporalio.contrib.streams._handles import StreamHandle
+
+        ref._require_supported()
+        await StreamHandle(self, client, ref).close(result, error=error)
+
+    async def flush_notifications(self) -> None:
+        """Wait for the notifications the stream runtime still has out, for up to 10 seconds.
+
+        The stream runtime tells a stream's notifier on the server in the background, after
+        an append that a sleeping reader waits for and after a close. A
+        Worker built from the client does this when it stops. A process that
+        holds only a client calls it before it exits. Before a client
+        connected the store, it returns at once.
+
+        .. warning::
+            This API is experimental.
+        """
+        if self._service is not None:
+            await call(self._service.flush_notifications(FlushNotificationsRequest()))
 
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
         """Add the interceptor a Workflow that uses ``workflow_writer`` replays with.
