@@ -5,16 +5,13 @@ a new producer attempt, the Activity closes the stream itself, and when the
 run ends with no close, the server's notifier closes the stream with the
 run's outcome. The stock dev server has no stream notifier, so every case
 here skips there. ``scripts/streams_live_lane.sh`` runs them on a server
-that has it, on memory, standalone Redis and a Redis Cluster, each with a
-``StreamDriver``.
+that has it, on memory, standalone Redis and a Redis Cluster.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import uuid
-from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -29,7 +26,6 @@ from temporalio.contrib.streams import (
     BEGINNING,
     Cursor,
     RecordKind,
-    StreamDriver,
     StreamRef,
     activity_handle,
     get_stream_handle,
@@ -55,23 +51,10 @@ OWNER_CHECK = 30.0
 
 
 @pytest.fixture(params=["memory", "redis", "cluster"])
-async def driven(
-    request: pytest.FixtureRequest, client: Client
-) -> AsyncIterator[Client]:
-    """A client whose store keeps a notification log, with a StreamDriver running."""
+async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
+    """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
-    streams = await connect_with(
-        client, store(request.param).notify_on_append(notification_log=True)
-    )
-    driver = asyncio.create_task(
-        StreamDriver(streams, sweep_interval=timedelta(seconds=2)).run()
-    )
-    try:
-        yield streams
-    finally:
-        driver.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await driver
+    return await connect_with(client, store(request.param).notify_on_append())
 
 
 @workflow.defn
@@ -140,10 +123,10 @@ async def produce() -> str:
 
 
 async def test_live_both_readers_follow_a_standalone_activity_across_its_retry(
-    driven: Client,
+    notifying: Client,
 ):
-    async with new_worker(driven, Consume, activities=[produce]) as worker:
-        owner = await driven.start_activity(
+    async with new_worker(notifying, Consume, activities=[produce]) as worker:
+        owner = await notifying.start_activity(
             produce,
             id=new_workflow_id(),
             task_queue=worker.task_queue,
@@ -153,16 +136,16 @@ async def test_live_both_readers_follow_a_standalone_activity_across_its_retry(
             ),
         )
         ref = _ref(owner)
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run, ref, id=new_workflow_id(), task_queue=worker.task_queue
         )
-        seen, withdrawn = await asyncio.wait_for(_read(driven, ref), 60)
+        seen, withdrawn = await asyncio.wait_for(_read(notifying, ref), 60)
         assert await owner.result() == "ok"
         expected = ["a1", "a2", "a3", "SUPERSEDED", "b1", "b2"]
         assert seen == expected
         assert withdrawn == ["a1", "a2", "a3"]
         # Python readers expose no close result, so it is read from Core.
-        assert await _close_result(driven, ref) == "done"
+        assert await _close_result(notifying, ref) == "done"
         assert await asyncio.wait_for(reader.result(), 60) == expected
 
 
@@ -188,15 +171,15 @@ async def follow(workflow_id: str) -> int:
 
 
 async def test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat(
-    driven: Client,
+    notifying: Client,
 ):
     _followed.clear()
-    async with new_worker(driven, Waits, activities=[follow]) as worker:
-        workflow_id = await running_owner(driven, worker.task_queue)
-        stream = get_stream_handle(driven, workflow_id, topic=TOKENS)
+    async with new_worker(notifying, Waits, activities=[follow]) as worker:
+        workflow_id = await running_owner(notifying, worker.task_queue)
+        stream = get_stream_handle(notifying, workflow_id, topic=TOKENS)
         producer = stream.producer(producer_id="p", attempt=1)
         await producer.append("p1", "p2", "p3")
-        follower = await driven.start_activity(
+        follower = await notifying.start_activity(
             follow,
             workflow_id,
             id=new_workflow_id(),
@@ -212,7 +195,7 @@ async def test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat(
         await stream.close()
         assert await asyncio.wait_for(follower.result(), 60) == 2
         assert _followed == [["p1", "p2"], ["p3", "p4"]]
-        await driven.get_workflow_handle(workflow_id).signal(Waits.finish)
+        await notifying.get_workflow_handle(workflow_id).signal(Waits.finish)
 
 
 # Step 7: an Activity that fails for good with no close.
@@ -225,20 +208,20 @@ async def fails_hard() -> None:
 
 
 async def test_live_an_activity_that_fails_with_no_close_fails_the_workflow_reader(
-    driven: Client,
+    notifying: Client,
 ):
-    async with new_worker(driven, Consume, activities=[fails_hard]) as worker:
-        owner = await driven.start_activity(
+    async with new_worker(notifying, Consume, activities=[fails_hard]) as worker:
+        owner = await notifying.start_activity(
             fails_hard,
             id=new_workflow_id(),
             task_queue=worker.task_queue,
             start_to_close_timeout=timedelta(seconds=10),
         )
         ref = _ref(owner)
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run, ref, id=new_workflow_id(), task_queue=worker.task_queue
         )
-        seen, _ = await asyncio.wait_for(_read(driven, ref), OWNER_CHECK)
+        seen, _ = await asyncio.wait_for(_read(notifying, ref), OWNER_CHECK)
         assert seen == ["x1"]
         with pytest.raises(WorkflowFailureError) as raised:
             await asyncio.wait_for(reader.result(), OWNER_CHECK)
@@ -268,12 +251,12 @@ async def writes_until_reset() -> None:
 
 
 async def test_live_an_attempt_after_a_reset_supersedes_with_no_divergence(
-    driven: Client,
+    notifying: Client,
 ):
     activity_id = new_workflow_id()
     _second_failed[activity_id] = asyncio.Event()
-    async with new_worker(driven, Consume, activities=[writes_until_reset]) as worker:
-        owner = await driven.start_activity(
+    async with new_worker(notifying, Consume, activities=[writes_until_reset]) as worker:
+        owner = await notifying.start_activity(
             writes_until_reset,
             id=activity_id,
             task_queue=worker.task_queue,
@@ -281,14 +264,14 @@ async def test_live_an_attempt_after_a_reset_supersedes_with_no_divergence(
             retry_policy=RetryPolicy(maximum_attempts=3),
         )
         ref = _ref(owner)
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run, ref, id=new_workflow_id(), task_queue=worker.task_queue
         )
         await asyncio.wait_for(_second_failed[activity_id].wait(), 30)
         await asyncio.sleep(0.5)
-        await driven.workflow_service.reset_activity_execution(
+        await notifying.workflow_service.reset_activity_execution(
             ResetActivityExecutionRequest(
-                namespace=driven.namespace,
+                namespace=notifying.namespace,
                 activity_id=activity_id,
                 run_id=owner.run_id or "",
                 identity="lane",
@@ -297,10 +280,10 @@ async def test_live_an_attempt_after_a_reset_supersedes_with_no_divergence(
         )
         await asyncio.wait_for(owner.result(), 30)
         expected = ["r1", "SUPERSEDED", "r2", "SUPERSEDED", "r3"]
-        seen, withdrawn = await asyncio.wait_for(_read(driven, ref), 30)
+        seen, withdrawn = await asyncio.wait_for(_read(notifying, ref), 30)
         assert seen == expected
         assert withdrawn == ["r1", "r2"]
-        assert await _close_result(driven, ref) == "after reset"
+        assert await _close_result(notifying, ref) == "after reset"
         assert await asyncio.wait_for(reader.result(), 30) == expected
 
 
@@ -316,12 +299,12 @@ async def runs_until_terminated() -> None:
 
 
 async def test_live_a_terminated_activity_fails_the_workflow_reader(
-    driven: Client,
+    notifying: Client,
 ):
     async with new_worker(
-        driven, Consume, activities=[runs_until_terminated]
+        notifying, Consume, activities=[runs_until_terminated]
     ) as worker:
-        owner = await driven.start_activity(
+        owner = await notifying.start_activity(
             runs_until_terminated,
             id=new_workflow_id(),
             task_queue=worker.task_queue,
@@ -329,10 +312,10 @@ async def test_live_a_terminated_activity_fails_the_workflow_reader(
             heartbeat_timeout=timedelta(seconds=5),
         )
         ref = _ref(owner)
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run, ref, id=new_workflow_id(), task_queue=worker.task_queue
         )
-        read = asyncio.ensure_future(_read(driven, ref))
+        read = asyncio.ensure_future(_read(notifying, ref))
         await asyncio.sleep(3)
         await owner.terminate(reason="stop it")
         seen, _ = await asyncio.wait_for(read, OWNER_CHECK)

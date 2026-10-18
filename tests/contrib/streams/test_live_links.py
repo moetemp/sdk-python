@@ -6,7 +6,7 @@ Workflow follower read all of it in one order. The Workflow follower sleeps
 while every source is idle and wakes through the notifier. The stock dev
 server has no stream notifier, so every case here skips there.
 ``scripts/streams_live_lane.sh`` runs them on a server that has it, on
-memory, standalone Redis and a Redis Cluster, each with a ``StreamDriver``.
+memory, standalone Redis and a Redis Cluster.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import os
 import uuid
-from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -29,7 +28,6 @@ from temporalio.contrib.streams import (
     FollowPosition,
     LinkStateKind,
     RecordKind,
-    StreamDriver,
     StreamRef,
     StreamStorePlugin,
     activity_handle,
@@ -70,23 +68,10 @@ def _store(kind: str) -> StreamStorePlugin:
 
 
 @pytest.fixture(params=["memory", "redis", "cluster"])
-async def linked(
-    request: pytest.FixtureRequest, client: Client
-) -> AsyncIterator[Client]:
-    """A client whose store keeps a notification log, with a StreamDriver running."""
+async def linked(request: pytest.FixtureRequest, client: Client) -> Client:
+    """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
-    streams = await connect_with(
-        client, _store(request.param).notify_on_append(notification_log=True)
-    )
-    driver = asyncio.create_task(
-        StreamDriver(streams, sweep_interval=timedelta(seconds=2)).run()
-    )
-    try:
-        yield streams
-    finally:
-        driver.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await driver
+    return await connect_with(client, _store(request.param).notify_on_append())
 
 
 def describe(item: FollowedItem[Any]) -> str:

@@ -13,11 +13,9 @@ Workflow Task.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import time
 import uuid
-from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
 
@@ -35,7 +33,6 @@ from temporalio.bridge.proto.streams import ReadRangeRequest
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import (
     RecordKind,
-    StreamDriver,
     StreamPosition,
     StreamRefusedError,
     StreamStorePlugin,
@@ -54,9 +51,7 @@ from temporalio.worker import Replayer
 from tests.contrib.streams._support import (
     connect_with,
     describe_stream_notifier,
-    new_schema,
     new_workflow_id,
-    postgres_streams,
 )
 from tests.contrib.streams.test_outside_handles import Waits, running_owner
 from tests.helpers import new_worker
@@ -114,8 +109,6 @@ async def skip_without_notifier(client: Client) -> None:
 def store(kind: str) -> StreamStorePlugin:
     if kind == "memory":
         return MemoryStreams()
-    if kind == "postgres":
-        return postgres_streams()
     if kind == "cluster":
         url = os.environ.get("STREAMS_REDIS_CLUSTER_URL", "")
         if not url:
@@ -127,31 +120,11 @@ def store(kind: str) -> StreamStorePlugin:
     return RedisStreams(url, key_prefix=f"live-{uuid.uuid4().hex}")
 
 
-@pytest.fixture(params=["memory", "redis", "postgres"])
+@pytest.fixture(params=["memory", "redis"])
 async def notifying(request: pytest.FixtureRequest, client: Client) -> Client:
     """A client whose store notifies, on a server with the notifier."""
     await skip_without_notifier(client)
     return await connect_with(client, store(request.param).notify_on_append())
-
-
-@pytest.fixture(params=["memory", "redis", "cluster", "postgres"])
-async def driven(
-    request: pytest.FixtureRequest, client: Client
-) -> AsyncIterator[Client]:
-    """A client whose store keeps a notification log, with a StreamDriver running."""
-    await skip_without_notifier(client)
-    streams = await connect_with(
-        client, store(request.param).notify_on_append(notification_log=True)
-    )
-    driver = asyncio.create_task(
-        StreamDriver(streams, sweep_interval=timedelta(seconds=2)).run()
-    )
-    try:
-        yield streams
-    finally:
-        driver.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await driver
 
 
 async def until(check: Any, timeout: float = 15.0) -> None:
@@ -187,49 +160,7 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
-async def test_live_a_sleeping_client_wakes_through_the_driver(driven: Client):
-    async with new_worker(driven, Waits) as worker:
-        owner = await running_owner(driven, worker.task_queue)
-        handle = get_stream_handle(driven, owner, topic=TOKENS)
-        records = handle.read()
-        first = asyncio.ensure_future(records.__anext__())
-        # Past the idle wait, the read came back empty and the reader waits
-        # on the notifier, which its poll started.
-        await asyncio.sleep(3)
-        started = time.monotonic()
-        await handle.producer(producer_id="p", attempt=1).append("woke")
-        assert (await asyncio.wait_for(first, 10)).value == "woke"
-        # The driver's notification woke it, not the poll limit.
-        assert time.monotonic() - started < QUICK
-        await records.aclose()
-        await driven.get_workflow_handle(owner).signal(Waits.finish)
-
-
-async def test_live_streams_on_many_slots_all_wake_through_the_driver(
-    driven: Client,
-):
-    # On a cluster each owner's chain hashes to its own slot, so its log
-    # entries land on that slot's primary, and the driver drains them all.
-    async with new_worker(driven, Waits) as worker:
-        owners = [await running_owner(driven, worker.task_queue) for _ in range(8)]
-        reads = [get_stream_handle(driven, o, topic=TOKENS).read() for o in owners]
-        firsts = [asyncio.ensure_future(r.__anext__()) for r in reads]
-        await asyncio.sleep(3)
-        for owner in owners:
-            await (
-                get_stream_handle(driven, owner, topic=TOKENS)
-                .producer(producer_id="p", attempt=1)
-                .append(owner)
-            )
-        woke = await asyncio.wait_for(asyncio.gather(*firsts), 15)
-        assert [r.value for r in woke] == owners
-        for read in reads:
-            await read.aclose()
-        for owner in owners:
-            await driven.get_workflow_handle(owner).signal(Waits.finish)
-
-
-@pytest.mark.parametrize("kind", ["redis", "postgres"])
+@pytest.mark.parametrize("kind", ["redis"])
 async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
     client: Client, kind: str
 ):
@@ -255,12 +186,6 @@ async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
 async def two_processes(client: Client, kind: str) -> tuple[Client, Client]:
     """A reader's client that notifies, and a producer's that never does, on one store."""
     await skip_without_notifier(client)
-    if kind == "postgres":
-        schema = new_schema()
-        reading = await connect_with(
-            client, postgres_streams(schema).notify_on_append()
-        )
-        return reading, await connect_with(client, postgres_streams(schema))
     url = os.environ.get("STREAMS_REDIS_URL", "")
     if not url:
         pytest.skip("set STREAMS_REDIS_URL to share a store across two clients")
@@ -408,29 +333,6 @@ async def test_live_a_workflow_reader_sleeps_and_wakes_on_an_append(
     )
 
 
-async def test_live_a_workflow_reader_wakes_through_the_driver(driven: Client):
-    async with new_worker(driven, Waits, Reads) as worker:
-        owner = await running_owner(driven, worker.task_queue)
-        reader_id = new_workflow_id()
-        reader = await driven.start_workflow(
-            Reads.run,
-            args=[owner, 2, False],
-            id=reader_id,
-            task_queue=worker.task_queue,
-        )
-        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
-            producer_id="p", attempt=1
-        )
-        await producer.append("first")
-        await _sleeping(driven, reader_id, owner)
-        started = time.monotonic()
-        await producer.append("second")
-        assert await asyncio.wait_for(reader.result(), 20) == ["first", "second"]
-        # The driver's notification woke it, not the recheck.
-        assert time.monotonic() - started < QUICK
-        await driven.get_workflow_handle(owner).signal(Waits.finish)
-
-
 @workflow.defn
 class ReadsQuickly:
     """Reads ``count`` records with a short idle wait, so it sleeps between them."""
@@ -449,18 +351,18 @@ class ReadsQuickly:
 
 
 async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
-    driven: Client,
+    notifying: Client,
 ):
     # The server delivers the first notification of a window at once and the
     # newest one at the window's end, so a busy stream wakes the reader about
     # once per window (streamnotifier.debounceWindow, 1 second by default).
-    async with new_worker(driven, Waits, ReadsQuickly) as worker:
-        owner = await running_owner(driven, worker.task_queue)
-        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
+    async with new_worker(notifying, Waits, ReadsQuickly) as worker:
+        owner = await running_owner(notifying, worker.task_queue)
+        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             ReadsQuickly.run,
             args=[owner, 31],
             id=new_workflow_id(),
@@ -473,7 +375,7 @@ async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
             await asyncio.sleep(0.1)
         elapsed = time.monotonic() - started
         assert await asyncio.wait_for(reader.result(), 30) == 31
-        await driven.get_workflow_handle(owner).signal(Waits.finish)
+        await notifying.get_workflow_handle(owner).signal(Waits.finish)
     wakes = sum(
         a.Is(StreamWake.DESCRIPTOR)
         for e in (await reader.fetch_history()).events
@@ -769,7 +671,7 @@ async def test_live_a_position_resumes_the_reader_after_continue_as_new(
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
-@pytest.mark.parametrize("kind", ["redis", "postgres"])
+@pytest.mark.parametrize("kind", ["redis"])
 async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
     client: Client, kind: str
 ):

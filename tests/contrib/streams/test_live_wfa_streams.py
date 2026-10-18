@@ -6,7 +6,7 @@ agent's Worker closes the stream when the agent sees the tool end. When that
 close never comes, the server's notifier closes the stream after its graces.
 The stock dev server has no stream notifier, so every case here skips
 there. ``scripts/streams_live_lane.sh`` runs them on a server that has it, on
-memory, standalone Redis and a Redis Cluster, each with a ``StreamDriver``.
+memory, standalone Redis and a Redis Cluster.
 """
 
 from __future__ import annotations
@@ -48,8 +48,8 @@ from tests.contrib.streams.test_live_activity_owner import (
 )
 from tests.helpers import new_worker
 
-# The same stores and driver as the standalone Activity cases.
-driven = _saa.driven
+# The same stores as the standalone Activity cases.
+notifying = _saa.notifying
 
 TOKENS = topic("tokens", str)
 TOOL_ID = "tool-1"
@@ -113,16 +113,16 @@ async def run_tool() -> str:
     return "ok"
 
 
-async def test_live_both_readers_follow_a_tool_call_across_its_retry(driven: Client):
-    async with new_worker(driven, Agent, Consume, activities=[run_tool]) as worker:
-        agent, reader = await _start(driven, worker.task_queue, "run_tool")
+async def test_live_both_readers_follow_a_tool_call_across_its_retry(notifying: Client):
+    async with new_worker(notifying, Agent, Consume, activities=[run_tool]) as worker:
+        agent, reader = await _start(notifying, worker.task_queue, "run_tool")
         ref = _tool_ref(agent)
-        seen, withdrawn = await asyncio.wait_for(_read(driven, ref), 60)
+        seen, withdrawn = await asyncio.wait_for(_read(notifying, ref), 60)
         assert await agent.result() == "ok"
         expected = ["a1", "a2", "a3", "SUPERSEDED", "b1", "b2"]
         assert seen == expected
         assert withdrawn == ["a1", "a2", "a3"]
-        assert await _close_result(driven, ref) is None
+        assert await _close_result(notifying, ref) is None
         assert await asyncio.wait_for(reader.result(), 60) == expected
 
 
@@ -143,13 +143,13 @@ def _application_cause(error: BaseException) -> ApplicationError:
 
 
 async def test_live_a_tool_that_fails_closes_its_stream_with_the_failure(
-    driven: Client,
+    notifying: Client,
 ):
-    async with new_worker(driven, Agent, Consume, activities=[fails_hard]) as worker:
-        agent, reader = await _start(driven, worker.task_queue, "fails_hard")
+    async with new_worker(notifying, Agent, Consume, activities=[fails_hard]) as worker:
+        agent, reader = await _start(notifying, worker.task_queue, "fails_hard")
         ref = _tool_ref(agent)
         with pytest.raises((ActivityError, ApplicationError)) as client_raised:
-            await asyncio.wait_for(_read(driven, ref), 60)
+            await asyncio.wait_for(_read(notifying, ref), 60)
         assert _application_cause(client_raised.value).type == "Boom"
         with pytest.raises(WorkflowFailureError):
             await agent.result()
@@ -168,16 +168,16 @@ async def hangs() -> None:
 
 
 async def test_live_a_tool_that_times_out_closes_its_stream_with_the_timeout(
-    driven: Client,
+    notifying: Client,
 ):
-    async with new_worker(driven, Agent, Consume, activities=[hangs]) as worker:
-        agent = await driven.start_workflow(
+    async with new_worker(notifying, Agent, Consume, activities=[hangs]) as worker:
+        agent = await notifying.start_workflow(
             Agent.run,
             args=["hangs", 2_000, 1],
             id=new_workflow_id(),
             task_queue=worker.task_queue,
         )
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run,
             _tool_ref(agent),
             id=new_workflow_id(),
@@ -217,9 +217,9 @@ class ChainedAgent:
         return [workflow.info().run_id]
 
 
-async def test_live_each_run_of_a_chain_gets_its_own_tool_stream(driven: Client):
-    async with new_worker(driven, ChainedAgent, activities=[writes_its_run]) as worker:
-        agent = await driven.start_workflow(
+async def test_live_each_run_of_a_chain_gets_its_own_tool_stream(notifying: Client):
+    async with new_worker(notifying, ChainedAgent, activities=[writes_its_run]) as worker:
+        agent = await notifying.start_workflow(
             ChainedAgent.run, 2, id=new_workflow_id(), task_queue=worker.task_queue
         )
         [last_run] = await asyncio.wait_for(agent.result(), 60)
@@ -231,12 +231,12 @@ async def test_live_each_run_of_a_chain_gets_its_own_tool_stream(driven: Client)
             )
             for run in (first_run, last_run)
         ]
-        first = [r async for r in get_stream_handle(driven, refs[0]).read()]
-        last = [r async for r in get_stream_handle(driven, refs[1]).read()]
+        first = [r async for r in get_stream_handle(notifying, refs[0]).read()]
+        last = [r async for r in get_stream_handle(notifying, refs[1]).read()]
         assert [r.value for r in first] == [first_run]
         assert [r.value for r in last] == [last_run]
         with pytest.raises(StreamCursorError):
-            async for _ in get_stream_handle(driven, refs[1]).read(
+            async for _ in get_stream_handle(notifying, refs[1]).read(
                 after=first[-1].cursor
             ):
                 pass
@@ -262,12 +262,12 @@ async def waits_in_the_first_run() -> str:
 _first_runs: dict[str, str] = {}
 
 
-async def test_live_a_reset_run_writes_a_new_tool_stream(driven: Client):
+async def test_live_a_reset_run_writes_a_new_tool_stream(notifying: Client):
     workflow_id = new_workflow_id()
     _release[workflow_id] = asyncio.Event()
     _started[workflow_id] = asyncio.Event()
-    async with new_worker(driven, Agent, activities=[waits_in_the_first_run]) as worker:
-        agent = await driven.start_workflow(
+    async with new_worker(notifying, Agent, activities=[waits_in_the_first_run]) as worker:
+        agent = await notifying.start_workflow(
             Agent.run,
             args=["waits_in_the_first_run", 60_000, 1],
             id=workflow_id,
@@ -281,9 +281,9 @@ async def test_live_a_reset_run_writes_a_new_tool_stream(driven: Client):
             for e in history.events
             if e.event_type == EventType.EVENT_TYPE_WORKFLOW_TASK_COMPLETED
         ][:1]
-        reset = await driven.workflow_service.reset_workflow_execution(
+        reset = await notifying.workflow_service.reset_workflow_execution(
             ResetWorkflowExecutionRequest(
-                namespace=driven.namespace,
+                namespace=notifying.namespace,
                 workflow_execution=WorkflowExecution(
                     workflow_id=workflow_id, run_id=agent.result_run_id or ""
                 ),
@@ -295,7 +295,7 @@ async def test_live_a_reset_run_writes_a_new_tool_stream(driven: Client):
         new_run = reset.run_id
         assert (
             await asyncio.wait_for(
-                driven.get_workflow_handle(workflow_id, run_id=new_run).result(), 60
+                notifying.get_workflow_handle(workflow_id, run_id=new_run).result(), 60
             )
             == "ok"
         )
@@ -309,9 +309,9 @@ async def test_live_a_reset_run_writes_a_new_tool_stream(driven: Client):
             workflow_id, run_id=new_run, activity_id=TOOL_ID, topic=TOKENS
         )
         # The old run ended with the reset, so its read ends at once.
-        old_seen = [r.value async for r in get_stream_handle(driven, old).read()]
+        old_seen = [r.value async for r in get_stream_handle(notifying, old).read()]
         assert old_seen == [_first_runs[workflow_id]]
-        new_seen = [r.value async for r in get_stream_handle(driven, new).read()]
+        new_seen = [r.value async for r in get_stream_handle(notifying, new).read()]
         assert new_seen == [new_run]
         _release[workflow_id].set()
 
@@ -333,19 +333,19 @@ async def outlives_its_agent() -> str:
 
 
 async def test_live_a_tool_whose_agent_never_closes_ends_by_the_owner_check(
-    driven: Client,
+    notifying: Client,
 ):
     workflow_id = new_workflow_id()
     _tool_started[workflow_id] = asyncio.Event()
     _tool_go[workflow_id] = asyncio.Event()
     agent_queue = f"agent-{uuid.uuid4()}"
     async with (
-        new_worker(driven, Consume) as readers,
-        new_worker(driven, activities=[outlives_its_agent]) as tools,
+        new_worker(notifying, Consume) as readers,
+        new_worker(notifying, activities=[outlives_its_agent]) as tools,
     ):
-        agent_worker = Worker(driven, task_queue=agent_queue, workflows=[Agent])
+        agent_worker = Worker(notifying, task_queue=agent_queue, workflows=[Agent])
         async with agent_worker:
-            agent = await driven.start_workflow(
+            agent = await notifying.start_workflow(
                 Agent.run,
                 args=["outlives_its_agent", 60_000, 1, tools.task_queue],
                 id=workflow_id,
@@ -355,7 +355,7 @@ async def test_live_a_tool_whose_agent_never_closes_ends_by_the_owner_check(
         # The tool runs on its own task queue, so it completes while the agent
         # has no Worker to see it.
         _tool_go[workflow_id].set()
-        reader = await driven.start_workflow(
+        reader = await notifying.start_workflow(
             Consume.run,
             _tool_ref(agent),
             id=new_workflow_id(),
