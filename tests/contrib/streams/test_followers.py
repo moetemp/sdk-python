@@ -2,7 +2,7 @@
 
 An agent Workflow publishes on its own stream, links two tool calls that
 stream on their own, and links a child Workflow's stream. A follower reads
-all of them in one order, which Core's ``Follow`` keeps by the link gates.
+all of them in one order, which the stream runtime's ``Follow`` keeps by the link gates.
 """
 
 from __future__ import annotations

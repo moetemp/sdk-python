@@ -17,10 +17,10 @@ __all__ = ["StoreCapabilities"]
 class StoreCapabilities:
     """The capabilities of a store, as the stream runtime reports them.
 
-    Every store keeps an ordered log per topic, and the stream runtime applies the same
-    reader rules on every store. A capability changes what a producer is
-    told and how much the store keeps. Without one, the stream runtime takes a fallback,
-    with a weaker guarantee.
+    Every store keeps an ordered log per topic, and the stream runtime applies
+    the same reader rules on every store. A capability changes what a producer
+    is told and how much the store keeps. Without one, the runtime takes a
+    fallback, with a weaker guarantee.
 
     As a mask for :class:`temporalio.contrib.streams.memory.MemoryStreams`,
     a field set to ``False`` turns that capability off. A mask can't turn
@@ -34,10 +34,6 @@ class StoreCapabilities:
     Without it, a retry can land a second copy, which readers drop, and an
     append that races a close can answer success, which no reader delivers.
     """
-    conditional_tail: bool = True
-    """An append can require the log's next position."""
-    conditional_fence: bool = True
-    """An append can require the stream's fence token."""
     kept_last: bool = True
     """The store knows a log's last position after retention dropped it all.
 
@@ -76,8 +72,6 @@ class StoreCapabilities:
     def _from_proto(proto: Any) -> StoreCapabilities:
         return StoreCapabilities(
             producer_state=proto.producer_state,
-            conditional_tail=proto.conditional_tail,
-            conditional_fence=proto.conditional_fence,
             kept_last=proto.kept_last,
             holds=proto.holds,
             change_feed=proto.change_feed,
@@ -97,15 +91,15 @@ class StoreCapabilities:
         """The mask as the stream runtime takes it.
 
         Raises:
-            ValueError: The Core in this SDK can't mask a store.
+            ValueError: The stream runtime in this SDK can't mask a store.
         """
         proto_type = getattr(temporalio.bridge.proto.streams, "StoreCapabilities", None)
         if proto_type is None:
-            raise ValueError("this SDK's Core can't mask a store's capabilities")
+            raise ValueError(
+                "this SDK's stream runtime can't mask a store's capabilities"
+            )
         proto = proto_type(
             producer_state=self.producer_state,
-            conditional_tail=self.conditional_tail,
-            conditional_fence=self.conditional_fence,
             kept_last=self.kept_last,
             holds=self.holds,
             change_feed=self.change_feed,
@@ -122,16 +116,16 @@ class StoreCapabilities:
         return proto
 
 
-# What a Core from before DescribeStore serves. Its Redis and memory stores have
-# every capability that Core knew of, and none had a conditional append.
-_BEFORE_DESCRIBE = StoreCapabilities(conditional_tail=False, conditional_fence=False)
+# What a stream runtime from before DescribeStore serves. Its Redis and memory
+# stores have every capability that runtime knew of.
+_BEFORE_DESCRIBE = StoreCapabilities()
 
 
 async def describe(store: StreamStore) -> StoreCapabilities:
     """What the stream runtime reports for ``store``.
 
     Raises:
-        StreamCallFailure: the stream runtime failed the call.
+        StreamCallFailure: The stream runtime failed the call.
     """
     proto = temporalio.bridge.proto.streams
     request = getattr(proto, "DescribeStoreRequest", None)

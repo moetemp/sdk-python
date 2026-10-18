@@ -17,6 +17,10 @@ Register the store once, on the client, with `Client.connect`. Connecting
 the client connects the store, and every Worker built from that client
 publishes and appends through it. There's nothing extra to install.
 
+A Worker refuses a store passed only to `Worker(plugins=[...])`, or one on a
+client made without `Client.connect`, with `ValueError`. The stream runtime
+needs the client's connection to check a stream's owner.
+
 ```python
 from temporalio.client import Client
 from temporalio.contrib.streams.redis import RedisStreams
@@ -120,9 +124,6 @@ can't grow it either. A `SUPERSEDED` past that withdraws only the records
 still held. Call `forget(producer_id)` once a producer can't retry, to drop
 it sooner.
 
-A future Workflow reader can't drop superseded records silently, because
-replay must see the same records, so it will deliver `SUPERSEDED` too.
-
 Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't stop at one run. A Workflow id can
 start a new chain after the old one closed, and a handle opens the newest
@@ -143,10 +144,10 @@ an identity of its own:
 
 - **Producer id.** `__temporal_local_<n>@<scheduling run id>`, where `n`
   counts the run's Local Activity calls in order. The `__temporal` prefix is
-  reserved, so no user Activity id writes as the same producer. The store plugin's Worker interceptor
-  stamps the number on each call in a header, so it stays the same across
-  reruns, and across a retry that backs off longer than
-  `local_retry_threshold`, which gets a new Activity id.
+  reserved, so no user Activity id writes as the same producer. The store
+  plugin's Worker interceptor stamps the number on each call in a header, so
+  it stays the same across reruns, and across a retry that backs off longer
+  than `local_retry_threshold`, which gets a new Activity id.
 - **Attempt.** Before the first append, the producer asks the server for
   the run's History length `h` and the pending Workflow Task's attempt `t`.
   With the Local Activity's attempt `a`, it writes attempt
@@ -167,9 +168,6 @@ Known limits:
   describe the Workflow (`DescribeWorkflowExecution` on its namespace), both
   for the attempt and for the stream runtime's owner check. Without it, the
   first append fails.
-- **A later Core change removes the call.** Workflow code doesn't see the
-  Workflow Task attempt, so the server is asked for it. A later Core change
-  can supply the Workflow Task attempt, which removes the call.
 - **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
   Task past attempt 99,999, raises `StreamUnsupportedError` on its first
   append.
@@ -401,20 +399,8 @@ async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
   Workflow and Activity ids are in History. A link's value goes through the
   codec, so put secrets there.
 
-How the harness's subagent events map:
-
-| Harness event | Link records |
-|---------------|--------------|
-| `SUBAGENT_STARTED` with the child `workflow_id` | `link(StreamRef.for_workflow(child_id), name=...)` |
-| `SUBAGENT_MESSAGE_SENT` with `from_offset` | `link(..., after=<child cursor>)` for each turn |
-| `SUBAGENT_REPLY_RECEIVED` | `join(name=..., until=<child cursor at the turn end>)` |
-| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which the stream runtime reports |
-| A merge offset per child | `FollowPosition`, which holds every open segment |
-
 Known limits:
 
-- **Core and readers.** A Core before link records reads a `LINK` as an
-  invalid record, so every reader of a stream with links needs this release.
 - **Size.** The follow position grows with the open segments. With the
   default bounds it stays below 64 KiB.
 - **Workflow followers.** A Workflow follower with more open sources than
@@ -494,10 +480,6 @@ Known limits:
 - **No check on replay.** Replay doesn't compare the records the run
   publishes with the store, so a Workflow change that publishes other
   records replays without an error.
-- **Histories of the Local Activity writer.** An earlier version of
-  `workflow_writer` sent records through Local Activities. Its Histories
-  have a marker per flush, and they fail replay on this version with a
-  nondeterminism error.
 
 ## A reader sleeps while the stream is idle
 

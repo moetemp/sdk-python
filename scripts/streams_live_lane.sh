@@ -13,9 +13,10 @@
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
-#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with Core's
-#                      redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five more ports.
-#   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
+#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with the
+#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five
+#                      more ports.
+#   CARGO_TARGET_DIR   where the crate's live test builds (default: under WORK_DIR)
 #   STREAMS_ARCHIVE_S3_URL  an `s3://bucket/prefix` the archive cases write to, with the `AWS_*`
 #                      settings the stream runtime reads. Without it, the script starts MinIO in
 #                      Docker on a free port and removes the container at the end.

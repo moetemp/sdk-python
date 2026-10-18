@@ -1,6 +1,6 @@
 """Turning stream notifications on, and closing a stream with an outcome.
 
-A close ends every read in the store, then Core closes the stream's notifier
+A close ends every read in the store, then the stream runtime closes the stream's notifier
 on the server with the outcome. The stock test server has no notifier, so a
 close there ends the stream in the store only. A server with the notifier
 records the outcome, which ``DescribeStreamNotifier`` shows.

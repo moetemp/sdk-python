@@ -1,4 +1,4 @@
-"""Records, their stored form, and what lang owes a record's body."""
+"""Records, their stored form, and what the SDK owes a record's body."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def test_the_content_hash_is_the_plaintext_payload_hash():
     one = converter.to_payloads([{"n": 1}])[0]
     assert content_hash(one) == content_hash(converter.to_payloads([{"n": 1}])[0])
     assert content_hash(one) != content_hash(converter.to_payloads([{"n": 2}])[0])
-    # Core refuses a hash that isn't a SHA-256.
+    # The stream runtime refuses a hash that isn't a SHA-256.
     assert len(content_hash(one)) == 32
 
 
@@ -149,7 +149,7 @@ def test_the_digest_is_length_delimited_over_the_batch():
 
 
 def test_the_digest_matches_what_every_sdk_takes():
-    # The vector Core's tests hold, so a retry through another SDK still dedupes.
+    # The vector the crate's tests hold, so a retry through another SDK still dedupes.
     batch = [
         to_wire(
             CONVERTER.payload_converter,

@@ -267,6 +267,20 @@ class WorkflowInstance(ABC):
         """
         return []
 
+    def stream_wake_contexts(
+        self,
+    ) -> Mapping[str, temporalio.converter.SerializationContext]:
+        """Return the codec context of each stream reader's wakes, by subscription id.
+
+        Not an abstractmethod because it is not mandatory to implement. The
+        Worker decodes a wake's close failure in its reader's context before
+        the next activation, and leaves the failure of any other wake encoded.
+
+        Returns:
+            The contexts the run's stream readers registered.
+        """
+        return {}
+
 
 class UnsandboxedWorkflowRunner(WorkflowRunner):
     """Workflow runner that does not do any sandboxing."""
@@ -369,6 +383,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # The stream reader takes them from here, so this module knows nothing
         # of what a wake means.
         self._stream_wakes: list[temporalio.api.stream.v1.StreamWake] = []
+        self._stream_wake_contexts: dict[
+            str, temporalio.converter.SerializationContext
+        ] = {}
 
         # Patches we have been notified of and memoized patch responses
         self._patches_notified: set[str] = set()
@@ -479,6 +496,11 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
 
     def stream_records(self) -> Sequence[temporalio.bridge.proto.streams.OutputRecord]:
         return self._stream_records
+
+    def stream_wake_contexts(
+        self,
+    ) -> Mapping[str, temporalio.converter.SerializationContext]:
+        return self._stream_wake_contexts
 
     #### Activation functions ####
     # These are in alphabetical order and besides "activate", and

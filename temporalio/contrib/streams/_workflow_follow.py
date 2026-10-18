@@ -59,6 +59,7 @@ from temporalio.contrib.streams._workflow import (
     _FINAL_ERRORS,
     TaskCutoff,
     _next_reader,
+    cut_task,
 )
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
@@ -253,7 +254,7 @@ class WorkflowStreamFollower(Generic[T]):
                 else:
                     await workflow.sleep(_NO_WAKE_RETRY)
                 self._take_wakes()
-            self._cut_task()
+            cut_task(self._cutoff)
             response, read_by = await self._step()
             update_sources(state.sources, response)
             payload_converter = workflow.payload_converter()
@@ -315,17 +316,6 @@ class WorkflowStreamFollower(Generic[T]):
                 wake.resubscribe = False
                 state.generation += 1
         state.sleeping = None
-
-    def _cut_task(self) -> None:
-        if self._cutoff is None:
-            return
-        runtime: Any = workflow._Runtime.current()
-        commands, seconds = runtime._task_progress()
-        if (
-            commands >= self._cutoff.commands
-            or seconds >= self._cutoff.time.total_seconds()
-        ):
-            runtime._request_task_heartbeat()
 
     def _end(self) -> BaseException:
         state = self._state

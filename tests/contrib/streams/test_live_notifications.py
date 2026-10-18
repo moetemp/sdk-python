@@ -847,7 +847,7 @@ async def _read_from_the_store(client: Client) -> tuple[Any, str, Any]:
         )
         await asyncio.sleep(3)
         await owner.signal(PublishesAndCloses.end, "result")
-        # With no cache, every task replays the reads before it, through Core.
+        # With no cache, every task replays the reads before it, through the stream runtime.
         assert await asyncio.wait_for(reader.result(), 30) == ["a", "b", "FINISH"]
         await owner.signal(PublishesAndCloses.end, "end")
         await owner.result()
@@ -881,7 +881,7 @@ async def test_live_a_replay_that_finds_other_records_is_nondeterminism(
             parts.payloads[0].data = range.SerializeToString()
             payload.data = parts.SerializeToString()
     # The task fails with the nondeterminism cause. The Replayer reports a
-    # failure that lang found as a failed activation, not as Core's
+    # failure that the SDK found as a failed activation, not as Core's
     # NondeterminismError.
     with pytest.raises(Exception) as raised:
         await Replayer(workflows=[ReadsFromTheStore], plugins=[store]).replay_workflow(
@@ -968,7 +968,7 @@ async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
 async def test_live_a_workflow_reader_waits_for_an_owner_that_starts_later(
     notifying: Client,
 ):
-    # Inside the owner start grace, Core answers an idle read with no chain
+    # Inside the owner start grace, the stream runtime answers an idle read with no chain
     # and attaches nothing, so the reader reads again on a timer.
     async with new_worker(notifying, Waits, Reads) as worker:
         owner = new_workflow_id()

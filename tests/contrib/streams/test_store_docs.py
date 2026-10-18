@@ -1,4 +1,4 @@
-"""The store table in the capabilities page says what Core reports.
+"""The store table in the capabilities page says what the stream runtime reports.
 
 Redis rows run when ``STREAMS_REDIS_URL`` is set.
 """
@@ -39,9 +39,6 @@ def _offered(capabilities: StoreCapabilities) -> dict[str, str]:
 
     return {
         "Producer state": yn(capabilities.producer_state),
-        "Conditional": yn(
-            capabilities.conditional_tail or capabilities.conditional_fence
-        ),
         "Kept last": yn(capabilities.kept_last),
         "Holds": yn(capabilities.holds),
         "Change feed": yn(capabilities.change_feed),
@@ -66,7 +63,7 @@ def _store(row: str) -> StreamStorePlugin:
 
 @pytest.mark.skipif(
     not hasattr(temporalio.bridge.proto.streams, "DescribeStoreRequest"),
-    reason="this Core can't describe a store",
+    reason="this stream runtime can't describe a store",
 )
 @pytest.mark.parametrize("row", list(_table()))
 async def test_the_store_table_matches_core(client: Client, row: str):

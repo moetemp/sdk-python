@@ -94,7 +94,7 @@ async def _read(client: Client, ref: StreamRef) -> tuple[list[str], list[str]]:
 
 
 async def _close_result(client: Client, ref: StreamRef) -> Any:
-    """The close result Core's read gives once the stream ended."""
+    """The close result the stream runtime's read gives once the stream ended."""
     service = await store_for_client(client)._service_for(client)
     response = await service.read(
         ReadRequest(stream=stream_address(client.namespace, ref), after="$end")
@@ -144,7 +144,7 @@ async def test_live_both_readers_follow_a_standalone_activity_across_its_retry(
         expected = ["a1", "a2", "a3", "SUPERSEDED", "b1", "b2"]
         assert seen == expected
         assert withdrawn == ["a1", "a2", "a3"]
-        # Python readers expose no close result, so it is read from Core.
+        # Python readers expose no close result, so it is read from the stream runtime.
         assert await _close_result(notifying, ref) == "done"
         assert await asyncio.wait_for(reader.result(), 60) == expected
 
@@ -255,7 +255,9 @@ async def test_live_an_attempt_after_a_reset_supersedes_with_no_divergence(
 ):
     activity_id = new_workflow_id()
     _second_failed[activity_id] = asyncio.Event()
-    async with new_worker(notifying, Consume, activities=[writes_until_reset]) as worker:
+    async with new_worker(
+        notifying, Consume, activities=[writes_until_reset]
+    ) as worker:
         owner = await notifying.start_activity(
             writes_until_reset,
             id=activity_id,

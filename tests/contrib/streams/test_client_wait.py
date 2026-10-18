@@ -4,7 +4,7 @@ With notifications on, a read waits its idle time in the store. After a read
 that finds nothing, the reader waits on the notifier with
 ``WaitForNotification`` past the read's ``wake_after``, and reads again after
 every answer.
-The fakes here script Core's answers. The live cases need a server with the
+The fakes here script the stream runtime's answers. The live cases need a server with the
 stream notifier and run in the Jetty lane.
 """
 
