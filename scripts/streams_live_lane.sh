@@ -1,34 +1,36 @@
 #!/usr/bin/env bash
-# Runs the stream notifier live tests against a server built with the stream notifier and the
-# Workflow wake target.
+# Runs the stream notifier and streams-over-Nexus live tests against a server built with the
+# stream notifier, the Workflow wake target and Nexus progress.
 #
-# The stock dev server has no stream notifier, so the live tests skip there. This lane builds a
-# server that has it, starts it with the settings the guide lists and short recheck and poll
-# limits, and fails unless every gated test below passes. Run it from a built sdk-python checkout.
+# The stock dev server has no stream notifier and no Nexus progress, so the live tests skip there.
+# This lane builds a server that has both, starts it with the settings the guides list and short
+# recheck and poll limits, and fails unless every gated test below passes. Run it from a built
+# sdk-python checkout.
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: cd06e4dc, moe/jetty/js14-task-attachments)
+#   SERVER_REF         commit to build (default: 6e611c45, moe/bridge/v2/dr40-sdk-streams)
 #   SERVER_BIN         use this server binary instead of building one
-#   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7941)
-#   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6441.
+#   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
+#   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
 #   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with the
-#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7951) and five
+#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7971) and five
 #                      more ports.
+#   CARGO_TARGET_DIR   where the crate's live test builds (default: under WORK_DIR)
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
-#   PYTEST_TARGETS     the tests to run (default: tests/contrib/streams). A narrower run fails
+#   PYTEST_TARGETS     the tests to run (default: the stream and Nexus tests). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-cd06e4dcceccd05d91e50631404c56d1d9f254a7}
-PORT_BASE=${PORT_BASE:-7941}
+SERVER_REF=${SERVER_REF:-6e611c455c6379aab10420af689a64e3eefb872c}
+PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
 
 GRPC_PORT=$PORT_BASE
 HTTP_PORT=$((PORT_BASE + 1))
-REDIS_PORT=6441
+REDIS_PORT=6428
 pids=()
 
 cleanup() {
@@ -56,7 +58,32 @@ history.enableChasm:
   - value: true
 history.enableCHASMCallbacks:
   - value: true
+history.enableCHASMSignalBacklinks:
+  - value: true
+history.enableSignalWithStartFromWorkflow:
+  - value: true
+nexusoperation.enableChasmWorkflowOperations:
+  - value: true
+nexusoperation.chasmWorkflowOperationsRolloutPercent:
+  - value: 100
+nexusoperation.enableProgress:
+  - value: true
+nexusoperation.callback.endpoint.template:
+  - value: "http://localhost:$HTTP_PORT/namespaces/{{.NamespaceName}}/nexus/callback"
+callback.allowedAddresses:
+  - value:
+      - Pattern: "localhost:$HTTP_PORT"
+        AllowInsecure: true
+      - Pattern: "127.0.0.1:$HTTP_PORT"
+        AllowInsecure: true
+      # The stream runtime's live notifier test takes the notifier's callbacks on this address.
+      - Pattern: "127.0.0.1:7899"
+        AllowInsecure: true
 streamnotifier.enabled:
+  - value: true
+# Direct reads with ClientTransport call ExecuteSyncNexusOperation. A server
+# without it ignores the setting.
+frontend.enableExecuteSyncNexusOperation:
   - value: true
 # Streams that a standalone Activity owns need standalone Activities.
 activity.enableStandalone:
@@ -86,6 +113,13 @@ streamnotifier.recheckMax:
   - value: 30s
 system.forceSearchAttributesCacheRefreshOnRead:
   - value: true
+# A follower is a standalone operation with a callback to a Worker's task queue.
+nexusoperation.enableStandalone:
+  - value: true
+nexusoperation.enabledCallbackKinds:
+  - value:
+      - nexus
+      - nexusHandler
 EOF
 
 sqlite_store() {
@@ -175,7 +209,7 @@ if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
     "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
   # Three primaries with one replica each, as the cluster cases need. The crate's own default
   # base is a shared cluster, so this lane picks its own range.
-  export STREAMS_CLUSTER_BASE=${STREAMS_CLUSTER_BASE:-7951}
+  export STREAMS_CLUSTER_BASE=${STREAMS_CLUSTER_BASE:-7971}
   eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
     bash "$crate_dir/scripts/redis-test-servers.sh" |
     grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
@@ -184,7 +218,8 @@ fi
 cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
-# The server takes a few seconds to join its own ring, and the tests need the default namespace.
+# The server takes a few seconds to join its own ring. The tests need the default namespace, and
+# the cross-namespace tests need streams-b.
 uv run --no-sync python - "$GRPC_PORT" <<'EOF'
 import asyncio
 import sys
@@ -202,18 +237,19 @@ async def main() -> None:
     for _ in range(120):
         try:
             client = await Client.connect(target)
-            try:
-                await client.workflow_service.register_namespace(
-                    RegisterNamespaceRequest(
-                        namespace="default",
-                        workflow_execution_retention_period=Duration(
-                            seconds=int(timedelta(days=1).total_seconds())
-                        ),
+            for namespace in ["default", "streams-b"]:
+                try:
+                    await client.workflow_service.register_namespace(
+                        RegisterNamespaceRequest(
+                            namespace=namespace,
+                            workflow_execution_retention_period=Duration(
+                                seconds=int(timedelta(days=1).total_seconds())
+                            ),
+                        )
                     )
-                )
-            except RPCError as err:
-                if err.status != RPCStatusCode.ALREADY_EXISTS:
-                    raise
+                except RPCError as err:
+                    if err.status != RPCStatusCode.ALREADY_EXISTS:
+                        raise
             return
         except (RPCError, RuntimeError):
             pass
@@ -227,13 +263,20 @@ EOF
 sleep 12
 
 status=0
-uv run --no-sync pytest ${PYTEST_TARGETS:-tests/contrib/streams} \
+default_targets=(
+  tests/contrib/streams
+  tests/nexus/test_workflow_operation_progress*.py
+  tests/nexus/test_temporal_system_nexus.py
+  tests/nexus/test_notification_service.py
+  tests/nexus/test_standalone_callbacks.py
+)
+uv run --no-sync pytest ${PYTEST_TARGETS:-${default_targets[*]}} \
   -E "127.0.0.1:$GRPC_PORT" -p no:cacheprovider --junitxml="$WORK_DIR/junit.xml" 2>&1 |
   tee "$WORK_DIR/pytest.log" || status=$?
 
-# A live test that skips here proves nothing, so a skip for a missing notifier or a missing store
-# fails the lane.
-gated='no stream notifier|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL'
+# A live test that skips here proves nothing, so a skip for a missing notifier, missing Nexus
+# progress or a missing store fails the lane.
+gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|no NexusHandler callbacks'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -268,6 +311,12 @@ gate tests/contrib/streams/test_live_notifications.py \
   test_live_a_replay_of_a_lost_range_fails_the_task \
   test_live_a_read_after_a_timed_out_read_replays_from_the_store \
   test_live_a_workflow_reader_waits_for_an_owner_that_starts_later
+gate tests/contrib/streams/test_live_activity_stream_nexus.py \
+  test_live_a_caller_reads_a_tool_calls_activity_stream \
+  test_live_a_reader_wakes_at_most_once_per_burst_of_a_tool \
+  test_live_a_worker_follows_a_tool_calls_activity_stream \
+  test_live_a_tool_that_fails_with_no_close_fails_the_operation \
+  test_live_an_authorizer_takes_activity_reads_from_one_caller_namespace
 gate tests/contrib/streams/test_live_activity_owner.py \
   test_live_both_readers_follow_a_standalone_activity_across_its_retry \
   test_live_a_standalone_activity_follows_a_stream_from_its_heartbeat \
@@ -285,6 +334,11 @@ gate tests/contrib/streams/test_live_links.py \
   test_live_both_followers_keep_the_gates_of_an_agent \
   test_live_a_failed_tool_a_missing_child_and_a_cycle_go_on \
   test_live_a_follower_resumes_inside_a_segment
+gate tests/contrib/streams/test_live_agent_links_nexus.py \
+  test_live_a_caller_follows_an_agent_and_its_tools_across_namespaces \
+  test_live_a_caller_resumes_its_follow_in_a_new_run \
+  test_live_a_worker_follower_asks_for_the_agents_links \
+  test_live_a_caller_sees_a_busy_tool_while_the_agent_is_idle
 gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
@@ -292,6 +346,50 @@ gate tests/contrib/streams/test_store_plugin.py \
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed
+gate tests/contrib/streams/test_nexus_stream_operation.py \
+  test_a_caller_sees_appends_as_progress_and_the_close_as_the_result \
+  test_a_close_right_after_the_last_publishes_comes_after_them \
+  test_a_workflow_closes_its_own_stream \
+  test_a_workflows_own_publishes_reach_the_caller_as_progress \
+  test_a_worker_without_notifications_still_delivers_the_close_result \
+  test_live_a_failed_owner_fails_the_operation \
+  test_live_a_close_with_an_error_fails_the_operation \
+  test_live_an_outside_close_with_an_error_fails_the_operation \
+  test_live_a_terminated_owner_fails_the_operation
+gate tests/contrib/streams/test_nexus_reader.py \
+  test_bodies_reach_the_workflow_decoded_by_the_callers_codec \
+  test_live_a_close_with_the_last_publishes_loses_none_of_them \
+  test_live_a_new_reader_resumes_after_a_cursor \
+  test_live_a_start_on_a_closed_stream_still_names_it \
+  test_live_a_workflow_reads_every_record_then_none \
+  test_live_a_direct_reader_without_a_transport_names_the_opt_out \
+  test_live_a_reader_after_continue_as_new_sees_a_later_attempt \
+  test_live_each_read_carries_the_state_its_last_answer_gave \
+  test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
+  test_live_a_reader_gets_every_record_of_a_burst \
+  test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new \
+  test_live_a_failed_owner_raises_after_every_record_is_read \
+  test_live_a_completed_owner_ends_the_reader \
+  test_live_a_canceled_owner_raises_a_canceled_operation
+gate tests/nexus/test_standalone_callbacks.py \
+  test_live_a_worker_gets_the_completion_of_a_standalone_operation
+gate tests/contrib/streams/test_nexus_follower.py \
+  test_live_a_follower_gets_each_batch_then_the_close \
+  test_live_a_follower_reads_through_the_client_transport \
+  test_live_a_follower_resumes_on_another_worker \
+  test_live_a_late_follower_reads_the_backlog_in_pages \
+  test_live_a_failed_owner_reaches_on_close_as_a_failure \
+  test_live_a_follower_on_an_empty_stream_hears_the_first_append \
+  test_live_a_follower_that_reads_a_burst_gets_no_extra_progress
+gate tests/contrib/streams/test_nexus_read_wakes.py \
+  test_live_a_reader_that_never_waits_gets_no_progress \
+  test_live_an_idle_reader_is_woken_once_per_idle_stretch \
+  test_live_a_record_between_the_empty_read_and_the_wait_is_not_lost
+gate tests/contrib/streams/test_nexus_push.py \
+  test_live_a_sleeping_nexus_reader_wakes_on_the_next_append \
+  test_live_a_busy_stream_notifies_at_most_once_per_debounce_window
+gate tests/nexus/test_workflow_operation_progress.py \
+  test_live_progress_is_ordered_folded_ended_and_replayed
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree
@@ -317,5 +415,21 @@ for test_id in gated:
         failed = True
 sys.exit(1 if failed else 0)
 PY
+
+# The stream runtime sends the notifications and the closes, so its own live test runs against the
+# server too. It returns early without a server, so the lane checks that it ran.
+crate_dir=$(uv run --no-sync python -c \
+  "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
+crate_test=connection::tests::a_live_notifier_hears_appends_as_progress_and_the_close_as_the_result
+STREAMS_NOTIFIER_SERVER="http://127.0.0.1:$GRPC_PORT" STREAMS_NOTIFIER_NEXUS_PROGRESS=1 \
+  CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK_DIR/cargo-target}" \
+  cargo test --manifest-path "$crate_dir/Cargo.toml" -p temporalio-streams \
+  --lib -- "$crate_test" --exact --nocapture 2>&1 |
+  tee "$WORK_DIR/crate-live.log" || status=$?
+if grep -q "set STREAMS_NOTIFIER" "$WORK_DIR/crate-live.log" ||
+  ! grep -q "test result: ok. 1 passed" "$WORK_DIR/crate-live.log"; then
+  echo "live lane: the stream runtime's live notifier test did not run and pass" >&2
+  status=1
+fi
 
 exit "$status"
