@@ -125,7 +125,7 @@ def current_local_call() -> LocalCall | None:
 class StreamsInterceptor(temporalio.worker.Interceptor):
     """Numbers each Local Activity call and reads the number in the Activity.
 
-    Its Workflow interceptor also tells ``workflow_writer`` that the Worker
+    Its Workflow interceptor also tells ``stream_producer`` that the Worker
     has a store.
     """
 

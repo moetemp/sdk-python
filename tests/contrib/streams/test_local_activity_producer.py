@@ -25,7 +25,7 @@ from temporalio.contrib.streams import (
     StreamStorePlugin,
     StreamUnsupportedError,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
     topic,
 )
 from temporalio.contrib.streams._local_activity import (
@@ -125,7 +125,7 @@ async def test_a_local_activity_streams_while_its_task_runs(streams: Client):
             id=workflow_id,
             task_queue=worker.task_queue,
         )
-        stream = get_stream_handle(streams, workflow_id).read(topic=TOKENS)
+        stream = stream_handle(streams, workflow_id).read(topic=TOKENS)
         # The Local Activity waits for this read, so its Workflow Task is open.
         early = [await anext(stream), await anext(stream)]
         await stream.aclose()
@@ -134,7 +134,7 @@ async def test_a_local_activity_streams_while_its_task_runs(streams: Client):
     run_id = handle.result_run_id
     assert producer_id == f"__temporal_local_1@{run_id}"
     assert [r.value for r in early] == ["a", "b"]
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert [r.kind for r in records] == [RecordKind.DATA] * 2 + [RecordKind.FINISH]
     # The first Workflow Task started at event 3 and is in its first attempt.
     assert {(r.producer_id, r.attempt) for r in records} == {
@@ -248,7 +248,7 @@ async def test_a_rerun_after_failed_tasks_supersedes_the_last_run(streams: Clien
     # stamped by the Workflow would repeat, and the store would refuse it.
     assert schedules[1] == schedules[2]
     assert [replaying for _, replaying in schedules] == [False, False, False]
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert_each_run_supersedes(records, runs=3)
     assert [r.attempt for r in records if r.kind is RecordKind.FINISH] == [
         producer_attempt(3, 1, 1),
@@ -267,7 +267,7 @@ async def test_a_rerun_after_a_task_heartbeat_supersedes(streams: Client):
     # The first task completed as a heartbeat while the Local Activity ran,
     # so the rerun is scheduled by replaying it, at the length it had then.
     assert schedules == [(3, False), (3, True)]
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert_each_run_supersedes(records, runs=2)
 
 
@@ -311,7 +311,7 @@ async def test_a_backed_off_retry_keeps_its_producer_id(streams: Client):
         await handle.result()
     first, retry = activity_ids[workflow_id]
     assert first != retry
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert [r.kind for r in records] == [
         RecordKind.DATA,
         RecordKind.SUPERSEDED,
