@@ -42,7 +42,8 @@ async def connect(
     It connects, since connecting is what hands the store to Workers built
     from it. With ``reads``, an endpoint name, it also carries
     ``StreamDirectReads`` with a ``ClientTransport`` for that endpoint, so a
-    ``StreamReader`` on its Workers reads directly, as it does by default.
+    ``StreamReader`` with ``replay_from_store=True`` on its Workers reads
+    directly.
     """
     plugins: list[Any] = [plugin] if plugin is not None else []
     if reads is not None:

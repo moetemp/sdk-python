@@ -114,7 +114,9 @@ class SlackRouter:
             service=ConversationService, endpoint=endpoint
         )
         handle = await client.start_operation(ConversationService.respond, request)
-        reader = StreamReader(handle, item_type=Message, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Message, endpoint=endpoint, replay_from_store=True
+        )
         routed = Routed()
         while (batch := await reader.next()) is not None:
             for message in batch:

@@ -108,6 +108,7 @@ class PushReader:
             item_type=Token,
             endpoint=endpoint,
             idle_wait=timedelta(milliseconds=50),
+            replay_from_store=True,
         )
         texts: list[str] = []
         while len(texts) < count and (batch := await reader.next()) is not None:

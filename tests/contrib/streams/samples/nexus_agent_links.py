@@ -222,7 +222,12 @@ class FollowsAgent:
         client = workflow.create_nexus_client(service=Agents, endpoint=agents)
         handle = await client.start_operation(Agents.run_agent, agent_id)
         reader = StreamReader(
-            handle, item_type=str, endpoint=streams, follow_links=True, after=after
+            handle,
+            item_type=str,
+            endpoint=streams,
+            follow_links=True,
+            after=after,
+            replay_from_store=True,
         )
         batches = 0
         while (batch := await reader.next_followed()) is not None:

@@ -2223,17 +2223,19 @@ async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> 
     assert seen[0].undecodable == ["cursor-2"]
 
 
-@workflow.defn(name="DefaultChatReader")
-class DefaultChatReader:
+@workflow.defn(name="DirectChatReader")
+class DirectChatReader:
     @workflow.run
     async def run(self, endpoint: str) -> int:
         client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
         handle = await client.start_operation(ChatService.chat, "hello")
-        reader = StreamReader(handle, item_type=Token, endpoint=endpoint)
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=True
+        )
         return len(await reader.next() or [])
 
 
-async def test_live_a_default_reader_without_a_transport_names_the_opt_out(
+async def test_live_a_direct_reader_without_a_transport_names_the_opt_out(
     client: Client, env: WorkflowEnvironment
 ) -> None:
     owner_id = f"token-owner-{uuid.uuid4()}"
@@ -2256,16 +2258,16 @@ async def test_live_a_default_reader_without_a_transport_names_the_opt_out(
         def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
             return StreamOperationHandler(start_owner)
 
-    # The caller's Worker has no StreamDirectReads, so the default read has no
+    # The caller's Worker has no StreamDirectReads, so the direct read has no
     # way to reach the endpoint.
     async with Worker(
         client,
         task_queue=task_queue,
-        workflows=[DefaultChatReader, LiveTokenOwner],
+        workflows=[DirectChatReader, LiveTokenOwner],
         nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
     ):
         caller = await client.start_workflow(
-            DefaultChatReader.run,
+            DirectChatReader.run,
             endpoint,
             id=f"stream-reader-{uuid.uuid4()}",
             task_queue=task_queue,
