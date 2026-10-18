@@ -745,12 +745,12 @@ class Callback(google.protobuf.message.Message):
         - Input:  temporalio.api.notificationservice.v1.OnCompleteRequest
         - Output: temporalio.api.notificationservice.v1.OnCompleteResponse
 
-        When `progress_operation` is set, the server also invokes that operation of the same service for
-        the source operation's progress. That operation must have the following:
+        When `progress_operation` is set, the server also invokes that operation of the same service
+        for the source operation's progress. That operation must have the following:
         - Input:  temporalio.api.notificationservice.v1.OnProgressRequest
         - Output: temporalio.api.notificationservice.v1.OnProgressResponse
-        It may be invoked any number of times before, during or after the single completion. It must
-        complete synchronously.
+        It may be invoked any number of times before, during or after the single completion. It
+        must complete synchronously.
 
         The targeted Nexus service must be registered within the same namespace as the source operation
         the callback is attached to. (While Nexus allows for cross-namespace operations, NexusHandler callbacks

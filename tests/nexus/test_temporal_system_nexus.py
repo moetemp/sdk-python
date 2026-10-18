@@ -13,9 +13,7 @@ from google.protobuf.message import Message
 
 import temporalio.api.common.v1
 import temporalio.api.failure.v1
-import temporalio.api.stream.v1
 import temporalio.api.workflowservice.v1.request_response_pb2 as workflowservice_pb2
-import temporalio.api.workflowservice.v1.stream_request_response_pb2 as stream_pb2
 import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
@@ -725,12 +723,6 @@ def _field_is_repeated(field: FieldDescriptor) -> bool:
     [
         workflowservice_pb2.SignalWithStartWorkflowExecutionRequest,
         workflowservice_pb2.SignalWithStartWorkflowExecutionResponse,
-        stream_pb2.AttachStreamCallbackRequest,
-        stream_pb2.AttachStreamCallbackResponse,
-        stream_pb2.DetachStreamCallbackRequest,
-        stream_pb2.DetachStreamCallbackResponse,
-        stream_pb2.NotifyStreamRequest,
-        stream_pb2.NotifyStreamResponse,
     ],
 )
 def test_system_nexus_proto_roundtrip(message_type: type[Message]) -> None:
@@ -748,44 +740,6 @@ def test_system_nexus_proto_roundtrip(message_type: type[Message]) -> None:
     roundtripped = payload_converter.from_payload(payload, message_type)
     assert isinstance(roundtripped, message_type)
     assert roundtripped == proto_value
-
-
-def test_stream_reference_without_run_id_reads_as_none() -> None:
-    converter = workflow_service_models._StreamReferenceTransferTypeConverter()
-    proto = temporalio.api.stream.v1.StreamReference(workflow_id="wf", topic="t")
-    reference = converter.from_transfer_type(
-        proto, workflow_service_models.StreamReference
-    )
-    assert reference.run_id is None
-    assert converter.to_transfer_type(reference) == proto
-
-
-def test_a_notify_stream_close_failure_round_trips_through_the_user_failure_converter() -> (
-    None
-):
-    data_converter = temporalio.converter.default()
-    system_converter = nexus_system._get_payload_converter(
-        data_converter.payload_converter, data_converter.failure_converter
-    )
-    request = workflow_service_models.NotifyStreamRequest(
-        namespace="ns",
-        stream_ref=workflow_service_models.StreamReference(workflow_id="wf", topic="t"),
-        position="cursor",
-        counter=1,
-        close=True,
-        close_failure=temporalio.exceptions.ApplicationError(
-            "the agent gave up", type="AgentGaveUp"
-        ),
-    )
-
-    payload = system_converter.to_payload(request)
-    converted = system_converter.from_payload(
-        payload, workflow_service_models.NotifyStreamRequest
-    )
-
-    assert isinstance(converted.close_failure, temporalio.exceptions.ApplicationError)
-    assert converted.close_failure.type == "AgentGaveUp"
-    assert converted.close_failure.message == "the agent gave up"
 
 
 def test_system_nexus_uses_user_failure_converter() -> None:

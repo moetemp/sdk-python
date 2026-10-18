@@ -1204,8 +1204,8 @@ class FollowOutput:
     """
 
     state: bytes | None = None
-    """Pass as state on the next call of this follow. Core always sets it. At most 64 KiB,
-    which is about 86 KiB as base64.
+    """Pass as state on the next call of this follow. The service always sets it. At most
+    64 KiB, which is about 86 KiB as base64.
     """
 
     sources: list[FollowSourceWire]
@@ -4855,9 +4855,10 @@ class _StreamOperationTokenTransferTypeConverter(
 @_transfer_type_convertible(_StreamOperationTokenTransferTypeConverter)
 @dataclasses.dataclass(slots=True, kw_only=True)
 class StreamOperationToken:
-    """What a stream-returning operation's token carries. Core mints it when the operation
-    starts, and a caller reads the stream back from it. The token is this model's
-    transfer form as JSON with sorted keys and no spaces, in base64url with no padding.
+    """What a stream-returning operation's token carries. The service mints it when the
+    operation starts, and a caller reads the stream back from it. The token is this
+    model's transfer form as JSON with sorted keys and no spaces, in base64url with no
+    padding.
     """
 
     v: typing.Literal[2] = 2

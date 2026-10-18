@@ -11,18 +11,10 @@ import temporalio.converter
 import temporalio.nexus.system._support as _support
 
 from . import services as _services
-from .operations.attach_stream_callback import attach_stream_callback
-from .operations.detach_stream_callback import detach_stream_callback
-from .operations.notify_stream import notify_stream
 from .operations.signal_with_start_workflow import signal_with_start_workflow
-from .operations.wait_stream_callback import wait_stream_callback
 
 __all__ = [
-    "attach_stream_callback",
-    "detach_stream_callback",
-    "notify_stream",
     "signal_with_start_workflow",
-    "wait_stream_callback",
 ]
 
 
@@ -57,29 +49,5 @@ __nexus_operation_registry__: dict[
     ): _NexusOperationInfo(
         operation=_services.WorkflowService.signal_with_start_workflow,
         serialization_context=_support.signal_with_start_workflow_serialization_context,
-    ),
-    (
-        "temporal.api.workflowservice.v1.WorkflowService",
-        "AttachStreamCallback",
-    ): _NexusOperationInfo(
-        operation=_services.WorkflowService.attach_stream_callback,
-    ),
-    (
-        "temporal.api.workflowservice.v1.WorkflowService",
-        "DetachStreamCallback",
-    ): _NexusOperationInfo(
-        operation=_services.WorkflowService.detach_stream_callback,
-    ),
-    (
-        "temporal.api.workflowservice.v1.WorkflowService",
-        "NotifyStream",
-    ): _NexusOperationInfo(
-        operation=_services.WorkflowService.notify_stream,
-    ),
-    (
-        "temporal.api.workflowservice.v1.WorkflowService",
-        "WaitStreamCallback",
-    ): _NexusOperationInfo(
-        operation=_services.WorkflowService.wait_stream_callback,
     ),
 }

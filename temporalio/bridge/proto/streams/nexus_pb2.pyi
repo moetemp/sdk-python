@@ -33,7 +33,7 @@ class NexusCall(google.protobuf.message.Message):
     LIMITS_FIELD_NUMBER: builtins.int
     NAMESPACE_FIELD_NUMBER: builtins.int
     input: builtins.bytes
-    """The operation's input, the N0a model in its JSON transfer form."""
+    """The operation's input, the contract's model in its JSON transfer form."""
     @property
     def deadline(self) -> google.protobuf.timestamp_pb2.Timestamp:
         """When the Nexus request times out. The service answers a read in time for its answer to travel
@@ -115,7 +115,7 @@ class NexusStep(google.protobuf.message.Message):
     CODEC_FIELD_NUMBER: builtins.int
     FAILURE_FIELD_NUMBER: builtins.int
     output: builtins.bytes
-    """The operation's output, the N0a model in its JSON transfer form."""
+    """The operation's output, the contract's model in its JSON transfer form."""
     @property
     def codec(self) -> global___CodecWork: ...
     @property

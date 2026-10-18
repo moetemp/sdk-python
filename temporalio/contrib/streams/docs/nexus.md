@@ -171,12 +171,6 @@ failure as a `NexusOperationError`. A cancel from the caller detaches its
 callback and completes that caller's operation as canceled. The stream keeps
 going for any other caller. A start without a callback is refused.
 
-`temporalio.workflow` also has generated low-level bindings for the
-notifier: `notify_stream`, `attach_stream_callback` and
-`detach_stream_callback`. Use `close_workflow_stream` rather than
-`notify_stream`. Attach and detach have no use from Workflow code: the
-handler attaches, and a cancel detaches.
-
 What happens underneath:
 
 1. The handler's start attaches the caller's callback to the stream's

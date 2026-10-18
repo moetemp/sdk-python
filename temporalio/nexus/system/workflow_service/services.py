@@ -5,16 +5,8 @@ from __future__ import annotations
 from nexusrpc import Operation, service
 
 from .models import (
-    AttachStreamCallbackRequest,
-    AttachStreamCallbackResponse,
-    DetachStreamCallbackRequest,
-    DetachStreamCallbackResponse,
-    NotifyStreamRequest,
-    NotifyStreamResponse,
     SignalWithStartWorkflowRequest,
     SignalWithStartWorkflowResponse,
-    WaitStreamCallbackRequest,
-    WaitStreamCallbackResponse,
 )
 
 
@@ -30,23 +22,3 @@ class WorkflowService:
         SignalWithStartWorkflowRequest,
         SignalWithStartWorkflowResponse,
     ] = Operation(name="SignalWithStartWorkflowExecution")
-
-    attach_stream_callback: Operation[
-        AttachStreamCallbackRequest,
-        AttachStreamCallbackResponse,
-    ] = Operation(name="AttachStreamCallback")
-
-    detach_stream_callback: Operation[
-        DetachStreamCallbackRequest,
-        DetachStreamCallbackResponse,
-    ] = Operation(name="DetachStreamCallback")
-
-    notify_stream: Operation[
-        NotifyStreamRequest,
-        NotifyStreamResponse,
-    ] = Operation(name="NotifyStream")
-
-    wait_stream_callback: Operation[
-        WaitStreamCallbackRequest,
-        WaitStreamCallbackResponse,
-    ] = Operation(name="WaitStreamCallback")

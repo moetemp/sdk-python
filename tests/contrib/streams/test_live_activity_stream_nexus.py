@@ -21,7 +21,6 @@ import pytest
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.memory import MemoryStreams
-from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
     FollowerBatch,
@@ -34,6 +33,7 @@ from temporalio.contrib.streams.nexus import (
     stream_ref_from_token,
 )
 from temporalio.contrib.streams.nexus._direct import StreamServiceCallError
+from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError
 from temporalio.worker import Worker

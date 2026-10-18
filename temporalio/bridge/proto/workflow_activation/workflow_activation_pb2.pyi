@@ -161,9 +161,11 @@ class WorkflowActivation(google.protobuf.message.Message):
     """
     @property
     def workflow_task(self) -> global___WorkflowTaskHistoryInfo:
-        """The Workflow Task this activation belongs to, from History. On replay of a Local Activity
-        heartbeat chain, Core merges the chain into one activation, and this names the chain's last
-        task. Evict-only activations leave it unset.
+        """The Workflow Task this activation belongs to, from History. On replay, Core merges a chain
+        of tasks that completed with no commands into one activation, and this names the chain's
+        last task. So inside a chain, a live run and a replay can name different tasks. A chain
+        never merges into the live task. It ends at its last completed task, so lang replays the
+        chain before any live activation. Evict-only activations leave it unset.
         """
     def __init__(
         self,
@@ -233,8 +235,8 @@ global___WorkflowActivation = WorkflowActivation
 
 class WorkflowTaskHistoryInfo(google.protobuf.message.Message):
     """A History-defined identity for a Workflow Task attempt. All fields are functions of the History
-    events up to the task's own WorkflowTaskStarted event, so a live task, a cache miss and a replay
-    get the same values.
+    events up to the task's own WorkflowTaskStarted event, so every Worker that names the same task
+    gets the same values.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
