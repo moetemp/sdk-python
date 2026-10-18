@@ -21,11 +21,11 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     activity_handle,
-    get_stream_handle,
     start_activity_with_stream,
+    stream_handle,
+    stream_producer,
     topic,
     workflow_follower,
-    workflow_writer,
 )
 from temporalio.contrib.streams import _follow as follow_module
 from temporalio.contrib.streams._plugin import store_for_client
@@ -48,18 +48,18 @@ async def tool(tokens: list[str]) -> str:
 class Child:
     @workflow.run
     async def run(self) -> None:
-        events = workflow_writer(EVENTS)
-        events.publish("c1")
-        events.publish("c2")
+        events = stream_producer(EVENTS)
+        events.append("c1")
+        events.append("c2")
 
 
 @workflow.defn
 class Agent:
     @workflow.run
     async def run(self) -> None:
-        events = workflow_writer(EVENTS)
+        events = stream_producer(EVENTS)
         timeout = timedelta(seconds=10)
-        events.publish("d1")
+        events.append("d1")
         first, first_ref = start_activity_with_stream(
             tool,
             ["a1", "a2"],
@@ -82,10 +82,10 @@ class Agent:
         await first
         await second
         events.join(name="tool-1")
-        events.publish("d2")
+        events.append("d2")
         await child
         events.join(name="sub")
-        events.publish("d3")
+        events.append("d3")
 
 
 def describe(item: FollowedItem[Any]) -> str:
@@ -141,7 +141,7 @@ async def run_agent(streams: Client, task_queue: str) -> str:
 
 
 async def follow_all(streams: Client, agent_id: str, **kwargs: Any) -> list[Any]:
-    handle = get_stream_handle(streams, agent_id, topic=EVENTS)
+    handle = stream_handle(streams, agent_id, topic=EVENTS)
     items: list[Any] = []
 
     async def pull() -> None:

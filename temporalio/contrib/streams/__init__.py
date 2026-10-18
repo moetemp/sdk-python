@@ -42,21 +42,22 @@ A store is configured as a plugin:
 client and on every Worker built from that client. Each
 context then reaches a stream the same way:
 
-- Workflow code publishes to its own stream with :func:`workflow_writer`.
+- Workflow code publishes to its own stream with :func:`stream_producer`.
   The Worker appends each activation's records before it completes the
   activation, and nothing goes to History.
-- An Activity reaches the stream of the Workflow that scheduled it with
-  :func:`activity_handle`, and writes as itself: its Activity id with the
-  scheduling run id, and an attempt from its start time and its Temporal
-  attempt. A Local Activity writes as its call number in the run, with an
-  attempt that grows across its reruns. In a standalone Activity,
-  :func:`activity_handle` is the Activity's own stream, and the Activity
+- An Activity writes to the stream of the Workflow that scheduled it with
+  :func:`stream_producer` too, and reads it with :func:`activity_handle`.
+  It writes as itself: its Activity id with the scheduling run id, and an
+  attempt from its start time and its Temporal attempt. A Local Activity
+  writes as its call number in the run, with an attempt that grows across
+  its reruns. In a standalone Activity, :func:`stream_producer` and
+  :func:`activity_handle` reach the Activity's own stream, and the Activity
   writes as its id with its run id. An Activity that Workflow code started
   with :func:`start_activity_with_stream` owns a stream too, which
   :func:`activity_handle` gives it, and which closes when the Workflow sees
   the Activity end.
 - Any process holding a client reaches a stream with
-  :func:`get_stream_handle`, and writes with a producer id and an attempt of
+  :func:`stream_handle`, and writes with a producer id and an attempt of
   its own.
 
 Every read of a Workflow's stream follows the Workflow's run chain across
@@ -104,7 +105,7 @@ from temporalio.contrib.streams._handles import (
     StreamHandle,
     StreamProducer,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
@@ -134,10 +135,10 @@ from temporalio.contrib.streams._workflow_follow import (
     WorkflowStreamFollower,
     workflow_follower,
 )
-from temporalio.contrib.streams._workflow_writer import (
-    WorkflowStreamWriter,
+from temporalio.contrib.streams._workflow_producer import (
+    WorkflowStreamProducer,
     close_workflow_stream,
-    workflow_writer,
+    stream_producer,
 )
 
 __all__ = [
@@ -182,15 +183,15 @@ __all__ = [
     "SupersessionTracker",
     "TaskCutoff",
     "WorkflowStreamFollower",
+    "WorkflowStreamProducer",
     "WorkflowStreamReader",
-    "WorkflowStreamWriter",
     "activity_handle",
     "close_workflow_stream",
-    "get_stream_handle",
     "start_activity_with_stream",
+    "stream_handle",
+    "stream_producer",
     "topic",
     "track_supersession",
     "workflow_follower",
     "workflow_reader",
-    "workflow_writer",
 ]

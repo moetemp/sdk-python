@@ -61,7 +61,7 @@ import temporalio.nexus
 from temporalio import workflow
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.streams import (
-    StreamRef, close_workflow_stream, topic, workflow_writer,
+    StreamRef, close_workflow_stream, topic, stream_producer,
 )
 from temporalio.contrib.streams.nexus import StreamOperationHandler
 
@@ -75,9 +75,9 @@ class ConversationService:
 class Conversation:
     @workflow.run
     async def run(self, request: str) -> None:
-        writer = workflow_writer(MESSAGES)
+        producer = stream_producer(MESSAGES)
         for reply in make_replies(request):
-            writer.publish(reply)
+            producer.append(reply)
         await close_workflow_stream(MESSAGES, result="done")
 
 async def open_conversation(ctx, request: str) -> StreamRef:
@@ -145,14 +145,14 @@ process flushes its notifications before it exits.
 Closing the stream completes every operation that handed it out:
 
 - From the owning Workflow, `await close_workflow_stream(topic,
-  result=...)`. The topic's writer lands what it buffered first. Then one
+  result=...)`. The topic's Workflow Producer lands what it buffered first. Then one
   Local Activity closes the stream in the store and then completes the
   operations, so a reader never misses a record published before the close.
 - From outside a Workflow, for example an Activity or the process that sees
   the work end, `await store.close_stream(client, ref, result)`. It closes
   the stream in the store first, so a later append raises
   `StreamClosedError`, and then closes its notifier. It raises when either
-  refuses the close. A later flush of the owner Workflow's writer is refused
+  refuses the close. A later flush of the owner Workflow's producer is refused
   too, and fails the Workflow. So close a Workflow-owned stream from the
   Workflow.
 
