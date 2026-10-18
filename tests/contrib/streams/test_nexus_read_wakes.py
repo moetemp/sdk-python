@@ -26,8 +26,8 @@ from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib.streams import (
     StreamRef,
     close_workflow_stream,
-    get_stream_handle,
-    workflow_writer,
+    stream_handle,
+    stream_producer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
@@ -56,14 +56,14 @@ class WakeOwner:
 
     @workflow.run
     async def run(self, first: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in first:
-            writer.publish(Token(text))
+            writer.append(Token(text))
         while True:
             await workflow.wait_condition(lambda: bool(self._queue) or self._close)
             while self._queue:
                 for text in self._queue.pop(0):
-                    writer.publish(Token(text))
+                    writer.append(Token(text))
             if self._close:
                 await close_workflow_stream(STREAM.topic, result="closed")
                 return
@@ -190,7 +190,7 @@ async def test_live_an_idle_reader_is_woken_once_per_idle_stretch(lane: _Lane):
     await asyncio.sleep(4)
     # One append of two records, so one notification for the stretch.
     await (
-        get_stream_handle(lane.client, lane.owner_id, topic=STREAM.topic)
+        stream_handle(lane.client, lane.owner_id, topic=STREAM.topic)
         .producer(producer_id="writer", attempt=1)
         .append(Token("second"), Token("third"))
     )
