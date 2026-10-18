@@ -53,6 +53,7 @@ from temporalio.contrib.streams.nexus._direct import (
     FOLLOW_POSITIONS_TYPE,
     _DirectReadCodec,
     _put_follow,
+    _range_key,
     _transfer,
     answer_of,
     direct_follow_activity,
@@ -73,7 +74,7 @@ from temporalio.contrib.streams.nexus._generated import (
 )
 from temporalio.contrib.streams.nexus._generated import client as generated_client
 from temporalio.contrib.streams.nexus._handler import _caller_namespace
-from temporalio.converter import DataConverter, PayloadCodec
+from temporalio.converter import DataConverter, PayloadCodec, PayloadConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import ActivityEnvironment
@@ -216,7 +217,9 @@ async def test_the_live_task_turns_the_result_back_from_the_cache():
     transport = FakeTransport()
     plugin = StreamDirectReads({"e": transport})
     range, answer = live(record("c1", "a"), record("c2", "b"))
-    plugin._batches.put(range, answer)
+    plugin._batches.put(
+        _range_key(range), PayloadConverter.default.to_payload(answer).data
+    )
     batch = await turned_back(
         codec_of(plugin, Base64Codec()), positions_payload("e", range, answer)
     )

@@ -24,7 +24,6 @@ import base64
 import dataclasses
 import json
 import uuid
-from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from ssl import SSLContext
@@ -52,6 +51,7 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._replay_reads import (
+    BatchCache,
     ReadChain,
     ReadStates,
     ReplayReadCodec,
@@ -122,9 +122,6 @@ _AUTH_STATUSES = {401, 403}
 # What an HTTP call may take outside an Activity, where no Activity's time
 # bounds it.
 _DEFAULT_HTTP_TIMEOUT = 30.0
-# Batches the read Activity read in this process, so the live Workflow Task
-# turns its result back without a second read.
-_CACHE_SIZE = 256
 # The default payload converter writes the contract's JSON transfer form.
 _CONTRACT = PayloadConverter.default
 # Conditions that a repeat of the same read gets again, so the Activity stops.
@@ -433,8 +430,10 @@ class StreamDirectReads(SimplePlugin):
             data_converter=self._wrap,
         )
         self._transports = dict(transports)
-        self._batches = _BatchCache()
-        self._follows: OrderedDict[bytes, bytes] = OrderedDict()
+        # Answers the read Activity read in this process, so the live Workflow
+        # Task turns its result back without a second read.
+        self._batches = BatchCache()
+        self._follows = BatchCache()
         self._read_states = ReadStates()
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
@@ -560,7 +559,7 @@ async def _read(
     )
     # The Worker turns the result back into this batch before Workflow code
     # sees it, from here while the run stays in this process.
-    plugin._batches.put(range, answer)
+    plugin._batches.put(_range_key(range), _CONTRACT.to_payload(answer).data)
     chain = None
     elided = False
     if read_seq > 0:
@@ -661,6 +660,17 @@ def _following(transport: Any, endpoint: str) -> StreamFollowTransport:
     return cast(StreamFollowTransport, transport)
 
 
+def _range_key(range: ReadRangeInput) -> bytes:
+    return b"\0".join(
+        [
+            (range.floor_holder or "").encode(),
+            range.after_token.encode(),
+            range.to_token.encode(),
+            range.records_digest,
+        ]
+    )
+
+
 def _follow_key(range: FollowRangeInput) -> bytes:
     return b"\0".join(
         [(range.floor_holder or "").encode(), range.state or b"", range.follow_digest]
@@ -670,11 +680,7 @@ def _follow_key(range: FollowRangeInput) -> bytes:
 def _put_follow(
     plugin: StreamDirectReads, range: FollowRangeInput, answer: FollowOutput
 ) -> None:
-    key = _follow_key(range)
-    plugin._follows[key] = _CONTRACT.to_payload(answer).data
-    plugin._follows.move_to_end(key)
-    while len(plugin._follows) > _CACHE_SIZE:
-        plugin._follows.popitem(last=False)
+    plugin._follows.put(_follow_key(range), _CONTRACT.to_payload(answer).data)
 
 
 def follow_batch_payload(answer: FollowOutput) -> Payload:
@@ -795,40 +801,6 @@ def answer_of(payload: Payload) -> ReadOutput:
     return _CONTRACT.from_payload(payload, ReadOutput)
 
 
-class _BatchCache:
-    """The newest batches direct reads read in this process."""
-
-    def __init__(self, size: int = _CACHE_SIZE) -> None:
-        self._size = size
-        self._batches: OrderedDict[tuple[str, str, str, bytes], bytes] = OrderedDict()
-
-    @staticmethod
-    def _key(range: ReadRangeInput) -> tuple[str, str, str, bytes]:
-        return (
-            range.floor_holder or "",
-            range.after_token,
-            range.to_token,
-            range.records_digest,
-        )
-
-    def put(self, range: ReadRangeInput, answer: ReadOutput) -> None:
-        key = self._key(range)
-        self._batches[key] = _CONTRACT.to_payload(answer).data
-        self._batches.move_to_end(key)
-        while len(self._batches) > self._size:
-            self._batches.popitem(last=False)
-
-    def take(self, range: ReadRangeInput) -> ReadOutput | None:
-        # The batch stays cached for a later replay in this process.
-        data = self._batches.get(self._key(range))
-        if data is None:
-            return None
-        return _from_json(data, ReadOutput)
-
-    def clear(self) -> None:
-        self._batches.clear()
-
-
 class _DirectReadCodec(PayloadCodec, WithSerializationContext):
     """The client's codec, with direct reads turned back into batches on decode."""
 
@@ -919,9 +891,9 @@ class _DirectReadCodec(PayloadCodec, WithSerializationContext):
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
             return batch_payload(answer, chain)
-        cached = self._plugin._batches.take(range)
+        cached = self._plugin._batches.get(_range_key(range))
         if cached is not None:
-            return batch_payload(cached, chain)
+            return batch_payload(_from_json(cached, ReadOutput), chain)
         if chain is not None and document.get("elided"):
             if previous is None:
                 raise StreamError(

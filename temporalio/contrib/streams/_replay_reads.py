@@ -96,73 +96,46 @@ class ReadStates:
         return state if seq == chain.seq - 1 else None
 
 
+def range_key(range: ReadRangeRequest) -> bytes:
+    """The cache key of one read: its holder, its range and its digest."""
+    return b"\0".join(
+        [
+            range.floor_holder.encode(),
+            range.after.encode(),
+            range.to.encode(),
+            range.records_digest,
+        ]
+    )
+
+
 class BatchCache:
-    """The newest batches positions-only reads read in this process."""
+    """The newest answers reads read in this process, by key."""
 
     def __init__(self, size: int = _CACHE_SIZE, max_bytes: int = _CACHE_BYTES) -> None:
-        """Keep up to ``size`` batches of no more than ``max_bytes`` in all."""
+        """Keep up to ``size`` answers of no more than ``max_bytes`` in all."""
         self._size = size
         self._max_bytes = max_bytes
         self._bytes = 0
-        self._batches: OrderedDict[bytes, bytes] = OrderedDict()
-
-    @staticmethod
-    def key(range: ReadRangeRequest) -> bytes:
-        """The key of one read: its holder, its range and its digest."""
-        return b"\0".join(
-            [
-                range.floor_holder.encode(),
-                range.after.encode(),
-                range.to.encode(),
-                range.records_digest,
-            ]
-        )
-
-    def put(self, range: ReadRangeRequest, response: ReadResponse) -> None:
-        """Keep ``response``, whose bodies are already decoded."""
-        key = self.key(range)
-        data = response.SerializeToString()
-        self._bytes += len(data) - len(self._batches.get(key, b""))
-        self._batches[key] = data
-        self._batches.move_to_end(key)
-        while self._batches and (
-            len(self._batches) > self._size or self._bytes > self._max_bytes
-        ):
-            self._bytes -= len(self._batches.popitem(last=False)[1])
-
-    def take(self, range: ReadRangeRequest) -> ReadResponse | None:
-        """The batch of ``range``, which stays cached for a later replay."""
-        data = self._batches.get(self.key(range))
-        return ReadResponse.FromString(data) if data is not None else None
-
-    def clear(self) -> None:
-        """Drop every batch, so the next decode reads from the store."""
-        self._batches.clear()
-        self._bytes = 0
-
-
-class ByteCache:
-    """The newest values put in this process, by key."""
-
-    def __init__(self, size: int = _CACHE_SIZE) -> None:
-        """Keep up to ``size`` values."""
-        self._size = size
         self._values: OrderedDict[bytes, bytes] = OrderedDict()
 
     def put(self, key: bytes, value: bytes) -> None:
         """Keep ``value`` under ``key``."""
+        self._bytes += len(value) - len(self._values.get(key, b""))
         self._values[key] = value
         self._values.move_to_end(key)
-        while len(self._values) > self._size:
-            self._values.popitem(last=False)
+        while self._values and (
+            len(self._values) > self._size or self._bytes > self._max_bytes
+        ):
+            self._bytes -= len(self._values.popitem(last=False)[1])
 
     def get(self, key: bytes) -> bytes | None:
-        """The value under ``key``, which stays for a later replay."""
+        """The value under ``key``, which stays cached for a later replay."""
         return self._values.get(key)
 
     def clear(self) -> None:
-        """Drop every value."""
+        """Drop every value, so the next decode reads from the store."""
         self._values.clear()
+        self._bytes = 0
 
 
 def positions_payload(
@@ -316,8 +289,8 @@ class ReplayReadCodec(PayloadCodec, WithSerializationContext):
             # A read with no stored record has no record at all, since a
             # SUPERSEDED record comes only before a stored one.
             batch = answer
-        elif (cached := self._plugin._batches.take(range)) is not None:
-            batch = cached
+        elif (cached := self._plugin._batches.get(range_key(range))) is not None:
+            batch = ReadResponse.FromString(cached)
         else:
             if chain is not None and _STATE_ELIDED_KEY in payload.metadata:
                 state = self._plugin._read_states.before(chain)

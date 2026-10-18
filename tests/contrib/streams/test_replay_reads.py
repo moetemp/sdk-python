@@ -35,6 +35,7 @@ from temporalio.contrib.streams._replay_reads import (
     ReadStates,
     ReplayReadCodec,
     is_positions,
+    range_key,
 )
 from temporalio.contrib.streams._workflow import _ReadInput, read_activity
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -380,9 +381,10 @@ def test_the_batch_cache_keeps_its_bytes_bounded():
     ranges = [ReadRangeRequest(after=str(i), to=str(i + 1)) for i in range(3)]
     big = ReadResponse(cursor="x" * 1400)
     for read in ranges:
-        cache.put(read, big)
-    assert cache.take(ranges[0]) is None
-    assert cache.take(ranges[1]) == big and cache.take(ranges[2]) == big
+        cache.put(range_key(read), big.SerializeToString())
+    assert cache.get(range_key(ranges[0])) is None
+    assert cache.get(range_key(ranges[1])) == big.SerializeToString()
+    assert cache.get(range_key(ranges[2])) == big.SerializeToString()
 
 
 @pytest.mark.parametrize("kind", ["redis", "postgres"])
