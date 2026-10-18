@@ -27,9 +27,9 @@ from temporalio.contrib.streams.nexus import (
     follow_stream,
 )
 from temporalio.worker import Worker
-from tests.contrib.streams.samples import nexus_agent_links as demo
+from tests.contrib.streams import _agent_links_nexus as demo
 from tests.contrib.streams.test_live_activity_stream_nexus import lane as lane
-from tests.contrib.streams.test_nexus_scenario_demos import (  # noqa: F401
+from tests.contrib.streams.test_live_activity_stream_nexus import (  # noqa: F401
     new_store as new_store,
 )
 from tests.helpers.nexus import end_standalone_operation

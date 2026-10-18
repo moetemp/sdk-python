@@ -1,8 +1,7 @@
-"""Bridge readers woken through the notification log and a StreamDriver.
+"""Bridge readers woken through producer notifications.
 
-The handler's store keeps a notification log, so producers make no call to
-Temporal, and a StreamDriver forwards the notifications. The caller reads
-directly through ``ClientTransport``, the default. These live tests need the
+The handler's store notifies the server after each append. The caller reads
+directly through ``ClientTransport``. These live tests need the
 Bridge lane's server, with the stream notifier, Nexus progress, the debounce
 and ``ExecuteSyncNexusOperation``. Any other server makes them skip.
 """
@@ -27,7 +26,6 @@ from temporalio import workflow
 from temporalio.api.nexus.v1 import NexusOperationProgress
 from temporalio.client import Client
 from temporalio.contrib.streams import (
-    StreamDriver,
     StreamRef,
     StreamStorePlugin,
     workflow_writer,
@@ -50,8 +48,7 @@ from tests.contrib.streams.test_nexus_reader import (
 )
 from tests.helpers.nexus import make_nexus_endpoint_name
 
-# A wake through the driver lands within its doorbell latency and the
-# server's debounce window (1 second by default).
+# A wake lands within the server's debounce window (1 second by default).
 QUICK = 5.0
 
 
@@ -133,7 +130,7 @@ async def lane(
     task_queue = f"push-{uuid.uuid4()}"
     endpoint = make_nexus_endpoint_name(task_queue)
     await env.create_nexus_endpoint(endpoint, task_queue)
-    store = _store(request.param).notify_on_append(notification_log=True)
+    store = _store(request.param).notify_on_append()
     reads = StreamDirectReads({endpoint: ClientTransport(client, endpoint)})
     streams = await Client.connect(
         client.service_client.config.target_host,
@@ -154,26 +151,18 @@ async def lane(
         def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
             return StreamOperationHandler(start_owner)
 
-    driver = asyncio.create_task(
-        StreamDriver(streams, sweep_interval=timedelta(seconds=2)).run()
-    )
-    try:
-        async with Worker(
-            streams,
-            task_queue=task_queue,
-            workflows=[PushOwner, PushReader],
-            nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
-        ):
-            yield lane
-            with contextlib.suppress(Exception):
-                await streams.get_workflow_handle(lane.owner_id).signal(PushOwner.done)
-    finally:
-        driver.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await driver
+    async with Worker(
+        streams,
+        task_queue=task_queue,
+        workflows=[PushOwner, PushReader],
+        nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
+    ):
+        yield lane
+        with contextlib.suppress(Exception):
+            await streams.get_workflow_handle(lane.owner_id).signal(PushOwner.done)
 
 
-async def test_live_a_sleeping_nexus_reader_wakes_through_the_driver(lane: _Lane):
+async def test_live_a_sleeping_nexus_reader_wakes_on_the_next_append(lane: _Lane):
     reader = await lane.client.start_workflow(
         PushReader.run,
         args=[lane.endpoint, 2],
@@ -187,7 +176,7 @@ async def test_live_a_sleeping_nexus_reader_wakes_through_the_driver(lane: _Lane
         PushOwner.publish, ["second"]
     )
     assert await asyncio.wait_for(reader.result(), 30) == ["first", "second"]
-    # The driver's notification woke it, not a recheck.
+    # The owner's notification woke it, not a recheck.
     assert time.monotonic() - started < QUICK
 
 

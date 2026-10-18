@@ -183,8 +183,7 @@ What happens underneath:
    notifier on the server as an idle callback, which hears no progress
    until it waits, and returns the stream reference in the operation token.
 2. The stream runtime notifies the notifier after every append, a Workflow's
-   publishes included, or a StreamDriver does it from the store's
-   notification log. Notifications are folded: at most one call is in
+   publishes included. Notifications are folded: at most one call is in
    flight, and the newest one wins.
 3. A reader reads first. Each read names its operation (`wake_token`). A
    read that finds nothing asks the notifier to wake that operation's
@@ -672,10 +671,6 @@ class ToolsHandler:
 - **Server.** The server runs standalone Activities
   (`activity.enableStandalone`) besides the settings above.
 
-[`tests/contrib/streams/samples/nexus_tool_call_stream.py`](../../../../tests/contrib/streams/samples/nexus_tool_call_stream.py)
-runs a tool as a standalone Activity in another namespace and a caller
-Workflow that reads its stream, directly or recorded.
-
 ## Follow links over Nexus
 
 A stream can hold link records that open other streams, such as one per tool
@@ -714,10 +709,6 @@ while (items := await reader.next_followed()) is not None:
   endpoint is not expanded. It comes as `SKIPPED` with reason `endpoint`,
   and the caller may follow it on its own. `append` takes no links. A
   `DONE` report over Nexus carries no close outcome.
-
-The sample `tests/contrib/streams/samples/nexus_agent_links.py` runs a caller
-in one namespace that follows an agent and its tool calls in another, goes on
-in a new run from its position, and replays.
 
 ## Limits and timeouts
 
@@ -870,18 +861,10 @@ seconds each. With many readers, give that Worker more Nexus pollers
 (`nexus_task_poller_behavior`), and serve appends and reads on separate
 task queues or endpoints, so an append doesn't wait behind parked reads.
 
-## Sample
-
-[`tests/contrib/streams/samples/nexus_slack_router.py`](../../../../tests/contrib/streams/samples/nexus_slack_router.py)
-runs a handler that streams a conversation's messages and a caller Workflow
-that reads them and files each one under its channel. Its test,
-`tests/contrib/streams/test_nexus_samples.py`, runs it on a server with the
-settings above and skips on a server without the stream notifier.
-
 ## Live tests
 
 The stock dev server has no stream notifier and takes no NexusHandler
-callbacks on a standalone operation, so the sample test and the reader,
+callbacks on a standalone operation, so the reader,
 progress, stream operation and follower lifecycle tests skip there.
 `scripts/streams_live_lane.sh` builds a server that has the notifier, starts
 it with the settings above and a scratch Redis, and runs those tests against
@@ -889,9 +872,8 @@ it, along with the stream runtime's live notifier test. It fails unless each
 test on its gated list passes. A release of streams over Nexus needs a green
 run of it, until CI has a lane with such a server.
 
-The push cases in `tests/contrib/streams/test_nexus_push.py` run a
-StreamDriver over a store with a notification log, on memory, standalone
-Redis and a Redis Cluster that the lane starts unless
-`STREAMS_REDIS_CLUSTER_URL` names one. A sleeping caller wakes through the
-driver, and a busy stream delivers at most two progress notifications per
-debounce window.
+The push cases in `tests/contrib/streams/test_nexus_push.py` run producer
+notifications on memory, standalone Redis and a Redis Cluster that the lane
+starts unless `STREAMS_REDIS_CLUSTER_URL` names one. A sleeping caller wakes
+through them, and a busy stream delivers at most two progress notifications
+per debounce window.

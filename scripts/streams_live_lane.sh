@@ -216,7 +216,7 @@ cd "$SDK_DIR"
 export PYTHONPATH="$SDK_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 # The server takes a few seconds to join its own ring. The tests need the default namespace, and
-# the cross-namespace demo needs streams-b.
+# the cross-namespace tests need streams-b.
 uv run --no-sync python - "$GRPC_PORT" <<'EOF'
 import asyncio
 import sys
@@ -343,8 +343,6 @@ gate tests/contrib/streams/test_store_plugin.py \
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed
-gate tests/contrib/streams/test_nexus_samples.py \
-  test_the_slack_router_files_each_message_under_its_channel
 gate tests/contrib/streams/test_nexus_stream_operation.py \
   test_a_caller_sees_appends_as_progress_and_the_close_as_the_result \
   test_a_close_right_after_the_last_publishes_comes_after_them \
@@ -385,31 +383,10 @@ gate tests/contrib/streams/test_nexus_read_wakes.py \
   test_live_an_idle_reader_is_woken_once_per_idle_stretch \
   test_live_a_record_between_the_empty_read_and_the_wait_is_not_lost
 gate tests/contrib/streams/test_nexus_push.py \
-  test_live_a_sleeping_nexus_reader_wakes_through_the_driver \
+  test_live_a_sleeping_nexus_reader_wakes_on_the_next_append \
   test_live_a_busy_stream_notifies_at_most_once_per_debounce_window
 gate tests/nexus/test_workflow_operation_progress.py \
   test_live_progress_is_ordered_folded_ended_and_replayed
-gate tests/contrib/streams/test_nexus_scenario_demos.py \
-  test_n1b_a_parent_relays_every_record_and_gets_the_close_result \
-  test_n1c_a_relay_across_namespaces_gets_every_record \
-  test_n2_every_segment_url_crosses_namespaces_and_resolves \
-  test_n3d_an_agent_hears_every_message_whatever_bs_store \
-  test_n4_a_connector_posts_every_message_and_idles_with_no_task \
-  test_n5b_a_dashboard_and_a_relay_both_get_every_record \
-  test_n5c_followers_that_attach_late_get_every_record \
-  test_n6_a_second_operation_follows_the_location_after_the_wake \
-  test_n7a_a_caller_reads_every_stage_then_gets_the_failure \
-  test_n7b_the_reader_marks_the_retry_and_the_stale_write \
-  test_n8_a_caller_replays_with_the_owners_streams_and_worker_gone \
-  test_n9_a_direct_reader_records_ranges_and_replays_from_the_endpoint \
-  test_n9_a_shared_encryption_codec_crosses_both_ways \
-  test_n9_a_trim_below_the_floor_keeps_the_range \
-  test_n9_a_lapsed_floor_lease_loses_the_range_and_fails_the_task \
-  test_n9_authorize_refuses_a_caller_namespace_the_server_vouched_for
-gate tests/contrib/streams/test_nexus_scenario_demos.py \
-  test_u1a_the_app_worker_gets_each_stage_pushed_then_the_close \
-  test_u4_a_standalone_connector_posts_each_message_once \
-  test_u5c_dashboards_read_the_backlog_in_pages_and_after_the_close
 uv run --no-sync python - "$WORK_DIR/junit.xml" "${gated_tests[@]}" <<'PY' || status=1
 import sys
 import xml.etree.ElementTree as ElementTree

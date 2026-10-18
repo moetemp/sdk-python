@@ -10,9 +10,6 @@ and every tool stream in one order, through the stream service's ``follow``.
 Workers in ``streams-b``: one serves ``Agents`` and one the stream service,
 and one runs the agent and its tools. The caller's Workflow runs in the
 client's namespace and follows directly through ``StreamDirectReads``.
-
-Run against the Bridge live lane's server with ``TEMPORAL_ADDRESS=127.0.0.1:7961
-python -m tests.contrib.streams.samples.nexus_agent_links``.
 """
 
 from __future__ import annotations
@@ -49,11 +46,10 @@ from temporalio.contrib.streams.nexus import (
 )
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.worker import Replayer, Worker
-from tests.contrib.streams.samples.scenarios._nexus import (
+from tests.contrib.streams._nexus_lane import (
     NAMESPACE_B,
     NewStore,
     endpoint,
-    run,
     two_namespaces,
 )
 
@@ -344,7 +340,3 @@ async def main(
                 workflows=[FollowsAgent], plugins=[direct_reads(the_lane)]
             ).replay_workflow(run_history)
     return output
-
-
-if __name__ == "__main__":
-    run(main)

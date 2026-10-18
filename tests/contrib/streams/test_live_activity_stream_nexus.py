@@ -10,6 +10,7 @@ when ``STREAMS_REDIS_URL`` is set.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
@@ -19,6 +20,8 @@ import pytest
 
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import StreamStorePlugin
+from temporalio.contrib.streams.memory import MemoryStreams
+from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
     FollowerBatch,
@@ -34,17 +37,29 @@ from temporalio.contrib.streams.nexus._direct import StreamServiceCallError
 from temporalio.exceptions import ApplicationError, NexusOperationError
 from temporalio.service import RPCError
 from temporalio.worker import Worker
-from tests.contrib.streams.samples import nexus_tool_call_stream as demo
-from tests.contrib.streams.samples.scenarios._nexus import NAMESPACE_B, has_namespace
+from tests.contrib.streams import _tool_call_stream_nexus as demo
+from tests.contrib.streams._nexus_lane import NAMESPACE_B, has_namespace
 from tests.contrib.streams.test_live_notifications import skip_without_notifier
-from tests.contrib.streams.test_nexus_scenario_demos import (  # noqa: F401
-    new_store as new_store,
-)
 from tests.helpers.nexus import end_standalone_operation
 
 # The lane checks owners every 2 seconds and debounces each stream's
 # deliveries, so a close by the owner check lands in a few seconds.
 OWNER_CHECK = 30.0
+
+
+def redis_store() -> StreamStorePlugin:
+    url = os.environ.get("STREAMS_REDIS_URL", "")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to run the live tests on Redis")
+    return RedisStreams(url, key_prefix=f"live-{uuid.uuid4().hex}")
+
+
+@pytest.fixture(params=["memory", "redis"])
+def new_store(request: pytest.FixtureRequest) -> Callable[[], StreamStorePlugin]:
+    if request.param == "redis":
+        redis_store()
+        return redis_store
+    return MemoryStreams
 
 
 @pytest.fixture

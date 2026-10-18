@@ -11,9 +11,6 @@ Workers in ``streams-b``: one serves ``Tools`` and the stream service on
 ``<task queue>-b``, and one runs the ``run_tool`` Activity on
 ``<task queue>-tools``. The caller's Workflow runs in the client's namespace
 and reads directly through ``StreamDirectReads``.
-
-Run against the Bridge live lane's server with ``TEMPORAL_ADDRESS=127.0.0.1:7961
-python -m tests.contrib.streams.samples.nexus_tool_call_stream``.
 """
 
 from __future__ import annotations
@@ -40,11 +37,10 @@ from temporalio.contrib.streams.nexus import (
 )
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer, Worker
-from tests.contrib.streams.samples.scenarios._nexus import (
+from tests.contrib.streams._nexus_lane import (
     NAMESPACE_B,
     NewStore,
     endpoint,
-    run,
     stream_service_url,
     two_namespaces,
 )
@@ -237,7 +233,3 @@ async def main(
             history
         )
     return output
-
-
-if __name__ == "__main__":
-    run(main)
