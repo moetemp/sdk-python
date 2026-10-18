@@ -282,15 +282,17 @@ async def test_a_rerun_after_a_task_heartbeat_supersedes(streams: Client):
     assert schedules == [(3, False), (3, True)]
     records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert_each_run_supersedes(records, runs=2)
-    # Replay stamps the rerun with the first run's task, so its first attempt
-    # writes the same producer attempt with other content. The store refuses
-    # it, the Local Activity retries, and attempt 2 supersedes the first run.
-    task = task_attempt([], 0)
-    assert refused[workflow_id] == [(2, 1)]
-    assert [r.attempt for r in records if r.kind is RecordKind.FINISH] == [
-        producer_attempt(task, 1),
-        producer_attempt(task, 2),
-    ]
+    # Core dispatches the rerun in the live task, after the heartbeat task
+    # completed and the next one failed. So the rerun's first attempt writes
+    # a higher task attempt, and its first batch supersedes the first run.
+    assert refused[workflow_id] == []
+    first, rerun = (r.attempt for r in records if r.kind is RecordKind.FINISH)
+    assert first == producer_attempt(task_attempt([], 0), 1)
+    assert rerun & (1 << 14) - 1 == 1
+    # The rerun's prefix is the heartbeat task, started at event 3, or a later one.
+    assert rerun >> 14 >> 16 >= 3
+    (supersession,) = [r.supersession for r in records if r.supersession]
+    assert (supersession.previous_attempt, supersession.attempt) == (first, rerun)
 
 
 # How many Workflow Tasks of each Workflow ran its Local Activity, by Workflow id.
