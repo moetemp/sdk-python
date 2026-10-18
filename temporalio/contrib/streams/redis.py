@@ -20,7 +20,7 @@ class RedisStreams(StreamStorePlugin):
 
     One instance per Redis deployment. Pass it to the client as a plugin,
     and open handles from the client with
-    :func:`temporalio.contrib.streams.get_stream_handle`. Redis 7.0 or later
+    :func:`temporalio.contrib.streams.stream_handle`. Redis 7.0 or later
     is required, with ``maxmemory-policy noeviction``.
     """
 
