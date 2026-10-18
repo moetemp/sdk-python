@@ -1,7 +1,7 @@
 """Reaching a stream from an Activity or from client code.
 
-Every call goes to the stream service, which checks the owner, mints and
-checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
+Every call goes to the stream runtime's service, which checks the owner, mints
+and checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
 needs the plaintext or the user's types: converting values, the two hashes
 taken before the codec, and the codec itself.
 
@@ -120,7 +120,7 @@ class StreamProducer(Generic[T]):
         self._local_call = local_call
         self._sequence = 1
         self._last = BEGINNING
-        # A batch reads the sequence, then awaits the codec and the stream runtime, then
+        # A batch reads the sequence, then awaits the codec and the store, then
         # moves it on; calls one at a time keep each batch's sequences.
         self._lock = asyncio.Lock()
 
@@ -450,6 +450,10 @@ class StreamHandle:
             self._plugin._notifier_unsupported = True
             self._set_wait(request, False)
             return False
+        except StreamNotFoundError:
+            # The owner hasn't started yet. The next read waits out the owner
+            # start grace, and fails once it ends.
+            pass
         return True
 
     def follow(
@@ -488,8 +492,6 @@ class StreamHandle:
         previous batch end, which repeats the rest of that batch. The follow
         ends when the root is done and every segment ended. The root's close
         failure raises after its last item.
-
-        Follow needs a Core with link records and ``Follow``.
 
         Raises:
             ValueError: A bound is below one, or ``result_type`` was passed
@@ -616,7 +618,7 @@ class StreamHandle:
         )
 
     async def _read_run_id(self) -> str:
-        """The run a read names to the stream runtime, which ends a read when that run closes.
+        """The run a read names to the store, which ends a read when that run closes.
 
         A read must end only with its chain. While the chain that holds
         ``chain_run_id`` is the Workflow id's newest, the read names no run

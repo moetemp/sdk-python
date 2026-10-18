@@ -13,9 +13,10 @@
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
-#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with Core's
-#                      redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five more ports.
-#   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
+#   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with the
+#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five
+#                      more ports.
+#   CARGO_TARGET_DIR   where the crate's live test builds (default: under WORK_DIR)
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 #   PYTEST_TARGETS     the tests to run (default: the stream and Nexus tests). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.

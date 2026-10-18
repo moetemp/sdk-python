@@ -1,8 +1,8 @@
 """An Activity's producer attempt comes from the attempt's start time.
 
 A reset sets an Activity's Temporal attempt back to one, so the Temporal
-attempt alone can't order the attempts of one Activity. Core composes the
-producer attempt from the attempt's start time and its Temporal attempt.
+attempt alone can't order the attempts of one Activity. The stream runtime
+composes the producer attempt from the attempt's start time and its Temporal attempt.
 """
 
 from __future__ import annotations

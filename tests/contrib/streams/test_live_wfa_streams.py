@@ -218,7 +218,9 @@ class ChainedAgent:
 
 
 async def test_live_each_run_of_a_chain_gets_its_own_tool_stream(notifying: Client):
-    async with new_worker(notifying, ChainedAgent, activities=[writes_its_run]) as worker:
+    async with new_worker(
+        notifying, ChainedAgent, activities=[writes_its_run]
+    ) as worker:
         agent = await notifying.start_workflow(
             ChainedAgent.run, 2, id=new_workflow_id(), task_queue=worker.task_queue
         )
@@ -266,7 +268,9 @@ async def test_live_a_reset_run_writes_a_new_tool_stream(notifying: Client):
     workflow_id = new_workflow_id()
     _release[workflow_id] = asyncio.Event()
     _started[workflow_id] = asyncio.Event()
-    async with new_worker(notifying, Agent, activities=[waits_in_the_first_run]) as worker:
+    async with new_worker(
+        notifying, Agent, activities=[waits_in_the_first_run]
+    ) as worker:
         agent = await notifying.start_workflow(
             Agent.run,
             args=["waits_in_the_first_run", 60_000, 1],

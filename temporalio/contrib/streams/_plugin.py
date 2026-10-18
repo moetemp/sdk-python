@@ -1,11 +1,10 @@
 """The plugin a store configuration is, and how each context finds the store.
 
 A configuration class is registered once, on the client:
-``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks
-the stream runtime for the store it names. The stream runtime serves that one
-store to the client's handles and to every Worker built from the client, so a
-Workflow's publish, an Activity's append and an outside read meet in the same
-place.
+``Client.connect(plugins=[RedisStreams(...)])``. Connecting the client asks the
+stream runtime for the store it names. The runtime serves that one store to the
+client's handles and to every Worker built from the client, so a Workflow's
+publish, an Activity's append and an outside read meet in the same place.
 
 On a Worker the plugin hands the Worker the store, and the Worker appends
 what :func:`temporalio.contrib.streams.workflow_writer` publishes before it
@@ -60,8 +59,8 @@ class StreamStorePlugin(SimplePlugin):
 
     Use :class:`temporalio.contrib.streams.redis.RedisStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
-    is one store, on one client connection, since the stream runtime asks about each
-    stream's owner over the connection that connected the store. A second
+    is one store, on one client connection, since the stream runtime asks about
+    each stream's owner over the connection that connected the store. A second
     connection, such as another namespace's endpoint, needs its own instance.
     Registering a second, different store on the same client raises
     ``ValueError``, because a handle could otherwise pick either.
@@ -117,12 +116,12 @@ class StreamStorePlugin(SimplePlugin):
     ) -> ServiceClient:
         """Connect the client, then the store, so Workers built from it have one.
 
-        A lazy client connects here too, since the stream runtime needs its connection to
-        ask about a stream's owner.
+        A lazy client connects here too, since the stream runtime needs its
+        connection to ask about a stream's owner.
 
         Raises:
-            temporalio.contrib.streams.StreamError: the stream runtime could not reach the
-                store.
+            temporalio.contrib.streams.StreamError: The stream runtime could
+                not reach the store.
         """
         service_client = await next(config)
         await self._connected(service_client)
@@ -313,7 +312,7 @@ class StreamStorePlugin(SimplePlugin):
 
     @property
     def capabilities(self) -> StoreCapabilities:
-        """What the store can do, as the stream runtime found when a client connected it.
+        """What the store can do, as the stream runtime found on connect.
 
         Raises:
             ValueError: No client connected this store yet.
@@ -423,7 +422,7 @@ class StreamStorePlugin(SimplePlugin):
 
 
 async def call(pending: Awaitable[T]) -> T:
-    """Await a stream call, raising the stream runtime's failure as the error a caller catches."""
+    """Await a stream call, raising its failure as the error a caller catches."""
     try:
         return await pending
     except StreamCallFailure as failure:

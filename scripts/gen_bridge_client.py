@@ -310,7 +310,7 @@ $method_calls''')
         for service_descriptor in service_descriptors
     ]
     file_template = Template('''# Generated file. DO NOT EDIT
-"""Generated calls for Core's in-process stream services."""
+"""Generated calls for the stream runtime's in-process stream services."""
 
 from __future__ import annotations
 
@@ -320,7 +320,7 @@ $imports
 
 if TYPE_CHECKING:
     from temporalio.bridge.streams import StreamStore
-$classes''')
+"""Generated calls for the stream runtime's in-process stream services."""
     with open(output_file, "w") as f:
         f.write(
             file_template.substitute(

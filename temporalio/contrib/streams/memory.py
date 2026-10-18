@@ -18,9 +18,9 @@ __all__ = ["MemoryStreams"]
 class MemoryStreams(StreamStorePlugin):
     """A store in this process's memory.
 
-    The stream runtime holds it, so the client's handles and every Worker built from the
-    client share it. Nothing survives the process, and another process sees
-    none of it.
+    The stream runtime holds it, so the client's handles and every Worker built
+    from the client share it. Nothing survives the process, and another process
+    sees none of it.
     """
 
     def __init__(
@@ -38,15 +38,15 @@ class MemoryStreams(StreamStorePlugin):
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
             capabilities: A mask over the store's capabilities. A field set to
-                ``False`` turns that capability off, and the stream runtime takes its
-                fallback, as on a store that lacks it. For tests, and to try
-                the weaker guarantees. Every capability when unset.
+                ``False`` turns that capability off, and the stream runtime
+                takes its fallback, as on a store that lacks it. For tests, and
+                to try the weaker guarantees. Every capability when unset.
 
         Raises:
             ValueError: ``owner_start_grace`` is negative, or a mask was
-                given to an SDK whose Core can't mask a store.
+                given to an SDK whose stream runtime can't mask a store.
         """
-        # Set only when asked for, so the config also fits a Core without masks.
+        # Set only when asked for, so the config also fits a runtime without masks.
         mask: dict[str, Any] = {}
         if capabilities is not None:
             mask["capabilities"] = capabilities._to_proto()

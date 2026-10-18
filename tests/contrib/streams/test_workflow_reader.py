@@ -89,7 +89,7 @@ TOKENS = topic("tokens", str)
 
 
 class FakeReads:
-    """Core's scripted answers for the read Activity, and the inputs it got."""
+    """The stream runtime's scripted answers for the read Activity, and the inputs it got."""
 
     def __init__(self, answers: list[Any]) -> None:
         self.answers = answers
@@ -176,7 +176,7 @@ def superseded(cursor: str, producer: str, attempt: int) -> ReadRecord:
 
 
 def empty(cursor: str, wake_after: int) -> ReadResponse:
-    # Core names the chain on every read of an owner that started.
+    # The stream runtime names the chain on every read of an owner that started.
     return ReadResponse(
         cursor=cursor, wake_after=wake_after, chain_first_run_id="chain"
     )
@@ -288,7 +288,7 @@ async def test_a_reader_sleeps_after_an_empty_read_until_a_higher_counter(
         ["data a", "data b"],
         ["superseded p@2", "data c"],
     ]
-    # Each read names the subscriber, so Core attaches it and asks for a wake
+    # Each read names the subscriber, so the stream runtime attaches it and asks for a wake
     # at the empty read. No read attaches first, and each waits in the store.
     assert [(i.subscription_id, i.subscribe) for i in fake.inputs] == [
         ("1", False),
@@ -455,7 +455,7 @@ async def test_a_resubscribe_attaches_again_under_a_new_id(client: Client):
         drive,
     )
     assert batches == [["data z"]]
-    # After a resubscribe each read names the new generation, so Core
+    # After a resubscribe each read names the new generation, so the stream runtime
     # attaches again at the next empty read.
     assert [(i.subscription_id, i.generation) for i in fake.inputs] == [
         ("1", 0),
@@ -554,7 +554,7 @@ async def test_a_reader_that_never_went_idle_has_nothing_to_detach(client: Clien
         stop_after=1,
     )
     assert batches == [["data a"]]
-    # Core attaches only at an empty read, so this reader never attached.
+    # The stream runtime attaches only at an empty read, so this reader never attached.
     assert [(i.subscription_id, i.unsubscribe) for i in fake.inputs] == [("1", False)]
 
 
@@ -882,7 +882,8 @@ def test_a_read_input_from_before_activity_owners_names_a_workflow():
 
 @pytest.mark.parametrize("record_batches", [True, False])
 async def test_a_workflow_reads_the_stream_of_a_standalone_activity(
-    client: Client, record_batches: bool,
+    client: Client,
+    record_batches: bool,
 ):
     # The Activity closes its stream before the reader starts, so the reader
     # reads to the close and never sleeps on the notifier.
@@ -979,7 +980,7 @@ class ReadsAnActivityRun:
 async def test_a_reader_of_an_ended_activity_run_raises_the_notifiers_failure(
     client: Client,
 ):
-    # Core ends the read when the run ends, with no outcome. Only the notifier
+    # The stream runtime ends the read when the run ends, with no outcome. Only the notifier
     # knows the run's failure, so the reader attaches and waits for its close.
     global _fake
     _fake = FakeReads(
@@ -1067,7 +1068,8 @@ class RunsAToolAndReadsIt:
 
 @pytest.mark.parametrize("record_batches", [True, False])
 async def test_a_workflow_reads_the_stream_of_its_own_activity(
-    client: Client, record_batches: bool,
+    client: Client,
+    record_batches: bool,
 ):
     # The Worker closes the tool's stream when the run sees the tool end, so
     # the reader reads to that close and never sleeps on the notifier.
@@ -1138,7 +1140,7 @@ async def test_a_reader_of_a_tool_stream_ends_at_the_notifiers_backstop_close(
     client: Client,
 ):
     # The store never closes a tool stream whose agent missed the close, and
-    # Core ends the read only after its grace. The notifier's close is the end.
+    # The stream runtime ends the read only after its grace. The notifier's close is the end.
     global _fake
     _fake = FakeReads(
         [
@@ -1284,7 +1286,7 @@ class CancelsTheAttachingRead:
 
 async def test_a_close_after_a_canceled_attach_detaches(client: Client):
     global _fake
-    # Each read of an open stream names the reader, so Core may attach it.
+    # Each read of an open stream names the reader, so the stream runtime may attach it.
     _fake = FakeReads([HANG])
     async with new_worker(
         client, CancelsTheAttachingRead, activities=[fake_read]
@@ -1368,7 +1370,7 @@ async def test_a_failed_read_leaves_no_gap_in_the_read_chain(client: Client):
 
 
 async def test_a_read_before_the_owner_starts_reads_again_on_a_timer(client: Client):
-    # Core answers an idle read inside the owner start grace with no chain
+    # The stream runtime answers an idle read inside the owner start grace with no chain
     # and attaches nothing, so no wake would come.
     batches, fake, _ = await _run_reader(
         client,
@@ -1413,3 +1415,31 @@ async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Cli
         )
         assert len(second.records) == 1
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
+
+
+@workflow.defn
+class RegistersReaders:
+    @workflow.run
+    async def run(self, owner: str) -> dict[str, str]:
+        workflow_reader(owner)
+        workflow_reader(StreamRef.for_activity("tool"))
+        runtime: Any = workflow._Runtime.current()
+        contexts: dict[str, Any] = runtime._stream_wake_contexts
+        return {
+            sub: f"{type(c).__name__}/{getattr(c, 'activity_id', None) or c.workflow_id}"
+            for sub, c in contexts.items()
+        }
+
+
+async def test_each_reader_registers_its_owner_context(client: Client):
+    async with new_worker(client, RegistersReaders) as worker:
+        result = await client.execute_workflow(
+            RegistersReaders.run,
+            "owner-wf",
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert result == {
+        "1": "WorkflowSerializationContext/owner-wf",
+        "2": "ActivitySerializationContext/tool",
+    }

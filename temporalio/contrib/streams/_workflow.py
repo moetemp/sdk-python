@@ -62,7 +62,7 @@ from temporalio.contrib.streams._plugin import (
     store_for_client,
 )
 from temporalio.contrib.streams._record import Cursor, StreamRecord
-from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams._replay_reads import (
     ReadChain,
     batch_payload,
@@ -72,7 +72,7 @@ from temporalio.contrib.streams._replay_reads import (
     range_key,
 )
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
-from temporalio.contrib.streams._wakes import wake_state
+from temporalio.contrib.streams._wakes import register_wake_context, wake_state
 from temporalio.contrib.streams._wire import decode_or_mark, to_record
 from temporalio.converter._payload_codec import _apply_to_failure_payloads
 from temporalio.exceptions import ApplicationError
@@ -154,6 +154,16 @@ class TaskCutoff:
     """The commands one Workflow Task may send before the reader cuts it."""
     time: timedelta = timedelta(seconds=2)
     """How long one Workflow Task may run before the reader cuts it."""
+
+
+def cut_task(cutoff: TaskCutoff | None) -> None:
+    """Ask Core to complete the running Workflow Task once it passed ``cutoff``."""
+    if cutoff is None:
+        return
+    runtime: Any = workflow._Runtime.current()
+    commands, seconds = runtime._task_progress()
+    if commands >= cutoff.commands or seconds >= cutoff.time.total_seconds():
+        runtime._request_task_heartbeat()
 
 
 @dataclass(frozen=True)
@@ -289,6 +299,10 @@ class WorkflowStreamReader(Generic[T]):
         else:
             cursor, state = after.token, b""
         self._state = _ReaderState(cursor, state, _next_reader())
+        register_wake_context(
+            self.subscription_id,
+            owner_context(workflow.info().namespace, ref.workflow_id, ref.activity_id),
+        )
 
     @property
     def topic(self) -> str:
@@ -396,7 +410,7 @@ class WorkflowStreamReader(Generic[T]):
             if state.sleep_after is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
-            self._cut_task()
+            cut_task(self._cutoff)
             response = await self._read()
             records = self._convert(list(response.records), response.cursor)
             state.state = response.state
@@ -500,17 +514,6 @@ class WorkflowStreamReader(Generic[T]):
             )
         except asyncio.TimeoutError:
             pass
-
-    def _cut_task(self) -> None:
-        if self._cutoff is None:
-            return
-        runtime: Any = workflow._Runtime.current()
-        commands, seconds = runtime._task_progress()
-        if (
-            commands >= self._cutoff.commands
-            or seconds >= self._cutoff.time.total_seconds()
-        ):
-            runtime._request_task_heartbeat()
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
@@ -626,12 +629,10 @@ class WorkflowStreamReader(Generic[T]):
                 "replay_from_store=False to record each batch in History"
             )
         response = ReadResponse.FromString(payload.data)
-        # A marker from before the reader named its run counts as this run's.
-        read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
         return (
             response,
             payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
-            read_by.decode() if read_by is not None else workflow.info().run_id,
+            payload.metadata[_READ_BY_RUN_ID_KEY].decode(),
             is_chained(payload),
         )
 
@@ -772,11 +773,16 @@ def workflow_reader(
             Replay reads the range from the store again, before Workflow
             code sees it, and a store that holds other records fails the
             Workflow Task as nondeterministic. The store holds the records
-            the reader read against retention for ``floor_lease`` after the
-            reader's last read or replay, and the reader never ends the hold
-            itself. A run that goes longer than that with no read and no
-            replay can't replay its reads, and its Workflow Task fails on
-            each retry, so such a run should Continue-as-New first. Replay
+            the reader read against retention for ``floor_lease`` (the
+            retention, 7 days, by default) after the reader's last read or
+            replay, and the reader never ends the hold itself. Only a read
+            or a replay moves the hold, so a reader that read to the end
+            moves it no more. A run must Continue-as-New within
+            ``floor_lease`` of its last read. Past that it can't replay its
+            reads, and its Workflow Task fails on each retry. The hold keeps
+            every record after the reader's first read, with no bound on
+            their size, so on a busy topic Continue-as-New when
+            :meth:`WorkflowStreamReader.continue_as_new_suggested` says so. Replay
             needs the store, so a ``Replayer`` needs the store plugin and a
             client in its process that connected the same store. A store
             with neither holds nor a replay horizon (see

@@ -1,4 +1,4 @@
-"""The error family, Core's failure kinds, and the cursors a read starts from."""
+"""The error family, the store's failure kinds, and the cursors a read starts from."""
 
 from __future__ import annotations
 
@@ -70,7 +70,8 @@ def test_each_core_failure_kind_raises_its_error():
         StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_MISMATCH: StreamReplayMismatchError,
         StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamReplayRangeLostError,
     }
-    # Every kind Core defines has its error, so a new kind fails here first.
+    # Every kind the stream runtime defines has its error, so a new kind fails
+    # here first.
     assert set(expected) == set(StreamFailureKind.values()) - {
         StreamFailureKind.STREAM_FAILURE_KIND_UNSPECIFIED
     }
