@@ -22,16 +22,21 @@ from temporalio.client import Client
 from temporalio.common import RetryPolicy
 from temporalio.contrib.streams import (
     RecordKind,
+    StreamProducerError,
+    StreamRecord,
     StreamStorePlugin,
     StreamUnsupportedError,
     activity_handle,
     stream_handle,
+    stream_producer,
     topic,
+    track_supersession,
 )
 from temporalio.contrib.streams._local_activity import (
     LOCAL_ACTIVITY_HEADER,
     StreamsInterceptor,
     producer_attempt,
+    task_attempt,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
@@ -59,26 +64,26 @@ async def streams(request: pytest.FixtureRequest, client: Client) -> Client:
     return await connect_with(client, store)
 
 
-def test_the_attempt_grows_with_history_then_task_then_local_attempt():
+def test_the_attempt_grows_with_task_prefix_then_retry_then_local_attempt():
     ordered = [
-        producer_attempt(3, 1, 1),
-        producer_attempt(3, 1, 2),
-        producer_attempt(3, 2, 1),
-        producer_attempt(4, 1, 1),
-        producer_attempt(4, 3, 9_999),
-        producer_attempt(5, 0, 1),
+        producer_attempt(task_attempt([], 0), 1),
+        producer_attempt(task_attempt([], 0), 2),
+        producer_attempt(task_attempt([], 1), 1),
+        producer_attempt(task_attempt([3, 0], 0), 1),
+        producer_attempt(task_attempt([3, 0], 4), 16_383),
+        producer_attempt(task_attempt([9, 3, 0], 0), 1),
     ]
     assert ordered == sorted(set(ordered))
-    assert producer_attempt(3, 1, 1) == 3_00001_0001
-    assert producer_attempt(51_200, 99_999, 9_999) < 2**53
+    # The same task attempt the Workflow's own records write.
+    assert task_attempt([3, 0], 1) == 3 << 16 | 2
+    assert producer_attempt(3 << 16 | 2, 1) == (3 << 16 | 2) << 14 | 1
 
 
-@pytest.mark.parametrize(
-    "parts", [(0, 1, 10_000), (0, 100_000, 1), (2**53 // 10**9 + 1, 1, 1)]
-)
-def test_an_attempt_too_large_to_encode_is_refused(parts: tuple[int, int, int]):
-    with pytest.raises(StreamUnsupportedError, match="has no stream producer"):
-        producer_attempt(*parts)
+def test_each_part_of_the_attempt_saturates():
+    assert task_attempt([], 70_000) == 65_535
+    assert producer_attempt(1, 20_000) == producer_attempt(1, 16_383)
+    # A task prefix below the event limit keeps the attempt below 2**46.
+    assert producer_attempt(task_attempt([51_200], 70_000), 20_000) < 2**46
 
 
 async def test_an_unnumbered_local_activity_has_no_stream_producer():
@@ -136,9 +141,9 @@ async def test_a_local_activity_streams_while_its_task_runs(streams: Client):
     assert [r.value for r in early] == ["a", "b"]
     records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert [r.kind for r in records] == [RecordKind.DATA] * 2 + [RecordKind.FINISH]
-    # The first Workflow Task started at event 3 and is in its first attempt.
+    # The first Workflow Task is in its first attempt, with no completed task before it.
     assert {(r.producer_id, r.attempt) for r in records} == {
-        (producer_id, producer_attempt(3, 1, 1))
+        (producer_id, producer_attempt(task_attempt([], 0), 1))
     }
     assert [r.sequence for r in records] == [1, 2, 3]
 
@@ -147,6 +152,8 @@ async def test_a_local_activity_streams_while_its_task_runs(streams: Client):
 # Activity, whether it was replaying then, and how many Workflow Tasks it failed.
 scheduled_at: dict[str, list[tuple[int, bool]]] = defaultdict(list)
 failed_tasks: dict[str, int] = defaultdict(int)
+# The appends the store refused, by Workflow id, as (run, Local Activity attempt).
+refused: dict[str, list[tuple[int, int]]] = defaultdict(list)
 
 
 @activity.defn
@@ -154,7 +161,11 @@ async def stream_one_run(slow: bool) -> None:
     info = activity.info()
     runs = len(scheduled_at[info.workflow_id or ""])
     producer = activity_handle().producer(topic=TOKENS)
-    await producer.append(f"run {runs}", f"more from run {runs}")
+    try:
+        await producer.append(f"run {runs}", f"more from run {runs}")
+    except StreamProducerError:
+        refused[info.workflow_id or ""].append((runs, info.attempt))
+        raise
     if slow and runs == 1:
         # A Signal between two Workflow Tasks makes the first one end before
         # it on replay, rather than merge with the next.
@@ -250,15 +261,17 @@ async def test_a_rerun_after_failed_tasks_supersedes_the_last_run(streams: Clien
     assert [replaying for _, replaying in schedules] == [False, False, False]
     records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert_each_run_supersedes(records, runs=3)
+    # No task completed, and each rerun counts one more failed attempt.
+    first, second, third = (producer_attempt(task_attempt([], n), 1) for n in range(3))
     assert [r.attempt for r in records if r.kind is RecordKind.FINISH] == [
-        producer_attempt(3, 1, 1),
-        producer_attempt(4, 2, 1),
-        producer_attempt(4, 3, 1),
+        first,
+        second,
+        third,
     ]
     supersessions = [r.supersession for r in records if r.supersession]
     assert [(s.previous_attempt, s.attempt) for s in supersessions] == [
-        (producer_attempt(3, 1, 1), producer_attempt(4, 2, 1)),
-        (producer_attempt(4, 2, 1), producer_attempt(4, 3, 1)),
+        (first, second),
+        (second, third),
     ]
 
 
@@ -269,6 +282,75 @@ async def test_a_rerun_after_a_task_heartbeat_supersedes(streams: Client):
     assert schedules == [(3, False), (3, True)]
     records = await read_all(stream_handle(streams, workflow_id).read(topic=TOKENS))
     assert_each_run_supersedes(records, runs=2)
+    # Replay stamps the rerun with the first run's task, so its first attempt
+    # writes the same producer attempt with other content. The store refuses
+    # it, the Local Activity retries, and attempt 2 supersedes the first run.
+    task = task_attempt([], 0)
+    assert refused[workflow_id] == [(2, 1)]
+    assert [r.attempt for r in records if r.kind is RecordKind.FINISH] == [
+        producer_attempt(task, 1),
+        producer_attempt(task, 2),
+    ]
+
+
+# How many Workflow Tasks of each Workflow ran its Local Activity, by Workflow id.
+ran_local: dict[str, int] = defaultdict(int)
+
+
+@activity.defn
+async def stream_two_tokens() -> None:
+    await stream_producer(TOKENS).append("local a", "local b")
+
+
+@workflow.defn
+class DropsItsLocalActivityOnRetry:
+    @workflow.run
+    async def run(self) -> None:
+        workflow_id = workflow.info().workflow_id
+        if not ran_local[workflow_id]:
+            ran_local[workflow_id] += 1
+            await workflow.execute_local_activity(
+                stream_two_tokens, start_to_close_timeout=timedelta(seconds=10)
+            )
+            # Fails the Workflow Task before the Local Activity's marker is
+            # recorded. The retried task takes the other branch.
+            raise RuntimeError("fail this Workflow Task")
+        stream_producer(TOKENS).append("from the retried task")
+
+
+async def test_a_task_retry_without_the_local_activity_withdraws_its_records(
+    streams: Client,
+):
+    workflow_id = new_workflow_id()
+    async with new_worker(
+        streams,
+        DropsItsLocalActivityOnRetry,
+        activities=[stream_two_tokens],
+        workflow_runner=UNSANDBOXED,
+    ) as worker:
+        handle = await streams.start_workflow(
+            DropsItsLocalActivityOnRetry.run,
+            id=workflow_id,
+            task_queue=worker.task_queue,
+            task_timeout=timedelta(seconds=2),
+        )
+        await handle.result()
+    run_id = handle.result_run_id
+    read = stream_handle(streams, workflow_id).read(topic=TOKENS)
+    withdrawn: list[str | None] = []
+    shown: list[StreamRecord[str]] = []
+    async for record, gone in track_supersession(read):
+        withdrawn.extend(r.value for r in gone)
+        if record.kind is RecordKind.DATA:
+            shown.append(record)
+        elif record.kind is RecordKind.SUPERSEDED:
+            assert record.supersession is not None
+            assert record.supersession.producer_id == f"__temporal_local_1@{run_id}"
+    # The Workflow's record shows that the Local Activity's task never
+    # completed, so its records are withdrawn though no rerun wrote again.
+    assert withdrawn == ["local a", "local b"]
+    assert [r.value for r in shown] == ["local a", "local b", "from the retried task"]
+    assert shown[-1].producer_id == f"@{run_id}"
 
 
 # The Activity id each attempt of a Local Activity saw, by Workflow id.
