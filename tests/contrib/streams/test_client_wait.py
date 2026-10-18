@@ -30,7 +30,7 @@ from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.bridge.streams import StreamCallFailure
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamRef, StreamStorePlugin, get_stream_handle
+from temporalio.contrib.streams import StreamRef, StreamStorePlugin, stream_handle
 from temporalio.contrib.streams._handles import StreamHandle
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.converter import DataConverter
@@ -204,7 +204,7 @@ async def test_an_idle_read_on_a_server_without_a_notifier_still_gets_records(
     streams_client = await connect_with(client, store)
     async with new_worker(streams_client, Waits) as worker:
         workflow_id = await running_owner(streams_client, worker.task_queue)
-        handle = get_stream_handle(streams_client, workflow_id, topic="t")
+        handle = stream_handle(streams_client, workflow_id, topic="t")
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
         await asyncio.sleep(IDLE.total_seconds() + 1)
