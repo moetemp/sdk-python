@@ -616,21 +616,45 @@ class NamedProducer(google.protobuf.message.Message):
 
     PRODUCER_ID_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
+    TASK_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    COMPLETED_STARTED_EVENT_IDS_FIELD_NUMBER: builtins.int
     producer_id: builtins.str
     attempt: builtins.int
     """A process that restarts its work raises the attempt, which starts a new sequence and tells
     readers that the earlier attempt's records are superseded. From one.
     """
+    task_started_event_id: builtins.int
+    """A Local Activity call (`__temporal_local_<n>@<run id>`) sets it to the `started_event_id` of
+    the `WorkflowTaskHistoryInfo` of the activation that scheduled it. Its records carry it, so a
+    reader learns when the call's task attempt never completed.
+    """
+    @property
+    def completed_started_event_ids(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """The `completed_started_event_ids` of that info, at most eight. The first record of each batch
+        carries them as `completed_tasks`.
+        """
     def __init__(
         self,
         *,
         producer_id: builtins.str = ...,
         attempt: builtins.int = ...,
+        task_started_event_id: builtins.int = ...,
+        completed_started_event_ids: collections.abc.Iterable[builtins.int]
+        | None = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "attempt", b"attempt", "producer_id", b"producer_id"
+            "attempt",
+            b"attempt",
+            "completed_started_event_ids",
+            b"completed_started_event_ids",
+            "producer_id",
+            b"producer_id",
+            "task_started_event_id",
+            b"task_started_event_id",
         ],
     ) -> None: ...
 
