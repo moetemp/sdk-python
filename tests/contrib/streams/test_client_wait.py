@@ -123,6 +123,35 @@ async def test_an_idle_read_waits_on_the_notifier_then_reads_again(client: Clien
     ]
 
 
+async def test_idle_wait_sets_how_long_an_idle_read_waits_in_the_store(
+    client: Client,
+):
+    service = FakeService(
+        reads=[
+            ReadResponse(cursor="c0", wake_after=5),
+            ReadResponse(records=[record("c1", "a")], cursor="c1", done=True),
+        ],
+        waits=[WaitForNotificationResponse(counter=6, position="p6")],
+    )
+    handle = fake_handle(client, MemoryStreams().notify_on_append(), service)
+    idle = timedelta(milliseconds=250)
+    records = await read_all(handle.read(idle_wait=idle))
+    assert [r.value for r in records] == ["a"]
+    assert summary(service.calls) == [
+        ("read", "", idle),
+        ("wait", 5),
+        ("read", "c0", idle),
+    ]
+
+
+def test_a_negative_idle_wait_is_refused(client: Client):
+    handle = fake_handle(
+        client, MemoryStreams().notify_on_append(), FakeService(reads=[], waits=[])
+    )
+    with pytest.raises(ValueError, match="idle_wait"):
+        handle.read(idle_wait=timedelta(seconds=-1))
+
+
 async def test_a_wait_at_the_poll_limit_reads_again(client: Client):
     # The read after the limit is what finds a record whose notification was lost.
     service = FakeService(
