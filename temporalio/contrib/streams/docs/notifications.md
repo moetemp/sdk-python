@@ -1,0 +1,285 @@
+# Readers that sleep
+
+A reader that waits for the next record can sleep while the stream is idle,
+instead of holding a store read open. The server's stream notifier wakes it
+when a producer appends, or when the stream closes. Two readers sleep this
+way in one namespace:
+
+- A client reader, `StreamHandle.read()`, waits on the notifier with a long
+  poll.
+- A Workflow reader, `workflow_reader()`, reads in batches through Local
+  Activities and wakes on a Workflow Task.
+
+Both need a server with the stream notifier, and producers that notify.
+
+## Server setup
+
+The notifier is a CHASM component. Turn it on with these dynamic config
+settings:
+
+```yaml
+history.enableChasm:
+  - value: true
+history.enableCHASMCallbacks:
+  - value: true
+streamnotifier.enabled:
+  - value: true
+```
+
+These settings change how readers wake. The defaults are right for most
+deployments:
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `streamnotifier.pollMaxWait` | 60 s | How long a client reader's poll waits. At the limit the reader reads again |
+| `streamnotifier.recheckInitial` | 1 min | When the notifier first asks an idle Workflow reader to read again |
+| `streamnotifier.recheckMax` | 5 min | The longest gap between two such asks. The gap doubles up to it |
+| `streamwake.minInterval` | 1 s | The shortest time between two Workflow Tasks that only carry wakes |
+| `history.maximumStreamWakeSources` | 32 | How many readers one Workflow execution can have at once. A reader frees its place when it detaches, when its attach fails, or when its run takes its close or resubscribe wake |
+| `streamnotifier.maxCallbacks` | 2,000 | How many Workflow readers one stream can have |
+| `streamnotifier.ownerCheckInterval` | 30 s | How often the notifier checks a stream's owner |
+| `streamnotifier.idleTimeoutNoCallbacks` | 1 h | How long a notifier with no reader stays |
+
+## Notifications are on by default
+
+Every store notifies after each append. An append answers only after its
+notification went, or after a few failed tries, so a producer that stops
+before then gets no answer, and its retry notifies again. Keep it on in
+every process that appends or reads. A client reader sleeps on the notifier
+only when its own store has it on. A process whose streams have no sleeping
+reader can turn it off:
+
+```python
+store = RedisStreams("redis://localhost:6379").notify_on_append(False)
+client = await Client.connect("localhost:7233", plugins=[store])
+```
+
+On a server without the stream notifier, the first notification fails and
+the process stops notifying. A Worker built from the
+client waits for the notifications still out when it stops. A process that
+holds only a client calls `await store.flush_notifications()` before it
+exits.
+
+## When the stream runtime notifies
+
+1. A reader reads and waits up to its idle time, 2 seconds by default. A
+   read that finds records returns them at once.
+2. A read that waits its whole idle time and finds nothing answers
+   `wake_after`, the counter of its position.
+3. The reader sleeps until the notifier's counter is above `wake_after`, the
+   stream closes, or a time limit passes. A Workflow reader asks the
+   notifier for this one wake in the same Local Activity as the empty read.
+   A client reader holds a long poll.
+4. Every append notifies the notifier, from the producer's process.
+   Notifications for one stream fold into one call in flight, and a failed
+   last notification is tried twice more.
+5. The notifier wakes every sleeping reader with one notification. A reader
+   that reads records asks for nothing, so it gets no wake while it works.
+
+The server drops a notification for a stream with no notifier, and a
+reader's attach or wait starts the notifier. So a reader reads first, and
+attaches only when a read comes back empty, then reads once more before it
+sleeps, which catches an append that landed before the notifier existed.
+
+A Workflow reader attaches as an idle target, which gets no wake until it
+waits. Each wait gets at most one wake, and uses it up. A wait whose counter
+the stream passed already wakes the reader at once. So a Workflow reader
+gets one wake per idle stretch, whatever the append rate, and the records
+that land while it reads cost no Workflow Task. Its next read finds them.
+
+The notifier delivers the first notification of a window at once and the
+newest one at the window's end (`streamnotifier.debounceWindow`, 1 second by
+default). A wait that the window holds back wakes the reader at the
+window's end.
+
+## A client reader
+
+`StreamHandle.read()` keeps its API. With notifications on, an idle read
+sleeps on the notifier:
+
+```python
+handle = get_stream_handle(client, workflow_id, topic=EVENTS)
+async for record in handle.read():
+    ...
+```
+
+The sleep holds one gRPC long poll, not a store connection. At the poll
+limit the reader reads again. That read finds records whose notification
+was lost, or comes back empty and sleeps again. On a server without the notifier, the
+reader waits in the store instead, as without notifications.
+
+## A Workflow reader
+
+```python
+@workflow.defn
+class Connector:
+    @workflow.run
+    async def run(self, channel: str, after: StreamPosition | None) -> None:
+        async with workflow_reader(
+            channel, topic=MESSAGES, after=after or BEGINNING
+        ) as reader:
+            async for batch in reader:
+                for record in batch.records:
+                    if record.kind is RecordKind.DATA:
+                        await workflow.execute_activity(post, record.value, ...)
+                if workflow.info().is_continue_as_new_suggested():
+                    workflow.continue_as_new(args=[channel, batch.position])
+```
+
+- Each read is one Local Activity, which adds one marker event when its
+  Workflow Task completes. By default the marker holds the read's range, and
+  replay reads the range from the store again (see below).
+- Each read names the run as the subscriber. Only a read that comes back
+  empty attaches the run to the stream's notifier, in the same Local
+  Activity, and the stream runtime reads once more after the attach, so it finds a record
+  that landed before the attach. A reader that never goes idle never
+  attaches. While the stream is idle, the reader waits with no Local
+  Activity and no timer. The server records each wake on the next Workflow
+  Task's scheduled event, so a wake adds no event of its own.
+- The reader gets one wake per idle stretch. Each empty read asks the
+  notifier for the next wake, and a read that finds records asks for none.
+  So a reader that works on a batch, for example in an Activity, gets no
+  Workflow Task from the appends that land meanwhile.
+- A batch holds every record kind, `SUPERSEDED` and `FINISH` too, since
+  replay must give your code the same records. `SupersessionTracker` names
+  the records each `SUPERSEDED` withdraws.
+- `batch.position` carries the cursor and the stream runtime's read state. Pass it as
+  `after=` in the next run, for example after Continue-as-New.
+- `async with` detaches a reader that stops before the stream ends.
+- A reader that finds records on every read ends its Workflow Task after 100
+  commands or 2 seconds, so your Activities and timers do not wait for the
+  reads. Change it with `cutoff=TaskCutoff(commands=..., time=...)`.
+- A read that fails for good, for example on an owner that does not exist,
+  fails with an `ApplicationError` whose type names the stream error.
+- Each marker has a summary that says what the read did, for example
+  `stream read tokens after the start` or `stream unsubscribe tokens`. The UI
+  shows it on the marker, since every read marker has the same Activity type.
+- The read and close Activities run only as the Local Activities that the
+  stream API schedules. Workflow code that calls one as a normal Activity
+  gets a non-retryable `StreamUnsupportedError`.
+
+### Positions or recorded
+
+A Workflow reader keeps what it read in one of two ways. Choose per use case.
+
+| | Positions (default) | Recorded |
+|---|---|---|
+| Option | `replay_from_store=True` | `replay_from_store=False` |
+| History per read | The range, a digest and the stream runtime's read state | Every record of the batch |
+| Replay reads | The store, through the store plugin | History only |
+| Replay needs | The store, and the reader's hold on the range | Nothing outside History |
+| Run length | Continue-as-New before `floor_lease` passes | Bounded by History size |
+
+Use positions for a reader that reads a lot or reads large records, such as
+a connector that follows a busy stream. Use recorded batches for a History
+that has to replay with no store, for example one you ship to another team
+or keep past the store's retention, or for a run that waits longer than
+`floor_lease` between reads.
+
+### Replay from the store
+
+The store is the record of a stream, so History does not keep a second copy
+of what a Workflow reader read. By default, `replay_from_store=True`, each
+read's marker holds the read's range, the stream runtime's digest of its records, and
+The stream runtime's read state after the read. The state holds the newest attempt of
+each producer the read saw, up to 16 KiB. A read starts from the state the
+reader's previous read ended with, so its marker leaves that out, and
+replay takes it from the previous marker. A read counts only once it
+returned, so a failed or canceled read leaves no gap. The reader's first
+read keeps the state it started from, the one `after=` gave, and so does
+the first read of a reset run, since the markers before it are another
+run's. So a marker is a
+few hundred bytes for a stream with a few producers, whatever the batch
+holds, and up to about 17 KiB for a stream with many, such as one that
+Local Activities write to, which has a producer per call. A stream that a
+`workflow_writer` publishes to has one producer per run, `@<run id>`, so its
+state stays small. At 17 KiB, 1,000 reads add about 17 MiB to History.
+
+- On replay, the Worker reads the same range from the store again, before
+  Workflow code sees the batch. Workflow code gets the same records in both
+  modes, and no I/O runs in it. The live task takes the batch the Local
+  Activity read, from memory.
+- Replay decodes a reader's markers in order. A process that sees a later
+  read before the one ahead of it, which a Worker that replays the full
+  History never does, fails the Workflow Task, and the retry replays from
+  the start.
+- Other records in the range fail the Workflow Task as nondeterministic. A
+  range the store lost, to retention or a delete, fails the task for a
+  retry, so an operator can restore the store, reset the Workflow, or go
+  back to recorded batches.
+- The store holds the records the reader read against retention, per
+  reader run. Each read, and each replay of a read, renews the hold for
+  `floor_lease` (the retention by default, set on `RedisStreams`). The
+  reader never ends the hold itself, not at the stream's end and not at
+  `close()`, since the run may replay its reads until it ends.
+- So a run can replay a read only while the hold lasts. A run that goes
+  longer than `floor_lease` with no read and no replay, for example an
+  entity Workflow that read a stream and then waits on Signals for longer,
+  loses the range. Its next replay, after a Worker restart, an eviction or
+  a query, raises `StreamReplayRangeLostError`, and the Workflow Task fails
+  on each retry until an operator resets the run. A long-running reader
+  should Continue-as-New well before `floor_lease` passes, or pass
+  `replay_from_store=False`.
+- A positions-only reader pins every record after its first read until its
+  run ends. Plan a Continue-as-New for a long reader. Each holder costs
+  store memory and append time. `reader.continue_as_new_suggested()` says
+  when the records it read pass 256 MiB, or a day passed since its first
+  read. Pass `reader.position` as `after=` to the next run.
+- Replay needs the store. A `Replayer` needs the store plugin and a client
+  in its process that connected the same store. Without them, the read
+  raises `StreamUnsupportedError`, which names the opt-out.
+- `workflow_reader(..., replay_from_store=False)` records each batch in
+  History instead, for a History that replays with no store, such as one you
+  ship to another team or keep past the store's retention. It costs History
+  size for each record read.
+- The mode is per reader and fixed for a run. Histories written in one mode
+  replay in that mode, so a change of the default or of the option applies
+  to new runs.
+
+The store plugin does the replay step in the client's payload codec: it
+wraps the codec the client has and passes every other payload through.
+
+## Closing a stream
+
+
+
+| Who closes | How |
+|------------|-----|
+| The owner Workflow | `await close_workflow_stream(topic, result=..., error=...)` |
+| An Activity | `await activity_handle().close(result, error=...)` |
+| A client | `await get_stream_handle(client, workflow_id).close(result, error=...)` |
+| Nobody | The owner's run chain ends. The notifier's owner check closes the stream |
+
+`close_workflow_stream` puts the run's `FINISH` in the activation, after
+what the run published before. The stream runtime appends it before it starts the close's
+Local Activity, which closes the store and the notifier. A Worker with no
+Workflow cache can rerun the task of a close whose Local Activity was still
+in flight, since an eviction cancels it. Readers then see `SUPERSEDED`
+before the second `FINISH`.
+Every read ends after the last record. A sleeping reader wakes. The store
+keeps the first close's outcome and hands it to every reader that reaches
+the end, so a client read raises the close's error after its last record,
+and a Workflow reader raises it after its last batch. A close with a result
+ends the read with no error.
+
+A close from an Activity or a client is not visible to the owner
+Workflow's writer. The stream runtime drops the Workflow's later records on that topic
+and the run goes on. Close from the owner Workflow, or have
+readers check how the stream closed.
+
+Close explicitly. Without a close, the notifier's owner check closes the
+stream up to `ownerCheckInterval` plus `ownerCloseGrace` after the owner
+ended, and a client reader ends at its next read.
+
+## A lost notification
+
+A producer can stop after its append and before its notification lands.
+Its append then gets no answer, so a retry appends again, which writes
+nothing twice and notifies. A producer that never retries, or a process
+with notifications off, leaves the record to the next append by any
+producer, or to a time-based check:
+
+- A client reader reads again at the poll limit (60 seconds).
+- The notifier asks an idle Workflow reader to read again after 1 minute,
+  doubling to 5 minutes. That costs about 290 Workflow Tasks a day per idle
+  reader.

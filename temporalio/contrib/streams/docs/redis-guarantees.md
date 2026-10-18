@@ -43,6 +43,11 @@ reader's cursor can name an entry the new primary never had, and new
 entries can get lower ids, so the reader skips them. Read again from
 `latest()` after a known failover.
 
+OSS Redis, Valkey and ElastiCache replicate asynchronously. A failover can
+lose acked records, closes and dedupe entries. A positions-only Workflow
+reader then fails replay as nondeterministic. Use MemoryDB, or
+`replay_from_store=False`.
+
 Recommended for production: `appendonly yes` with `appendfsync everysec` or
 `always`, at least one replica, and the settings below.
 
@@ -61,7 +66,8 @@ Recommended for production: `appendonly yes` with `appendfsync everysec` or
   error they can retry.
 - **Enough memory for retention.** A stream keeps records for `retention`
   (7 days by default) after they were written. Size Redis for your write
-  rate times the retention.
+  rate times the retention. For a longer retention, see
+  [Long retention](#long-retention).
 
 ## Retention and cleanup
 
@@ -82,6 +88,23 @@ The store cleans up after itself, with no job to run:
   the keyspace with `SCAN`, so run it rarely. Run it only after the chain
   closed and its producers stopped: it also removes the close flag and the
   dedupe state, so a late append writes a fresh log.
+  `delete_activity_streams(namespace, activity_id)` does the same for the
+  streams of every run of a standalone Activity id.
+
+## Long retention
+
+Redis keeps every record in memory. So on OSS Redis and Valkey, and on
+Amazon ElastiCache, retention is bound by memory: write rate times
+`retention` must fit in `maxmemory`. AOF and RDB do not lift that bound.
+They copy memory to disk, and a restart loads it all back into memory. Do
+not raise `retention` on these servers to keep streams for observability.
+
+On AWS, Amazon MemoryDB for Valkey is the production target for the store.
+It runs the store's scripts unchanged, and its multi-AZ write log keeps
+acknowledged records through a failover. Its data tiering moves cold keys
+to SSD, but it moves a topic's whole log, and keeps a log above 128 MiB in
+memory. See `crates/streams/docs/redis.md` in the sdk-streams repository for its
+access string.
 
 ## When a Workflow closes
 
@@ -105,13 +128,16 @@ stream: the next run keeps publishing to it.
 Temporal does not authorize or meter record traffic. Records go straight
 between your applications and your Redis, so access is Redis's job.
 
-Readers write nothing, so a reader needs only read access to Redis, and the
-Temporal permission to describe the Workflow. A read holds one Redis
-connection while it waits, from a pool the stream runtime keeps per node, so
-set `blocking_reads_per_node` on `RedisStreams` to the streams a process
-follows at once. A read that finds the pool full waits for a connection
-until its own poll ends, then answers empty, so a process that follows more
-streams than the pool holds sees records late rather than failing.
+Readers write no records and no close flags. A client reader needs only read
+access to Redis, and the Temporal permission to describe the Workflow. A
+`workflow_reader` with `replay_from_store=True` also writes its hold in the
+topic's `:floors` hash, so its Worker needs the writer rules. A read holds one
+Redis connection while it waits, from a pool the stream runtime keeps per
+node, so set `blocking_reads_per_node` on `RedisStreams` to the streams a
+process follows at once. A read that finds the pool full waits for a
+connection until its own poll ends, then answers empty, so a process that
+follows more streams than the pool holds sees records late rather than
+failing.
 
 Every key of a namespace's streams starts with
 `<prefix>:{<namespace>:`, where `<prefix>` is the store's `key_prefix`
@@ -120,7 +146,7 @@ Every key of a namespace's streams starts with
 one namespace's applications:
 
 ```
-ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hincrby +hdel +hscan +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
+ACL SETUSER streams-app on >secret resetkeys ~temporal-streams:{my-ns:* resetchannels -@all +evalsha +eval +script|load +multi +exec +xadd +xread +xrevrange +xrange +xtrim +xlen +hget +hset +hgetall +hlen +hincrby +hdel +hscan +sadd +smembers +rpush +lrange +exists +del +unlink +pexpire +pttl +time +info +config|get +ping +hello +client|setinfo +cluster|slots
 ```
 
 The stream runtime's conformance suite runs as a user with exactly these

@@ -1,0 +1,1 @@
+Experimental `temporalio.contrib.streams`: a `workflow_reader()` reads first and attaches to the stream's notifier only when a read comes back empty, then reads once more with no wait before it sleeps.

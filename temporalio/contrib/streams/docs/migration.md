@@ -41,12 +41,11 @@ Differences to plan for:
 
 ## What does not map
 
-- **Reading inside the Workflow.** A Workflow cannot read a stream in this
-  release. If a Workflow reads its own Workflow Stream today, keep that
-  part on Workflow Streams, or send the Workflow what it needs, for example
-  as a Signal.
-- **Activity-owned and standalone streams.** Only a Workflow owns a stream
-  in this release.
+- **Reading inside the Workflow.** A Workflow reads a stream with
+  `workflow_reader`, one Local Activity per batch, and sleeps on the
+  stream's notifier while the stream is idle. That needs a server with the
+  stream notifier. On a server without it, keep that part on Workflow
+  Streams, or send the Workflow what it needs, for example as a Signal.
 - **A server-sent events bridge.** Streams ships none. Serve readers from
   your own endpoint with `get_stream_handle(...).read(...)`.
 - **Records already published.** They stay where they are, in the

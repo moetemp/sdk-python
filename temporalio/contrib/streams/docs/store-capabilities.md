@@ -44,8 +44,8 @@ application kept.
 |---|---|---|---|
 | Producer state | `producer_state` | A retry of the newest batch writes nothing and answers the first positions. A changed batch, or one with an old sequence, fails with `StreamProducerError`. An append after a close fails with `StreamClosedError`. | A retry can land a second copy, which readers drop. The producer can get the second copy's positions. A changed or stale batch lands with no error, and readers keep the first copy. An append that races a close can answer success, and no reader delivers it. A Workflow then gets no `workflow_stream_output_dropped` metric for it. |
 | Kept last position | `kept_last` | The store knows a log's last position after retention dropped all of it, for 30 days. So a read tells an expired cursor from an empty stream. | The stream runtime decides expiry from the cursor's own record. Retention drops only the oldest records, so if that record is still there, nothing after it is lost. If it is gone, the read fails with `StreamExpiredError`, also when nothing after it was lost. |
-| Retention holds | `holds` | A holder keeps records from retention. | No holder can keep records. |
-| Change feed | `change_feed` | One consumer reads every append in order. | Producers notify after each append. |
+| Retention holds | `holds` | A `workflow_reader` with `replay_from_store=True` holds the records it read against retention. | A positions-only read works only on a store with a `replay_horizon`. Otherwise its first read fails with `StreamUnsupportedError`, and the reader needs `replay_from_store=False`. |
+| Change feed | `change_feed` | The notification log keeps a notification for each append, so a producer that stops after its append still wakes its readers. | Producers notify after each append, and an append answers only after its notification went. A producer that stops before then gets no answer, and its retry notifies. A producer that never retries leaves the reader to its next recheck. |
 | Cheap logs | `cheap_logs` | One log per topic of each run chain. | The stream runtime would share a few logs between streams. No store in this release needs it. |
 | Delete by owner | `delete_owner` | `delete_workflow_streams` removes a Workflow's streams. | `delete_workflow_streams` raises `StreamUnsupportedError`. Records go at retention. |
 | Topic listing | `topic_listing` | A closer finds every topic of a run chain. | Producers write a `TOPIC` record to the chain's control log, so a closer finds the topics there. |
@@ -79,8 +79,8 @@ Y means the store has it, and N means the stream runtime takes the fallback.
 
 | Store | Producer state | Kept last | Holds | Change feed | Cheap logs | Delete | Listing | Long poll |
 |---|---|---|---|---|---|---|---|---|
-| `MemoryStreams()` | Y | Y | N | N | Y | Y | Y | Y |
-| `RedisStreams(...)` | Y | Y | N | N | Y | Y | Y | Y |
+| `MemoryStreams()` | Y | Y | Y | N | Y | Y | Y | Y |
+| `RedisStreams(...)` | Y | Y | Y | N | Y | Y | Y | Y |
 | `RedisStreams(..., plain=True)` | N | N | N | N | Y | Y | Y | Y |
 
 `RedisStreams(plain=True)` runs no Lua scripts. Use it on a Redis that
