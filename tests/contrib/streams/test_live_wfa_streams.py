@@ -28,8 +28,8 @@ from temporalio.contrib.streams import (
     StreamCursorError,
     StreamRef,
     activity_handle,
-    get_stream_handle,
     start_activity_with_stream,
+    stream_handle,
     topic,
 )
 from temporalio.exceptions import (
@@ -233,12 +233,12 @@ async def test_live_each_run_of_a_chain_gets_its_own_tool_stream(notifying: Clie
             )
             for run in (first_run, last_run)
         ]
-        first = [r async for r in get_stream_handle(notifying, refs[0]).read()]
-        last = [r async for r in get_stream_handle(notifying, refs[1]).read()]
+        first = [r async for r in stream_handle(notifying, refs[0]).read()]
+        last = [r async for r in stream_handle(notifying, refs[1]).read()]
         assert [r.value for r in first] == [first_run]
         assert [r.value for r in last] == [last_run]
         with pytest.raises(StreamCursorError):
-            async for _ in get_stream_handle(notifying, refs[1]).read(
+            async for _ in stream_handle(notifying, refs[1]).read(
                 after=first[-1].cursor
             ):
                 pass
@@ -313,9 +313,9 @@ async def test_live_a_reset_run_writes_a_new_tool_stream(notifying: Client):
             workflow_id, run_id=new_run, activity_id=TOOL_ID, topic=TOKENS
         )
         # The old run ended with the reset, so its read ends at once.
-        old_seen = [r.value async for r in get_stream_handle(notifying, old).read()]
+        old_seen = [r.value async for r in stream_handle(notifying, old).read()]
         assert old_seen == [_first_runs[workflow_id]]
-        new_seen = [r.value async for r in get_stream_handle(notifying, new).read()]
+        new_seen = [r.value async for r in stream_handle(notifying, new).read()]
         assert new_seen == [new_run]
         _release[workflow_id].set()
 
