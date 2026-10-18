@@ -30,6 +30,7 @@ from temporalio.bridge.streams import StreamCallFailure, StreamStore
 from temporalio.bridge.streams_generated import StreamService
 from temporalio.contrib.streams._capabilities import StoreCapabilities, describe
 from temporalio.contrib.streams._errors import error_from_failure
+from temporalio.converter import DataConverter
 from temporalio.plugin import SimplePlugin
 
 if TYPE_CHECKING:
@@ -66,6 +67,18 @@ class StreamStorePlugin(SimplePlugin):
         self._service_client: ServiceClient | None = None
         # Whether Client.connect connected the store, which a Worker needs.
         self._connected_by_connect = False
+        # Set once the server answered that it has no stream notifier.
+        self._notifier_unsupported = False
+        # Imported here, since that module imports this one.
+        from temporalio.contrib.streams._replay_reads import (
+            BatchCache,
+            ByteCache,
+            ReadStates,
+        )
+
+        self._batches = BatchCache()
+        self._read_states = ReadStates()
+        self._follows = ByteCache()
 
     def configure_client(self, config: ClientConfig) -> ClientConfig:
         """Register this store on the client.
@@ -76,7 +89,14 @@ class StreamStorePlugin(SimplePlugin):
         for plugin in config.get("plugins", []):
             if isinstance(plugin, StreamStorePlugin) and plugin is not self:
                 raise ValueError(_two_stores(plugin, self))
-        return super().configure_client(config)
+        config = super().configure_client(config)
+        # A positions-only Workflow read turns back into its batch on decode.
+        from temporalio.contrib.streams._replay_reads import wrap_codec
+
+        config["data_converter"] = wrap_codec(
+            self, config.get("data_converter") or DataConverter.default
+        )
+        return config
 
     async def connect_service_client(
         self,
@@ -136,8 +156,16 @@ class StreamStorePlugin(SimplePlugin):
         The Replayer needs no store, since a replay publishes no records.
         Without the interceptor, ``workflow_writer`` raises
         :class:`temporalio.contrib.streams.StreamUnsupportedError` on replay.
+        A ``workflow_reader`` with ``replay_from_store=True``, the default, reads its batches
+        from the store again, so it needs a client in this process that
+        connected this store.
         """
         config = super().configure_replayer(config)
+        from temporalio.contrib.streams._replay_reads import wrap_codec
+
+        config["data_converter"] = wrap_codec(
+            self, config.get("data_converter") or DataConverter.default
+        )
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
 
         interceptors = list(config.get("interceptors") or [])

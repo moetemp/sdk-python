@@ -33,6 +33,8 @@ class RedisStreams(StreamStorePlugin):
         retention: timedelta = timedelta(days=7),
         blocking_reads_per_node: int | None = None,
         response_timeout: timedelta | None = None,
+        floor_lease: timedelta | None = None,
+        floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
         plain: bool = False,
     ) -> None:
@@ -56,6 +58,14 @@ class RedisStreams(StreamStorePlugin):
                 default when unset.
             response_timeout: How long a short call waits for its reply.
                 The stream runtime's default when unset.
+            floor_lease: How long a Workflow reader that replays from the
+                store, as ``workflow_reader`` does by default, holds the
+                records it read against retention after its last read.
+                ``retention`` when unset.
+            floor_release_grace: How long such a hold lasts after a reader
+                releases it. One day when unset. A Python Workflow reader
+                never releases, since its run may replay its reads until it
+                ends, so its hold lasts ``floor_lease``.
             owner_start_grace: How long a read of a Workflow that Temporal
                 doesn't know yet answers empty before it fails with
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
@@ -92,7 +102,12 @@ class RedisStreams(StreamStorePlugin):
         config.retention.FromTimedelta(retention)
         if response_timeout is not None:
             config.response_timeout.FromTimedelta(response_timeout)
+        if floor_lease is not None:
+            config.floor_lease.FromTimedelta(floor_lease)
+        if floor_release_grace is not None:
+            config.floor_release_grace.FromTimedelta(floor_release_grace)
+        store = StreamStoreConfig(redis=config)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
-            with_owner_start_grace(StreamStoreConfig(redis=config), owner_start_grace),
+            with_owner_start_grace(store, owner_start_grace),
         )
