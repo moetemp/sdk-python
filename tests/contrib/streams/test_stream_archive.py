@@ -31,7 +31,7 @@ from temporalio.contrib.streams import (
     StreamExpiredError,
     StreamProducer,
     StreamStorePlugin,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams.archive import StreamArchive
 from temporalio.contrib.streams.redis import RedisStreams
@@ -178,9 +178,7 @@ async def trim_past(tiers: Tiers, owner: str, after: Cursor, producer: StreamPro
     deadline = time.monotonic() + 60
     filler = 0
     while True:
-        records = get_stream_handle(tiers.hot_only, owner, topic=TOKENS).read(
-            after=after
-        )
+        records = stream_handle(tiers.hot_only, owner, topic=TOKENS).read(after=after)
         try:
             await asyncio.wait_for(records.__anext__(), 5)
         except StreamExpiredError:
@@ -199,7 +197,7 @@ async def test_live_a_cursor_below_the_hot_floor_reads_the_archive(tiers: Tiers)
     archived = tiers.archived
     async with new_worker(archived, Waits) as worker:
         owner = await running_owner(archived, worker.task_queue)
-        handle = get_stream_handle(archived, owner, topic=TOKENS)
+        handle = stream_handle(archived, owner, topic=TOKENS)
         producer = handle.producer(producer_id="p", attempt=1)
         await producer.append("a", "b", "c")
         records = handle.read()
@@ -231,7 +229,7 @@ async def test_live_a_positions_only_replay_reads_a_trimmed_range_from_the_archi
     archived = tiers.archived
     async with new_worker(archived, Waits, Reads, max_cached_workflows=0) as worker:
         owner = await running_owner(archived, worker.task_queue)
-        handle = get_stream_handle(archived, owner, topic=TOKENS)
+        handle = stream_handle(archived, owner, topic=TOKENS)
         producer = handle.producer(producer_id="p", attempt=1)
         await producer.append("a", "b")
         reader = await archived.start_workflow(

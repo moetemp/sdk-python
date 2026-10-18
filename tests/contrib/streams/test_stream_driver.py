@@ -16,7 +16,7 @@ from temporalio.contrib.streams import (
     StreamDriver,
     StreamStorePlugin,
     StreamUnsupportedError,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.postgres import PostgresStreams
@@ -76,7 +76,7 @@ async def test_a_driver_on_a_server_without_notifiers_fails(client: Client, kind
         owner = await running_owner(streams, worker.task_queue)
         # An entry in the log, so the driver has a notification to send.
         await (
-            get_stream_handle(streams, owner, topic="t")
+            stream_handle(streams, owner, topic="t")
             .producer(producer_id="p", attempt=1)
             .append("x")
         )

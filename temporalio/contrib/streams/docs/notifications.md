@@ -146,7 +146,7 @@ read and write on those keys and `+xreadgroup +xautoclaim +xack +xdel
 sleeps on the notifier:
 
 ```python
-handle = get_stream_handle(client, workflow_id, topic=EVENTS)
+handle = stream_handle(client, workflow_id, topic=EVENTS)
 async for record in handle.read():
     ...
 ```
@@ -240,7 +240,7 @@ run's. So a marker is a
 few hundred bytes for a stream with a few producers, whatever the batch
 holds, and up to about 17 KiB for a stream with many, such as one that
 Local Activities write to, which has a producer per call. A stream that a
-`workflow_writer` publishes to has one producer per run, `@<run id>`, so its
+`stream_producer` publishes to has one producer per run, `@<run id>`, so its
 state stays small. At 17 KiB, 1,000 reads add about 17 MiB to History.
 
 - On replay, the Worker reads the same range from the store again, before
@@ -295,7 +295,7 @@ wraps the codec the client has and passes every other payload through.
 |------------|-----|
 | The owner Workflow | `await close_workflow_stream(topic, result=..., error=...)` |
 | An Activity | `await activity_handle().close(result, error=...)` |
-| A client | `await get_stream_handle(client, workflow_id).close(result, error=...)` |
+| A client | `await stream_handle(client, workflow_id).close(result, error=...)` |
 | Nobody | The owner's run chain ends. The notifier's owner check closes the stream |
 
 `close_workflow_stream` puts the run's `FINISH` in the activation, after
@@ -311,7 +311,7 @@ and a Workflow reader raises it after its last batch. A close with a result
 ends the read with no error.
 
 A close from an Activity or a client is not visible to the owner
-Workflow's writer. The stream runtime drops the Workflow's later records on that topic
+Workflow's producer. The stream runtime drops the Workflow's later records on that topic
 and the run goes on. Close from the owner Workflow, or have
 readers check how the stream closed.
 

@@ -41,10 +41,10 @@ from temporalio.contrib.streams import (
     StreamStorePlugin,
     StreamUnsupportedError,
     close_workflow_stream,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
     workflow_reader,
-    workflow_writer,
 )
 from temporalio.contrib.streams._replay_reads import POSITIONS_TYPE, ReadStates
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -170,7 +170,7 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
 ):
     async with new_worker(notifying, Waits) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        handle = get_stream_handle(notifying, owner, topic=TOKENS)
+        handle = stream_handle(notifying, owner, topic=TOKENS)
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
         # Past the idle wait, the read came back empty and the reader waits
@@ -190,7 +190,7 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
 async def test_live_a_sleeping_client_wakes_through_the_driver(driven: Client):
     async with new_worker(driven, Waits) as worker:
         owner = await running_owner(driven, worker.task_queue)
-        handle = get_stream_handle(driven, owner, topic=TOKENS)
+        handle = stream_handle(driven, owner, topic=TOKENS)
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
         # Past the idle wait, the read came back empty and the reader waits
@@ -212,12 +212,12 @@ async def test_live_streams_on_many_slots_all_wake_through_the_driver(
     # entries land on that slot's primary, and the driver drains them all.
     async with new_worker(driven, Waits) as worker:
         owners = [await running_owner(driven, worker.task_queue) for _ in range(8)]
-        reads = [get_stream_handle(driven, o, topic=TOKENS).read() for o in owners]
+        reads = [stream_handle(driven, o, topic=TOKENS).read() for o in owners]
         firsts = [asyncio.ensure_future(r.__anext__()) for r in reads]
         await asyncio.sleep(3)
         for owner in owners:
             await (
-                get_stream_handle(driven, owner, topic=TOKENS)
+                stream_handle(driven, owner, topic=TOKENS)
                 .producer(producer_id="p", attempt=1)
                 .append(owner)
             )
@@ -239,11 +239,11 @@ async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
     reading, silent = await two_processes(client, kind)
     async with new_worker(reading, Waits) as worker:
         owner = await running_owner(reading, worker.task_queue)
-        records = get_stream_handle(reading, owner, topic=TOKENS).read()
+        records = stream_handle(reading, owner, topic=TOKENS).read()
         first = asyncio.ensure_future(records.__anext__())
         await asyncio.sleep(3)
         await (
-            get_stream_handle(silent, owner, topic=TOKENS)
+            stream_handle(silent, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("late")
         )
@@ -280,10 +280,10 @@ async def test_live_every_append_notifies(client: Client):
         owner = await running_owner(streams, worker.task_queue)
         # A notification for a stream with no notifier is dropped, so a
         # sleeping reader starts the notifier first.
-        sleeping = get_stream_handle(streams, owner, topic=TOKENS).read()
+        sleeping = stream_handle(streams, owner, topic=TOKENS).read()
         reading = asyncio.ensure_future(sleeping.__anext__())
         await until(lambda: _has_notifier(streams, owner))
-        producer = get_stream_handle(streams, owner, topic=TOKENS).producer(
+        producer = stream_handle(streams, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         counters: list[int] = []
@@ -321,7 +321,7 @@ def store_for(client: Client) -> StreamStorePlugin:
 async def test_live_a_close_with_an_outcome_reaches_the_notifier(notifying: Client):
     async with new_worker(notifying, Waits) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        handle = get_stream_handle(notifying, owner, topic=TOKENS)
+        handle = stream_handle(notifying, owner, topic=TOKENS)
         records = handle.read()
         first = asyncio.ensure_future(records.__anext__())
         await asyncio.sleep(3)
@@ -389,7 +389,7 @@ async def test_live_a_workflow_reader_sleeps_and_wakes_on_an_append(
             id=reader_id,
             task_queue=worker.task_queue,
         )
-        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+        producer = stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
@@ -419,7 +419,7 @@ async def test_live_a_workflow_reader_wakes_through_the_driver(driven: Client):
             id=reader_id,
             task_queue=worker.task_queue,
         )
-        producer = get_stream_handle(driven, owner, topic=TOKENS).producer(
+        producer = stream_handle(driven, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
@@ -457,7 +457,7 @@ async def test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window(
     # once per window (streamnotifier.debounceWindow, 1 second by default).
     async with new_worker(notifying, Waits, ReadsQuickly) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+        producer = stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
@@ -541,7 +541,7 @@ async def test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_wo
             id=reader_id,
             task_queue=worker.task_queue,
         )
-        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+        producer = stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await _sleeping(notifying, reader_id, owner)
@@ -582,7 +582,7 @@ async def test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived(
     # missed, only the recheck would wake the reader, with `recheck` set.
     async with new_worker(notifying, Waits, ReadsQuickly) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+        producer = stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("first")
@@ -624,7 +624,7 @@ async def test_live_a_workflow_reader_on_an_empty_stream_wakes_on_the_first_appe
         )
         await _sleeping(notifying, reader_id, owner)
         await (
-            get_stream_handle(notifying, owner, topic=TOKENS)
+            stream_handle(notifying, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("only")
         )
@@ -644,7 +644,7 @@ async def test_live_two_readers_wake_from_one_notification(notifying: Client):
         ]
         for i in ids:
             await _sleeping(notifying, i, owner)
-        handle = get_stream_handle(notifying, owner, topic=TOKENS)
+        handle = stream_handle(notifying, owner, topic=TOKENS)
         client_records = handle.read()
         client_first = asyncio.ensure_future(client_records.__anext__())
         await asyncio.sleep(3)
@@ -665,9 +665,9 @@ class PublishesAndCloses:
 
     @workflow.run
     async def run(self) -> None:
-        writer = workflow_writer(TOKENS)
-        writer.publish("a")
-        writer.publish("b")
+        writer = stream_producer(TOKENS)
+        writer.append("a")
+        writer.append("b")
         await workflow.wait_condition(lambda: self.how is not None)
         if self.how == "error":
             await close_workflow_stream(
@@ -697,7 +697,7 @@ async def test_live_a_workflow_close_ends_both_readers_with_its_outcome(
         )
         await _sleeping(notifying, reader_id, owner_id)
         client_read = asyncio.ensure_future(
-            _read_to_the_end(get_stream_handle(notifying, owner_id, topic=TOKENS))
+            _read_to_the_end(stream_handle(notifying, owner_id, topic=TOKENS))
         )
         await owner.signal(PublishesAndCloses.end, how)
         records, ended_with = await asyncio.wait_for(client_read, 30)
@@ -754,7 +754,7 @@ async def test_live_a_position_resumes_the_reader_after_continue_as_new(
 ):
     async with new_worker(notifying, Waits, ReadsAcrossContinueAsNew) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        producer = get_stream_handle(notifying, owner, topic=TOKENS).producer(
+        producer = stream_handle(notifying, owner, topic=TOKENS).producer(
             producer_id="p", attempt=1
         )
         await producer.append("one")
@@ -785,7 +785,7 @@ async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
         )
         await _sleeping(reading, reader_id, owner)
         await (
-            get_stream_handle(silent, owner, topic=TOKENS)
+            stream_handle(silent, owner, topic=TOKENS)
             .producer(producer_id="p", attempt=1)
             .append("found")
         )
@@ -938,7 +938,7 @@ async def test_live_a_read_after_a_timed_out_read_replays_from_the_store(
 ):
     async with new_worker(notifying, Waits, ReadsThroughATimeout) as worker:
         owner = await running_owner(notifying, worker.task_queue)
-        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        stream = stream_handle(notifying, owner, topic=TOKENS)
         await stream.producer(producer_id="p", attempt=1).append("a")
         reader = await notifying.start_workflow(
             ReadsThroughATimeout.run,
@@ -982,7 +982,7 @@ async def test_live_a_workflow_reader_waits_for_an_owner_that_starts_later(
         await notifying.start_workflow(
             Waits.run, id=owner, task_queue=worker.task_queue
         )
-        stream = get_stream_handle(notifying, owner, topic=TOKENS)
+        stream = stream_handle(notifying, owner, topic=TOKENS)
         await stream.producer(producer_id="p", attempt=1).append("first")
         assert await asyncio.wait_for(reader.result(), 30) == ["first"]
         await notifying.get_workflow_handle(owner).signal(Waits.finish)

@@ -83,7 +83,7 @@ __all__ = [
     "StreamHandle",
     "StreamProducer",
     "activity_handle",
-    "get_stream_handle",
+    "stream_handle",
 ]
 
 T = TypeVar("T")
@@ -295,7 +295,7 @@ class StreamHandle:
         client: Client,
         ref: StreamRef,
     ) -> None:
-        """Prefer :func:`temporalio.contrib.streams.get_stream_handle`."""
+        """Prefer :func:`temporalio.contrib.streams.stream_handle`."""
         self._plugin = plugin
         self._client = client
         self._ref = ref
@@ -836,7 +836,7 @@ def activity_handle(
     The SDK closes nothing when the Activity returns, so call
     :meth:`ActivityStreamHandle.close` as the last step.
 
-    To write to another stream, use :func:`get_stream_handle` with
+    To write to another stream, use :func:`stream_handle` with
     ``temporalio.activity.client()`` and a producer id of your own.
 
     A Local Activity writes the Workflow's stream too, while the Workflow
@@ -973,7 +973,7 @@ def _attempt_producers(scope: str = "activity") -> dict[str, StreamProducer[Any]
     return scopes.setdefault(scope, {})
 
 
-def get_stream_handle(
+def stream_handle(
     client: Client,
     workflow_id: str | StreamRef,
     *,
