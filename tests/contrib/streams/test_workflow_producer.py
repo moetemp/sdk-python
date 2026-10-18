@@ -40,12 +40,12 @@ from temporalio.contrib.streams import (
     StreamUnsupportedError,
     SupersessionTracker,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.contrib.streams._local_activity import StreamsInterceptor
-from temporalio.contrib.streams._workflow_writer import _RunWriters
+from temporalio.contrib.streams._workflow_producer import _RunProducers
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
@@ -132,14 +132,14 @@ async def wait_until_released() -> None:
 class PublishesThenWaits:
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer(STEPS)
+        steps = stream_producer(STEPS)
         for step in ("plan", "call model"):
-            steps.publish(step)
+            steps.append(step)
         # A long Local Activity, such as a model call, keeps the task open.
         await workflow.execute_local_activity(
             wait_until_released, start_to_close_timeout=timedelta(seconds=30)
         )
-        steps.publish("call tool")
+        steps.append("call tool")
         await workflow.execute_local_activity(
             wait_until_released, start_to_close_timeout=timedelta(seconds=30)
         )
@@ -153,7 +153,7 @@ async def test_records_show_per_activation_while_the_task_runs(streams: Client):
         handle = await streams.start_workflow(
             PublishesThenWaits.run, id=workflow_id, task_queue=worker.task_queue
         )
-        stream = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+        stream = stream_handle(streams, workflow_id).read(topic=STEPS)
         early = [await anext(stream) for _ in range(2)]
         released[workflow_id].set()
         early.append(await anext(stream))
@@ -180,20 +180,20 @@ async def test_records_show_per_activation_while_the_task_runs(streams: Client):
 class PublishesAndFinishes:
     @workflow.run
     async def run(self) -> list[str]:
-        steps = workflow_writer(STEPS)
+        steps = stream_producer(STEPS)
         for index in range(6):
-            steps.publish(str(index))
+            steps.append(str(index))
         await steps.flush()
         await steps.finish()
         # FINISH is per topic, so another writer's finish writes nothing more.
-        await workflow_writer(STEPS).finish()
+        await stream_producer(STEPS).finish()
         out = []
         try:
-            steps.publish("late")
+            steps.append("late")
         except ValueError as error:
             out.append(str(error))
         try:
-            workflow_writer("other").publish("x" * (2 << 20))
+            stream_producer("other").append("x" * (2 << 20))
         except StreamError as error:
             out.append(str(error))
         return out
@@ -214,7 +214,7 @@ async def test_a_run_publishes_in_order_then_finishes_once(
             PublishesAndFinishes.run, id=workflow_id, task_queue=worker.task_queue
         )
         late, oversized = await handle.result()
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.kind for r in records] == [RecordKind.DATA] * 6 + [RecordKind.FINISH]
     assert [r.value for r in records[:6]] == [str(index) for index in range(6)]
     assert {r.producer_id for r in records} == {f"@{handle.result_run_id}"}
@@ -235,23 +235,23 @@ async def test_the_run_state_goes_with_the_run(client: Client):
             PublishesAndFinishes.run, id=new_workflow_id(), task_queue=worker.task_queue
         )
     gc.collect()
-    assert not [o for o in gc.get_objects() if type(o) is _RunWriters]
+    assert not [o for o in gc.get_objects() if type(o) is _RunProducers]
 
 
 @workflow.defn
 class PublishesThenEnds:
     @workflow.run
     async def run(self, how: str, runs_left: int) -> str:
-        steps = workflow_writer(STEPS)
+        steps = stream_producer(STEPS)
         if how == "cancel":
             try:
                 await workflow.wait_condition(lambda: False)
             except asyncio.CancelledError:
-                steps.publish(f"{how} {runs_left} a")
-                steps.publish(f"{how} {runs_left} b")
+                steps.append(f"{how} {runs_left} a")
+                steps.append(f"{how} {runs_left} b")
                 raise
-        steps.publish(f"{how} {runs_left} a")
-        steps.publish(f"{how} {runs_left} b")
+        steps.append(f"{how} {runs_left} a")
+        steps.append(f"{how} {runs_left} b")
         # The records go with the completion that ends the run.
         if how == "continue" and runs_left:
             workflow.continue_as_new(args=[how, runs_left - 1])
@@ -278,7 +278,7 @@ async def test_the_last_records_land_before_the_run_ends(client: Client, how: st
                 await handle.result()
         else:
             await handle.result()
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     runs = [1, 0] if how == "continue" else [1]
     assert [r.value for r in records] == [
         f"{how} {run} {part}" for run in runs for part in "ab"
@@ -298,12 +298,12 @@ failed_tasks: dict[str, int] = defaultdict(int)
 class FailsAfterAPublish:
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer(STEPS)
-        steps.publish("before")
+        steps = stream_producer(STEPS)
+        steps.append("before")
         # A completed task, so what follows has a later prefix.
         await workflow.sleep(timedelta(milliseconds=10))
-        steps.publish("a")
-        steps.publish("b")
+        steps.append("a")
+        steps.append("b")
         # Ends the activation, so the Worker appends a and b, and the task goes on.
         await workflow.execute_local_activity(
             tick, start_to_close_timeout=timedelta(seconds=10)
@@ -329,7 +329,7 @@ async def test_a_failed_task_reruns_as_superseded_and_keeps_earlier_tasks(
             FailsAfterAPublish.run, id=workflow_id, task_queue=worker.task_queue
         )
         await handle.result()
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.kind for r in records] == [
         RecordKind.DATA,
         RecordKind.DATA,
@@ -376,13 +376,13 @@ async def outlasts_the_task_timeout() -> None:
 class PublishesAroundAHeartbeat:
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer(STEPS)
-        steps.publish("a")
+        steps = stream_producer(STEPS)
+        steps.append("a")
         # Core heartbeats the task at 80% of its timeout while this runs.
         await workflow.execute_local_activity(
             outlasts_the_task_timeout, start_to_close_timeout=timedelta(seconds=10)
         )
-        steps.publish("b")
+        steps.append("b")
 
 
 async def test_a_heartbeat_task_moves_the_prefix_with_no_supersession(
@@ -398,7 +398,7 @@ async def test_a_heartbeat_task_moves_the_prefix_with_no_supersession(
             task_queue=worker.task_queue,
             task_timeout=timedelta(seconds=2),
         )
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.value for r in records] == ["a", "b"]
     assert prefix(records[0].attempt) < prefix(records[1].attempt)
 
@@ -411,7 +411,7 @@ class PublishesWhenAsked:
     @workflow.run
     async def run(self) -> None:
         await workflow.wait_condition(lambda: self.go)
-        workflow_writer(STEPS).publish("late")
+        stream_producer(STEPS).append("late")
         await workflow.wait_condition(lambda: False)
 
     @workflow.signal
@@ -427,14 +427,14 @@ class PublishesEachSignal:
 
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer(STEPS)
+        steps = stream_producer(STEPS)
         published = 0
         while not self.done or published < len(self.values):
             await workflow.wait_condition(
                 lambda: self.done or published < len(self.values)
             )
             for value in self.values[published:]:
-                steps.publish(value)
+                steps.append(value)
             published = len(self.values)
 
     @workflow.signal
@@ -453,7 +453,7 @@ async def test_a_worker_restart_in_one_process_keeps_the_stream_whole(
     # Worker's shutdown can't drop the state of the Worker that replaces it.
     workflow_id = new_workflow_id()
     task_queue = str(uuid.uuid4())
-    stream = get_stream_handle(streams, workflow_id).read(topic=STEPS)
+    stream = stream_handle(streams, workflow_id).read(topic=STEPS)
     async with new_worker(streams, PublishesEachSignal, task_queue=task_queue):
         handle = await streams.start_workflow(
             PublishesEachSignal.run, id=workflow_id, task_queue=task_queue
@@ -468,7 +468,7 @@ async def test_a_worker_restart_in_one_process_keeps_the_stream_whole(
         await handle.signal(PublishesEachSignal.finish)
         await handle.result()
     await stream.aclose()
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.value for r in records] == ["a", "b", "c"]
     assert {r.producer_id for r in records} == {f"@{handle.result_run_id}"}
     # Each record came in a later task, so no record supersedes another.
@@ -511,7 +511,7 @@ class PublishesFromReadOnlyHandlers:
 
     @workflow.query
     def publish_in_query(self) -> None:
-        workflow_writer(STEPS).publish("from a query")
+        stream_producer(STEPS).append("from a query")
 
     @workflow.update
     def finish(self) -> None:
@@ -520,7 +520,7 @@ class PublishesFromReadOnlyHandlers:
     @finish.validator
     def publish_in_validator(self) -> None:
         try:
-            workflow_writer(STEPS).publish("from a validator")
+            stream_producer(STEPS).append("from a validator")
         except workflow.ReadOnlyContextError as error:
             # Rejects the Update. Left to propagate, it fails the Workflow Task.
             raise ValueError(str(error)) from error
@@ -549,7 +549,7 @@ class WritesWithoutAStore:
     @workflow.run
     async def run(self) -> str:
         try:
-            workflow_writer(STEPS)
+            stream_producer(STEPS)
         except StreamUnsupportedError as error:
             return str(error)
         return "opened"
@@ -567,9 +567,9 @@ async def test_a_worker_without_the_store_cannot_write(client: Client):
 class FlushesOnce:
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer(STEPS)
-        steps.publish("one")
-        steps.publish("two")
+        steps = stream_producer(STEPS)
+        steps.append("one")
+        steps.append("two")
         await steps.flush()
 
 
@@ -593,10 +593,10 @@ async def test_a_worker_adds_the_interceptor_once(client: Client):
 class PublishesPastSixteenMiB:
     @workflow.run
     async def run(self) -> None:
-        steps = workflow_writer("big")
+        steps = stream_producer("big")
         try:
             for _ in range(12):
-                steps.publish("x" * (1400 << 10))
+                steps.append("x" * (1400 << 10))
         except StreamError:
             await workflow.sleep(timedelta(milliseconds=1))
 
@@ -609,7 +609,7 @@ async def test_an_activation_past_sixteen_mib_replays_the_same(client: Client):
             PublishesPastSixteenMiB.run, id=workflow_id, task_queue=worker.task_queue
         )
         await handle.result()
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic="big"))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic="big"))
     assert len(records) == 12
     await Replayer(
         workflows=[PublishesPastSixteenMiB], plugins=[MemoryStreams()]
