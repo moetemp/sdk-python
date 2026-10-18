@@ -8,12 +8,12 @@ stream service on a Nexus endpoint, and waits for progress once a read finds
 nothing new. Every append notifies the operation's callers, and the server
 folds the notifications of a busy stream into one per debounce window.
 
-By default every read is a Nexus operation of the Workflow, so History
-records what each read answered, and a replay hands over the same batches at
-the same points. With ``replay_from_store=True`` each read runs in a Local
-Activity, History keeps only the range that crossed and its digest, and a
-replay reads that range again from the owner's store. That needs a
-direct-read transport for the endpoint.
+By default, ``replay_from_store=True``, each read runs in a Local Activity,
+History keeps only the range that crossed and its digest, and a replay reads
+that range again from the owner's store. It needs a direct-read transport
+for the endpoint. With ``replay_from_store=False`` every read is a Nexus
+operation of the Workflow, so History records what each read answered, and a
+replay hands over the same batches at the same points.
 """
 
 from __future__ import annotations
@@ -241,10 +241,10 @@ class StreamReader(Generic[T]):
     such read costs a timer and a read in History, about 290 a day for an
     idle stream.
 
-    By default every read is a Nexus operation result in the caller's
-    History, about three events and up to one read answer (1 MiB of records)
-    each. With ``replay_from_store=True`` a read is one Local Activity marker
-    of a few hundred bytes, as below. To read a long stream, Continue-as-New
+    By default a read is one Local Activity marker of a few hundred bytes, as
+    below. With ``replay_from_store=False`` every read is a Nexus operation
+    result in the caller's History, about three events and up to one read
+    answer (1 MiB of records) each. To read a long stream, Continue-as-New
     before History grows too large: pass :attr:`position` to the new run,
     start the operation again there, and build the reader with
     ``after=position``. The position is at most about 22 KiB. After a
@@ -297,7 +297,7 @@ class StreamReader(Generic[T]):
         after: Cursor | ReadPosition | None = None,
         drain_limit: timedelta = timedelta(seconds=60),
         idle_wait: timedelta = timedelta(seconds=2),
-        replay_from_store: bool = False,
+        replay_from_store: bool = True,
         follow_links: bool = False,
         max_depth: int = 4,
         max_open: int = 16,
@@ -324,13 +324,13 @@ class StreamReader(Generic[T]):
                 it well below the 10 second timeout of a Nexus request.
             replay_from_store: Read in a Local Activity and record only the
                 range of each read and its digest, so the records stay out
-                of History. It needs :class:`StreamDirectReads` on the
-                Worker's client with a transport for ``endpoint``, and on any
-                Replayer. Without one, the read raises
+                of History. The default. It needs :class:`StreamDirectReads`
+                on the Worker's client with a transport for ``endpoint``, and
+                on any Replayer. Without one, the read raises
                 :class:`temporalio.contrib.streams.StreamUnsupportedError`,
-                which names this option. ``False``, the default, reads
-                through Nexus operations and records each read's answer,
-                records included, so it needs no transport.
+                which names this option. ``False`` reads through Nexus
+                operations and records each read's answer, records included,
+                so it needs no transport.
             follow_links: Follow the stream's link records too, through the
                 stream service's ``follow``. Read the items with
                 :meth:`next_followed` in place of :meth:`next`. Each item
@@ -750,8 +750,8 @@ class StreamReader(Generic[T]):
             if DIRECT_FOLLOW_ACTIVITY not in str(error):
                 raise
             raise StreamUnsupportedError(
-                f"a stream follow with replay_from_store=True follows directly from "
-                f"endpoint {self._endpoint!r}, and the Worker has no "
+                "a stream follow with replay_from_store=True (the default) follows "
+                f"directly from endpoint {self._endpoint!r}, and the Worker has no "
                 "StreamDirectReads; register it on the Worker's client with a "
                 "transport for the endpoint, or pass replay_from_store=False to the "
                 "StreamReader"
@@ -800,7 +800,7 @@ class StreamReader(Generic[T]):
             if DIRECT_READ_ACTIVITY not in str(error):
                 raise
             raise StreamUnsupportedError(
-                f"a stream read with replay_from_store=True reads "
+                "a stream read with replay_from_store=True (the default) reads "
                 f"directly from endpoint {self._endpoint!r}, and the Worker has no "
                 "StreamDirectReads; register it on the Worker's client with a "
                 "transport for the endpoint, or pass replay_from_store=False to the "
