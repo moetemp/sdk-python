@@ -522,6 +522,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             act.deployment_version_for_current_task
         )
         self._current_history_length = act.history_length
+        self._current_workflow_task = act.workflow_task
         if act.history_length != self._task_history_length:
             self._task_history_length = act.history_length
             self._task_started = time.monotonic()
