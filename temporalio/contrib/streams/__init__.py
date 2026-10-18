@@ -103,6 +103,13 @@ from temporalio.contrib.streams._supersession import (
     track_supersession,
 )
 from temporalio.contrib.streams._topic import DEFAULT_TOPIC, StreamTopic, topic
+from temporalio.contrib.streams._workflow import (
+    StreamBatch,
+    StreamPosition,
+    TaskCutoff,
+    WorkflowStreamReader,
+    workflow_reader,
+)
 from temporalio.contrib.streams._workflow_writer import (
     WorkflowStreamWriter,
     workflow_writer,
@@ -117,6 +124,7 @@ __all__ = [
     "LinkEvent",
     "RecordKind",
     "StoreCapabilities",
+    "StreamBatch",
     "StreamClosedError",
     "StreamCursorError",
     "StreamError",
@@ -126,6 +134,7 @@ __all__ = [
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
+    "StreamPosition",
     "StreamProducer",
     "StreamProducerError",
     "StreamRecord",
@@ -140,10 +149,13 @@ __all__ = [
     "StreamUnsupportedError",
     "Supersession",
     "SupersessionTracker",
+    "TaskCutoff",
+    "WorkflowStreamReader",
     "WorkflowStreamWriter",
     "activity_handle",
     "get_stream_handle",
     "topic",
     "track_supersession",
+    "workflow_reader",
     "workflow_writer",
 ]

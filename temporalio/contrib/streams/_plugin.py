@@ -124,7 +124,7 @@ class StreamStorePlugin(SimplePlugin):
         return service_client
 
     def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
-        """Check that the Worker's client carries this store.
+        """Check that the Worker's client carries this store, and add the built-in Activities.
 
         Also adds the interceptor that stamps each Local Activity call, so a
         Local Activity can publish.
@@ -148,7 +148,14 @@ class StreamStorePlugin(SimplePlugin):
             )
         # Imported here, since the Activity reaches the store through this module.
         from temporalio.contrib.streams._local_activity import StreamsInterceptor
+        from temporalio.contrib.streams._workflow import read_activity
 
+        activities = list(config.get("activities") or [])
+        # The same plugin on the client and the Worker configures the Worker twice.
+        for builtin in (read_activity,):
+            if builtin not in activities:
+                activities.append(builtin)
+        config["activities"] = activities
         interceptors = list(config.get("interceptors") or [])
         # Two would number each Local Activity call twice.
         if not any(isinstance(i, StreamsInterceptor) for i in interceptors):
