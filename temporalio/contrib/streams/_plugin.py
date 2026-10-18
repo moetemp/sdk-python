@@ -189,7 +189,11 @@ class StreamStorePlugin(SimplePlugin):
             await self.flush_notifications()
 
     def notify_on_append(
-        self, enabled: bool = True, *, max_notifiers: int | None = None
+        self,
+        enabled: bool = True,
+        *,
+        max_notifiers: int | None = None,
+        notification_log: bool = False,
     ) -> Self:
         """Set whether each stream's notifier on the server hears when the stream moves.
 
@@ -213,6 +217,12 @@ class StreamStorePlugin(SimplePlugin):
             max_notifiers: How many streams the stream runtime keeps a
                 notifier for, dropping the least recently used. The stream
                 runtime's default when unset.
+            notification_log: Write a log entry with each append, in the
+                same store step, in place of the producer's notification. A
+                :class:`temporalio.contrib.streams.StreamDriver` reads the
+                log and notifies the server. Producers then make no call to
+                Temporal. Turn it on in every process that appends, and run
+                at least one driver.
 
         Raises:
             ValueError: A client already connected this store, or
@@ -228,6 +238,7 @@ class StreamStorePlugin(SimplePlugin):
         if max_notifiers is not None and max_notifiers < 1:
             raise ValueError(f"max_notifiers must be at least 1, got {max_notifiers}")
         self._config.notify_on_append = enabled
+        self._config.notification_log = notification_log
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self
