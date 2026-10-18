@@ -33,8 +33,8 @@ from temporalio.contrib.streams import (
     StreamRef,
     activity_handle,
     start_activity_with_stream,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
@@ -77,8 +77,8 @@ class Agent:
 
     @workflow.run
     async def run(self, queries: list[str]) -> str:
-        events = workflow_writer(EVENTS)
-        events.publish("plan")
+        events = stream_producer(EVENTS)
+        events.append("plan")
         for index, query in enumerate(queries):
             call = f"tool-{index}"
             handle, ref = start_activity_with_stream(
@@ -91,7 +91,7 @@ class Agent:
             events.link(ref, name=call)
             await handle
             events.join(name=call)
-        events.publish("answer")
+        events.append("answer")
         return "answered"
 
 
@@ -118,8 +118,8 @@ class SlowAgent:
 
     @workflow.run
     async def run(self, query: str) -> str:
-        events = workflow_writer(EVENTS)
-        events.publish("plan")
+        events = stream_producer(EVENTS)
+        events.append("plan")
         handle, ref = start_activity_with_stream(
             slow_search,
             query,
@@ -130,7 +130,7 @@ class SlowAgent:
         events.link(ref, name="tool-0")
         await handle
         events.join(name="tool-0")
-        events.publish("answer")
+        events.append("answer")
         return "answered"
 
 

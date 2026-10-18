@@ -61,7 +61,7 @@ import temporalio.nexus
 from temporalio import workflow
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.streams import (
-    StreamRef, close_workflow_stream, topic, workflow_writer,
+    StreamRef, close_workflow_stream, topic, stream_producer,
 )
 from temporalio.contrib.streams.nexus import StreamOperationHandler
 
@@ -75,9 +75,9 @@ class ConversationService:
 class Conversation:
     @workflow.run
     async def run(self, request: str) -> None:
-        writer = workflow_writer(MESSAGES)
+        writer = stream_producer(MESSAGES)
         for reply in make_replies(request):
-            writer.publish(reply)
+            writer.append(reply)
         await close_workflow_stream(MESSAGES, result="done")
 
 async def open_conversation(ctx, request: str) -> StreamRef:

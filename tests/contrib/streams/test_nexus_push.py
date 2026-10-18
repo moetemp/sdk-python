@@ -28,7 +28,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     StreamRef,
     StreamStorePlugin,
-    workflow_writer,
+    stream_producer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
@@ -76,13 +76,13 @@ class PushOwner:
 
     @workflow.run
     async def run(self) -> None:
-        writer = workflow_writer(STREAM.topic)
-        writer.publish(Token("first"))
+        writer = stream_producer(STREAM.topic)
+        writer.append(Token("first"))
         while not self._done:
             await workflow.wait_condition(lambda: bool(self._queue) or self._done)
             while self._queue:
                 for text in self._queue.pop(0):
-                    writer.publish(Token(text))
+                    writer.append(Token(text))
                     await workflow.sleep(timedelta(milliseconds=100))
 
     @workflow.signal

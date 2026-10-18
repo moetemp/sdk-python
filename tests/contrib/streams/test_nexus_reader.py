@@ -63,8 +63,8 @@ from temporalio.contrib.streams import (
     StreamStorePlugin,
     Supersession,
     close_workflow_stream,
-    get_stream_handle,
-    workflow_writer,
+    stream_handle,
+    stream_producer,
 )
 from temporalio.contrib.streams._record import Cursor, RecordKind
 from temporalio.contrib.streams._wire import WireRecord, to_wire
@@ -1203,9 +1203,9 @@ class LiveTokenOwner:
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in texts:
-            writer.publish(Token(text))
+            writer.append(Token(text))
             await workflow.sleep(timedelta(milliseconds=100))
         await writer.finish()
         await workflow.wait_condition(lambda: self._done)
@@ -1358,9 +1358,9 @@ class LiveEndingOwner:
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in texts:
-            writer.publish(Token(text))
+            writer.append(Token(text))
             await workflow.sleep(timedelta(milliseconds=100))
         await writer.finish()
         await workflow.wait_condition(lambda: bool(self._end))
@@ -1657,9 +1657,7 @@ async def _append_and_read(
             await asyncio.sleep(0.1)
         else:
             pytest.fail("the stream operation never started")
-        producer = get_stream_handle(client, ref).producer(
-            producer_id="burst", attempt=1
-        )
+        producer = stream_handle(client, ref).producer(producer_id="burst", attempt=1)
         for start in range(0, len(texts), per_append):
             await producer.append(
                 *(Token(text) for text in texts[start : start + per_append])
@@ -1739,9 +1737,9 @@ class LiveOwnerThatClosesInOneTask:
 
     @workflow.run
     async def run(self, texts: list[str]) -> None:
-        writer = workflow_writer(STREAM.topic)
+        writer = stream_producer(STREAM.topic)
         for text in texts:
-            writer.publish(Token(text))
+            writer.append(Token(text))
         await close_workflow_stream(STREAM.topic, result=f"{len(texts)} tokens")
         await workflow.wait_condition(lambda: self._done)
 
@@ -1859,9 +1857,7 @@ async def test_live_a_start_on_a_closed_stream_still_names_it(
         owner = await client.start_workflow(
             LiveIdleOwner.run, id=owner_id, task_queue=task_queue
         )
-        producer = get_stream_handle(client, ref).producer(
-            producer_id="writer", attempt=1
-        )
+        producer = stream_handle(client, ref).producer(producer_id="writer", attempt=1)
         await producer.append(*(Token(f"t{n}") for n in range(5)))
         await store.close_stream(client, ref, "closed before")
         token, labels, result = await asyncio.wait_for(
@@ -1960,9 +1956,7 @@ async def test_live_a_new_reader_resumes_after_a_cursor(
             ):
                 break
             await asyncio.sleep(0.1)
-        producer = get_stream_handle(client, ref).producer(
-            producer_id="writer", attempt=1
-        )
+        producer = stream_handle(client, ref).producer(producer_id="writer", attempt=1)
         await producer.append(Token("t0"), Token("t1"), Token("t2"))
         for _ in range(200):
             history = await caller.fetch_history()
@@ -2055,7 +2049,7 @@ async def test_live_a_position_keeps_another_producers_stale_mark_across_continu
         owner = await client.start_workflow(
             LiveIdleOwner.run, id=owner_id, task_queue=task_queue
         )
-        handle = get_stream_handle(client, ref)
+        handle = stream_handle(client, ref)
         a1 = handle.producer(producer_id="A", attempt=1)
         a2 = handle.producer(producer_id="A", attempt=2)
         b = handle.producer(producer_id="B", attempt=1)
@@ -2158,7 +2152,7 @@ async def test_live_a_reader_after_continue_as_new_sees_a_later_attempt(
         owner = await client.start_workflow(
             LiveIdleOwner.run, id=owner_id, task_queue=task_queue
         )
-        handle = get_stream_handle(client, ref)
+        handle = stream_handle(client, ref)
         first = handle.producer(producer_id="writer", attempt=1)
         await first.append(Token("t0"), Token("t1"), Token("t2"))
         caller = await client.start_workflow(
