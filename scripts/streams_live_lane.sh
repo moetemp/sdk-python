@@ -9,12 +9,12 @@
 #
 # Environment:
 #   SERVER_REPO        git URL of the server (default: the moetemp fork)
-#   SERVER_REF         commit to build (default: moe/bridge/v2/dr40-sdk-streams)
+#   SERVER_REF         commit to build (default: 6e611c45, moe/bridge/v2/dr40-sdk-streams)
 #   SERVER_BIN         use this server binary instead of building one
 #   PORT_BASE          frontend gRPC port, the other ports follow it (default: 7961)
 #   STREAMS_REDIS_URL  Redis to use. Without it, the script starts a scratch redis-server on 6428.
 #   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with the
-#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five
+#                      crate's redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7971) and five
 #                      more ports.
 #   CARGO_TARGET_DIR   where the crate's live test builds (default: under WORK_DIR)
 #   STREAMS_ARCHIVE_S3_URL  an `s3://bucket/prefix` the archive cases write to, with the `AWS_*`
@@ -29,7 +29,7 @@
 set -euo pipefail
 
 SERVER_REPO=${SERVER_REPO:-https://github.com/moetemp/temporal.git}
-SERVER_REF=${SERVER_REF:-f67725104c0322212bb3fa2a9db40dadbd8aa66f}
+SERVER_REF=${SERVER_REF:-6e611c455c6379aab10420af689a64e3eefb872c}
 PORT_BASE=${PORT_BASE:-7961}
 WORK_DIR=${WORK_DIR:-$(mktemp -d -t streams-live-lane)}
 SDK_DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -217,7 +217,9 @@ if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
   # The script comes from the checkout of the temporalio-streams crate the bridge builds against.
   crate_dir=$(cd "$SDK_DIR" && uv run --no-sync python -c \
     "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
-  # Three primaries with one replica each, as the cluster cases need.
+  # Three primaries with one replica each, as the cluster cases need. The crate's own default
+  # base is a shared cluster, so this lane picks its own range.
+  export STREAMS_CLUSTER_BASE=${STREAMS_CLUSTER_BASE:-7971}
   eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
     bash "$crate_dir/scripts/redis-test-servers.sh" |
     grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
