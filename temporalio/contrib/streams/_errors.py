@@ -35,6 +35,8 @@ __all__ = [
     "StreamProducerError",
     "StreamRecordError",
     "StreamRefusedError",
+    "StreamReplayMismatchError",
+    "StreamReplayRangeLostError",
     "StreamStorageError",
     "StreamUnsupportedError",
 ]
@@ -92,6 +94,17 @@ class StreamClosedError(StreamRefusedError):
     delivers it.
     """
 
+    def __init__(self, message: str, *, closed_by: str = "") -> None:
+        """Name who closed the stream, when the close said."""
+        super().__init__(message)
+        self.closed_by = closed_by
+        """The ``closed_by`` of the stream's first close.
+
+        Empty when the owner's run chain ended without a close, or the close
+        named no one. :func:`temporalio.contrib.streams.close_workflow_stream`
+        names the closing run as ``@<run id>``.
+        """
+
 
 class StreamProducerError(StreamRefusedError):
     """The store refused the append because of the producer's identity.
@@ -130,7 +143,9 @@ class StreamRecordError(StreamError):
 
     Its body did not convert to the topic's type, or the codec or the store
     could not decode it. Reading on from :attr:`cursor` skips it, which is a
-    choice the caller makes, since skipping loses the record.
+    choice the caller makes, since skipping loses the record. A Workflow
+    reader raises it once, after the records before it, and its next
+    iteration goes on past it.
     """
 
     def __init__(self, message: str, cursor: Cursor) -> None:
@@ -141,6 +156,23 @@ class StreamRecordError(StreamError):
 
 class StreamUnsupportedError(StreamError):
     """The capability is not offered by this release or by this store."""
+
+
+class StreamReplayMismatchError(StreamError):
+    """A replay read found other records than the read it repeats.
+
+    Other content, another count or another end. A positions-only Workflow
+    reader reports it as nondeterminism, so the Workflow Task fails.
+    """
+
+
+class StreamReplayRangeLostError(StreamError):
+    """A replay read found that the store no longer holds the range it repeats.
+
+    Retention trimmed the records, or the stream was deleted. The Workflow
+    Task fails and is retried, so an operator can restore the store, reset
+    the Workflow past the read, or replay with recorded batches.
+    """
 
 
 _BY_KIND: dict[int, type[StreamError]] = {
@@ -154,6 +186,8 @@ _BY_KIND: dict[int, type[StreamError]] = {
     StreamFailureKind.STREAM_FAILURE_KIND_NOT_FOUND: StreamNotFoundError,
     StreamFailureKind.STREAM_FAILURE_KIND_STORAGE: StreamStorageError,
     StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED: StreamUnsupportedError,
+    StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_MISMATCH: StreamReplayMismatchError,
+    StreamFailureKind.STREAM_FAILURE_KIND_REPLAY_RANGE_LOST: StreamReplayRangeLostError,
 }
 
 
@@ -169,6 +203,8 @@ def error_from_failure(failure: StreamFailure) -> StreamError | ValueError:
         return ValueError(failure.message)
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_RECORD:
         return StreamRecordError(failure.message, Cursor(failure.cursor))
+    if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_CLOSED:
+        return StreamClosedError(failure.message, closed_by=failure.closed_by)
     if failure.kind == StreamFailureKind.STREAM_FAILURE_KIND_PRODUCER_DIVERGENT:
         return StreamProducerError(failure.message, divergent=True)
     return _BY_KIND.get(failure.kind, StreamStorageError)(failure.message)

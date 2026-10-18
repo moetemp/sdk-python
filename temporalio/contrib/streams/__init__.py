@@ -76,6 +76,8 @@ from temporalio.contrib.streams._errors import (
     StreamProducerError,
     StreamRecordError,
     StreamRefusedError,
+    StreamReplayMismatchError,
+    StreamReplayRangeLostError,
     StreamStorageError,
     StreamUnsupportedError,
 )
@@ -89,7 +91,9 @@ from temporalio.contrib.streams._handles import (
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
     Supersession,
 )
@@ -110,6 +114,7 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "LinkEvent",
     "RecordKind",
     "StoreCapabilities",
     "StreamClosedError",
@@ -117,6 +122,7 @@ __all__ = [
     "StreamError",
     "StreamExpiredError",
     "StreamHandle",
+    "StreamLink",
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
@@ -126,6 +132,8 @@ __all__ = [
     "StreamRecordError",
     "StreamRef",
     "StreamRefusedError",
+    "StreamReplayMismatchError",
+    "StreamReplayRangeLostError",
     "StreamStorageError",
     "StreamStorePlugin",
     "StreamTopic",
