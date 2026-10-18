@@ -128,14 +128,15 @@ an identity of its own:
   plugin's Worker interceptor stamps the number on each call in a header, so
   it stays the same across reruns, and across a retry that backs off longer
   than `local_retry_threshold`, which gets a new Activity id.
-- **Attempt.** The interceptor also stamps the Workflow Task facts of the
-  activation that schedules the call. Core takes them from History. The
-  task attempt is `prefix << 16 | retry`, the same value the Workflow's own
-  records use. With the Local Activity's attempt `a`, the producer writes
-  attempt `task attempt << 14 | min(a, 16383)`. Each rerun runs in a later
-  Workflow Task attempt, so the attempt grows, and readers see `SUPERSEDED`
-  before the rerun's records. A retry inside one attempt is written once, as
-  for any producer.
+- **Attempt.** Core puts the facts of the Workflow Task in which it
+  dispatched the call on the Local Activity's start. It takes them from
+  History. The task attempt is `prefix << 16 | retry`, the same value the
+  Workflow's own records use. With the Local Activity's attempt `a`, the
+  producer writes attempt `task attempt << 14 | min(a, 16383)`. A rerun is
+  dispatched in a later Workflow Task than the first run, also when Core
+  schedules it while it replays a task that completed as a heartbeat. So the
+  attempt grows, and readers see `SUPERSEDED` before the rerun's records. A
+  retry inside one attempt is written once, as for any producer.
 - **Failed tasks.** The records carry the started event id of the call's
   Workflow Task attempt and the run's last completed tasks, as the
   Workflow's records do. If that task fails and its retry doesn't run the
@@ -146,19 +147,12 @@ The attempt needs no server call, so the first record goes out at once. The
 stream runtime's owner check describes the Workflow, but it caches the
 answer per owner run, so the run's Local Activities share it.
 
-Known limits:
+Known limit:
 
 - **Old failed tasks.** Each record lists only the run's last eight
   completed tasks. If more than seven tasks complete before the next record
   on the topic, the reader can't prove the call's task failed, and its
   records stand.
-- **Rerun after a heartbeat.** If the Workflow Task completed as a
-  heartbeat while the call ran and a later task fails, the rerun schedules
-  the call again while it replays. It gets the first run's task facts, so
-  its first attempt writes the same producer attempt. The same content is
-  taken as a resend. Other content is refused with `StreamProducerError`,
-  which fails that Local Activity attempt, and the local retry writes a
-  higher attempt that supersedes the first run.
 
 ## A Workflow publishes to its own stream
 
