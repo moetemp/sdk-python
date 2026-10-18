@@ -155,6 +155,16 @@ class TaskCutoff:
     """How long one Workflow Task may run before the reader cuts it."""
 
 
+def cut_task(cutoff: TaskCutoff | None) -> None:
+    """Ask Core to complete the running Workflow Task once it passed ``cutoff``."""
+    if cutoff is None:
+        return
+    runtime: Any = workflow._Runtime.current()
+    commands, seconds = runtime._task_progress()
+    if commands >= cutoff.commands or seconds >= cutoff.time.total_seconds():
+        runtime._request_task_heartbeat()
+
+
 @dataclass(frozen=True)
 class StreamBatch(Generic[T]):
     """The records one read delivered, in stream order, and the position after them."""
@@ -399,7 +409,7 @@ class WorkflowStreamReader(Generic[T]):
             if state.sleep_after is not None:
                 await workflow.wait_condition(self._woke)
                 self._take_wake()
-            self._cut_task()
+            cut_task(self._cutoff)
             response = await self._read()
             records = self._convert(list(response.records), response.cursor)
             state.state = response.state
@@ -503,17 +513,6 @@ class WorkflowStreamReader(Generic[T]):
             )
         except asyncio.TimeoutError:
             pass
-
-    def _cut_task(self) -> None:
-        if self._cutoff is None:
-            return
-        runtime: Any = workflow._Runtime.current()
-        commands, seconds = runtime._task_progress()
-        if (
-            commands >= self._cutoff.commands
-            or seconds >= self._cutoff.time.total_seconds()
-        ):
-            runtime._request_task_heartbeat()
 
     def _woke(self) -> bool:
         wake = wake_state(self.subscription_id)
