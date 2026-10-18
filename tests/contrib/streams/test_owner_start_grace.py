@@ -1,6 +1,6 @@
 """A read can start before its owner Workflow does.
 
-Until ``owner_start_grace`` runs out, Core answers a read of a Workflow that
+Until ``owner_start_grace`` runs out, the store answers a read of a Workflow that
 Temporal doesn't know yet with an empty batch, so the read waits. After the
 grace the read fails with ``StreamNotFoundError``.
 """

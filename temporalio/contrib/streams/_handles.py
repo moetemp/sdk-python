@@ -1,12 +1,12 @@
 """Reaching a stream from an Activity or from client code.
 
-Every call goes to Core's stream service, which checks the owner, mints and
-checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
+Every call goes to the stream runtime's service, which checks the owner, mints
+and checks cursors, and synthesizes ``SUPERSEDED``. What stays here is what
 needs the plaintext or the user's types: converting values, the two hashes
 taken before the codec, and the codec itself.
 
 An Activity reaches the stream of the Workflow that scheduled it, and writes
-as itself: Core derives its producer id as
+as itself: the stream runtime derives its producer id as
 ``<Activity id>@<scheduling run id>`` and its Temporal attempt is the
 producer attempt, so a retry is reported to readers as ``SUPERSEDED``. The
 run is part of the id because a stream outlives a run, and Activity ids
@@ -99,7 +99,7 @@ class StreamProducer(Generic[T]):
         self._local_call = local_call
         self._sequence = 1
         self._last = BEGINNING
-        # A batch reads the sequence, then awaits the codec and Core, then
+        # A batch reads the sequence, then awaits the codec and the store, then
         # moves it on; calls one at a time keep each batch's sequences.
         self._lock = asyncio.Lock()
 
@@ -405,7 +405,7 @@ class StreamHandle:
         )
 
     async def _read_run_id(self) -> str:
-        """The run a read names to Core, which ends a read when that run closes.
+        """The run a read names to the store, which ends a read when that run closes.
 
         A read must end only with its chain. While the chain that holds
         ``chain_run_id`` is the Workflow id's newest, the read names no run

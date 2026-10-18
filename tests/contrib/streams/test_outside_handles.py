@@ -62,7 +62,7 @@ class Waits:
 
 
 async def running_owner(client: Client, task_queue: str) -> str:
-    # Core asks the server about the owner, so the stream's Workflow must exist.
+    # The store asks the server about the owner, so the stream's Workflow must exist.
     workflow_id = new_workflow_id()
     await client.start_workflow(Waits.run, id=workflow_id, task_queue=task_queue)
     return workflow_id
@@ -126,7 +126,7 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
         RecordKind.FINISH,
     ]
     described = await streams_client.get_workflow_handle(workflow_id).describe()
-    # Core derives the same producer id the handle reports.
+    # The stream runtime derives the same producer id the handle reports.
     producer_id = f"tokens@{described.run_id}"
     assert records[1].supersession == Supersession(producer_id, 1, 2)
     assert [r.value for r in records if r.kind is RecordKind.DATA] == [
@@ -283,7 +283,7 @@ async def test_a_retry_through_a_nonce_codec_still_dedupes(client: Client):
         stream = get_stream_handle(coded, workflow_id, topic=TOKENS)
         first = await stream.producer(producer_id="p", attempt=1).append("a")
         retry = stream.producer(producer_id="p", attempt=1)
-        # The ciphertext differs, and the digest lang took before the codec does not.
+        # The ciphertext differs, and the digest taken before the codec does not.
         assert await retry.append("a") == first
         owner = coded.get_workflow_handle(workflow_id)
         await owner.signal(Waits.finish)
@@ -346,7 +346,7 @@ async def test_a_read_on_a_named_chain_follows_continue_as_new(client: Client):
         reader = stream.read()
         first = await asyncio.wait_for(anext(reader), 10)
         waiting = asyncio.ensure_future(anext(reader))
-        # Past Core's first owner check while the read waits. A read pinned to
+        # Past the store's first owner check while the read waits. A read pinned to
         # the named run would end there, since that run closed at
         # Continue-as-New.
         await asyncio.sleep(1.5)

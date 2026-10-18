@@ -1,4 +1,4 @@
-"""A store configuration registers as a client plugin, and Core connects to it."""
+"""A store configuration registers as a client plugin, and the runtime connects it."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ async def test_a_client_made_without_connecting_connects_its_store_on_use(
     config = client.config()
     config["plugins"] = [store]
     service = await store._service_for(Client(**config))
-    # An owner that does not exist is Core's answer, so the call reached the store.
+    # An owner that does not exist is the store's answer, so the call reached the store.
     stream = StreamAddress(
         namespace=client.namespace,
         owner_kind=StreamOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
@@ -105,7 +105,7 @@ def test_redis_settings_go_into_the_store_config():
     assert config.retention.ToTimedelta() == timedelta(hours=2)
     assert config.blocking_reads_per_node == 4
     assert config.response_timeout.ToTimedelta() == timedelta(seconds=3)
-    # Unset settings leave Core's defaults.
+    # Unset settings leave the stream runtime's defaults.
     defaults = RedisStreams("redis://a:6379")._config.redis
     assert defaults.blocking_reads_per_node == 0
     assert not defaults.HasField("response_timeout")
@@ -157,8 +157,8 @@ async def test_deleting_removes_what_a_workflow_stream_holds(client: Client):
 async def test_one_store_serves_one_client_connection(client: Client):
     store = MemoryStreams()
     first = await connect_with(client, store)
-    # Core asks about owners over the connection that connected the store, so a
-    # second connection would get the first one's answers.
+    # The runtime asks about owners over the connection that connected the store,
+    # so a second connection would get the first one's answers.
     with pytest.raises(ValueError, match="one client connection"):
         await connect_with(client, store)
     config = client.config()

@@ -1,4 +1,4 @@
-"""A store reports its capabilities, and Core's fallbacks keep reads whole.
+"""A store reports its capabilities, and the fallbacks keep reads whole.
 
 The masked memory store and Redis with ``plain=True`` lack producer state,
 so a retry or a second producer object can land a copy. Readers must not
@@ -35,9 +35,9 @@ from tests.helpers import new_worker
 TOKENS = topic("tokens", str)
 # What a store without producer state looks like, on the memory store.
 NO_PRODUCER_STATE = StoreCapabilities(producer_state=False, kept_last=False)
-# A Core from before DescribeStore can't mask a store or run Redis plain.
+# A stream runtime from before DescribeStore can't mask a store or run Redis plain.
 HAS_DESCRIBE = hasattr(temporalio.bridge.proto.streams, "DescribeStoreRequest")
-NO_DESCRIBE = "this Core can't describe or mask a store"
+NO_DESCRIBE = "this stream runtime can't describe or mask a store"
 needs_describe = pytest.mark.skipif(not HAS_DESCRIBE, reason=NO_DESCRIBE)
 
 
@@ -125,8 +125,8 @@ async def test_a_store_that_cannot_delete_by_owner_says_so(client: Client):
         await masked.delete_workflow_streams(client.namespace, "any")
 
 
-class _CoreWithoutDescribe:
-    """A store of a Core that knows no DescribeStore call."""
+class _RuntimeWithoutDescribe:
+    """A store of a stream runtime that knows no DescribeStore call."""
 
     def __init__(self, kind: StreamFailureKind.ValueType) -> None:
         self.kind = kind
@@ -135,19 +135,19 @@ class _CoreWithoutDescribe:
         raise StreamCallFailure(StreamFailure(kind=self.kind, message=f"no {rpc}"))
 
 
-async def test_a_core_without_describe_serves_every_capability(
+async def test_a_runtime_without_describe_serves_every_capability(
     monkeypatch: pytest.MonkeyPatch,
 ):
     # The fake store never parses, so any message types stand in for the call's.
     proto = temporalio.bridge.proto.streams
     monkeypatch.setattr(proto, "DescribeStoreRequest", StreamFailure, raising=False)
     monkeypatch.setattr(proto, "DescribeStoreResponse", StreamFailure, raising=False)
-    unknown = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED)
+    unknown = _RuntimeWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_UNSUPPORTED)
     capabilities = await describe(unknown)  # type: ignore[arg-type]
     assert capabilities.producer_state and capabilities.kept_last
     assert capabilities.delete_owner and capabilities.topic_listing
     # Any other failure is the store's, not a missing call.
-    failing = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
+    failing = _RuntimeWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
     with pytest.raises(StreamCallFailure):
         await describe(failing)  # type: ignore[arg-type]
 
@@ -158,5 +158,5 @@ async def test_an_sdk_without_the_describe_protos_serves_every_capability(
     monkeypatch.delattr(
         temporalio.bridge.proto.streams, "DescribeStoreRequest", raising=False
     )
-    store = _CoreWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
+    store = _RuntimeWithoutDescribe(StreamFailureKind.STREAM_FAILURE_KIND_STORAGE)
     assert (await describe(store)).producer_state  # type: ignore[arg-type]

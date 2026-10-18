@@ -1,6 +1,7 @@
 """The cursors a read starts from without having read anything.
 
-Core mints and checks every other cursor, so its token format is Core's own.
+The stream runtime mints and checks every other cursor, so its token format
+is the runtime's own.
 """
 
 from __future__ import annotations

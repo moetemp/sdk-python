@@ -57,7 +57,7 @@ class RecordKind(enum.IntEnum):
     the stream. Match the earlier records on ``producer_id`` and an
     ``attempt`` below :attr:`Supersession.attempt`.
 
-    Core's reader synthesizes it from the records it observed. No store
+    The stream runtime's reader synthesizes it from the records it observed. No store
     holds it, so every store reports a retry the same way. Its cursor is the
     position before the new attempt's first record. A reader that resumes
     there gets this record again, then the new attempt, since dropping the

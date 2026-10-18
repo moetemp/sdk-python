@@ -282,7 +282,7 @@ def generate_python_stream_service(
         for method in methods
     ]
     file_template = Template('''# Generated file. DO NOT EDIT
-"""Generated calls for Core's in-process $service_name."""
+"""Generated calls for the stream runtime's in-process $service_name."""
 
 from __future__ import annotations
 
@@ -295,7 +295,7 @@ if TYPE_CHECKING:
 
 
 class $service_name:
-    """Calls for the $service_name, which Core dispatches in process."""
+    """Calls for the $service_name, which the stream runtime serves in process."""
 
     def __init__(self, store: StreamStore) -> None:
         """Initialize service with the provided store."""

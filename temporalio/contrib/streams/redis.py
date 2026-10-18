@@ -16,7 +16,7 @@ __all__ = ["RedisStreams"]
 
 
 class RedisStreams(StreamStorePlugin):
-    """A store in a Redis or a Redis Cluster that Core connects to.
+    """A store in a Redis or a Redis Cluster that the stream runtime connects to.
 
     One instance per Redis deployment. Pass it to the client as a plugin,
     and open handles from the client with
@@ -52,18 +52,18 @@ class RedisStreams(StreamStorePlugin):
             retention: How long a stream keeps a record, and how long after
                 its last write the stream itself lives.
             blocking_reads_per_node: How many reads may wait on one node at
-                once, each on a connection of its own. Core's default when
-                unset.
+                once, each on a connection of its own. The stream runtime's
+                default when unset.
             response_timeout: How long a short call waits for its reply.
-                Core's default when unset.
+                The stream runtime's default when unset.
             owner_start_grace: How long a read of a Workflow that Temporal
                 doesn't know yet answers empty before it fails with
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
-            plain: Run no Lua scripts, for a Redis that refuses them. The
-                store then has no producer state, no kept last position, no
-                holds and no change feed, and Core takes the fallback of
+            plain: Run no Lua scripts, for a Redis that refuses them. The store
+                then has no producer state, no kept last position, no holds and
+                no change feed, and the stream runtime takes the fallback of
                 each (see :attr:`capabilities`).
 
         Raises:
@@ -80,7 +80,7 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"retention must be at least a millisecond, got {retention}"
             )
-        # Set only when asked for, so the config also fits a Core without it.
+        # Set only when asked for, so the config also fits a runtime without it.
         extra: dict[str, Any] = {"plain": True} if plain else {}
         config = RedisStoreConfig(
             urls=urls,

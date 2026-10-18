@@ -15,12 +15,12 @@ __all__ = ["StoreCapabilities"]
 
 @dataclass(frozen=True)
 class StoreCapabilities:
-    """The capabilities of a store, as Core reports them.
+    """The capabilities of a store, as the stream runtime reports them.
 
-    Every store keeps an ordered log per topic, and Core applies the same
-    reader rules on every store. A capability changes what a producer is
-    told and how much the store keeps. Without one, Core takes a fallback,
-    with a weaker guarantee.
+    Every store keeps an ordered log per topic, and the stream runtime applies
+    the same reader rules on every store. A capability changes what a producer
+    is told and how much the store keeps. Without one, the runtime takes a
+    fallback, with a weaker guarantee.
 
     As a mask for :class:`temporalio.contrib.streams.memory.MemoryStreams`,
     a field set to ``False`` turns that capability off. A mask can't turn
@@ -88,14 +88,16 @@ class StoreCapabilities:
         )
 
     def _to_proto(self) -> Any:
-        """The mask as Core takes it.
+        """The mask as the stream runtime takes it.
 
         Raises:
-            ValueError: The Core in this SDK can't mask a store.
+            ValueError: The stream runtime in this SDK can't mask a store.
         """
         proto_type = getattr(temporalio.bridge.proto.streams, "StoreCapabilities", None)
         if proto_type is None:
-            raise ValueError("this SDK's Core can't mask a store's capabilities")
+            raise ValueError(
+                "this SDK's stream runtime can't mask a store's capabilities"
+            )
         proto = proto_type(
             producer_state=self.producer_state,
             kept_last=self.kept_last,
@@ -114,16 +116,16 @@ class StoreCapabilities:
         return proto
 
 
-# What a Core from before DescribeStore serves. Its Redis and memory stores have
-# every capability that Core knew of.
+# What a stream runtime from before DescribeStore serves. Its Redis and memory
+# stores have every capability that runtime knew of.
 _BEFORE_DESCRIBE = StoreCapabilities()
 
 
 async def describe(store: StreamStore) -> StoreCapabilities:
-    """What Core reports for ``store``.
+    """What the stream runtime reports for ``store``.
 
     Raises:
-        StreamCallFailure: Core failed the call.
+        StreamCallFailure: The stream runtime failed the call.
     """
     proto = temporalio.bridge.proto.streams
     request = getattr(proto, "DescribeStoreRequest", None)

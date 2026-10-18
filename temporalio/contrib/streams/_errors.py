@@ -158,7 +158,7 @@ _BY_KIND: dict[int, type[StreamError]] = {
 
 
 def error_from_failure(failure: StreamFailure) -> StreamError | ValueError:
-    """The error a caller catches for Core's ``failure``.
+    """The error a caller catches for the stream runtime's ``failure``.
 
     An input that breaks the call's contract is a ``ValueError``, as in the
     rest of the SDK, so a caller can tell it from a store refusal. A kind this

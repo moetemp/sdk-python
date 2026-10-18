@@ -1,5 +1,5 @@
 # Generated file. DO NOT EDIT
-"""Generated calls for Core's in-process StreamService."""
+"""Generated calls for the stream runtime's in-process StreamService."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class StreamService:
-    """Calls for the StreamService, which Core dispatches in process."""
+    """Calls for the StreamService, which the stream runtime serves in process."""
 
     def __init__(self, store: StreamStore) -> None:
         """Initialize service with the provided store."""
