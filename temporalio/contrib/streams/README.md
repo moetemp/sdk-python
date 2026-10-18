@@ -58,13 +58,13 @@ TOKENS = topic("tokens", str)
 
 @activity.defn
 async def generate(prompt: str) -> str:
-    producer = activity_handle().producer(topic=TOKENS)
+    producer = stream_producer(TOKENS)
     ...
     await producer.append(*words)
     await producer.finish()
 
 text = []
-async for record in get_stream_handle(client, "answer-1").read(topic=TOKENS):
+async for record in stream_handle(client, "answer-1").read(topic=TOKENS):
     if record.kind is RecordKind.SUPERSEDED:
         text.clear()
     elif record.kind is RecordKind.DATA:
@@ -118,7 +118,7 @@ To resume later, keep the last `record.cursor` and pass it back as
 
 ## A Local Activity streams to its Workflow
 
-A Local Activity calls `activity_handle()` the same way, and its records
+A Local Activity calls `stream_producer` the same way, and its records
 are visible while the Workflow Task that runs it is still open. So an agent
 loop that runs its model calls as Local Activities streams their tokens.
 
@@ -386,8 +386,12 @@ Known limits:
 
 ## A Workflow publishes to its own stream
 
-Workflow code can't do I/O, so `workflow_writer` hands its records to the
-Worker with the activation that published them. The Worker appends them to
+`stream_producer` is one function for Workflow code and Activity code. In
+an Activity it returns `activity_handle().producer(topic=...)`, and
+`append` is awaited. In a Workflow it returns the Workflow Producer, and
+`append` returns at once. Workflow code can't do I/O, so the Workflow
+Producer hands its records to the Worker with the activation that appended
+them. The Worker appends them to
 the store through the stream runtime when the activation ends, before it
 gives the completion to Core, so before the Workflow Task goes to the server.
 
@@ -398,23 +402,23 @@ STEPS = topic("steps", str)
 class Agent:
     @workflow.run
     async def run(self, prompt: str) -> str:
-        steps = workflow_writer(STEPS)
-        steps.publish("planning")
+        steps = stream_producer(STEPS)
+        steps.append("planning")
         answer = await workflow.execute_local_activity(
             call_model, prompt, start_to_close_timeout=timedelta(minutes=5)
         )
-        steps.publish("answered")
+        steps.append("answered")
         return answer
 ```
 
-- **Publish.** `publish(value)` is a plain call. It converts the value with
+- **Append.** `append(value)` is a plain call. It converts the value with
   the Workflow's payload converter and adds the record to the activation.
-- **Visibility.** A record is visible when the activation that published it
+- **Visibility.** A record is visible when the activation that appended it
   completes. That is before the Workflow Task completes, and before the
   server accepts it. In the example, readers see `planning` while the model
   call runs as a Local Activity in the same Workflow Task.
-- **Order.** Records land in the order the run published them, across all
-  writers and topics of the run.
+- **Order.** Records land in the order the run appended them, across all
+  producers and topics of the run.
 - **No History.** Publishing adds no event and no marker to History, and
   costs no Action.
 - **Identity.** The run writes as the producer `@<run id>`. Each Workflow
@@ -432,7 +436,7 @@ class Agent:
 - **Closed topic.** If the store reports the topic closed, a retry could
   never land, so the stream runtime drops that topic's records with a
   warning and the task goes on. A Workflow can't see this through its
-  writer.
+  producer.
 - **Run end.** The records of the activation that completes, fails, cancels
   or continues the run as new land with that completion. `finish()` writes
   `FINISH` with the activation. `flush()` returns at once, since nothing
@@ -440,12 +444,12 @@ class Agent:
 - **Replay.** Replay sends no records, since the store has them. A
   `Replayer` needs the store plugin in `plugins=`, which adds the
   interceptor and connects nothing.
-- **Queries and validators.** Opening a writer or publishing there raises
+- **Queries and validators.** Opening a producer or appending there raises
   `ReadOnlyContextError`.
 - **Codec.** The values are converted in the Workflow. The payload codec
   runs on each record body when the Worker publishes the records.
-- **Size.** A record holds at most 1.5 MiB. A larger publish raises
-  `StreamError` and publishes nothing. One activation's records have no
+- **Size.** A record holds at most 1.5 MiB. A larger append raises
+  `StreamError` and appends nothing. One activation's records have no
   limit in the Workflow, since replay can't check one the same way.
 
 Known limits:
