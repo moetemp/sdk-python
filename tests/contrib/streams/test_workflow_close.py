@@ -19,14 +19,14 @@ from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureEr
 from temporalio.contrib.streams import (
     RecordKind,
     close_workflow_stream,
-    get_stream_handle,
-    workflow_writer,
+    stream_handle,
+    stream_producer,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.contrib.streams._support import connect_with, new_workflow_id, read_all
-from tests.contrib.streams.test_workflow_writer import STEPS, redis_store
+from tests.contrib.streams.test_workflow_producer import STEPS, redis_store
 from tests.helpers import new_worker
 
 
@@ -46,9 +46,9 @@ class PublishesThenCloses:
     @workflow.run
     async def run(self, how: str) -> None:
         if how != "no-writer":
-            writer = workflow_writer(STEPS)
-            writer.publish("one")
-            writer.publish("two")
+            writer = stream_producer(STEPS)
+            writer.append("one")
+            writer.append("two")
         if how == "error":
             await close_workflow_stream(
                 STEPS, error=ApplicationError("gave up", type="GaveUp")
@@ -77,9 +77,7 @@ async def test_a_workflow_close_ends_reads_while_the_workflow_runs(
         )
         records: list = []
         try:
-            async for record in get_stream_handle(streams, workflow_id).read(
-                topic=STEPS
-            ):
+            async for record in stream_handle(streams, workflow_id).read(topic=STEPS):
                 records.append(record)
         except ApplicationError as error:
             # A close with an error ends the read with it, after the last record.
@@ -133,11 +131,11 @@ async def test_a_workflow_close_takes_a_result_or_an_error_not_both(
 class PublishesAfterClose:
     @workflow.run
     async def run(self) -> str:
-        writer = workflow_writer(STEPS)
-        writer.publish("one")
+        writer = stream_producer(STEPS)
+        writer.append("one")
         await close_workflow_stream(STEPS)
         try:
-            writer.publish("late")
+            writer.append("late")
         except ValueError as error:
             return str(error)
         return "published"
@@ -161,7 +159,7 @@ class OpensAWriterAfterClose:
     async def run(self) -> str:
         await close_workflow_stream(STEPS)
         try:
-            workflow_writer(STEPS)
+            stream_producer(STEPS)
         except ValueError as error:
             return str(error)
         return "opened"
@@ -174,7 +172,7 @@ async def test_a_writer_cannot_open_on_a_topic_the_run_closed(streams: Client):
             OpensAWriterAfterClose.run, id=workflow_id, task_queue=worker.task_queue
         )
     assert "already closed" in said
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.value for r in records if r.kind is RecordKind.DATA] == []
 
 
@@ -188,9 +186,9 @@ class ClosesThenFailsItsTask:
 
     @workflow.run
     async def run(self) -> str:
-        writer = workflow_writer(STEPS)
-        writer.publish("one")
-        writer.publish("two")
+        writer = stream_producer(STEPS)
+        writer.append("one")
+        writer.append("two")
         await close_workflow_stream(STEPS, result="done")
         if workflow.info().workflow_id not in _failed_once:
             _failed_once.add(workflow.info().workflow_id)
@@ -217,7 +215,7 @@ async def test_a_rerun_after_the_close_finds_its_flushes_landed(
         )
     assert result == "closed"
     assert workflow_id in _failed_once
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     # The first run of the task wrote everything once. The stream runtime dropped
     # the rerun's records, since the run's own close came after them.
     assert [(r.kind, r.value) for r in records] == [
@@ -235,8 +233,8 @@ class PublishesAfterAnOutsideClose:
     @workflow.run
     async def run(self) -> str:
         await workflow.wait_condition(lambda: self.go)
-        writer = workflow_writer(STEPS)
-        writer.publish("late")
+        writer = stream_producer(STEPS)
+        writer.append("late")
         # Ends the activation, so the Worker tries the append before the run ends.
         await workflow.sleep(timedelta(milliseconds=10))
         return "went on"
@@ -254,11 +252,11 @@ async def test_a_publish_after_a_close_by_someone_else_is_dropped(streams: Clien
             id=workflow_id,
             task_queue=worker.task_queue,
         )
-        await get_stream_handle(streams, workflow_id).close(topic=STEPS)
+        await stream_handle(streams, workflow_id).close(topic=STEPS)
         await handle.signal(PublishesAfterAnOutsideClose.publish)
         said = await asyncio.wait_for(handle.result(), 30)
     # A retry could never land on a closed topic, so the stream runtime drops the records
     # and the run goes on.
     assert said == "went on"
-    records = await read_all(get_stream_handle(streams, workflow_id).read(topic=STEPS))
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
     assert [r.value for r in records if r.kind is RecordKind.DATA] == []
