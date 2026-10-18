@@ -667,7 +667,7 @@ async def test_a_worker_without_notifications_still_delivers_the_close_result(
 
 
 # A close with an error, and an owner that ends without completing, fail the
-# caller's operation as a Workflow-run operation fails (DD-107).
+# caller's operation as a Workflow-run operation fails.
 
 
 @workflow.defn(name="StreamFailureCaller")
