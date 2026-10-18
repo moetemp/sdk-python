@@ -49,8 +49,8 @@ class Child:
     @workflow.run
     async def run(self) -> None:
         events = stream_producer(EVENTS)
-        events.publish("c1")
-        events.publish("c2")
+        events.append("c1")
+        events.append("c2")
 
 
 @workflow.defn
@@ -59,7 +59,7 @@ class Agent:
     async def run(self) -> None:
         events = stream_producer(EVENTS)
         timeout = timedelta(seconds=10)
-        events.publish("d1")
+        events.append("d1")
         first, first_ref = start_activity_with_stream(
             tool,
             ["a1", "a2"],
@@ -82,10 +82,10 @@ class Agent:
         await first
         await second
         events.join(name="tool-1")
-        events.publish("d2")
+        events.append("d2")
         await child
         events.join(name="sub")
-        events.publish("d3")
+        events.append("d3")
 
 
 def describe(item: FollowedItem[Any]) -> str:
