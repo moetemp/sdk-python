@@ -108,9 +108,6 @@ can't grow it either. A `SUPERSEDED` past that withdraws only the records
 still held. Call `forget(producer_id)` once a producer can't retry, to drop
 it sooner.
 
-A future Workflow reader can't drop superseded records silently, because
-replay must see the same records, so it will deliver `SUPERSEDED` too.
-
 Every read follows the Workflow's run chain across Continue-as-New and ends
 when the chain closes. A reader can't stop at one run. A Workflow id can
 start a new chain after the old one closed, and a handle opens the newest
@@ -233,8 +230,6 @@ async def follow(workflow_id: str) -> int:
 
 Known limits:
 
-- **Not over Nexus.** The Nexus stream service serves only streams that a
-  Workflow owns.
 - **Clock skew.** The attempt uses the server's attempt start time. After a
   failover to a cluster whose clock is behind by more than the retry
   interval, a new attempt can look older, and its records are `stale`.
@@ -321,8 +316,6 @@ Known limits:
   Activities. A run with thousands of them makes each check larger.
 - **Codec keys.** A codec that keys on the Activity type or task queue
   can't decode the close outcome.
-- **Not over Nexus.** The Nexus stream service does not serve these
-  streams.
 
 ## Link records and followers
 
@@ -384,20 +377,8 @@ async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
   Workflow and Activity ids are in History. A link's value goes through the
   codec, so put secrets there.
 
-How the harness's subagent events map:
-
-| Harness event | Link records |
-|---------------|--------------|
-| `SUBAGENT_STARTED` with the child `workflow_id` | `link(StreamRef.for_workflow(child_id), name=...)` |
-| `SUBAGENT_MESSAGE_SENT` with `from_offset` | `link(..., after=<child cursor>)` for each turn |
-| `SUBAGENT_REPLY_RECEIVED` | `join(name=..., until=<child cursor at the turn end>)` |
-| Client-made `SUBAGENT_STREAM_UNAVAILABLE` | `LinkStateKind.UNAVAILABLE`, which the stream runtime reports |
-| A merge offset per child | `FollowPosition`, which holds every open segment |
-
 Known limits:
 
-- **Core and readers.** A Core before link records reads a `LINK` as an
-  invalid record, so every reader of a stream with links needs this release.
 - **Size.** The follow position grows with the open segments. With the
   default bounds it stays below 64 KiB.
 - **Workflow followers.** A Workflow follower with more open sources than

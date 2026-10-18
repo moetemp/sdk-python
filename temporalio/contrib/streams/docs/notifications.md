@@ -283,17 +283,3 @@ producer, or to a time-based check:
 - The notifier asks an idle Workflow reader to read again after 1 minute,
   doubling to 5 minutes. That costs about 290 Workflow Tasks a day per idle
   reader.
-
-## Live tests
-
-`scripts/streams_live_lane.sh` starts a server with the notifier and the
-settings above, with short poll and recheck limits, and runs the stream
-tests against it. It also starts a Redis Cluster of three primaries
-with one replica each, unless `STREAMS_REDIS_CLUSTER_URL` names one, and the
-live cases run on memory, Redis and the cluster. It fails when a live test skips or when a gated test did
-not pass.
-
-```bash
-SERVER_BIN=/path/to/temporal-server PORT_BASE=7941 \
-  STREAMS_REDIS_URL=redis://127.0.0.1:6441/0 bash scripts/streams_live_lane.sh
-```
