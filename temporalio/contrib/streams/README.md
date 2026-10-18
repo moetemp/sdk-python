@@ -124,10 +124,10 @@ an identity of its own:
 
 - **Producer id.** `__temporal_local_<n>@<scheduling run id>`, where `n`
   counts the run's Local Activity calls in order. The `__temporal` prefix is
-  reserved, so no user Activity id writes as the same producer. The store plugin's Worker interceptor
-  stamps the number on each call in a header, so it stays the same across
-  reruns, and across a retry that backs off longer than
-  `local_retry_threshold`, which gets a new Activity id.
+  reserved, so no user Activity id writes as the same producer. The store
+  plugin's Worker interceptor stamps the number on each call in a header, so
+  it stays the same across reruns, and across a retry that backs off longer
+  than `local_retry_threshold`, which gets a new Activity id.
 - **Attempt.** Before the first append, the producer asks the server for
   the run's History length `h` and the pending Workflow Task's attempt `t`.
   With the Local Activity's attempt `a`, it writes attempt
