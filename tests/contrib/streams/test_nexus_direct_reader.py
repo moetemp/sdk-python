@@ -38,7 +38,6 @@ from temporalio.contrib.streams.nexus import (
     StreamDirectReads,
     StreamReader,
 )
-from temporalio.contrib.streams.nexus import _reader as reader_module
 from temporalio.contrib.streams.nexus._direct import (
     DIRECT_READ_ACTIVITY,
     positions_payload,
@@ -433,13 +432,9 @@ async def test_a_direct_read_cuts_its_task_at_the_command_bound(
         # The cut comes before the read's Local Activity.
         raise _Cut(runtime.heartbeats)
 
-    monkeypatch.setattr(reader_module.workflow._Runtime, "current", lambda: runtime)
-    monkeypatch.setattr(
-        reader_module.workflow, "execute_local_activity", local_activity
-    )
-    monkeypatch.setattr(
-        reader_module.workflow, "info", lambda: SimpleNamespace(run_id="run-id")
-    )
+    monkeypatch.setattr(workflow._Runtime, "current", lambda: runtime)
+    monkeypatch.setattr(workflow, "execute_local_activity", local_activity)
+    monkeypatch.setattr(workflow, "info", lambda: SimpleNamespace(run_id="run-id"))
     reader = StreamReader(
         SimpleNamespace(),  # type: ignore[arg-type]
         item_type=Token,
