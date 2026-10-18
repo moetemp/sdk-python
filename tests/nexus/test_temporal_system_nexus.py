@@ -614,10 +614,16 @@ def _build_proto_sample(message_type: type[Message]) -> Message:
     return message
 
 
-def _populate_proto_sample(message: Message, *, path: str = "value") -> None:
+def _populate_proto_sample(
+    message: Message, *, path: str = "value", active: frozenset[str] = frozenset()
+) -> None:
+    # A recursive type such as Failure.cause is filled once, so the sample ends.
+    active = active | {message.DESCRIPTOR.full_name}
     seen_oneofs: set[str] = set()
     for raw_field in message.DESCRIPTOR.fields:
         field = cast(FieldDescriptor, raw_field)
+        if field.message_type is not None and field.message_type.full_name in active:
+            continue
         if field.containing_oneof is not None:
             if field.containing_oneof.name in seen_oneofs:
                 continue
@@ -632,6 +638,7 @@ def _populate_proto_sample(message: Message, *, path: str = "value") -> None:
                 _populate_proto_sample(
                     getattr(message, field.name).add(),
                     path=f"{path}.{field.name}[0]",
+                    active=active,
                 )
             else:
                 getattr(message, field.name).append(
@@ -641,6 +648,7 @@ def _populate_proto_sample(message: Message, *, path: str = "value") -> None:
             _populate_proto_sample(
                 getattr(message, field.name),
                 path=f"{path}.{field.name}",
+                active=active,
             )
         else:
             setattr(

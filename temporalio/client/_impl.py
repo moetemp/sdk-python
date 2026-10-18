@@ -1610,6 +1610,18 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             for k, v in input.headers.items():
                 req.nexus_header[k] = v
 
+        for callback in input.completion_callbacks:
+            handler = temporalio.api.common.v1.Callback.NexusHandler(
+                task_queue_name=callback.task_queue,
+                service=callback.service,
+                operation=callback.operation,
+                progress_operation=callback.progress_operation,
+            )
+            if callback.source_context is not None:
+                [context] = await data_converter.encode([callback.source_context])
+                handler.source_context.CopyFrom(context)
+            req.completion_callbacks.add(nexus_handler=handler)
+
         resp: temporalio.api.workflowservice.v1.StartNexusOperationExecutionResponse
         try:
             resp = await self._client.workflow_service.start_nexus_operation_execution(

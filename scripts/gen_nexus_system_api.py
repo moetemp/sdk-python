@@ -11,7 +11,8 @@ import gen_protos
 
 base_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(base_dir))
-wit_input_dir = (
+# The upstream WIT dependencies come from Core's API copy.
+wit_deps_dir = (
     base_dir
     / "temporalio"
     / "bridge"
@@ -21,10 +22,19 @@ wit_input_dir = (
     / "protos"
     / "api_upstream"
     / "nexus"
+    / "deps"
 )
+# The workflow service WIT with the stream notifier operations, and the notification service WIT,
+# come from the temporalio-streams crate, which carries the API they name.
+wit_input_dir = gen_protos.streams_proto_dir.parent / "nexus"
 wit_path = wit_input_dir / "workflow-service.wit"
-wit_deps_dir = wit_input_dir / "deps"
 output_dir = base_dir / "temporalio" / "nexus" / "system" / "workflow_service"
+# The service a Worker implements to take NexusHandler callbacks. The server calls
+# it, not a Workflow, so it gets plain definitions and no System Nexus caller.
+notification_wit_path = wit_input_dir / "notification-service.wit"
+notification_output_dir = (
+    base_dir / "temporalio" / "nexus" / "system" / "notification_service"
+)
 workflow_init_path = base_dir / "temporalio" / "workflow" / "__init__.py"
 workflowservice_request_response_proto = (
     gen_protos.api_proto_dir
@@ -34,28 +44,64 @@ workflowservice_request_response_proto = (
     / "v1"
     / "request_response.proto"
 )
-NEX_GEN_VERSION = "0.2.8"
+notificationservice_request_response_proto = (
+    gen_protos.api_proto_dir
+    / "temporal"
+    / "api"
+    / "notificationservice"
+    / "v1"
+    / "request_response.proto"
+)
+workflowservice_stream_request_response_proto = (
+    gen_protos.streams_api_proto_dir
+    / "temporal"
+    / "api"
+    / "workflowservice"
+    / "v1"
+    / "stream_request_response.proto"
+)
+notificationservice_progress_proto = (
+    gen_protos.nexus_api_proto_dir
+    / "temporal"
+    / "api"
+    / "notificationservice"
+    / "v1"
+    / "progress.proto"
+)
+# The stream bindings need nexgen fixes that no release carries yet, so both generators
+# use this pinned revision of the nexgen fork. NEX_GEN_BIN points them at a binary built
+# some other way.
+NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
+NEX_GEN_REVISION = "3c60ecc9987007d70f8d798d09373445b0219d54"
+nex_gen_root = base_dir / ".nexgen" / NEX_GEN_REVISION
 
 
 def nex_gen_command() -> list[str]:
     if bin_path := os.environ.get("NEX_GEN_BIN"):
         return [bin_path]
 
-    if shutil.which("nexgen") is None:
+    binary = nex_gen_root / "bin" / "nexgen"
+    if not binary.exists():
         subprocess.check_call(
             [
                 "cargo",
                 "install",
                 "--locked",
                 "nexgen",
-                "--version",
-                NEX_GEN_VERSION,
+                "--git",
+                NEX_GEN_REPOSITORY,
+                "--rev",
+                NEX_GEN_REVISION,
                 "--features",
                 "advanced",
-                "--force",
-            ]
+                "--root",
+                str(nex_gen_root),
+            ],
+            # The git CLI honours the user's URL rewrites and credentials,
+            # which cargo's built-in client does not.
+            env={**os.environ, "CARGO_NET_GIT_FETCH_WITH_CLI": "true"},
         )
-    return ["nexgen"]
+    return [str(binary)]
 
 
 def build_descriptor_set(descriptor_path: Path) -> None:
@@ -64,10 +110,15 @@ def build_descriptor_set(descriptor_path: Path) -> None:
             sys.executable,
             "-mgrpc_tools.protoc",
             f"--proto_path={gen_protos.api_proto_dir}",
+            f"--proto_path={gen_protos.streams_api_proto_dir}",
+            f"--proto_path={gen_protos.nexus_api_proto_dir}",
             f"--proto_path={gen_protos.proto_dir}",
             "--include_imports",
             f"--descriptor_set_out={descriptor_path}",
             str(workflowservice_request_response_proto),
+            str(notificationservice_request_response_proto),
+            str(workflowservice_stream_request_response_proto),
+            str(notificationservice_progress_proto),
         ]
     )
 
@@ -113,6 +164,8 @@ def generate_nexus_system_api() -> None:
         raise RuntimeError(f"missing WIT source: {wit_path}")
     if not wit_deps_dir.exists():
         raise RuntimeError(f"missing WIT dependency directory: {wit_deps_dir}")
+    if not notification_wit_path.exists():
+        raise RuntimeError(f"missing WIT source: {notification_wit_path}")
 
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "temporal_api.bin"
@@ -138,6 +191,22 @@ def generate_nexus_system_api() -> None:
             ]
         )
 
+        shutil.rmtree(notification_output_dir, ignore_errors=True)
+        subprocess.check_call(
+            [
+                *command,
+                "python",
+                str(notification_wit_path),
+                str(wit_deps_dir),
+                "--support-package",
+                "temporalio.nexus.system._support",
+                "--descriptors",
+                str(descriptor_path),
+                "--output",
+                str(notification_output_dir),
+            ]
+        )
+
     (output_dir.parent / "__init__.py").touch()
     generate_workflow_exports()
     subprocess.check_call(
@@ -150,6 +219,7 @@ def generate_nexus_system_api() -> None:
             "I",
             "--fix",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )
@@ -160,6 +230,7 @@ def generate_nexus_system_api() -> None:
             "ruff",
             "format",
             str(output_dir),
+            str(notification_output_dir),
             str(workflow_init_path),
         ]
     )

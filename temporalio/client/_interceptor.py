@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         AsyncActivityIDReference,
     )
     from ._nexus import (
+        NexusHandlerCallback,
         NexusOperationExecutionAsyncIterator,
         NexusOperationExecutionCount,
         NexusOperationExecutionDescription,
@@ -605,6 +606,7 @@ class StartNexusOperationInput:
     headers: Mapping[str, str]
     rpc_metadata: Mapping[str, str | bytes]
     rpc_timeout: timedelta | None
+    completion_callbacks: Sequence[NexusHandlerCallback] = ()
 
 
 @dataclass
