@@ -132,29 +132,37 @@ an identity of its own:
   plugin's Worker interceptor stamps the number on each call in a header, so
   it stays the same across reruns, and across a retry that backs off longer
   than `local_retry_threshold`, which gets a new Activity id.
-- **Attempt.** Before the first append, the producer asks the server for
-  the run's History length `h` and the pending Workflow Task's attempt `t`.
-  With the Local Activity's attempt `a`, it writes attempt
-  `(h * 100_000 + t) * 10_000 + a`. Each rerun runs in a later Workflow Task
-  attempt, so the attempt grows, and readers see `SUPERSEDED` before the
-  rerun's records. A retry inside one attempt is written once, as for any
-  producer.
+- **Attempt.** The interceptor also stamps the Workflow Task facts of the
+  activation that schedules the call. Core takes them from History. The
+  task attempt is `prefix << 16 | retry`, the same value the Workflow's own
+  records use. With the Local Activity's attempt `a`, the producer writes
+  attempt `task attempt << 14 | min(a, 16383)`. Each rerun runs in a later
+  Workflow Task attempt, so the attempt grows, and readers see `SUPERSEDED`
+  before the rerun's records. A retry inside one attempt is written once, as
+  for any producer.
+- **Failed tasks.** The records carry the started event id of the call's
+  Workflow Task attempt and the run's last completed tasks, as the
+  Workflow's records do. If that task fails and its retry doesn't run the
+  call again, the next record of the run on the topic shows that the task
+  never completed. Readers then see `SUPERSEDED` for the call's records.
+
+The attempt needs no server call, so the first record goes out at once. The
+stream runtime's owner check describes the Workflow, but it caches the
+answer per owner run, so the run's Local Activities share it.
 
 Known limits:
 
-- **One describe call.** Each Local Activity attempt makes one
-  `DescribeWorkflowExecution` call before its first append, so its first
-  record waits one round trip to the server. Later appends make no call. The
-  stream runtime's owner check also describes the Workflow, but it caches
-  the answer per owner run for a minute, so the run's Local Activities share
-  it.
-- **Describe permission.** The Worker's identity needs permission to
-  describe the Workflow (`DescribeWorkflowExecution` on its namespace), both
-  for the attempt and for the stream runtime's owner check. Without it, the
-  first append fails.
-- **Attempt range.** A Local Activity past attempt 9,999, or in a Workflow
-  Task past attempt 99,999, raises `StreamUnsupportedError` on its first
-  append.
+- **Old failed tasks.** Each record lists only the run's last eight
+  completed tasks. If more than seven tasks complete before the next record
+  on the topic, the reader can't prove the call's task failed, and its
+  records stand.
+- **Rerun after a heartbeat.** If the Workflow Task completed as a
+  heartbeat while the call ran and a later task fails, the rerun schedules
+  the call again while it replays. It gets the first run's task facts, so
+  its first attempt writes the same producer attempt. The same content is
+  taken as a resend. Other content is refused with `StreamProducerError`,
+  which fails that Local Activity attempt, and the local retry writes a
+  higher attempt that supersedes the first run.
 
 ## Streams owned by a standalone Activity
 

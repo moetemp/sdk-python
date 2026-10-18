@@ -161,17 +161,18 @@ class StreamRecord(google.protobuf.message.Message):
         do, so the stream service can follow it.
         """
     task_started_event_id: builtins.int
-    """Set by a Workflow run's own producer only: the WorkflowTaskStarted
-    event id of the task attempt that wrote the record.
+    """Set by a Workflow run's own producer and its Local Activity calls only:
+    the WorkflowTaskStarted event id of the task attempt that wrote the
+    record, or that scheduled the call.
     """
     @property
     def completed_tasks(
         self,
     ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
-        """Set by a Workflow run's own producer, on the first record of each
-        batch: the WorkflowTaskStarted event ids of the run's last completed
-        tasks, newest first, at most eight. The first is the attempt's prefix.
-        A trailing zero means the list goes back to the run's start. A reader
+        """Set by the same producers, on the first record of each batch: the
+        WorkflowTaskStarted event ids of the run's last completed tasks, newest
+        first, at most eight. The first is the task attempt's prefix. A
+        trailing zero means the list goes back to the run's start. A reader
         learns from it whether an earlier attempt it delivered completed.
         """
     @property
