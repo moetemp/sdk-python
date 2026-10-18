@@ -175,7 +175,7 @@ async def generate(prompt: str) -> str:
 
 handle = await client.start_activity(generate, "hi", id="gen-1", ...)
 ref = StreamRef.for_activity(handle.id, run_id=handle.run_id, topic=TOKENS)
-async for record in get_stream_handle(client, ref).read():
+async for record in stream_handle(client, ref).read():
     ...
 ```
 
@@ -183,7 +183,7 @@ async for record in get_stream_handle(client, ref).read():
   Activity id and its run. A ref with no run names the newest run of the id
   when a read starts, and the read stays on that run. A new run of the same
   Activity id has new streams.
-- **Readers.** A client reads with `get_stream_handle(client, ref)`, and
+- **Readers.** A client reads with `stream_handle(client, ref)`, and
   Workflow code with `workflow_reader(ref)`, as for a Workflow's stream.
 - **Producer.** The Activity writes as `<Activity id>@<run id>`. Retries,
   backoff, pause and reset keep the stream open.
@@ -220,7 +220,7 @@ async def follow(workflow_id: str) -> int:
     details = activity.info().heartbeat_details
     after = Cursor(details[0]) if details else BEGINNING
     seen = 0
-    async for record in get_stream_handle(activity.client(), workflow_id).read(
+    async for record in stream_handle(activity.client(), workflow_id).read(
         after=after
     ):
         seen += 1
@@ -258,7 +258,7 @@ class Agent:
 
 @activity.defn
 async def run_tool(call: ToolCall) -> str:
-    out = activity_handle().producer(topic=TOKENS)
+    out = stream_producer(TOKENS)
     async for token in tool(call):
         await out.append(token)
     return "ok"
@@ -266,7 +266,7 @@ async def run_tool(call: ToolCall) -> str:
 ref = StreamRef.for_workflow_activity(
     agent_id, run_id=run_id, activity_id="tool-42", topic=TOKENS
 )
-async for record in get_stream_handle(client, ref).read():
+async for record in stream_handle(client, ref).read():
     ...
 ```
 
@@ -326,7 +326,7 @@ their records, and a reader still sees one ordered view.
 
 ```python
 # Workflow code (agent). Links go out with the activation, as published values do.
-events = workflow_writer(EVENTS)
+events = stream_producer(EVENTS)
 handle, tool_ref = start_activity_with_stream(run_tool, call, topic=TOKENS, ...)
 events.link(tool_ref, name=call.id)                       # OPEN
 events.link(StreamRef.for_workflow(child_id), name="sub-3", after=child_cursor)
@@ -334,7 +334,7 @@ await handle
 events.join(name=call.id)                                 # JOIN, the agent waited here
 
 # Client code. One ordered view of the agent and every stream it links.
-async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
+async for item in stream_handle(client, agent_id, topic=EVENTS).follow():
     if item.link_state is not None:      # OPENED, DONE, UNAVAILABLE or SKIPPED
         ui.mark(item.source, item.link_state)
     else:
@@ -344,9 +344,9 @@ async for item in get_stream_handle(client, agent_id, topic=EVENTS).follow():
 ```
 
 - **Writing.** `StreamProducer.link(ref, *, name, after=None, value=None)`
-  and `WorkflowStreamWriter.link(...)` write an `OPEN`. The follower reads the
-  linked stream strictly after `after`, or from its oldest record. `join(*,
-  name, until=None)` writes a `JOIN`. It says the writer waited for the link
+  and `WorkflowStreamProducer.link(...)` write an `OPEN`. The follower reads
+  the linked stream strictly after `after`, or from its oldest record.
+  `join(*, name, until=None)` writes a `JOIN`. It says the producer waited for the link
   up to `until`, or to the linked stream's end. A tool stream needs no `JOIN`
   for its segment to end, since its stream closes with the call.
 - **Order.** Each stream keeps its own order. A linked stream's records
@@ -387,7 +387,7 @@ Known limits:
 ## A Workflow publishes to its own stream
 
 `stream_producer` is one function for Workflow code and Activity code. In
-an Activity it returns `activity_handle().producer(topic=...)`, and
+an Activity it returns `activity_handle(scope).producer(topic=...)`, and
 `append` is awaited. In a Workflow it returns the Workflow Producer, and
 `append` returns at once. Workflow code can't do I/O, so the Workflow
 Producer hands its records to the Worker with the activation that appended
@@ -507,7 +507,7 @@ result=..., error=...)`, and each sleeping reader sees the outcome. See
 - **Closing.** Once the Workflow's run chain ends, appends are refused with
   `StreamClosedError`, after a short closing window. Close earlier with
   `close_workflow_stream` in the Workflow or `close()` on a handle. A
-  Workflow doesn't see a close from outside through its writer: the stream runtime drops
+  Workflow doesn't see a close from outside through its producer: the stream runtime drops
   its later records on that topic, and the run goes on. So close a topic
   from the Workflow that owns it, or have readers check how it closed. On a
   store without producer state, a late append can still answer success, and
