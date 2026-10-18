@@ -24,6 +24,11 @@ by ``scripts/gen_nexus_streams_api.py``:
   nothing beyond the standard library.
 * ``TemporalStreamsForwarder``, which hands each operation's input to the
   stream runtime as the contract's JSON transfer form.
+
+:class:`TemporalStreamsHandler` is the one hand-written piece. It runs its
+authorizer and the namespace's payload codec, the parts only the SDK has, and
+the stream runtime runs every rule of the contract on the store of its Worker's
+client.
 """
 
 from temporalio.contrib.streams import StreamRef
@@ -40,6 +45,10 @@ from temporalio.contrib.streams.nexus._generated.client import (
     HTTPStatusError,
     TemporalStreamsHttpClient,
 )
+from temporalio.contrib.streams.nexus._handler import (
+    StreamAccess,
+    TemporalStreamsHandler,
+)
 
 __all__ = [
     "AppendInput",
@@ -48,8 +57,10 @@ __all__ = [
     "ReadInput",
     "ReadOutput",
     "RecordWire",
+    "StreamAccess",
     "StreamCursor",
     "StreamRef",
     "TemporalStreams",
+    "TemporalStreamsHandler",
     "TemporalStreamsHttpClient",
 ]
