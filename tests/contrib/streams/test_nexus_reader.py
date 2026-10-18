@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import dataclasses
+import os
+import time
 import types
 import uuid
 from collections.abc import Sequence
@@ -60,6 +62,8 @@ from temporalio.contrib.streams import (
     StreamRef,
     StreamStorePlugin,
     Supersession,
+    close_workflow_stream,
+    get_stream_handle,
     workflow_writer,
 )
 from temporalio.contrib.streams._record import Cursor, RecordKind
@@ -75,6 +79,7 @@ from temporalio.contrib.streams.nexus import (
     StreamOperationHandler,
     StreamReader,
     TemporalStreamsHandler,
+    stream_ref_from_token,
 )
 from temporalio.contrib.streams.nexus._generated import (
     RecordWireSuperseded,
@@ -1556,3 +1561,773 @@ async def connect(client: Client, store: StreamStorePlugin) -> Client:
         data_converter=client.data_converter,
         plugins=[store],
     )
+
+
+def _notifying_store(backing: str) -> StreamStorePlugin:
+    if backing.startswith("memory"):
+        return MemoryStreams().notify_on_append()
+    url = os.environ.get("STREAMS_REDIS_URL")
+    if not url:
+        pytest.skip("set STREAMS_REDIS_URL to read over Redis")
+    from temporalio.contrib.streams.redis import RedisStreams
+
+    return RedisStreams(url, key_prefix=f"reader-{uuid.uuid4().hex}").notify_on_append()
+
+
+async def _read_what_is_appended(
+    client: Client,
+    env: WorkflowEnvironment,
+    backing: str,
+    texts: list[str],
+    per_append: int,
+) -> list[str]:
+    """Appends ``texts`` from outside the owner once the caller is attached,
+    closes the stream, and answers with the labels the caller read."""
+    labels, _ = await _append_and_read(client, env, backing, texts, per_append)
+    return labels
+
+
+async def _read_appended_history(
+    client: Client, env: WorkflowEnvironment, texts: list[str], per_append: int
+) -> WorkflowHistory:
+    """The caller's History after it read ``texts``, appended a batch at a time
+    with a pause, so it takes several reads."""
+    _, history = await _append_and_read(
+        client, env, "memory", texts, per_append, pause=0.5
+    )
+    return history
+
+
+async def _append_and_read(
+    client: Client,
+    env: WorkflowEnvironment,
+    backing: str,
+    texts: list[str],
+    per_append: int,
+    *,
+    pause: float = 0,
+) -> tuple[list[str], WorkflowHistory]:
+    store = _notifying_store(backing)
+    if backing == "memory-async-codec":
+        config = client.config()
+        config["data_converter"] = dataclasses.replace(
+            DataConverter.default, payload_codec=SlowCodec()
+        )
+        client = Client(**config)
+    client = await connect(client, store)
+    owner_id = f"idle-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveLabelReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        caller = await client.start_workflow(
+            LiveLabelReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for _ in range(200):
+            history = await caller.fetch_history()
+            if any(
+                event.HasField("nexus_operation_started_event_attributes")
+                for event in history.events
+            ):
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("the stream operation never started")
+        producer = get_stream_handle(client, ref).producer(
+            producer_id="burst", attempt=1
+        )
+        for start in range(0, len(texts), per_append):
+            await producer.append(
+                *(Token(text) for text in texts[start : start + per_append])
+            )
+            await asyncio.sleep(pause)
+        await store.close_stream(client, ref, "done")
+        labels = await asyncio.wait_for(caller.result(), 60)
+        await client.get_workflow_handle(owner_id).signal(LiveIdleOwner.done)
+        history = await caller.fetch_history()
+    return labels, history
+
+
+async def test_live_each_read_carries_the_state_its_last_answer_gave(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    """The stream service holds nothing between reads, so the reader sends
+    back Core's state, and any of the service's Workers can serve the next."""
+    texts = [f"t{n}" for n in range(6)]
+    history = await _read_appended_history(client, env, texts, per_append=2)
+    scheduled = {
+        event.event_id: converter.from_payload(
+            event.nexus_operation_scheduled_event_attributes.input, ReadInput
+        )
+        for event in history.events
+        if event.nexus_operation_scheduled_event_attributes.operation == "read"
+    }
+    answers = [
+        (
+            scheduled[
+                event.nexus_operation_completed_event_attributes.scheduled_event_id
+            ],
+            converter.from_payload(
+                event.nexus_operation_completed_event_attributes.result, ReadOutput
+            ),
+        )
+        for event in history.events
+        if event.nexus_operation_completed_event_attributes.scheduled_event_id
+        in scheduled
+    ]
+    assert len(answers) >= 3, answers
+    assert answers[0][0].state is None
+    for (_, earlier), (later, _) in zip(answers, answers[1:]):
+        assert earlier.state
+        assert later.state == earlier.state
+
+
+@pytest.mark.parametrize("backing", BACKINGS)
+async def test_live_a_reader_gets_every_record_of_a_burst(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    labels = await _read_what_is_appended(
+        client, env, backing, [f"{n}:" for n in range(700)], per_append=50
+    )
+    assert labels == [str(n) for n in range(700)]
+
+
+@pytest.mark.parametrize("backing", BACKINGS)
+async def test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """Each answer holds about three of these records, so most answers are
+    short of the record limit without being the stream's tail."""
+    body = "x" * 300_000
+    labels = await _read_what_is_appended(
+        client, env, backing, [f"{n}:{body}" for n in range(12)], per_append=1
+    )
+    assert labels == [str(n) for n in range(12)]
+
+
+@workflow.defn(name="LiveOwnerThatClosesInOneTask")
+class LiveOwnerThatClosesInOneTask:
+    """Publishes its tokens and closes its stream with no wait between, then
+    keeps running until told to end."""
+
+    def __init__(self) -> None:
+        self._done = False
+
+    @workflow.run
+    async def run(self, texts: list[str]) -> None:
+        writer = workflow_writer(STREAM.topic)
+        for text in texts:
+            writer.publish(Token(text))
+        await close_workflow_stream(STREAM.topic, result=f"{len(texts)} tokens")
+        await workflow.wait_condition(lambda: self._done)
+
+    @workflow.signal
+    def done(self) -> None:
+        self._done = True
+
+
+@pytest.mark.parametrize("backing", BACKINGS)
+async def test_live_a_close_with_the_last_publishes_loses_none_of_them(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """The close commits in the same task as the last publishes. Core closes
+    the store and then the notifier only after it promotes the task's
+    records, so the reader is done only once it has every one of them."""
+    store = _notifying_store(backing)
+    if backing == "memory-async-codec":
+        config = client.config()
+        config["data_converter"] = dataclasses.replace(
+            DataConverter.default, payload_codec=SlowCodec()
+        )
+        client = Client(**config)
+    client = await connect(client, store)
+    owner_id = f"closing-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    texts = [f"{n}:" for n in range(300)]
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveOwnerThatClosesInOneTask.run, texts, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveLabelReader, LiveOwnerThatClosesInOneTask],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        labels = await asyncio.wait_for(
+            client.execute_workflow(
+                LiveLabelReader.run,
+                endpoint,
+                id=f"stream-reader-{uuid.uuid4()}",
+                task_queue=task_queue,
+            ),
+            60,
+        )
+        await client.get_workflow_handle(owner_id).signal(
+            LiveOwnerThatClosesInOneTask.done
+        )
+    assert labels == [str(n) for n in range(300)]
+
+
+@workflow.defn(name="LiveTokenReader")
+class LiveTokenReader:
+    """Reads the stream and reports the token it read it by."""
+
+    @workflow.run
+    async def run(self, endpoint: str) -> tuple[str, list[str], str]:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
+        labels: list[str] = []
+        while (batch := await reader.next()) is not None:
+            labels += [token.text for token in batch]
+        result = await handle
+        return handle.operation_token or "", labels, result
+
+
+@pytest.mark.parametrize("backing", ["memory", "redis"])
+async def test_live_a_start_on_a_closed_stream_still_names_it(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """The attach completes the operation at once, before the start answers,
+    and the completion carries the token the reader needs."""
+    store = _notifying_store(backing)
+    client = await connect(client, store)
+    owner_id = f"closed-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def closed_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(closed_stream)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveTokenReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        owner = await client.start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        producer = get_stream_handle(client, ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append(*(Token(f"t{n}") for n in range(5)))
+        await store.close_stream(client, ref, "closed before")
+        token, labels, result = await asyncio.wait_for(
+            client.execute_workflow(
+                LiveTokenReader.run,
+                endpoint,
+                id=f"stream-reader-{uuid.uuid4()}",
+                task_queue=task_queue,
+            ),
+            30,
+        )
+        await owner.signal(LiveIdleOwner.done)
+
+    assert stream_ref_from_token(token) == ref
+    assert labels == [f"t{n}" for n in range(5)]
+    assert result == "closed before"
+
+
+@workflow.defn(name="LiveResumingReader")
+class LiveResumingReader:
+    """Reads a first batch, then reads the rest with a new reader that starts
+    after the first one's cursor, as a run after Continue-as-New would."""
+
+    def __init__(self) -> None:
+        self._resume = False
+
+    @workflow.run
+    async def run(self, endpoint: str) -> tuple[list[str], list[str]]:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        first = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=False
+        )
+        batch = await first.next()
+        assert batch is not None
+        await workflow.wait_condition(lambda: self._resume)
+        rest = StreamReader(
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=first.cursor,
+            replay_from_store=False,
+        )
+        later: list[str] = []
+        while (more := await rest.next()) is not None:
+            later += [token.text for token in more]
+        return [token.text for token in batch], later
+
+    @workflow.signal
+    def resume(self) -> None:
+        self._resume = True
+
+
+async def test_live_a_new_reader_resumes_after_a_cursor(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    store = _notifying_store("memory")
+    client = await connect(client, store)
+    owner_id = f"resume-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveResumingReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        caller = await client.start_workflow(
+            LiveResumingReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for _ in range(200):
+            history = await caller.fetch_history()
+            if any(
+                event.HasField("nexus_operation_started_event_attributes")
+                for event in history.events
+            ):
+                break
+            await asyncio.sleep(0.1)
+        producer = get_stream_handle(client, ref).producer(
+            producer_id="writer", attempt=1
+        )
+        await producer.append(Token("t0"), Token("t1"), Token("t2"))
+        for _ in range(200):
+            history = await caller.fetch_history()
+            reads = sum(
+                event.nexus_operation_completed_event_attributes.HasField("result")
+                for event in history.events
+                if event.HasField("nexus_operation_completed_event_attributes")
+            )
+            if reads >= 1 and any(
+                b"t2" in event.nexus_operation_completed_event_attributes.result.data
+                for event in history.events
+            ):
+                break
+            await asyncio.sleep(0.1)
+        await producer.append(Token("t3"), Token("t4"))
+        await store.close_stream(client, ref, "done")
+        await caller.signal(LiveResumingReader.resume)
+        first, later = await asyncio.wait_for(caller.result(), 30)
+        await client.get_workflow_handle(owner_id).signal(LiveIdleOwner.done)
+
+    assert first == ["t0", "t1", "t2"]
+    assert later == ["t3", "t4"]
+
+
+@workflow.defn(name="LivePositionReader")
+class LivePositionReader:
+    """Reads the first three items, then continues as new from its position
+    and reads the rest."""
+
+    @workflow.run
+    async def run(
+        self, endpoint: str, position: ReadPosition | None = None
+    ) -> tuple[list[str], list[str], int]:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=position,
+            replay_from_store=False,
+        )
+        if position is None:
+            items = 0
+            while items < 3:
+                batch = await reader.next()
+                assert batch is not None
+                items += len(batch)
+            workflow.continue_as_new(args=[endpoint, reader.position])
+        texts: list[str] = []
+        while (more := await reader.next()) is not None:
+            texts += [token.text for token in more]
+        await handle
+        stale = [record.value.text for record in reader.stale_records]
+        return texts, stale, len(reader.supersessions)
+
+
+@pytest.mark.parametrize("backing", ["memory", "redis"])
+async def test_live_a_position_keeps_another_producers_stale_mark_across_continue_as_new(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """Producer A's attempt 2 took over, and B wrote the record at the cursor.
+    After Continue-as-New, A's attempt 1 writes once more. A cursor alone
+    would tell the service only B, so the late record would pass as current
+    data. The position carries what the service knew of A."""
+    store = _notifying_store(backing)
+    client = await connect(client, store)
+    owner_id = f"position-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def open_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(open_stream)
+
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LivePositionReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
+    ):
+        owner = await client.start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        handle = get_stream_handle(client, ref)
+        a1 = handle.producer(producer_id="A", attempt=1)
+        a2 = handle.producer(producer_id="A", attempt=2)
+        b = handle.producer(producer_id="B", attempt=1)
+        await a1.append(Token("a1"))
+        await a2.append(Token("a2"))
+        await b.append(Token("b1"))
+        caller = await client.start_workflow(
+            LivePositionReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for _ in range(300):
+            latest = client.get_workflow_handle(caller.id)
+            if (await latest.describe()).run_id != caller.result_run_id:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("the reader never continued as new")
+        await a1.append(Token("late"))
+        await b.append(Token("b2"))
+        await store.close_stream(client, ref, "done")
+        texts, stale, supersessions = await asyncio.wait_for(caller.result(), 30)
+        await owner.signal(LiveIdleOwner.done)
+
+    assert texts == ["b2"]
+    assert stale == ["late"]
+    assert supersessions == 0
+
+
+@workflow.defn(name="LiveContinuingReader")
+class LiveContinuingReader:
+    """Reads a first batch, then continues as new and reads the rest after the
+    first run's cursor, as a long reader keeps its History small."""
+
+    @workflow.run
+    async def run(
+        self, endpoint: str, after: str = ""
+    ) -> tuple[list[str], list[tuple[int, str, int, int]]]:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(
+            handle,
+            item_type=Token,
+            endpoint=endpoint,
+            after=Cursor(after) if after else None,
+            replay_from_store=False,
+        )
+        if not after:
+            batch = await reader.next()
+            assert batch is not None
+            workflow.continue_as_new(args=[endpoint, reader.cursor.token])
+        texts: list[str] = []
+        while (more := await reader.next()) is not None:
+            texts += [token.text for token in more]
+        await handle
+        return texts, [
+            (
+                s.index,
+                s.supersession.producer_id,
+                s.supersession.previous_attempt,
+                s.supersession.attempt,
+            )
+            for s in reader.supersessions
+        ]
+
+
+@pytest.mark.parametrize("backing", ["memory", "redis"])
+async def test_live_a_reader_after_continue_as_new_sees_a_later_attempt(
+    client: Client, env: WorkflowEnvironment, backing: str
+) -> None:
+    """Attempt 1 writes, the reader continues as new after it, then attempt 2
+    writes. The new run's reader learns of attempt 1 only through the stream
+    service, so without its supersession the two attempts would mix."""
+    store = _notifying_store(backing)
+    client = await connect(client, store)
+    owner_id = f"continuing-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+
+    async def open_stream(_ctx: Any, _prompt: str) -> StreamRef:
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(open_stream)
+
+    streams = TemporalStreamsHandler()
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[LiveContinuingReader, LiveIdleOwner],
+        nexus_service_handlers=[ChatServiceHandler(), streams],
+    ):
+        owner = await client.start_workflow(
+            LiveIdleOwner.run, id=owner_id, task_queue=task_queue
+        )
+        handle = get_stream_handle(client, ref)
+        first = handle.producer(producer_id="writer", attempt=1)
+        await first.append(Token("t0"), Token("t1"), Token("t2"))
+        caller = await client.start_workflow(
+            LiveContinuingReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for _ in range(300):
+            latest = client.get_workflow_handle(caller.id)
+            if (await latest.describe()).run_id != caller.result_run_id:
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("the reader never continued as new")
+        second = handle.producer(producer_id="writer", attempt=2)
+        await second.append(Token("u0"), Token("u1"), Token("u2"))
+        await store.close_stream(client, ref, "done")
+        texts, supersessions = await asyncio.wait_for(caller.result(), 30)
+        await owner.signal(LiveIdleOwner.done)
+
+    assert texts == ["u0", "u1", "u2"]
+    assert supersessions == [(0, "writer", 1, 2)]
+
+
+async def test_an_undecodable_record_raises_and_the_reader_goes_on_past_it() -> None:
+    """A body that does not decode into the item type is not skipped quietly:
+    the records before it are handed over, then next() raises, and the next
+    call goes on after it."""
+    bad = to_wire(
+        converter,
+        topic=STREAM.topic,
+        kind=RecordKind.DATA,
+        value="not a token",
+        producer_id="chat",
+        attempt=1,
+        sequence=2,
+    )
+    h = History()
+    h.started()
+    h.task()
+    chat = h.scheduled("ChatService", "chat")
+    h.chat_started(chat)
+    h.task(progress(1))
+    h.read(
+        answer(
+            record(1, text="a"),
+            RecordWire(token="cursor-2", record=bad.SerializeToString()),
+            record(3, text="c"),
+        )
+    )
+    # a is handed over, the bad record raises, then the rest of the answer is
+    # handed over with no read again.
+    h.task()
+    h.read(answer(cursor="cursor-3"))
+    h.task()
+    h.completed(chat, "summary")
+    h.task()
+    h.read(answer(cursor="cursor-3", done=True))
+    h.task()
+    h.workflow_completed()
+    await replay(WorkflowHistory(workflow_id="chat-reader", events=h.events))
+    assert seen[0].batches == [[Token("a")], [Token("c")]]
+    assert seen[0].undecodable == ["cursor-2"]
+
+
+@workflow.defn(name="DirectChatReader")
+class DirectChatReader:
+    @workflow.run
+    async def run(self, endpoint: str) -> int:
+        client = workflow.create_nexus_client(service=ChatService, endpoint=endpoint)
+        handle = await client.start_operation(ChatService.chat, "hello")
+        reader = StreamReader(
+            handle, item_type=Token, endpoint=endpoint, replay_from_store=True
+        )
+        return len(await reader.next() or [])
+
+
+async def test_live_a_direct_reader_without_a_transport_names_the_opt_out(
+    client: Client, env: WorkflowEnvironment
+) -> None:
+    owner_id = f"token-owner-{uuid.uuid4()}"
+    ref = StreamRef.for_workflow(owner_id, topic=STREAM.topic)
+    await _skip_without_notifier(client, ref)
+    task_queue = f"stream-reader-{uuid.uuid4()}"
+    endpoint = make_nexus_endpoint_name(task_queue)
+    await env.create_nexus_endpoint(endpoint, task_queue)
+    client = await connect(client, MemoryStreams().notify_on_append())
+
+    async def start_owner(_ctx: Any, _prompt: str) -> StreamRef:
+        await temporalio.nexus.client().start_workflow(
+            LiveTokenOwner.run, ["a"], id=owner_id, task_queue=task_queue
+        )
+        return ref
+
+    @nexusrpc.handler.service_handler(service=ChatService)
+    class ChatServiceHandler:
+        @nexusrpc.handler.operation_handler
+        def chat(self) -> nexusrpc.handler.OperationHandler[str, str]:
+            return StreamOperationHandler(start_owner)
+
+    # The caller's Worker has no StreamDirectReads, so the direct read has no
+    # way to reach the endpoint.
+    async with Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[DirectChatReader, LiveTokenOwner],
+        nexus_service_handlers=[ChatServiceHandler(), TemporalStreamsHandler()],
+    ):
+        caller = await client.start_workflow(
+            DirectChatReader.run,
+            endpoint,
+            id=f"stream-reader-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+
+        async def task_failure() -> str:
+            while True:
+                for event in (await caller.fetch_history()).events:
+                    if event.HasField("workflow_task_failed_event_attributes"):
+                        return (
+                            event.workflow_task_failed_event_attributes.failure.message
+                        )
+                await asyncio.sleep(0.2)
+
+        started = time.monotonic()
+        message = await asyncio.wait_for(task_failure(), 30)
+        # The read Activity fails with no retry, so the task fails at once.
+        assert time.monotonic() - started < 15
+        await caller.terminate()
+        await client.get_workflow_handle(owner_id).signal(LiveTokenOwner.done)
+    assert "StreamDirectReads" in message
+    assert "replay_from_store=False" in message
+
+
+async def test_each_read_before_the_completion_carries_the_wake_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stream service wakes the operation's idle callback after an empty
+    read only when the read names the operation, and a drain read names none."""
+    inputs: list[ReadInput] = []
+    answers = [
+        answer(record(1, text="a")),
+        ReadOutput(records=[], next_token="cursor-1", done=False),
+        answer(cursor="cursor-1", done=True),
+    ]
+
+    class FakeClient:
+        async def execute_operation(self, _operation: Any, input: ReadInput) -> Any:
+            inputs.append(input)
+            return answers.pop(0)
+
+    monkeypatch.setattr(
+        reader_module,
+        "workflow",
+        types.SimpleNamespace(
+            create_nexus_client=lambda **_kwargs: FakeClient(),
+            payload_converter=lambda: converter,
+            now=lambda: datetime.now(timezone.utc),
+        ),
+    )
+    calls: list[tuple[Any, ...]] = []
+    reader = StreamReader(
+        _OpenHandle(calls, waits=0),  # type: ignore[arg-type]
+        item_type=Token,
+        endpoint=ENDPOINT,
+        replay_from_store=False,
+    )
+    assert await reader.next() == [Token("a")]
+    assert await reader.next() is None
+    token = _OpenHandle.operation_token
+    assert [i.wake_token for i in inputs] == [token, token, None]
