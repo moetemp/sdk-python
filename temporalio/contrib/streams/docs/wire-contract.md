@@ -54,9 +54,9 @@ use it:
 | `topic` | 3 | The topic name |
 | `kind` | 4 | `STREAM_RECORD_KIND_DATA` (1), `STREAM_RECORD_KIND_FINISH` (2), `STREAM_RECORD_KIND_CLOSE` (5) or `STREAM_RECORD_KIND_TOPIC` (6). 0 reads as DATA. 3 is reserved, since readers synthesize `SUPERSEDED` with it, and 4 is kept for links between streams |
 | `producer_id` | 5 | Who wrote it. An Activity writes as `<activity id>@<scheduling run id>`, a Local Activity as `__temporal_local_<call number>@<scheduling run id>`, and a Workflow as `@<run id>` |
-| `attempt` | 6 | The producer's attempt. A Local Activity's is `task attempt << 14 \| min(Local Activity attempt, 16383)`, with the task attempt of the Workflow Task that scheduled it, below 2^46. A Workflow's is `prefix << 16 \| retry`: `prefix` is the WorkflowTaskStarted event id of the run's last completed Workflow Task (0 before one), and `retry` counts the reruns of the task since then, from 1 |
+| `attempt` | 6 | The producer's attempt. A Local Activity's is `task attempt << 14 \| min(Local Activity attempt, 16383)`, with the task attempt of the Workflow Task in which Core dispatched it, below 2^46. A Workflow's is `prefix << 16 \| retry`: `prefix` is the WorkflowTaskStarted event id of the run's last completed Workflow Task (0 before one), and `retry` counts the reruns of the task since then, from 1 |
 | `sequence` | 7 | The record's position in its attempt, starting at 1 |
-| `task_started_event_id` | 9 | On a Workflow's records, the WorkflowTaskStarted event id of the task that wrote it. On a Local Activity's, that of the task that scheduled it |
+| `task_started_event_id` | 9 | On a Workflow's records, the WorkflowTaskStarted event id of the task that wrote it. On a Local Activity's, that of the task in which Core dispatched it |
 | `completed_tasks` | 10 | On the first record of each Workflow or Local Activity batch, the WorkflowTaskStarted ids of the run's last completed tasks, newest first, at most 8, with a trailing 0 when the list reaches back to the run's start |
 
 Metadata keys, each a `Payload` with `encoding` = `binary/plain`:

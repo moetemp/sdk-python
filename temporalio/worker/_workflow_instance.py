@@ -322,9 +322,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             temporalio.bridge.proto.common.WorkerDeploymentVersion
         ) = None
         self._current_history_length = 0
-        self._current_workflow_task = (
-            temporalio.bridge.proto.workflow_activation.WorkflowTaskHistoryInfo()
-        )
         self._current_history_size = 0
         self._continue_as_new_suggested = False
         self._target_worker_deployment_version_changed = False
@@ -484,7 +481,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             act.deployment_version_for_current_task
         )
         self._current_history_length = act.history_length
-        self._current_workflow_task = act.workflow_task
         self._current_history_size = act.history_size_bytes
         self._continue_as_new_suggested = act.continue_as_new_suggested
         self._target_worker_deployment_version_changed = (
@@ -1397,11 +1393,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         self,
     ) -> list[temporalio.bridge.proto.streams.OutputRecord]:
         return self._stream_records
-
-    def workflow_task_history_info(
-        self,
-    ) -> temporalio.bridge.proto.workflow_activation.WorkflowTaskHistoryInfo:
-        return self._current_workflow_task
 
     def workflow_memo(self) -> Mapping[str, Any]:
         if self._untyped_converted_memo is None:
