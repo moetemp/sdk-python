@@ -54,6 +54,7 @@ from temporalio.contrib.streams._errors import (
     StreamNotFoundError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._follow import FollowedItem, FollowPosition, follow
 from temporalio.contrib.streams._local_activity import (
     LocalCall,
     current_local_call,
@@ -66,7 +67,9 @@ from temporalio.contrib.streams._plugin import (
 )
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
 )
 from temporalio.contrib.streams._ref import StreamRef, owner_context, stream_address
@@ -179,7 +182,47 @@ class StreamProducer(Generic[T]):
         async with self._lock:
             return await self._write(RecordKind.FINISH, [None])
 
-    async def _write(self, kind: RecordKind, values: Any) -> Cursor:
+    async def link(
+        self,
+        ref: StreamRef,
+        *,
+        name: str,
+        after: Cursor | None = None,
+        value: Any = None,
+    ) -> Cursor:
+        """Write a ``LINK`` that opens ``ref``'s stream, and return its cursor.
+
+        A follower reads the linked stream from strictly after ``after``, or
+        from its oldest record, in one order with this stream. ``name`` names
+        the link within this producer, and :meth:`join` names it again.
+        ``ref`` is stored as plaintext. ``value``, when given, goes through
+        the converter and codec as a ``DATA`` value does.
+
+        Raises:
+            ValueError: ``name`` is empty or over 256 bytes.
+            StreamError: As :meth:`append` raises.
+        """
+        link = StreamLink(LinkEvent.OPEN, ref, name, after=after)
+        async with self._lock:
+            return await self._write(RecordKind.LINK, [value], link)
+
+    async def join(self, *, name: str, until: Cursor | None = None) -> Cursor:
+        """Write a ``LINK`` that says this producer waited for link ``name``.
+
+        A follower holds this stream's later records until the linked stream
+        reached ``until``, or its end when ``until`` is ``None``.
+
+        Raises:
+            ValueError: ``name`` is empty or over 256 bytes.
+            StreamError: As :meth:`append` raises.
+        """
+        link = StreamLink(LinkEvent.JOIN, None, name, until=until)
+        async with self._lock:
+            return await self._write(RecordKind.LINK, [None], link)
+
+    async def _write(
+        self, kind: RecordKind, values: Any, link: StreamLink | None = None
+    ) -> Cursor:
         if self._local_call is not None:
             self._attempt = await self._local_call.attempt(self._handle._client)
         converter = self._handle._converter
@@ -192,6 +235,7 @@ class StreamProducer(Generic[T]):
                 producer_id=self._producer_id,
                 attempt=self._attempt,
                 sequence=self._sequence + index,
+                link=link,
             )
             for index, value in enumerate(values)
         ]
@@ -223,6 +267,8 @@ async def _append_records(
     records = []
     for wire in wires:
         record = AppendRecord(kind=wire.kind)
+        if wire.HasField("link"):
+            record.link.CopyFrom(wire.link)
         if wire.HasField("body"):
             record.body.CopyFrom(next(bodies))
             record.content_hash = content_hash(wire.body)
@@ -409,6 +455,54 @@ class StreamHandle:
             # start grace, and fails once it ends.
             pass
         return True
+
+    def follow(
+        self,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        after: Cursor | FollowPosition = BEGINNING,
+        max_depth: int = 4,
+        max_open: int = 16,
+        result_type: type | None = None,
+    ) -> AsyncGenerator[FollowedItem[Any], None]:
+        """Yield the records of ``topic`` and of the streams its links open, in one order.
+
+        Each ``LINK`` with event ``OPEN`` opens a segment of the linked
+        stream, and the follower reads it in place. A child's records never
+        come before its ``OPEN``. A record that comes after a ``JOIN`` waits
+        until the child reached the join point or its end. Other records
+        come in the order they were read. No clock decides the order. Each
+        item names its source stream, and keeps that stream's own cursor.
+
+        Link reports come as items with ``link_state`` set. ``OPENED`` when a
+        segment starts, ``DONE`` with the child's close outcome when it ends,
+        ``UNAVAILABLE`` with the error when the child can't be read, and
+        ``SKIPPED`` for a link past ``max_depth`` or ``max_open``, to a
+        stream already open, to an ancestor, or behind another Nexus
+        endpoint. A child never fails the follow. The link records
+        themselves come too, as records of their stream.
+
+        ``result_type`` applies to the root's records. A child's records
+        decode with the default rules, since a child's topic may hold
+        another type.
+
+        Only the last item of each batch carries ``position``, which resumes
+        the root and every open segment with no loss and no repeat. An
+        earlier item carries ``None``. To resume from it, resume from the
+        previous batch end, which repeats the rest of that batch. The follow
+        ends when the root is done and every segment ended. The root's close
+        failure raises after its last item.
+
+        Raises:
+            ValueError: A bound is below one, or ``result_type`` was passed
+                with a topic definition.
+            StreamError: As :meth:`read` raises for the root. Only a
+                ``STORAGE`` failure of a child fails the follow.
+        """
+        if max_depth < 1 or max_open < 1:
+            raise ValueError("max_depth and max_open must be at least 1")
+        name, result_type = self._resolve(topic, result_type)
+        return follow(self, name, after, max_depth, max_open, result_type)
 
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """The cursor of the newest record on ``topic``, or ``BEGINNING`` when empty.
