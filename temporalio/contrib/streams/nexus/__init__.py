@@ -35,7 +35,7 @@ A Nexus operation can also hand its caller a stream.
 caller to the stream's notifier on the server and puts the
 :class:`StreamRef` in the operation token (:func:`stream_ref_from_token`).
 With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
-on, the stream runtime tells the notifier after every append, which the caller
+on, the default, the stream runtime tells the notifier after every append, which the caller
 sees as operation progress.
 :meth:`temporalio.contrib.streams.StreamStorePlugin.close_stream` completes
 the operation, or :func:`temporalio.contrib.streams.close_workflow_stream`

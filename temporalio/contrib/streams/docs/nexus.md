@@ -111,7 +111,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams.redis import RedisStreams   # or MemoryStreams()
 from temporalio.contrib.streams.nexus import TemporalStreamsHandler
 
-store = RedisStreams("redis://localhost:6379").notify_on_append()
+store = RedisStreams("redis://localhost:6379")
 client = await Client.connect("localhost:7233", plugins=[store])
 worker = Worker(
     client,
@@ -133,8 +133,9 @@ earlier release on a newer service still works, but it sends no state, so
 the service primes from the cursor on every read and knows only the cursor
 record's producer.
 
-`notify_on_append()` turns on progress. Without it, the caller sees no
-progress, but the close still completes every operation with its result. The
+`notify_on_append`, on by default, gives the caller progress. With
+`notify_on_append(False)` the caller sees no progress, but the close still
+completes every operation with its result. The
 stream runtime closes a stream's notifier after every store close, whether
 or not progress is on. The stream runtime notifies only while a reader
 sleeps on the stream, so a busy stream costs no notification. [Readers that
@@ -588,8 +589,8 @@ NexusHandler callbacks on a standalone operation:
 | `nexusoperation.enableStandalone` | Standalone Nexus operations. |
 | `nexusoperation.enabledCallbackKinds: [nexus, nexusHandler]` | A standalone start may carry a callback to a Worker's task queue (`nexusHandler`), and other callers' Nexus callbacks (`nexus`). |
 
-The store must have `notify_on_append()` on, so the stream's moves reach the
-follower as progress. A callback attached later with
+The store must keep `notify_on_append` on, the default, so the stream's moves
+reach the follower as progress. A callback attached later with
 `attach_completion_callbacks` gets the completion only.
 
 `NexusClient.start_operation(..., completion_callbacks=[NexusHandlerCallback(...)])`

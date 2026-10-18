@@ -79,8 +79,8 @@ class StreamOperationHandler(
     reference in the operation token. The callback is idle: the server tells
     the caller when the stream moves only after a read that found nothing
     asked for a wake, when the store has
-    :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on,
-    and completes the operation with the close result when the stream closes.
+    :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append` on
+    (the default), and completes the operation with the close result when the stream closes.
     A start with the ``temporal-stream-first-wake-after`` header, which
     :func:`follow_stream` sends, asks for the first wake at the attach.
     A cancel detaches the caller.
