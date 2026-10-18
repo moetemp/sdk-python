@@ -21,7 +21,7 @@ class PostgresStreams(StreamStorePlugin):
 
     One instance per database. Pass it to the client as a plugin, and open
     handles from the client with
-    :func:`temporalio.contrib.streams.get_stream_handle`. PostgreSQL 14 or
+    :func:`temporalio.contrib.streams.stream_handle`. PostgreSQL 14 or
     later is required. The store keeps records on disk, so a long retention
     costs disk, not memory. By default it makes and upgrades its tables in
     ``schema`` when it connects.
