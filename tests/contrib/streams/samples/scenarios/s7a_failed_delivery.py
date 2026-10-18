@@ -21,8 +21,8 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import (
     StreamRecord,
-    activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
 )
 from temporalio.exceptions import ActivityError, ApplicationError
@@ -40,7 +40,7 @@ class Outcome:
 
 @activity.defn
 async def deliver() -> None:
-    stages = activity_handle().producer(topic=STAGES)
+    stages = stream_producer(STAGES)
     await stages.append("picked up", "at the hub")
     raise ApplicationError(
         "the courier stopped answering", type="CourierLost", non_retryable=True
@@ -77,7 +77,7 @@ async def main(
         )
         seen: list[StreamRecord[str]] = []
         await follow(
-            "backend", get_stream_handle(client, workflow_id).read(topic=STAGES), seen
+            "backend", stream_handle(client, workflow_id).read(topic=STAGES), seen
         )
         failure_type = None
         try:

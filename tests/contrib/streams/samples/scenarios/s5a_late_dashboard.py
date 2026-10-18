@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib.streams import END, StreamRecord, get_stream_handle, topic
+from temporalio.contrib.streams import END, StreamRecord, stream_handle, topic
 from temporalio.worker import Worker
 from tests.contrib.streams.samples.scenarios._common import follow, run, values
 
@@ -56,7 +56,7 @@ async def main(
         handle = await client.start_workflow(
             Delivery.run, id=workflow_id, task_queue=task_queue
         )
-        stream = get_stream_handle(client, workflow_id, topic=STAGES)
+        stream = stream_handle(client, workflow_id, topic=STAGES)
         courier = stream.producer(producer_id="courier", attempt=1)
         await courier.append("picked up", "at the hub")
 

@@ -1,7 +1,7 @@
 """Scenarios 3a to 3c: a chat turn streams its tokens, and a retry takes back a partial answer.
 
 The ``Chat`` Workflow publishes ``turn started`` on ``turns`` with
-``workflow_writer``, runs the ``generate`` Activity, then publishes ``turn
+``stream_producer``, runs the ``generate`` Activity, then publishes ``turn
 ended``. The Activity appends the model's tokens on a second topic,
 ``tokens``. Its first attempt appends two tokens and fails, as a dropped
 model connection does. Its second attempt appends the whole answer.
@@ -30,11 +30,10 @@ from temporalio.common import RetryPolicy
 from temporalio.contrib.streams import (
     RecordKind,
     StreamRecord,
-    activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
     track_supersession,
-    workflow_writer,
 )
 from temporalio.worker import Worker
 from tests.contrib.streams.samples.scenarios._common import (
@@ -61,7 +60,7 @@ class Outcome:
 @activity.defn
 async def generate(prompt: str) -> str:
     print(f"[model] attempt {activity.info().attempt} answers {prompt!r}")
-    producer = activity_handle().producer(topic=TOKENS)
+    producer = stream_producer(TOKENS)
     if activity.info().attempt == 1:
         await producer.append(*ANSWER[:2])
         raise RuntimeError("the model connection dropped")
@@ -74,15 +73,15 @@ async def generate(prompt: str) -> str:
 class Chat:
     @workflow.run
     async def run(self, prompt: str) -> str:
-        turns = workflow_writer(TURNS)
-        turns.publish("turn started")
+        turns = stream_producer(TURNS)
+        turns.append("turn started")
         answer = await workflow.execute_activity(
             generate,
             prompt,
             start_to_close_timeout=timedelta(seconds=10),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=100)),
         )
-        turns.publish("turn ended")
+        turns.append("turn ended")
         await turns.finish()
         return answer
 
@@ -122,7 +121,7 @@ async def main(
         handle = await client.start_workflow(
             Chat.run, "where is my parcel?", id=workflow_id, task_queue=task_queue
         )
-        stream = get_stream_handle(client, workflow_id)
+        stream = stream_handle(client, workflow_id)
         turns: list[StreamRecord[str]] = []
         turn_reader = asyncio.create_task(
             follow("turns", stream.read(topic=TURNS), turns)

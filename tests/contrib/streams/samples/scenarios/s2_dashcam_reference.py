@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamRecord, get_stream_handle, topic
+from temporalio.contrib.streams import StreamRecord, stream_handle, topic
 from temporalio.worker import Worker
 from tests.contrib.streams.samples.scenarios._common import follow, run, values
 
@@ -58,7 +58,7 @@ async def main(
         handle = await client.start_workflow(
             Delivery.run, id=workflow_id, task_queue=task_queue
         )
-        stream = get_stream_handle(client, workflow_id)
+        stream = stream_handle(client, workflow_id)
         fetched: list[bytes] = []
 
         def fetch(record: StreamRecord[Segment]) -> None:

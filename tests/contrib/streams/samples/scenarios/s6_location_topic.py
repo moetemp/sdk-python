@@ -21,7 +21,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import (
     BEGINNING,
     StreamRecord,
-    get_stream_handle,
+    stream_handle,
     topic,
 )
 from temporalio.worker import Worker
@@ -62,7 +62,7 @@ async def main(
         handle = await client.start_workflow(
             Delivery.run, id=workflow_id, task_queue=task_queue
         )
-        stream = get_stream_handle(client, workflow_id)
+        stream = stream_handle(client, workflow_id)
         events: list[StreamRecord[str]] = []
         points: list[StreamRecord[str]] = []
         # At most one read of the location, opened by the first event that asks.

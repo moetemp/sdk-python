@@ -37,10 +37,9 @@ from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib.streams import (
     RecordKind,
-    activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
-    workflow_writer,
 )
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.testing import WorkflowEnvironment
@@ -98,18 +97,18 @@ class WorkflowPublisher:
 
     @workflow.run
     async def run(self, count: int, gap_ms: int) -> None:
-        writer = workflow_writer(EVENTS)
+        writer = stream_producer(EVENTS)
         for index in range(count):
             key = (workflow.info().workflow_id, index)
             if not workflow.unsafe.is_replaying():
                 _workflow_sent.setdefault(key, _now())
-            writer.publish({"i": index})
+            writer.append({"i": index})
             await workflow.sleep(timedelta(milliseconds=gap_ms))
 
 
 @activity.defn
 async def produce(count: int, gap_ms: int) -> None:
-    producer = activity_handle().producer(topic=EVENTS)
+    producer = stream_producer(EVENTS)
     for index in range(count):
         await producer.append({"i": index, "t": _now()})
         await asyncio.sleep(gap_ms / 1000)
@@ -132,7 +131,7 @@ class Bench:
         self.task_queue = task_queue
 
     def stream(self, workflow_id: str) -> Any:
-        return get_stream_handle(self.client, workflow_id, topic=EVENTS)
+        return stream_handle(self.client, workflow_id, topic=EVENTS)
 
     async def read(
         self, workflow_id: str, count: int, sent: dict[int, int] | None = None
