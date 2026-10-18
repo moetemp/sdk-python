@@ -246,8 +246,26 @@ from .request_response_pb2 import (
     ValidateWorkerDeploymentVersionComputeConfigRequest,
     ValidateWorkerDeploymentVersionComputeConfigResponse,
 )
+from .stream_request_response_pb2 import (
+    AttachStreamCallbackRequest,
+    AttachStreamCallbackResponse,
+    DescribeStreamNotifierRequest,
+    DescribeStreamNotifierResponse,
+    DetachStreamCallbackRequest,
+    DetachStreamCallbackResponse,
+    NotifyStreamRequest,
+    NotifyStreamResponse,
+    NotifyStreamsRequest,
+    NotifyStreamsResponse,
+    PollStreamNotifierRequest,
+    PollStreamNotifierResponse,
+    WaitStreamCallbackRequest,
+    WaitStreamCallbackResponse,
+)
 
 __all__ = [
+    "AttachStreamCallbackRequest",
+    "AttachStreamCallbackResponse",
     "CountActivityExecutionsRequest",
     "CountActivityExecutionsResponse",
     "CountNexusOperationExecutionsRequest",
@@ -294,6 +312,8 @@ __all__ = [
     "DescribeNexusOperationExecutionResponse",
     "DescribeScheduleRequest",
     "DescribeScheduleResponse",
+    "DescribeStreamNotifierRequest",
+    "DescribeStreamNotifierResponse",
     "DescribeTaskQueueRequest",
     "DescribeTaskQueueResponse",
     "DescribeWorkerDeploymentRequest",
@@ -306,6 +326,8 @@ __all__ = [
     "DescribeWorkflowExecutionResponse",
     "DescribeWorkflowRuleRequest",
     "DescribeWorkflowRuleResponse",
+    "DetachStreamCallbackRequest",
+    "DetachStreamCallbackResponse",
     "ExecuteMultiOperationRequest",
     "ExecuteMultiOperationResponse",
     "FetchWorkerConfigRequest",
@@ -360,6 +382,10 @@ __all__ = [
     "ListWorkflowExecutionsResponse",
     "ListWorkflowRulesRequest",
     "ListWorkflowRulesResponse",
+    "NotifyStreamRequest",
+    "NotifyStreamResponse",
+    "NotifyStreamsRequest",
+    "NotifyStreamsResponse",
     "PatchScheduleRequest",
     "PatchScheduleResponse",
     "PauseActivityExecutionRequest",
@@ -376,6 +402,8 @@ __all__ = [
     "PollNexusOperationExecutionResponse",
     "PollNexusTaskQueueRequest",
     "PollNexusTaskQueueResponse",
+    "PollStreamNotifierRequest",
+    "PollStreamNotifierResponse",
     "PollWorkflowExecutionTimeSkippingRequest",
     "PollWorkflowExecutionTimeSkippingResponse",
     "PollWorkflowExecutionUpdateRequest",
@@ -494,6 +522,8 @@ __all__ = [
     "UpdateWorkflowExecutionResponse",
     "ValidateWorkerDeploymentVersionComputeConfigRequest",
     "ValidateWorkerDeploymentVersionComputeConfigResponse",
+    "WaitStreamCallbackRequest",
+    "WaitStreamCallbackResponse",
 ]
 
 # gRPC is optional

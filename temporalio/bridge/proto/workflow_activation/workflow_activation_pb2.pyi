@@ -11,6 +11,7 @@ import collections.abc
 import sys
 import typing
 
+import google.protobuf.any_pb2
 import google.protobuf.descriptor
 import google.protobuf.duration_pb2
 import google.protobuf.internal.containers
@@ -297,6 +298,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     DO_UPDATE_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_START_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_ATTACHMENTS_FIELD_NUMBER: builtins.int
     REMOVE_FROM_CACHE_FIELD_NUMBER: builtins.int
     @property
     def initialize_workflow(self) -> global___InitializeWorkflow:
@@ -357,6 +359,9 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     def resolve_nexus_operation(self) -> global___ResolveNexusOperation:
         """A nexus operation resolved."""
     @property
+    def workflow_task_attachments(self) -> global___WorkflowTaskAttachments:
+        """Attachments from the scheduled events of this Workflow Task."""
+    @property
     def remove_from_cache(self) -> global___RemoveFromCache:
         """Remove the workflow identified by the [WorkflowActivation] containing this job from the
         cache after performing the activation. It is guaranteed that this will be the only job
@@ -384,6 +389,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
         do_update: global___DoUpdate | None = ...,
         resolve_nexus_operation_start: global___ResolveNexusOperationStart | None = ...,
         resolve_nexus_operation: global___ResolveNexusOperation | None = ...,
+        workflow_task_attachments: global___WorkflowTaskAttachments | None = ...,
         remove_from_cache: global___RemoveFromCache | None = ...,
     ) -> None: ...
     def HasField(
@@ -423,6 +429,8 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"update_random_seed",
             "variant",
             b"variant",
+            "workflow_task_attachments",
+            b"workflow_task_attachments",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -462,6 +470,8 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"update_random_seed",
             "variant",
             b"variant",
+            "workflow_task_attachments",
+            b"workflow_task_attachments",
         ],
     ) -> None: ...
     def WhichOneof(
@@ -483,6 +493,7 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             "do_update",
             "resolve_nexus_operation_start",
             "resolve_nexus_operation",
+            "workflow_task_attachments",
             "remove_from_cache",
         ]
         | None
@@ -1513,6 +1524,34 @@ class ResolveNexusOperation(google.protobuf.message.Message):
     ) -> None: ...
 
 global___ResolveNexusOperation = ResolveNexusOperation
+
+class WorkflowTaskAttachments(google.protobuf.message.Message):
+    """The attachments the server put on the scheduled events of a Workflow Task.
+
+    Core issues at most one per Workflow Task, in the task's first activation, after the task's
+    other events. It comes from History, so replay issues the same job at the same point.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ATTACHMENTS_FIELD_NUMBER: builtins.int
+    @property
+    def attachments(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        google.protobuf.any_pb2.Any
+    ]:
+        """In event order. A failed task's scheduled event and its retry's both count."""
+    def __init__(
+        self,
+        *,
+        attachments: collections.abc.Iterable[google.protobuf.any_pb2.Any] | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["attachments", b"attachments"]
+    ) -> None: ...
+
+global___WorkflowTaskAttachments = WorkflowTaskAttachments
 
 class RemoveFromCache(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

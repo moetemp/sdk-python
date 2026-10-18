@@ -20,6 +20,7 @@ from .workflow_activation_pb2 import (
     UpdateRandomSeed,
     WorkflowActivation,
     WorkflowActivationJob,
+    WorkflowTaskAttachments,
     WorkflowTaskHistoryInfo,
 )
 
@@ -45,5 +46,6 @@ __all__ = [
     "UpdateRandomSeed",
     "WorkflowActivation",
     "WorkflowActivationJob",
+    "WorkflowTaskAttachments",
     "WorkflowTaskHistoryInfo",
 ]

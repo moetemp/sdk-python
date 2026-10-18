@@ -14,6 +14,7 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import any_pb2 as google_dot_protobuf_dot_any__pb2
 from google.protobuf import duration_pb2 as google_dot_protobuf_dot_duration__pb2
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
@@ -47,7 +48,7 @@ from temporalio.bridge.proto.nexus import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n?temporal/sdk/core/workflow_activation/workflow_activation.proto\x12\x1b\x63oresdk.workflow_activation\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a%temporal/api/failure/v1/message.proto\x1a$temporal/api/update/v1/message.proto\x1a$temporal/api/common/v1/message.proto\x1a(temporal/api/enums/v1/failed_cause.proto\x1a$temporal/api/enums/v1/workflow.proto\x1a\x37temporal/sdk/core/activity_result/activity_result.proto\x1a\x35temporal/sdk/core/child_workflow/child_workflow.proto\x1a%temporal/sdk/core/common/common.proto\x1a#temporal/sdk/core/nexus/nexus.proto"\xef\x04\n\x12WorkflowActivation\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12-\n\ttimestamp\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x14\n\x0cis_replaying\x18\x03 \x01(\x08\x12\x16\n\x0ehistory_length\x18\x04 \x01(\r\x12@\n\x04jobs\x18\x05 \x03(\x0b\x32\x32.coresdk.workflow_activation.WorkflowActivationJob\x12 \n\x18\x61vailable_internal_flags\x18\x06 \x03(\r\x12\x1a\n\x12history_size_bytes\x18\x07 \x01(\x04\x12!\n\x19\x63ontinue_as_new_suggested\x18\x08 \x01(\x08\x12T\n#deployment_version_for_current_task\x18\t \x01(\x0b\x32\'.coresdk.common.WorkerDeploymentVersion\x12\x18\n\x10last_sdk_version\x18\n \x01(\t\x12Z\n\x1fsuggest_continue_as_new_reasons\x18\x0b \x03(\x0e\x32\x31.temporal.api.enums.v1.SuggestContinueAsNewReason\x12\x30\n(target_worker_deployment_version_changed\x18\x0c \x01(\x08\x12K\n\rworkflow_task\x18\r \x01(\x0b\x32\x34.coresdk.workflow_activation.WorkflowTaskHistoryInfo"q\n\x17WorkflowTaskHistoryInfo\x12\x18\n\x10started_event_id\x18\x01 \x01(\x03\x12\x17\n\x0f\x66\x61iled_attempts\x18\x02 \x01(\r\x12#\n\x1b\x63ompleted_started_event_ids\x18\x03 \x03(\x03"\xe0\n\n\x15WorkflowActivationJob\x12N\n\x13initialize_workflow\x18\x01 \x01(\x0b\x32/.coresdk.workflow_activation.InitializeWorkflowH\x00\x12<\n\nfire_timer\x18\x02 \x01(\x0b\x32&.coresdk.workflow_activation.FireTimerH\x00\x12K\n\x12update_random_seed\x18\x04 \x01(\x0b\x32-.coresdk.workflow_activation.UpdateRandomSeedH\x00\x12\x44\n\x0equery_workflow\x18\x05 \x01(\x0b\x32*.coresdk.workflow_activation.QueryWorkflowH\x00\x12\x46\n\x0f\x63\x61ncel_workflow\x18\x06 \x01(\x0b\x32+.coresdk.workflow_activation.CancelWorkflowH\x00\x12\x46\n\x0fsignal_workflow\x18\x07 \x01(\x0b\x32+.coresdk.workflow_activation.SignalWorkflowH\x00\x12H\n\x10resolve_activity\x18\x08 \x01(\x0b\x32,.coresdk.workflow_activation.ResolveActivityH\x00\x12G\n\x10notify_has_patch\x18\t \x01(\x0b\x32+.coresdk.workflow_activation.NotifyHasPatchH\x00\x12q\n&resolve_child_workflow_execution_start\x18\n \x01(\x0b\x32?.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartH\x00\x12\x66\n resolve_child_workflow_execution\x18\x0b \x01(\x0b\x32:.coresdk.workflow_activation.ResolveChildWorkflowExecutionH\x00\x12\x66\n resolve_signal_external_workflow\x18\x0c \x01(\x0b\x32:.coresdk.workflow_activation.ResolveSignalExternalWorkflowH\x00\x12u\n(resolve_request_cancel_external_workflow\x18\r \x01(\x0b\x32\x41.coresdk.workflow_activation.ResolveRequestCancelExternalWorkflowH\x00\x12:\n\tdo_update\x18\x0e \x01(\x0b\x32%.coresdk.workflow_activation.DoUpdateH\x00\x12`\n\x1dresolve_nexus_operation_start\x18\x0f \x01(\x0b\x32\x37.coresdk.workflow_activation.ResolveNexusOperationStartH\x00\x12U\n\x17resolve_nexus_operation\x18\x10 \x01(\x0b\x32\x32.coresdk.workflow_activation.ResolveNexusOperationH\x00\x12I\n\x11remove_from_cache\x18\x32 \x01(\x0b\x32,.coresdk.workflow_activation.RemoveFromCacheH\x00\x42\t\n\x07variant"\xfc\n\n\x12InitializeWorkflow\x12\x15\n\rworkflow_type\x18\x01 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x32\n\targuments\x18\x03 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x17\n\x0frandomness_seed\x18\x04 \x01(\x04\x12M\n\x07headers\x18\x05 \x03(\x0b\x32<.coresdk.workflow_activation.InitializeWorkflow.HeadersEntry\x12\x10\n\x08identity\x18\x06 \x01(\t\x12I\n\x14parent_workflow_info\x18\x07 \x01(\x0b\x32+.coresdk.common.NamespacedWorkflowExecution\x12=\n\x1aworkflow_execution_timeout\x18\x08 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x37\n\x14workflow_run_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x38\n\x15workflow_task_timeout\x18\n \x01(\x0b\x32\x19.google.protobuf.Duration\x12\'\n\x1f\x63ontinued_from_execution_run_id\x18\x0b \x01(\t\x12J\n\x13\x63ontinued_initiator\x18\x0c \x01(\x0e\x32-.temporal.api.enums.v1.ContinueAsNewInitiator\x12;\n\x11\x63ontinued_failure\x18\r \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12@\n\x16last_completion_result\x18\x0e \x01(\x0b\x32 .temporal.api.common.v1.Payloads\x12\x1e\n\x16\x66irst_execution_run_id\x18\x0f \x01(\t\x12\x39\n\x0cretry_policy\x18\x10 \x01(\x0b\x32#.temporal.api.common.v1.RetryPolicy\x12\x0f\n\x07\x61ttempt\x18\x11 \x01(\x05\x12\x15\n\rcron_schedule\x18\x12 \x01(\t\x12\x46\n"workflow_execution_expiration_time\x18\x13 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x45\n"cron_schedule_to_schedule_interval\x18\x14 \x01(\x0b\x32\x19.google.protobuf.Duration\x12*\n\x04memo\x18\x15 \x01(\x0b\x32\x1c.temporal.api.common.v1.Memo\x12\x43\n\x11search_attributes\x18\x16 \x01(\x0b\x32(.temporal.api.common.v1.SearchAttributes\x12.\n\nstart_time\x18\x17 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12@\n\rroot_workflow\x18\x18 \x01(\x0b\x32).temporal.api.common.v1.WorkflowExecution\x12\x32\n\x08priority\x18\x19 \x01(\x0b\x32 .temporal.api.common.v1.Priority\x12!\n\x19original_execution_run_id\x18\x1a \x01(\t\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x18\n\tFireTimer\x12\x0b\n\x03seq\x18\x01 \x01(\r"m\n\x0fResolveActivity\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12;\n\x06result\x18\x02 \x01(\x0b\x32+.coresdk.activity_result.ActivityResolution\x12\x10\n\x08is_local\x18\x03 \x01(\x08"\xd1\x02\n"ResolveChildWorkflowExecutionStart\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12[\n\tsucceeded\x18\x02 \x01(\x0b\x32\x46.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartSuccessH\x00\x12X\n\x06\x66\x61iled\x18\x03 \x01(\x0b\x32\x46.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartFailureH\x00\x12]\n\tcancelled\x18\x04 \x01(\x0b\x32H.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartCancelledH\x00\x42\x08\n\x06status";\n)ResolveChildWorkflowExecutionStartSuccess\x12\x0e\n\x06run_id\x18\x01 \x01(\t"\xa6\x01\n)ResolveChildWorkflowExecutionStartFailure\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x15\n\rworkflow_type\x18\x02 \x01(\t\x12M\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32>.coresdk.child_workflow.StartChildWorkflowExecutionFailedCause"`\n+ResolveChildWorkflowExecutionStartCancelled\x12\x31\n\x07\x66\x61ilure\x18\x01 \x01(\x0b\x32 .temporal.api.failure.v1.Failure"i\n\x1dResolveChildWorkflowExecution\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12;\n\x06result\x18\x02 \x01(\x0b\x32+.coresdk.child_workflow.ChildWorkflowResult"+\n\x10UpdateRandomSeed\x12\x17\n\x0frandomness_seed\x18\x01 \x01(\x04"\x84\x02\n\rQueryWorkflow\x12\x10\n\x08query_id\x18\x01 \x01(\t\x12\x12\n\nquery_type\x18\x02 \x01(\t\x12\x32\n\targuments\x18\x03 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12H\n\x07headers\x18\x05 \x03(\x0b\x32\x37.coresdk.workflow_activation.QueryWorkflow.HeadersEntry\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01" \n\x0e\x43\x61ncelWorkflow\x12\x0e\n\x06reason\x18\x01 \x01(\t"\xa1\x02\n\x0eSignalWorkflow\x12\x13\n\x0bsignal_name\x18\x01 \x01(\t\x12.\n\x05input\x18\x02 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x10\n\x08identity\x18\x03 \x01(\t\x12I\n\x07headers\x18\x05 \x03(\x0b\x32\x38.coresdk.workflow_activation.SignalWorkflow.HeadersEntry\x12\x1c\n\x14originating_event_id\x18\x06 \x01(\x03\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01""\n\x0eNotifyHasPatch\x12\x10\n\x08patch_id\x18\x01 \x01(\t"\xb1\x01\n\x1dResolveSignalExternalWorkflow\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x31\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12P\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32\x41.temporal.api.enums.v1.SignalExternalWorkflowExecutionFailedCause"\xb8\x01\n$ResolveRequestCancelExternalWorkflow\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x31\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12P\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32\x41.temporal.api.enums.v1.CancelExternalWorkflowExecutionFailedCause"\xcb\x02\n\x08\x44oUpdate\x12\n\n\x02id\x18\x01 \x01(\t\x12\x1c\n\x14protocol_instance_id\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12.\n\x05input\x18\x04 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x43\n\x07headers\x18\x05 \x03(\x0b\x32\x32.coresdk.workflow_activation.DoUpdate.HeadersEntry\x12*\n\x04meta\x18\x06 \x01(\x0b\x32\x1c.temporal.api.update.v1.Meta\x12\x15\n\rrun_validator\x18\x07 \x01(\x08\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x9a\x01\n\x1aResolveNexusOperationStart\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x19\n\x0foperation_token\x18\x02 \x01(\tH\x00\x12\x16\n\x0cstarted_sync\x18\x03 \x01(\x08H\x00\x12\x32\n\x06\x66\x61iled\x18\x04 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x42\x08\n\x06status"Y\n\x15ResolveNexusOperation\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x33\n\x06result\x18\x02 \x01(\x0b\x32#.coresdk.nexus.NexusOperationResult"\xe0\x02\n\x0fRemoveFromCache\x12\x0f\n\x07message\x18\x01 \x01(\t\x12K\n\x06reason\x18\x02 \x01(\x0e\x32;.coresdk.workflow_activation.RemoveFromCache.EvictionReason"\xee\x01\n\x0e\x45victionReason\x12\x0f\n\x0bUNSPECIFIED\x10\x00\x12\x0e\n\nCACHE_FULL\x10\x01\x12\x0e\n\nCACHE_MISS\x10\x02\x12\x12\n\x0eNONDETERMINISM\x10\x03\x12\r\n\tLANG_FAIL\x10\x04\x12\x12\n\x0eLANG_REQUESTED\x10\x05\x12\x12\n\x0eTASK_NOT_FOUND\x10\x06\x12\x15\n\x11UNHANDLED_COMMAND\x10\x07\x12\t\n\x05\x46\x41TAL\x10\x08\x12\x1f\n\x1bPAGINATION_OR_HISTORY_FETCH\x10\t\x12\x1d\n\x19WORKFLOW_EXECUTION_ENDING\x10\nB8\xea\x02\x35Temporalio::Internal::Bridge::Api::WorkflowActivationb\x06proto3'
+    b'\n?temporal/sdk/core/workflow_activation/workflow_activation.proto\x12\x1b\x63oresdk.workflow_activation\x1a\x19google/protobuf/any.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a%temporal/api/failure/v1/message.proto\x1a$temporal/api/update/v1/message.proto\x1a$temporal/api/common/v1/message.proto\x1a(temporal/api/enums/v1/failed_cause.proto\x1a$temporal/api/enums/v1/workflow.proto\x1a\x37temporal/sdk/core/activity_result/activity_result.proto\x1a\x35temporal/sdk/core/child_workflow/child_workflow.proto\x1a%temporal/sdk/core/common/common.proto\x1a#temporal/sdk/core/nexus/nexus.proto"\xef\x04\n\x12WorkflowActivation\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12-\n\ttimestamp\x18\x02 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x14\n\x0cis_replaying\x18\x03 \x01(\x08\x12\x16\n\x0ehistory_length\x18\x04 \x01(\r\x12@\n\x04jobs\x18\x05 \x03(\x0b\x32\x32.coresdk.workflow_activation.WorkflowActivationJob\x12 \n\x18\x61vailable_internal_flags\x18\x06 \x03(\r\x12\x1a\n\x12history_size_bytes\x18\x07 \x01(\x04\x12!\n\x19\x63ontinue_as_new_suggested\x18\x08 \x01(\x08\x12T\n#deployment_version_for_current_task\x18\t \x01(\x0b\x32\'.coresdk.common.WorkerDeploymentVersion\x12\x18\n\x10last_sdk_version\x18\n \x01(\t\x12Z\n\x1fsuggest_continue_as_new_reasons\x18\x0b \x03(\x0e\x32\x31.temporal.api.enums.v1.SuggestContinueAsNewReason\x12\x30\n(target_worker_deployment_version_changed\x18\x0c \x01(\x08\x12K\n\rworkflow_task\x18\r \x01(\x0b\x32\x34.coresdk.workflow_activation.WorkflowTaskHistoryInfo"q\n\x17WorkflowTaskHistoryInfo\x12\x18\n\x10started_event_id\x18\x01 \x01(\x03\x12\x17\n\x0f\x66\x61iled_attempts\x18\x02 \x01(\r\x12#\n\x1b\x63ompleted_started_event_ids\x18\x03 \x03(\x03"\xbb\x0b\n\x15WorkflowActivationJob\x12N\n\x13initialize_workflow\x18\x01 \x01(\x0b\x32/.coresdk.workflow_activation.InitializeWorkflowH\x00\x12<\n\nfire_timer\x18\x02 \x01(\x0b\x32&.coresdk.workflow_activation.FireTimerH\x00\x12K\n\x12update_random_seed\x18\x04 \x01(\x0b\x32-.coresdk.workflow_activation.UpdateRandomSeedH\x00\x12\x44\n\x0equery_workflow\x18\x05 \x01(\x0b\x32*.coresdk.workflow_activation.QueryWorkflowH\x00\x12\x46\n\x0f\x63\x61ncel_workflow\x18\x06 \x01(\x0b\x32+.coresdk.workflow_activation.CancelWorkflowH\x00\x12\x46\n\x0fsignal_workflow\x18\x07 \x01(\x0b\x32+.coresdk.workflow_activation.SignalWorkflowH\x00\x12H\n\x10resolve_activity\x18\x08 \x01(\x0b\x32,.coresdk.workflow_activation.ResolveActivityH\x00\x12G\n\x10notify_has_patch\x18\t \x01(\x0b\x32+.coresdk.workflow_activation.NotifyHasPatchH\x00\x12q\n&resolve_child_workflow_execution_start\x18\n \x01(\x0b\x32?.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartH\x00\x12\x66\n resolve_child_workflow_execution\x18\x0b \x01(\x0b\x32:.coresdk.workflow_activation.ResolveChildWorkflowExecutionH\x00\x12\x66\n resolve_signal_external_workflow\x18\x0c \x01(\x0b\x32:.coresdk.workflow_activation.ResolveSignalExternalWorkflowH\x00\x12u\n(resolve_request_cancel_external_workflow\x18\r \x01(\x0b\x32\x41.coresdk.workflow_activation.ResolveRequestCancelExternalWorkflowH\x00\x12:\n\tdo_update\x18\x0e \x01(\x0b\x32%.coresdk.workflow_activation.DoUpdateH\x00\x12`\n\x1dresolve_nexus_operation_start\x18\x0f \x01(\x0b\x32\x37.coresdk.workflow_activation.ResolveNexusOperationStartH\x00\x12U\n\x17resolve_nexus_operation\x18\x10 \x01(\x0b\x32\x32.coresdk.workflow_activation.ResolveNexusOperationH\x00\x12Y\n\x19workflow_task_attachments\x18\x11 \x01(\x0b\x32\x34.coresdk.workflow_activation.WorkflowTaskAttachmentsH\x00\x12I\n\x11remove_from_cache\x18\x32 \x01(\x0b\x32,.coresdk.workflow_activation.RemoveFromCacheH\x00\x42\t\n\x07variant"\xfc\n\n\x12InitializeWorkflow\x12\x15\n\rworkflow_type\x18\x01 \x01(\t\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x32\n\targuments\x18\x03 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x17\n\x0frandomness_seed\x18\x04 \x01(\x04\x12M\n\x07headers\x18\x05 \x03(\x0b\x32<.coresdk.workflow_activation.InitializeWorkflow.HeadersEntry\x12\x10\n\x08identity\x18\x06 \x01(\t\x12I\n\x14parent_workflow_info\x18\x07 \x01(\x0b\x32+.coresdk.common.NamespacedWorkflowExecution\x12=\n\x1aworkflow_execution_timeout\x18\x08 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x37\n\x14workflow_run_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x38\n\x15workflow_task_timeout\x18\n \x01(\x0b\x32\x19.google.protobuf.Duration\x12\'\n\x1f\x63ontinued_from_execution_run_id\x18\x0b \x01(\t\x12J\n\x13\x63ontinued_initiator\x18\x0c \x01(\x0e\x32-.temporal.api.enums.v1.ContinueAsNewInitiator\x12;\n\x11\x63ontinued_failure\x18\r \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12@\n\x16last_completion_result\x18\x0e \x01(\x0b\x32 .temporal.api.common.v1.Payloads\x12\x1e\n\x16\x66irst_execution_run_id\x18\x0f \x01(\t\x12\x39\n\x0cretry_policy\x18\x10 \x01(\x0b\x32#.temporal.api.common.v1.RetryPolicy\x12\x0f\n\x07\x61ttempt\x18\x11 \x01(\x05\x12\x15\n\rcron_schedule\x18\x12 \x01(\t\x12\x46\n"workflow_execution_expiration_time\x18\x13 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x45\n"cron_schedule_to_schedule_interval\x18\x14 \x01(\x0b\x32\x19.google.protobuf.Duration\x12*\n\x04memo\x18\x15 \x01(\x0b\x32\x1c.temporal.api.common.v1.Memo\x12\x43\n\x11search_attributes\x18\x16 \x01(\x0b\x32(.temporal.api.common.v1.SearchAttributes\x12.\n\nstart_time\x18\x17 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12@\n\rroot_workflow\x18\x18 \x01(\x0b\x32).temporal.api.common.v1.WorkflowExecution\x12\x32\n\x08priority\x18\x19 \x01(\x0b\x32 .temporal.api.common.v1.Priority\x12!\n\x19original_execution_run_id\x18\x1a \x01(\t\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x18\n\tFireTimer\x12\x0b\n\x03seq\x18\x01 \x01(\r"m\n\x0fResolveActivity\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12;\n\x06result\x18\x02 \x01(\x0b\x32+.coresdk.activity_result.ActivityResolution\x12\x10\n\x08is_local\x18\x03 \x01(\x08"\xd1\x02\n"ResolveChildWorkflowExecutionStart\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12[\n\tsucceeded\x18\x02 \x01(\x0b\x32\x46.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartSuccessH\x00\x12X\n\x06\x66\x61iled\x18\x03 \x01(\x0b\x32\x46.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartFailureH\x00\x12]\n\tcancelled\x18\x04 \x01(\x0b\x32H.coresdk.workflow_activation.ResolveChildWorkflowExecutionStartCancelledH\x00\x42\x08\n\x06status";\n)ResolveChildWorkflowExecutionStartSuccess\x12\x0e\n\x06run_id\x18\x01 \x01(\t"\xa6\x01\n)ResolveChildWorkflowExecutionStartFailure\x12\x13\n\x0bworkflow_id\x18\x01 \x01(\t\x12\x15\n\rworkflow_type\x18\x02 \x01(\t\x12M\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32>.coresdk.child_workflow.StartChildWorkflowExecutionFailedCause"`\n+ResolveChildWorkflowExecutionStartCancelled\x12\x31\n\x07\x66\x61ilure\x18\x01 \x01(\x0b\x32 .temporal.api.failure.v1.Failure"i\n\x1dResolveChildWorkflowExecution\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12;\n\x06result\x18\x02 \x01(\x0b\x32+.coresdk.child_workflow.ChildWorkflowResult"+\n\x10UpdateRandomSeed\x12\x17\n\x0frandomness_seed\x18\x01 \x01(\x04"\x84\x02\n\rQueryWorkflow\x12\x10\n\x08query_id\x18\x01 \x01(\t\x12\x12\n\nquery_type\x18\x02 \x01(\t\x12\x32\n\targuments\x18\x03 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12H\n\x07headers\x18\x05 \x03(\x0b\x32\x37.coresdk.workflow_activation.QueryWorkflow.HeadersEntry\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01" \n\x0e\x43\x61ncelWorkflow\x12\x0e\n\x06reason\x18\x01 \x01(\t"\xa1\x02\n\x0eSignalWorkflow\x12\x13\n\x0bsignal_name\x18\x01 \x01(\t\x12.\n\x05input\x18\x02 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x10\n\x08identity\x18\x03 \x01(\t\x12I\n\x07headers\x18\x05 \x03(\x0b\x32\x38.coresdk.workflow_activation.SignalWorkflow.HeadersEntry\x12\x1c\n\x14originating_event_id\x18\x06 \x01(\x03\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01""\n\x0eNotifyHasPatch\x12\x10\n\x08patch_id\x18\x01 \x01(\t"\xb1\x01\n\x1dResolveSignalExternalWorkflow\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x31\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12P\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32\x41.temporal.api.enums.v1.SignalExternalWorkflowExecutionFailedCause"\xb8\x01\n$ResolveRequestCancelExternalWorkflow\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x31\n\x07\x66\x61ilure\x18\x02 \x01(\x0b\x32 .temporal.api.failure.v1.Failure\x12P\n\x05\x63\x61use\x18\x03 \x01(\x0e\x32\x41.temporal.api.enums.v1.CancelExternalWorkflowExecutionFailedCause"\xcb\x02\n\x08\x44oUpdate\x12\n\n\x02id\x18\x01 \x01(\t\x12\x1c\n\x14protocol_instance_id\x18\x02 \x01(\t\x12\x0c\n\x04name\x18\x03 \x01(\t\x12.\n\x05input\x18\x04 \x03(\x0b\x32\x1f.temporal.api.common.v1.Payload\x12\x43\n\x07headers\x18\x05 \x03(\x0b\x32\x32.coresdk.workflow_activation.DoUpdate.HeadersEntry\x12*\n\x04meta\x18\x06 \x01(\x0b\x32\x1c.temporal.api.update.v1.Meta\x12\x15\n\rrun_validator\x18\x07 \x01(\x08\x1aO\n\x0cHeadersEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12.\n\x05value\x18\x02 \x01(\x0b\x32\x1f.temporal.api.common.v1.Payload:\x02\x38\x01"\x9a\x01\n\x1aResolveNexusOperationStart\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x19\n\x0foperation_token\x18\x02 \x01(\tH\x00\x12\x16\n\x0cstarted_sync\x18\x03 \x01(\x08H\x00\x12\x32\n\x06\x66\x61iled\x18\x04 \x01(\x0b\x32 .temporal.api.failure.v1.FailureH\x00\x42\x08\n\x06status"Y\n\x15ResolveNexusOperation\x12\x0b\n\x03seq\x18\x01 \x01(\r\x12\x33\n\x06result\x18\x02 \x01(\x0b\x32#.coresdk.nexus.NexusOperationResult"D\n\x17WorkflowTaskAttachments\x12)\n\x0b\x61ttachments\x18\x01 \x03(\x0b\x32\x14.google.protobuf.Any"\xe0\x02\n\x0fRemoveFromCache\x12\x0f\n\x07message\x18\x01 \x01(\t\x12K\n\x06reason\x18\x02 \x01(\x0e\x32;.coresdk.workflow_activation.RemoveFromCache.EvictionReason"\xee\x01\n\x0e\x45victionReason\x12\x0f\n\x0bUNSPECIFIED\x10\x00\x12\x0e\n\nCACHE_FULL\x10\x01\x12\x0e\n\nCACHE_MISS\x10\x02\x12\x12\n\x0eNONDETERMINISM\x10\x03\x12\r\n\tLANG_FAIL\x10\x04\x12\x12\n\x0eLANG_REQUESTED\x10\x05\x12\x12\n\x0eTASK_NOT_FOUND\x10\x06\x12\x15\n\x11UNHANDLED_COMMAND\x10\x07\x12\t\n\x05\x46\x41TAL\x10\x08\x12\x1f\n\x1bPAGINATION_OR_HISTORY_FETCH\x10\t\x12\x1d\n\x19WORKFLOW_EXECUTION_ENDING\x10\nB8\xea\x02\x35Temporalio::Internal::Bridge::Api::WorkflowActivationb\x06proto3'
 )
 
 
@@ -94,6 +95,7 @@ _RESOLVENEXUSOPERATIONSTART = DESCRIPTOR.message_types_by_name[
     "ResolveNexusOperationStart"
 ]
 _RESOLVENEXUSOPERATION = DESCRIPTOR.message_types_by_name["ResolveNexusOperation"]
+_WORKFLOWTASKATTACHMENTS = DESCRIPTOR.message_types_by_name["WorkflowTaskAttachments"]
 _REMOVEFROMCACHE = DESCRIPTOR.message_types_by_name["RemoveFromCache"]
 _REMOVEFROMCACHE_EVICTIONREASON = _REMOVEFROMCACHE.enum_types_by_name["EvictionReason"]
 WorkflowActivation = _reflection.GeneratedProtocolMessageType(
@@ -367,6 +369,17 @@ ResolveNexusOperation = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(ResolveNexusOperation)
 
+WorkflowTaskAttachments = _reflection.GeneratedProtocolMessageType(
+    "WorkflowTaskAttachments",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _WORKFLOWTASKATTACHMENTS,
+        "__module__": "temporal.sdk.core.workflow_activation.workflow_activation_pb2",
+        # @@protoc_insertion_point(class_scope:coresdk.workflow_activation.WorkflowTaskAttachments)
+    },
+)
+_sym_db.RegisterMessage(WorkflowTaskAttachments)
+
 RemoveFromCache = _reflection.GeneratedProtocolMessageType(
     "RemoveFromCache",
     (_message.Message,),
@@ -391,58 +404,60 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _SIGNALWORKFLOW_HEADERSENTRY._serialized_options = b"8\001"
     _DOUPDATE_HEADERSENTRY._options = None
     _DOUPDATE_HEADERSENTRY._serialized_options = b"8\001"
-    _WORKFLOWACTIVATION._serialized_start = 574
-    _WORKFLOWACTIVATION._serialized_end = 1197
-    _WORKFLOWTASKHISTORYINFO._serialized_start = 1199
-    _WORKFLOWTASKHISTORYINFO._serialized_end = 1312
-    _WORKFLOWACTIVATIONJOB._serialized_start = 1315
-    _WORKFLOWACTIVATIONJOB._serialized_end = 2691
-    _INITIALIZEWORKFLOW._serialized_start = 2694
-    _INITIALIZEWORKFLOW._serialized_end = 4098
-    _INITIALIZEWORKFLOW_HEADERSENTRY._serialized_start = 4019
-    _INITIALIZEWORKFLOW_HEADERSENTRY._serialized_end = 4098
-    _FIRETIMER._serialized_start = 4100
-    _FIRETIMER._serialized_end = 4124
-    _RESOLVEACTIVITY._serialized_start = 4126
-    _RESOLVEACTIVITY._serialized_end = 4235
-    _RESOLVECHILDWORKFLOWEXECUTIONSTART._serialized_start = 4238
-    _RESOLVECHILDWORKFLOWEXECUTIONSTART._serialized_end = 4575
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTSUCCESS._serialized_start = 4577
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTSUCCESS._serialized_end = 4636
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTFAILURE._serialized_start = 4639
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTFAILURE._serialized_end = 4805
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTCANCELLED._serialized_start = 4807
-    _RESOLVECHILDWORKFLOWEXECUTIONSTARTCANCELLED._serialized_end = 4903
-    _RESOLVECHILDWORKFLOWEXECUTION._serialized_start = 4905
-    _RESOLVECHILDWORKFLOWEXECUTION._serialized_end = 5010
-    _UPDATERANDOMSEED._serialized_start = 5012
-    _UPDATERANDOMSEED._serialized_end = 5055
-    _QUERYWORKFLOW._serialized_start = 5058
-    _QUERYWORKFLOW._serialized_end = 5318
-    _QUERYWORKFLOW_HEADERSENTRY._serialized_start = 4019
-    _QUERYWORKFLOW_HEADERSENTRY._serialized_end = 4098
-    _CANCELWORKFLOW._serialized_start = 5320
-    _CANCELWORKFLOW._serialized_end = 5352
-    _SIGNALWORKFLOW._serialized_start = 5355
-    _SIGNALWORKFLOW._serialized_end = 5644
-    _SIGNALWORKFLOW_HEADERSENTRY._serialized_start = 4019
-    _SIGNALWORKFLOW_HEADERSENTRY._serialized_end = 4098
-    _NOTIFYHASPATCH._serialized_start = 5646
-    _NOTIFYHASPATCH._serialized_end = 5680
-    _RESOLVESIGNALEXTERNALWORKFLOW._serialized_start = 5683
-    _RESOLVESIGNALEXTERNALWORKFLOW._serialized_end = 5860
-    _RESOLVEREQUESTCANCELEXTERNALWORKFLOW._serialized_start = 5863
-    _RESOLVEREQUESTCANCELEXTERNALWORKFLOW._serialized_end = 6047
-    _DOUPDATE._serialized_start = 6050
-    _DOUPDATE._serialized_end = 6381
-    _DOUPDATE_HEADERSENTRY._serialized_start = 4019
-    _DOUPDATE_HEADERSENTRY._serialized_end = 4098
-    _RESOLVENEXUSOPERATIONSTART._serialized_start = 6384
-    _RESOLVENEXUSOPERATIONSTART._serialized_end = 6538
-    _RESOLVENEXUSOPERATION._serialized_start = 6540
-    _RESOLVENEXUSOPERATION._serialized_end = 6629
-    _REMOVEFROMCACHE._serialized_start = 6632
-    _REMOVEFROMCACHE._serialized_end = 6984
-    _REMOVEFROMCACHE_EVICTIONREASON._serialized_start = 6746
-    _REMOVEFROMCACHE_EVICTIONREASON._serialized_end = 6984
+    _WORKFLOWACTIVATION._serialized_start = 601
+    _WORKFLOWACTIVATION._serialized_end = 1224
+    _WORKFLOWTASKHISTORYINFO._serialized_start = 1226
+    _WORKFLOWTASKHISTORYINFO._serialized_end = 1339
+    _WORKFLOWACTIVATIONJOB._serialized_start = 1342
+    _WORKFLOWACTIVATIONJOB._serialized_end = 2809
+    _INITIALIZEWORKFLOW._serialized_start = 2812
+    _INITIALIZEWORKFLOW._serialized_end = 4216
+    _INITIALIZEWORKFLOW_HEADERSENTRY._serialized_start = 4137
+    _INITIALIZEWORKFLOW_HEADERSENTRY._serialized_end = 4216
+    _FIRETIMER._serialized_start = 4218
+    _FIRETIMER._serialized_end = 4242
+    _RESOLVEACTIVITY._serialized_start = 4244
+    _RESOLVEACTIVITY._serialized_end = 4353
+    _RESOLVECHILDWORKFLOWEXECUTIONSTART._serialized_start = 4356
+    _RESOLVECHILDWORKFLOWEXECUTIONSTART._serialized_end = 4693
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTSUCCESS._serialized_start = 4695
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTSUCCESS._serialized_end = 4754
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTFAILURE._serialized_start = 4757
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTFAILURE._serialized_end = 4923
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTCANCELLED._serialized_start = 4925
+    _RESOLVECHILDWORKFLOWEXECUTIONSTARTCANCELLED._serialized_end = 5021
+    _RESOLVECHILDWORKFLOWEXECUTION._serialized_start = 5023
+    _RESOLVECHILDWORKFLOWEXECUTION._serialized_end = 5128
+    _UPDATERANDOMSEED._serialized_start = 5130
+    _UPDATERANDOMSEED._serialized_end = 5173
+    _QUERYWORKFLOW._serialized_start = 5176
+    _QUERYWORKFLOW._serialized_end = 5436
+    _QUERYWORKFLOW_HEADERSENTRY._serialized_start = 4137
+    _QUERYWORKFLOW_HEADERSENTRY._serialized_end = 4216
+    _CANCELWORKFLOW._serialized_start = 5438
+    _CANCELWORKFLOW._serialized_end = 5470
+    _SIGNALWORKFLOW._serialized_start = 5473
+    _SIGNALWORKFLOW._serialized_end = 5762
+    _SIGNALWORKFLOW_HEADERSENTRY._serialized_start = 4137
+    _SIGNALWORKFLOW_HEADERSENTRY._serialized_end = 4216
+    _NOTIFYHASPATCH._serialized_start = 5764
+    _NOTIFYHASPATCH._serialized_end = 5798
+    _RESOLVESIGNALEXTERNALWORKFLOW._serialized_start = 5801
+    _RESOLVESIGNALEXTERNALWORKFLOW._serialized_end = 5978
+    _RESOLVEREQUESTCANCELEXTERNALWORKFLOW._serialized_start = 5981
+    _RESOLVEREQUESTCANCELEXTERNALWORKFLOW._serialized_end = 6165
+    _DOUPDATE._serialized_start = 6168
+    _DOUPDATE._serialized_end = 6499
+    _DOUPDATE_HEADERSENTRY._serialized_start = 4137
+    _DOUPDATE_HEADERSENTRY._serialized_end = 4216
+    _RESOLVENEXUSOPERATIONSTART._serialized_start = 6502
+    _RESOLVENEXUSOPERATIONSTART._serialized_end = 6656
+    _RESOLVENEXUSOPERATION._serialized_start = 6658
+    _RESOLVENEXUSOPERATION._serialized_end = 6747
+    _WORKFLOWTASKATTACHMENTS._serialized_start = 6749
+    _WORKFLOWTASKATTACHMENTS._serialized_end = 6817
+    _REMOVEFROMCACHE._serialized_start = 6820
+    _REMOVEFROMCACHE._serialized_end = 7172
+    _REMOVEFROMCACHE_EVICTIONREASON._serialized_start = 6934
+    _REMOVEFROMCACHE_EVICTIONREASON._serialized_end = 7172
 # @@protoc_insertion_point(module_scope)

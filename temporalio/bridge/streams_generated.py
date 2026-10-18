@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import temporalio.api.workflowservice.v1
 import temporalio.bridge.proto.streams
 
 if TYPE_CHECKING:
@@ -50,6 +51,42 @@ class StreamService:
             "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
         )
 
+    async def describe_stream_notifier(
+        self, req: temporalio.api.workflowservice.v1.DescribeStreamNotifierRequest
+    ) -> temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse:
+        """Invokes the StreamService.describe_stream_notifier call."""
+        return await self._store.call(
+            "DescribeStreamNotifier",
+            req,
+            temporalio.api.workflowservice.v1.DescribeStreamNotifierResponse,
+        )
+
+    async def flush_notifications(
+        self, req: temporalio.bridge.proto.streams.FlushNotificationsRequest
+    ) -> temporalio.bridge.proto.streams.FlushNotificationsResponse:
+        """Invokes the StreamService.flush_notifications call."""
+        return await self._store.call(
+            "FlushNotifications",
+            req,
+            temporalio.bridge.proto.streams.FlushNotificationsResponse,
+        )
+
+    async def follow(
+        self, req: temporalio.bridge.proto.streams.FollowRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow call."""
+        return await self._store.call(
+            "Follow", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
+    async def follow_range(
+        self, req: temporalio.bridge.proto.streams.FollowRangeRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow_range call."""
+        return await self._store.call(
+            "FollowRange", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
     async def latest(
         self, req: temporalio.bridge.proto.streams.LatestRequest
     ) -> temporalio.bridge.proto.streams.LatestResponse:
@@ -74,6 +111,22 @@ class StreamService:
         """Invokes the StreamService.read call."""
         return await self._store.call(
             "Read", req, temporalio.bridge.proto.streams.ReadResponse
+        )
+
+    async def read_range(
+        self, req: temporalio.bridge.proto.streams.ReadRangeRequest
+    ) -> temporalio.bridge.proto.streams.ReadResponse:
+        """Invokes the StreamService.read_range call."""
+        return await self._store.call(
+            "ReadRange", req, temporalio.bridge.proto.streams.ReadResponse
+        )
+
+    async def release_floor(
+        self, req: temporalio.bridge.proto.streams.ReleaseFloorRequest
+    ) -> temporalio.bridge.proto.streams.ReleaseFloorResponse:
+        """Invokes the StreamService.release_floor call."""
+        return await self._store.call(
+            "ReleaseFloor", req, temporalio.bridge.proto.streams.ReleaseFloorResponse
         )
 
     async def retire_producer(
@@ -102,4 +155,30 @@ class StreamService:
             "ShutdownWorker",
             req,
             temporalio.bridge.proto.streams.ShutdownWorkerResponse,
+        )
+
+    async def subscribe(
+        self, req: temporalio.bridge.proto.streams.SubscribeRequest
+    ) -> temporalio.bridge.proto.streams.SubscribeResponse:
+        """Invokes the StreamService.subscribe call."""
+        return await self._store.call(
+            "Subscribe", req, temporalio.bridge.proto.streams.SubscribeResponse
+        )
+
+    async def unsubscribe(
+        self, req: temporalio.bridge.proto.streams.UnsubscribeRequest
+    ) -> temporalio.bridge.proto.streams.UnsubscribeResponse:
+        """Invokes the StreamService.unsubscribe call."""
+        return await self._store.call(
+            "Unsubscribe", req, temporalio.bridge.proto.streams.UnsubscribeResponse
+        )
+
+    async def wait_for_notification(
+        self, req: temporalio.bridge.proto.streams.WaitForNotificationRequest
+    ) -> temporalio.bridge.proto.streams.WaitForNotificationResponse:
+        """Invokes the StreamService.wait_for_notification call."""
+        return await self._store.call(
+            "WaitForNotification",
+            req,
+            temporalio.bridge.proto.streams.WaitForNotificationResponse,
         )
