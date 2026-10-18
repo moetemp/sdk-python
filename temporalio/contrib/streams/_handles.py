@@ -70,7 +70,8 @@ __all__ = [
 
 T = TypeVar("T")
 
-_READ_WAIT = timedelta(seconds=30)
+# How long a read waits in the store before it answers empty, by default.
+_IDLE_WAIT = timedelta(seconds=2)
 
 
 class StreamProducer(Generic[T]):
@@ -249,7 +250,11 @@ class StreamHandle:
 
     @overload
     def read(
-        self, *, topic: StreamTopic[T], after: Cursor = ...
+        self,
+        *,
+        topic: StreamTopic[T],
+        after: Cursor = ...,
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[T], None]: ...
 
     @overload
@@ -259,6 +264,7 @@ class StreamHandle:
         topic: str | None = None,
         after: Cursor = ...,
         result_type: type[T],
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[T], None]: ...
 
     @overload
@@ -268,6 +274,7 @@ class StreamHandle:
         topic: str | None = None,
         after: Cursor = ...,
         result_type: None = None,
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[Any], None]: ...
 
     def read(
@@ -276,6 +283,7 @@ class StreamHandle:
         topic: str | StreamTopic[Any] | None = None,
         after: Cursor = BEGINNING,
         result_type: type | None = None,
+        idle_wait: timedelta = _IDLE_WAIT,
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         """Yield the records on ``topic`` after ``after`` as they arrive.
 
@@ -303,9 +311,16 @@ class StreamHandle:
             async for record in handle.read(after=start):
                 ...
 
+        An idle read waits ``idle_wait`` (2 seconds by default) in the store.
+        A read that finds nothing in that time comes back empty, and the
+        reader reads again. A longer ``idle_wait`` holds a store connection
+        longer and makes fewer store calls. The stream runtime cuts a wait
+        longer than 60 seconds to 60 seconds.
+
         Raises:
             ValueError: ``result_type`` was passed with a topic definition,
-                or the topic is empty. Raised by this call.
+                the topic is empty, or ``idle_wait`` is not positive. Raised
+                by this call.
             StreamCursorError: ``after`` came from another store or another
                 stream. Raised by the first iteration.
             StreamExpiredError: ``after`` names a record the store no longer
@@ -322,16 +337,24 @@ class StreamHandle:
         cursor you handled. It reads on from there, though it no longer knows
         which earlier attempts of other producers it delivered.
         """
+        # A zero wait answers at once, so the reader would read the store
+        # again and again with no pause.
+        if idle_wait <= timedelta(0):
+            raise ValueError(f"idle_wait must be positive, got {idle_wait}")
         name, result_type = self._resolve(topic, result_type)
-        return self._read(name, after, result_type)
+        return self._read(name, after, result_type, idle_wait)
 
     async def _read(
-        self, topic: str, after: Cursor, result_type: type | None
+        self,
+        topic: str,
+        after: Cursor,
+        result_type: type | None,
+        idle_wait: timedelta,
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         service = await self._plugin._service_for(self._client)
         address = self._address(topic, run_id=await self._read_run_id())
         request = ReadRequest(stream=address, after=after.token)
-        request.wait.FromTimedelta(_READ_WAIT)
+        request.wait.FromTimedelta(idle_wait)
         while True:
             response = await call(service.read(request))
             for record in response.records:
@@ -471,7 +494,11 @@ class ActivityStreamHandle:
 
     @overload
     def read(
-        self, *, topic: StreamTopic[T], after: Cursor = ...
+        self,
+        *,
+        topic: StreamTopic[T],
+        after: Cursor = ...,
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[T], None]: ...
 
     @overload
@@ -481,6 +508,7 @@ class ActivityStreamHandle:
         topic: str | None = None,
         after: Cursor = ...,
         result_type: type[T],
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[T], None]: ...
 
     @overload
@@ -490,6 +518,7 @@ class ActivityStreamHandle:
         topic: str | None = None,
         after: Cursor = ...,
         result_type: None = None,
+        idle_wait: timedelta = ...,
     ) -> AsyncGenerator[StreamRecord[Any], None]: ...
 
     def read(
@@ -498,11 +527,14 @@ class ActivityStreamHandle:
         topic: str | StreamTopic[Any] | None = None,
         after: Cursor = BEGINNING,
         result_type: type | None = None,
+        idle_wait: timedelta = _IDLE_WAIT,
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         """See :meth:`temporalio.contrib.streams.StreamHandle.read`."""
         # One call forwards every overload, which the checker can't match one by one.
         inner = cast(Any, self._inner)
-        return inner.read(topic=topic, after=after, result_type=result_type)
+        return inner.read(
+            topic=topic, after=after, result_type=result_type, idle_wait=idle_wait
+        )
 
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """See :meth:`temporalio.contrib.streams.StreamHandle.latest`."""
