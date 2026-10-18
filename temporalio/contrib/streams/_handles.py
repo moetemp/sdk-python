@@ -342,9 +342,8 @@ class StreamHandle:
     ) -> AsyncGenerator[StreamRecord[Any], None]:
         """Yield the records on ``topic`` after ``after`` as they arrive.
 
-        ``BEGINNING`` starts at the oldest record the topic retains, in the
-        store's archive when it has one, and ``END`` at whatever is appended
-        after the read starts. Any other
+        ``BEGINNING`` starts at the oldest record the topic retains, and
+        ``END`` at whatever is appended after the read starts. Any other
         cursor came from a record of this stream, and the read resumes just
         past it, so a reader that keeps the last cursor it handled and hands
         it back sees every stored record once. A resumed read knows the
@@ -360,7 +359,7 @@ class StreamHandle:
         caller that stops early calls ``aclose()`` on it.
 
         With :meth:`temporalio.contrib.streams.StreamStorePlugin.notify_on_append`
-        on, an idle read sleeps on the stream's notifier on the server. A read
+        on, the default, an idle read sleeps on the stream's notifier on the server. A read
         that waits 2 seconds and finds nothing comes back empty, and the
         reader waits until a producer notifies, the stream closes, or the server's wait
         limit (60 seconds by default) passes, and then reads again. That read

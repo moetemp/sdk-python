@@ -58,8 +58,7 @@ T = TypeVar("T")
 class StreamStorePlugin(SimplePlugin):
     """The base class of the store configuration classes.
 
-    Use :class:`temporalio.contrib.streams.redis.RedisStreams`,
-    :class:`temporalio.contrib.streams.postgres.PostgresStreams` or
+    Use :class:`temporalio.contrib.streams.redis.RedisStreams` or
     :class:`temporalio.contrib.streams.memory.MemoryStreams`. One instance
     is one store, on one client connection, since the stream runtime asks about each
     stream's owner over the connection that connected the store. A second
@@ -72,6 +71,8 @@ class StreamStorePlugin(SimplePlugin):
         """Name the plugin and the store the stream runtime connects to."""
         super().__init__(name)
         self._config = config
+        # On by default, since a sleeping reader wakes only on a notification or the recheck.
+        self._config.notify_on_append = True
         self._service: StreamService | None = None
         self._store: StreamStore | None = None
         self._capabilities: StoreCapabilities | None = None
@@ -188,28 +189,30 @@ class StreamStorePlugin(SimplePlugin):
             await self.flush_notifications()
 
     def notify_on_append(
-        self, *, max_notifiers: int | None = None, notification_log: bool = False
+        self, enabled: bool = True, *, max_notifiers: int | None = None
     ) -> Self:
-        """Tell each stream's notifier on the server when the stream moves.
+        """Set whether each stream's notifier on the server hears when the stream moves.
 
         That is what wakes a reader that sleeps on the stream: a client
-        reader that waits on the notifier, or a Workflow reader. The stream runtime tells
-        the notifier after every append, and folds the notifications of one
-        stream into one call in flight. Off by default, since most streams
-        have no sleeping reader. It needs a server with the stream notifier. Turn
-        it on before a client connects the store, in every process that
-        appends or reads, since a client reader sleeps on the notifier only
-        with it on.
+        reader that waits on the notifier, or a Workflow reader. The stream
+        runtime tells the notifier after every append, and folds the
+        notifications of one stream into one call in flight. An append
+        answers only after its notification went, or after a few failed
+        tries, so a producer that stops before then gets no answer, and its
+        retry notifies. On by default. On a server without the stream
+        notifier it costs one call, and then the process stops notifying.
+
+        Turn it off only in a process whose streams have no sleeping reader.
+        A client reader sleeps on the notifier only with it on, and a
+        Workflow reader that no producer notifies wakes only on the
+        notifier's recheck, up to 5 minutes late. Set it before a client
+        connects the store.
 
         Args:
-            max_notifiers: How many streams the stream runtime keeps a notifier for,
-                dropping the least recently used. The stream runtime's default when unset.
-            notification_log: Write a log entry with each append, in the
-                same store step, in place of the producer's notification. A
-                :class:`temporalio.contrib.streams.StreamDriver` reads the
-                log and notifies the server. Producers then make no call to
-                Temporal. Turn it on in every process that appends, and run
-                at least one driver.
+            enabled: Whether to notify. ``False`` turns notifications off.
+            max_notifiers: How many streams the stream runtime keeps a
+                notifier for, dropping the least recently used. The stream
+                runtime's default when unset.
 
         Raises:
             ValueError: A client already connected this store, or
@@ -220,12 +223,11 @@ class StreamStorePlugin(SimplePlugin):
         """
         if self._store is not None:
             raise ValueError(
-                "turn notifications on before a client connects the stream store"
+                "set notifications before a client connects the stream store"
             )
         if max_notifiers is not None and max_notifiers < 1:
             raise ValueError(f"max_notifiers must be at least 1, got {max_notifiers}")
-        self._config.notify_on_append = True
-        self._config.notification_log = notification_log
+        self._config.notify_on_append = enabled
         if max_notifiers is not None:
             self._config.max_notifiers = max_notifiers
         return self

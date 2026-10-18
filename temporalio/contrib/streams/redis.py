@@ -11,7 +11,6 @@ from temporalio.contrib.streams._plugin import (
     StreamStorePlugin,
     with_owner_start_grace,
 )
-from temporalio.contrib.streams.archive import StreamArchive
 
 __all__ = ["RedisStreams"]
 
@@ -37,8 +36,6 @@ class RedisStreams(StreamStorePlugin):
         floor_lease: timedelta | None = None,
         floor_release_grace: timedelta | None = None,
         owner_start_grace: timedelta | None = None,
-        notify_doorbells: int | None = None,
-        archive: StreamArchive | None = None,
         plain: bool = False,
     ) -> None:
         """Create the store's configuration.
@@ -73,16 +70,6 @@ class RedisStreams(StreamStorePlugin):
                 :class:`temporalio.contrib.streams.StreamNotFoundError`, so
                 a reader can start before its owner. 60 seconds when unset.
                 Zero fails at once.
-            notify_doorbells: With a notification log, how many doorbell
-                streams an append rings when its slot's log takes a first
-                entry. A driver blocks on each one. The stream runtime's 16 when unset.
-            archive: Object storage that keeps records after ``retention``
-                trims them, so streams stay readable longer than Redis
-                memory allows. A running
-                :class:`temporalio.contrib.streams.StreamDriver` fills it,
-                and the store needs
-                ``notify_on_append(notification_log=True)``. The stream runtime refuses
-                to connect the store without the log.
             plain: Run no Lua scripts, for a Redis that refuses them. The
                 store then has no producer state, no kept last position, no
                 holds and no change feed, and the stream runtime takes the fallback of
@@ -91,8 +78,7 @@ class RedisStreams(StreamStorePlugin):
         Raises:
             ValueError: No URL was given, ``key_prefix`` is empty,
                 ``retention`` is shorter than a millisecond, or
-                ``owner_start_grace`` is negative, or ``notify_doorbells`` is
-                below one.
+                ``owner_start_grace`` is negative.
         """
         urls = [url] if isinstance(url, str) else list(url)
         if not urls:
@@ -103,10 +89,6 @@ class RedisStreams(StreamStorePlugin):
             raise ValueError(
                 f"retention must be at least a millisecond, got {retention}"
             )
-        if notify_doorbells is not None and notify_doorbells < 1:
-            raise ValueError(
-                f"notify_doorbells must be at least 1, got {notify_doorbells}"
-            )
         # Set only when asked for, so the config also fits a Core without it.
         extra: dict[str, Any] = {"plain": True} if plain else {}
         config = RedisStoreConfig(
@@ -114,7 +96,6 @@ class RedisStreams(StreamStorePlugin):
             cluster=cluster,
             key_prefix=key_prefix,
             blocking_reads_per_node=blocking_reads_per_node or 0,
-            notify_doorbells=notify_doorbells or 0,
             **extra,
         )
         config.retention.FromTimedelta(retention)
@@ -125,8 +106,6 @@ class RedisStreams(StreamStorePlugin):
         if floor_release_grace is not None:
             config.floor_release_grace.FromTimedelta(floor_release_grace)
         store = StreamStoreConfig(redis=config)
-        if archive is not None:
-            store.archive.CopyFrom(archive._config)
         super().__init__(
             "temporalio.contrib.streams.RedisStreams",
             with_owner_start_grace(store, owner_start_grace),

@@ -45,7 +45,6 @@ from temporalio.contrib.streams import (
     StreamRecordError,
     StreamRef,
     StreamRefusedError,
-    StreamStorePlugin,
     StreamUnsupportedError,
     _workflow,
     activity_handle,
@@ -78,7 +77,6 @@ from tests.contrib.streams._support import (
     connect_with,
     describe_stream_notifier,
     new_workflow_id,
-    postgres_streams,
 )
 from tests.contrib.streams.test_outside_handles import (
     Waits,
@@ -88,10 +86,6 @@ from tests.contrib.streams.test_outside_handles import (
 from tests.helpers import new_worker
 
 TOKENS = topic("tokens", str)
-
-
-def new_store(kind: str) -> StreamStorePlugin:
-    return postgres_streams() if kind == "postgres" else MemoryStreams()
 
 
 class FakeReads:
@@ -661,12 +655,11 @@ async def test_each_reader_of_a_run_has_its_own_subscription(client: Client):
     assert ids == ["1", "2"]
 
 
-@pytest.mark.parametrize("kind", ["memory", "postgres"])
 async def test_the_read_activity_reads_and_decodes_through_core(
-    client: Client, kind: str
+    client: Client,
 ):
     # Without the notifier the attach fails, so this drives the read alone.
-    streams_client = await connect_with(client, new_store(kind))
+    streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         owner = await running_owner(streams_client, worker.task_queue)
         handle = streams_client.get_workflow_handle(owner)
@@ -887,14 +880,13 @@ def test_a_read_input_from_before_activity_owners_names_a_workflow():
     assert (input.owner_kind, input.activity_id) == ("workflow", "")
 
 
-@pytest.mark.parametrize("kind", ["memory", "postgres"])
 @pytest.mark.parametrize("record_batches", [True, False])
 async def test_a_workflow_reads_the_stream_of_a_standalone_activity(
-    client: Client, record_batches: bool, kind: str
+    client: Client, record_batches: bool,
 ):
     # The Activity closes its stream before the reader starts, so the reader
     # reads to the close and never sleeps on the notifier.
-    streams = await connect_with(client, new_store(kind))
+    streams = await connect_with(client, MemoryStreams())
     activity_id = new_workflow_id()
     async with new_worker(streams, ReadsAStream, activities=[owns_a_stream]) as worker:
         owner = await streams.start_activity(
@@ -927,11 +919,10 @@ async def test_a_workflow_reads_the_stream_of_a_standalone_activity(
         )
 
 
-@pytest.mark.parametrize("kind", ["memory", "postgres"])
 async def test_the_read_activity_reads_a_standalone_activitys_stream(
-    client: Client, kind: str
+    client: Client,
 ):
-    streams = await connect_with(client, new_store(kind))
+    streams = await connect_with(client, MemoryStreams())
     activity_id = new_workflow_id()
     async with new_worker(streams, activities=[owns_a_stream]) as worker:
         owner = await streams.start_activity(
@@ -1074,14 +1065,13 @@ class RunsAToolAndReadsIt:
         return seen
 
 
-@pytest.mark.parametrize("kind", ["memory", "postgres"])
 @pytest.mark.parametrize("record_batches", [True, False])
 async def test_a_workflow_reads_the_stream_of_its_own_activity(
-    client: Client, record_batches: bool, kind: str
+    client: Client, record_batches: bool,
 ):
     # The Worker closes the tool's stream when the run sees the tool end, so
     # the reader reads to that close and never sleeps on the notifier.
-    streams = await connect_with(client, new_store(kind))
+    streams = await connect_with(client, MemoryStreams())
     async with new_worker(
         streams, RunsAToolAndReadsIt, activities=[streams_a_tool_call]
     ) as worker:
@@ -1313,7 +1303,7 @@ async def test_an_attach_without_notifications_warns_once(
     client: Client, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(_workflow, "_warned_no_notify", False)
-    streams_client = await connect_with(client, MemoryStreams())
+    streams_client = await connect_with(client, MemoryStreams().notify_on_append(False))
     env = ActivityEnvironment(client=streams_client)
     env.info = dataclasses.replace(env.info, is_local=True)
     input = _ReadInput(
@@ -1331,7 +1321,7 @@ async def test_an_attach_without_notifications_warns_once(
             # The read itself may fail here, with no owner and no notifier.
             with contextlib.suppress(Exception):
                 await env.run(read_activity, input)
-    warned = [r for r in caplog.records if "notify_on_append()" in r.getMessage()]
+    warned = [r for r in caplog.records if "notify_on_append" in r.getMessage()]
     assert len(warned) == 1
 
 

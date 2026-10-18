@@ -106,58 +106,6 @@ to SSD, but it moves a topic's whole log, and keeps a log above 128 MiB in
 memory. See `crates/streams/docs/redis.md` in the sdk-streams repository for its
 access string.
 
-For long retention on any Redis, give the store an archive:
-
-```python
-from datetime import timedelta
-
-from temporalio.contrib.streams.archive import StreamArchive
-from temporalio.contrib.streams.redis import RedisStreams
-
-store = RedisStreams(
-    "redis://localhost:6379",
-    retention=timedelta(days=2),
-    archive=StreamArchive("s3://my-bucket/streams"),
-).notify_on_append(notification_log=True)
-```
-
-A running `StreamDriver` copies each stream's records to the archive in
-segments, with the positions Redis gave them. A segment ends at the first
-record that takes it to `segment_bytes` (4 MiB). The driver archives a
-stream's tail once the stream had no write for `segment_idle` (5 minutes),
-and as often for a stream that keeps taking writes. Closed streams go
-first. Each object is written once and never changed, so two drivers on
-one stream are safe.
-
-- **Readers need no change.** A read below what Redis still holds reads the
-  archive, with the same records, cursors and positions. A read from
-  `BEGINNING` starts at the archive's first record and goes on into Redis,
-  with no gap and no repeat. A positions-only
-  Workflow reader replays a range Redis trimmed from the archive, with the
-  same digest. A range that neither tier holds still fails as
-  `StreamReplayRangeLostError`, and a cursor there as `StreamExpiredError`.
-- **Redis keeps what the archive lacks.** The trim keeps every record the
-  archive does not hold yet, for at most `stall_limit` (7 days). If no
-  driver runs for longer, the trim takes them as before, and they are lost.
-  Nothing blocks appends. Size Redis for write rate times the sum of
-  `retention` and the longest driver outage you plan for.
-- **You own the bucket.** `delete_workflow_streams` and
-  `delete_activity_streams` also delete the archived objects, as best they
-  can. The stream runtime deletes nothing else in the archive. Set a lifecycle rule for
-  how long to keep it. Bodies are archived as your payload
-  codec encoded them. Set bucket encryption, such as SSE-KMS, for the rest
-  of each object.
-- **Credentials** come from the environment of each process that connects
-  the store: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION`.
-  For an S3-compatible server, also set `AWS_ENDPOINT_URL`, and
-  `AWS_ALLOW_HTTP=true` when it has no TLS. A local directory
-  (`StreamArchive("/var/streams")`) suits a single host and tests.
-
-The archive's progress lives in each stream's keys, and each slot keeps a
-set of the streams with records to archive. So with an archive, add
-`~temporal-streams:{*}:a +zadd +hexists` to the ACL below for applications,
-and also `+zrange +zrem` for drivers.
-
 ## When a Workflow closes
 
 Redis cannot see a Workflow close, so the stream runtime marks the stream

@@ -38,11 +38,12 @@ from tests.helpers import new_worker
 TOKENS = topic("tokens", str)
 
 
-def test_notifications_are_off_until_turned_on() -> None:
+def test_notifications_are_on_until_turned_off() -> None:
     store = MemoryStreams()
-    assert not store._config.notify_on_append
-    assert store.notify_on_append() is store
     assert store._config.notify_on_append
+    assert store.notify_on_append(False) is store
+    assert not store._config.notify_on_append
+    assert store.notify_on_append()._config.notify_on_append
     assert store._config.max_notifiers == 0
 
 

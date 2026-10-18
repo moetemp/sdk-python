@@ -16,12 +16,6 @@
 #   STREAMS_REDIS_CLUSTER_URL  a Redis Cluster to use. Without it, the script starts one with Core's
 #                      redis-test-servers.sh on STREAMS_CLUSTER_BASE (default 7101) and five more ports.
 #   CARGO_TARGET_DIR   where Core's live test builds (default: under WORK_DIR)
-#   STREAMS_ARCHIVE_S3_URL  an `s3://bucket/prefix` the archive cases write to, with the `AWS_*`
-#                      settings Core reads. Without it, the script starts MinIO in Docker on a free
-#                      port and removes the container at the end.
-#   STREAMS_POSTGRES_URL  a PostgreSQL 14 or later database the Postgres cases use. Each case makes
-#                      a schema of its own. Without it, the script starts PostgreSQL 17 in Docker
-#                      on a free port and removes the container at the end.
 #   WORK_DIR           where to build and keep logs (default: a new temporary directory)
 #   PYTEST_TARGETS     the tests to run (default: the stream and Nexus tests). A narrower run fails
 #                      the gate, since the gated ids outside it don't run.
@@ -37,14 +31,10 @@ GRPC_PORT=$PORT_BASE
 HTTP_PORT=$((PORT_BASE + 1))
 REDIS_PORT=6428
 pids=()
-containers=()
 
 cleanup() {
   for pid in "${pids[@]}"; do
     kill "$pid" 2>/dev/null || true
-  done
-  for container in "${containers[@]}"; do
-    docker rm -f "$container" >/dev/null 2>&1 || true
   done
 }
 trap cleanup EXIT
@@ -216,45 +206,10 @@ if [[ -z "${STREAMS_REDIS_CLUSTER_URL:-}" ]]; then
   # The script comes from the checkout of the temporalio-streams crate the bridge builds against.
   crate_dir=$(cd "$SDK_DIR" && uv run --no-sync python -c \
     "from tests.contrib.streams._support import streams_crate_dir; print(streams_crate_dir())")
-  # Three primaries with one replica each, as the driver's cluster tests need.
+  # Three primaries with one replica each, as the cluster cases need.
   eval "$(STREAMS_REDIS_DATA="$WORK_DIR/cluster" \
     bash "$crate_dir/scripts/redis-test-servers.sh" |
     grep STREAMS_REDIS_CLUSTER_URL | sed 's/^/export /')"
-fi
-
-if [[ -z "${STREAMS_ARCHIVE_S3_URL:-}" ]]; then
-  s3_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-  s3=streams-lane-s3-$$
-  # Docker Hub no longer carries MinIO's own image.
-  docker run -d --rm --name "$s3" -p "127.0.0.1:$s3_port:9000" \
-    -e MINIO_ROOT_USER=streams -e MINIO_ROOT_PASSWORD=streams-secret \
-    cgr.dev/chainguard/minio:latest server /tmp/data >/dev/null
-  containers+=("$s3")
-  for _ in $(seq 60); do
-    curl -sf "http://127.0.0.1:$s3_port/minio/health/ready" >/dev/null && break
-    sleep 1
-  done
-  export AWS_ENDPOINT_URL=http://127.0.0.1:$s3_port AWS_ALLOW_HTTP=true AWS_REGION=us-east-1
-  export AWS_ACCESS_KEY_ID=streams AWS_SECRET_ACCESS_KEY=streams-secret
-  export STREAMS_ARCHIVE_S3_URL=s3://streams-archive/lane
-  (cd "$SDK_DIR" && uv run --no-sync python -c \
-    "import boto3; boto3.client('s3').create_bucket(Bucket='streams-archive')")
-fi
-
-if [[ -z "${STREAMS_POSTGRES_URL:-}" ]]; then
-  pg_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-  pg=streams-lane-pg-$$
-  # Many cases connect at once, each with a pool and a listener.
-  docker run -d --rm --name "$pg" -p "127.0.0.1:$pg_port:5432" \
-    -e POSTGRES_USER=streams -e POSTGRES_PASSWORD=streams -e POSTGRES_DB=streams \
-    postgres:17 -c max_connections=1000 >/dev/null
-  containers+=("$pg")
-  for _ in $(seq 60); do
-    docker exec "$pg" pg_isready -q -U streams -d streams -h 127.0.0.1 && break
-    sleep 1
-  done
-  export STREAMS_POSTGRES_URL="postgres://streams:streams@127.0.0.1:$pg_port/streams"
-  STREAMS_POSTGRES_URL+="?sslmode=disable"
 fi
 
 cd "$SDK_DIR"
@@ -318,7 +273,7 @@ uv run --no-sync pytest ${PYTEST_TARGETS:-${default_targets[*]}} \
 
 # A live test that skips here proves nothing, so a skip for a missing notifier, missing Nexus
 # progress or a missing store fails the lane.
-gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|no NexusHandler callbacks|STREAMS_ARCHIVE_S3_URL|STREAMS_POSTGRES_URL'
+gated='no stream notifier|refused Nexus progress|STREAMS_REDIS_URL|STREAMS_REDIS_CLUSTER_URL|no NexusHandler callbacks'
 if grep -oE "<skipped [^>]*message=\"[^\"]*($gated)[^\"]*\"" "$WORK_DIR/junit.xml"; then
   echo "live lane: live tests skipped, see above" >&2
   status=1
@@ -336,9 +291,6 @@ gate() {
 }
 gate tests/contrib/streams/test_live_notifications.py \
   test_live_an_idle_client_reader_wakes_on_the_next_append \
-  test_live_a_sleeping_client_wakes_through_the_driver \
-  test_live_a_workflow_reader_wakes_through_the_driver \
-  test_live_streams_on_many_slots_all_wake_through_the_driver \
   test_live_a_busy_stream_wakes_a_workflow_reader_about_once_per_window \
   test_live_a_busy_workflow_reader_gets_no_wake_from_appends_while_it_works \
   test_live_each_wait_after_a_read_wakes_at_once_when_records_arrived \
@@ -379,12 +331,6 @@ gate tests/contrib/streams/test_live_links.py \
   test_live_both_followers_keep_the_gates_of_an_agent \
   test_live_a_failed_tool_a_missing_child_and_a_cycle_go_on \
   test_live_a_follower_resumes_inside_a_segment
-gate tests/contrib/streams/test_stream_archive.py \
-  test_live_a_cursor_below_the_hot_floor_reads_the_archive \
-  test_live_a_positions_only_replay_reads_a_trimmed_range_from_the_archive
-gate tests/contrib/streams/test_samples.py \
-  test_a_tool_call_streams_to_a_stream_of_its_own \
-  test_a_client_follows_an_agent_and_its_tool_calls
 gate tests/contrib/streams/test_live_agent_links_nexus.py \
   test_live_a_caller_follows_an_agent_and_its_tools_across_namespaces \
   test_live_a_caller_resumes_its_follow_in_a_new_run \
@@ -394,15 +340,6 @@ gate tests/contrib/streams/test_notify_and_close.py \
   test_a_close_with_an_outcome_reaches_the_notifier
 gate tests/contrib/streams/test_store_plugin.py \
   test_a_worker_flushes_notifications_after_it_stops
-gate tests/contrib/streams/test_sleeping_reader_demos.py \
-  test_j1_a_client_wakes_on_each_burst_and_ends_at_the_close \
-  test_j1b_a_parent_relays_every_stage_of_its_child \
-  test_j2_a_connector_posts_every_message_once_in_order \
-  test_j3_a_tail_reads_every_line_of_a_sparse_log \
-  test_j5b_a_late_dashboard_and_the_relay_both_get_every_stage \
-  test_j7a_both_readers_raise_the_close_error_after_the_last_record \
-  test_j8_only_a_reader_that_records_batches_replays_with_no_store \
-  test_j9_a_driver_wakes_the_client_on_each_burst
 gate tests/contrib/streams/test_workflow_close.py \
   test_a_workflow_close_ends_reads_while_the_workflow_runs \
   test_a_rerun_after_the_close_finds_its_flushes_landed

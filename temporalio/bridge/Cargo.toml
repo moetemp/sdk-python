@@ -93,7 +93,7 @@ url = "2.2"
 git = "https://github.com/moetemp/sdk-streams"
 rev = "4aebbd4abc292bc7536e0aadfca7fe6660403474"
 default-features = false
-features = ["archive", "envconfig", "postgres", "redis"]
+features = ["envconfig", "redis"]
 
 # The key must match the sdk-rust URL in the sdk-streams manifest byte for byte, or Cargo
 # ignores the patch with only a warning.

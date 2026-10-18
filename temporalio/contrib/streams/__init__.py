@@ -77,7 +77,6 @@ as an ordinary payload.
 
 from temporalio.contrib.streams._capabilities import StoreCapabilities
 from temporalio.contrib.streams._cursor import BEGINNING, END
-from temporalio.contrib.streams._driver import StreamDriver
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
     StreamCursorError,
@@ -157,7 +156,6 @@ __all__ = [
     "StreamBatch",
     "StreamClosedError",
     "StreamCursorError",
-    "StreamDriver",
     "StreamError",
     "StreamExpiredError",
     "StreamHandle",

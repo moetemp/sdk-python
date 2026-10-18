@@ -190,7 +190,7 @@ async def test_without_notifications_an_empty_read_never_sleeps(client: Client):
         ],
         waits=[],
     )
-    handle = fake_handle(client, MemoryStreams(), service)
+    handle = fake_handle(client, MemoryStreams().notify_on_append(False), service)
     assert [r.value for r in await read_all(handle.read())] == ["a"]
     assert summary(service.calls) == [("read", "", BLOCKING), ("read", "c0", BLOCKING)]
 
