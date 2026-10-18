@@ -450,6 +450,10 @@ class StreamHandle:
             self._plugin._notifier_unsupported = True
             self._set_wait(request, False)
             return False
+        except StreamNotFoundError:
+            # The owner hasn't started yet. The next read waits out the owner
+            # start grace, and fails once it ends.
+            pass
         return True
 
     def follow(
