@@ -29,7 +29,7 @@ from temporalio.bridge.proto.streams.v1 import StreamLink as StreamLinkProto
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamRef, get_stream_handle
+from temporalio.contrib.streams import StreamRef, stream_handle
 from temporalio.contrib.streams._ref import to_reference
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
@@ -705,7 +705,7 @@ async def test_live_a_follower_gets_each_batch_then_the_close(
     async with lane.worker(follower):
         await lane.own()
         await lane.follow()
-        producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer = stream_handle(lane.client, lane.ref).producer(
             producer_id="writer", attempt=1
         )
         await producer.append("a")
@@ -730,7 +730,7 @@ async def test_live_a_follower_reads_through_the_client_transport(
     async with lane.worker(follower):
         await lane.own()
         await lane.follow()
-        producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer = stream_handle(lane.client, lane.ref).producer(
             producer_id="writer", attempt=1
         )
         await producer.append("a")
@@ -750,7 +750,7 @@ async def test_live_a_follower_resumes_on_another_worker(
 ) -> None:
     lane = await _lane(client, env)
     first, second = _LiveFollower(), _LiveFollower()
-    producer = get_stream_handle(lane.client, lane.ref).producer(
+    producer = stream_handle(lane.client, lane.ref).producer(
         producer_id="writer", attempt=1
     )
     async with lane.worker(first, hands_over=True):
@@ -780,7 +780,7 @@ async def test_live_a_late_follower_reads_the_backlog_in_pages(
 ) -> None:
     lane = await _lane(client, env)
     follower = _LiveFollower(max_records=7)
-    producer = get_stream_handle(lane.client, lane.ref).producer(
+    producer = stream_handle(lane.client, lane.ref).producer(
         producer_id="writer", attempt=1
     )
     async with lane.worker(follower):
@@ -804,7 +804,7 @@ async def test_live_a_failed_owner_reaches_on_close_as_a_failure(
     async with lane.worker(follower):
         await lane.own()
         await lane.follow()
-        producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer = stream_handle(lane.client, lane.ref).producer(
             producer_id="writer", attempt=1
         )
         await producer.append("a")
@@ -904,7 +904,7 @@ async def test_live_a_follower_on_an_empty_stream_hears_the_first_append(
         await asyncio.sleep(2)
         assert follower.ordered() == []
         await (
-            get_stream_handle(lane.client, lane.ref)
+            stream_handle(lane.client, lane.ref)
             .producer(producer_id="writer", attempt=1)
             .append("first")
         )
@@ -923,7 +923,7 @@ async def test_live_a_follower_that_reads_a_burst_gets_no_extra_progress(
     follower = _LiveFollower()
     async with lane.worker(follower):
         await lane.own()
-        producer = get_stream_handle(lane.client, lane.ref).producer(
+        producer = stream_handle(lane.client, lane.ref).producer(
             producer_id="writer", attempt=1
         )
         texts = [f"t{n}" for n in range(20)]
@@ -1100,11 +1100,11 @@ async def test_the_store_transport_follows_links_through_core(client: Client) ->
         child = await running_owner(streams, worker.task_queue)
         child_ref = StreamRef.for_workflow(child, topic="tokens")
         await (
-            get_stream_handle(streams, child_ref)
+            stream_handle(streams, child_ref)
             .producer(producer_id="tool", attempt=1)
             .append("a1", "a2")
         )
-        parent = get_stream_handle(streams, agent, topic="tokens").producer(
+        parent = stream_handle(streams, agent, topic="tokens").producer(
             producer_id="agent", attempt=1
         )
         await parent.append("d1")

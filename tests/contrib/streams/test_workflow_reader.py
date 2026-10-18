@@ -48,8 +48,8 @@ from temporalio.contrib.streams import (
     StreamUnsupportedError,
     _workflow,
     activity_handle,
-    get_stream_handle,
     start_activity_with_stream,
+    stream_handle,
     topic,
     workflow_reader,
 )
@@ -663,7 +663,7 @@ async def test_the_read_activity_reads_and_decodes_through_core(
     async with new_worker(streams_client, Waits) as worker:
         owner = await running_owner(streams_client, worker.task_queue)
         handle = streams_client.get_workflow_handle(owner)
-        stream = get_stream_handle(streams_client, owner, topic=TOKENS)
+        stream = stream_handle(streams_client, owner, topic=TOKENS)
         await stream.producer(producer_id="w", attempt=1).append("one", "two")
         env = ActivityEnvironment(client=streams_client)
         env.info = dataclasses.replace(env.info, is_local=True)
@@ -1390,7 +1390,7 @@ async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Cli
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         owner = await running_owner(streams_client, worker.task_queue)
-        stream = get_stream_handle(streams_client, owner, topic=TOKENS)
+        stream = stream_handle(streams_client, owner, topic=TOKENS)
         big = "x" * (1200 << 10)
         await stream.producer(producer_id="w", attempt=1).append(big, big)
         env = ActivityEnvironment(client=streams_client)
