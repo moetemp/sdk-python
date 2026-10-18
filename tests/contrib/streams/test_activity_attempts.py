@@ -24,7 +24,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     Supersession,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
     topic,
     workflow_reader,
 )
@@ -128,7 +128,7 @@ async def test_a_retry_writes_an_attempt_keyed_by_its_start(client: Client):
             "SUPERSEDED None",
             "DATA b1",
         ]
-    records = await read_all(get_stream_handle(streams, handle.id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, handle.id).read(topic=TOKENS))
     first, second = records[0].attempt, records[3].attempt
     assert records[2].supersession == Supersession(
         records[3].producer_id, first, second
@@ -196,7 +196,7 @@ async def test_an_attempt_after_a_reset_supersedes_the_attempts_before_it(
         )
         await asyncio.wait_for(handle.result(), 30)
     assert _calls == [1, 2, 3, 1]
-    records = await read_all(get_stream_handle(streams, handle.id).read(topic=TOKENS))
+    records = await read_all(stream_handle(streams, handle.id).read(topic=TOKENS))
     assert [(r.kind, r.value, r.stale) for r in records] == [
         (RecordKind.DATA, "c1", False),
         (RecordKind.SUPERSEDED, None, False),
