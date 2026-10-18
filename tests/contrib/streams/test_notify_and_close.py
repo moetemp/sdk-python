@@ -22,7 +22,7 @@ from temporalio.contrib.streams import (
     StreamClosedError,
     StreamRefusedError,
     StreamUnsupportedError,
-    get_stream_handle,
+    stream_handle,
     topic,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -64,7 +64,7 @@ async def test_notifications_turn_on_only_before_a_connect(client: Client) -> No
 async def test_a_close_takes_a_result_or_an_error_not_both(client: Client) -> None:
     store = MemoryStreams()
     streams_client = await connect_with(client, store)
-    handle = get_stream_handle(streams_client, "any-owner", topic=TOKENS)
+    handle = stream_handle(streams_client, "any-owner", topic=TOKENS)
     with pytest.raises(ValueError, match="result or an error"):
         await handle.close("done", error=ApplicationError("no"))
     with pytest.raises(ValueError, match="result or an error"):
@@ -79,7 +79,7 @@ async def test_a_close_without_an_outcome_ends_reads_and_refuses_appends(
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         workflow_id = await running_owner(streams_client, worker.task_queue)
-        handle = get_stream_handle(streams_client, workflow_id, topic=TOKENS)
+        handle = stream_handle(streams_client, workflow_id, topic=TOKENS)
         producer = handle.producer(producer_id="writer", attempt=1)
         await producer.append("a", "b")
         await handle.close()
@@ -99,7 +99,7 @@ async def test_a_close_with_an_outcome_reaches_the_notifier(client: Client) -> N
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         workflow_id = await running_owner(streams_client, worker.task_queue)
-        handle = get_stream_handle(streams_client, workflow_id, topic=TOKENS)
+        handle = stream_handle(streams_client, workflow_id, topic=TOKENS)
         await handle.producer(producer_id="writer", attempt=1).append("a")
         failure = ApplicationError("the agent gave up", type="AgentGaveUp")
         await handle.close(error=failure)
