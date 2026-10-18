@@ -28,7 +28,8 @@ from temporalio.contrib.streams import (
     StreamRef,
     Supersession,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
+    stream_producer,
     topic,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -115,7 +116,7 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
         )
     assert names_its_chain
     records = await read_all(
-        get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
+        stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
     assert [r.kind for r in records] == [
         RecordKind.DATA,
@@ -175,22 +176,22 @@ async def test_an_activity_without_a_store_is_told(client: Client):
 
 async def test_a_client_handle_follows_the_chain(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
-    follower = get_stream_handle(streams_client, "wf")
+    follower = stream_handle(streams_client, "wf")
     assert follower.ref == StreamRef.for_workflow("wf")
     assert follower._address("output").run_id == ""
-    events = get_stream_handle(streams_client, "wf", topic=EVENTS)
+    events = stream_handle(streams_client, "wf", topic=EVENTS)
     assert events.ref == StreamRef.for_workflow("wf", topic=EVENTS)
-    assert get_stream_handle(streams_client, events.ref).ref == events.ref
+    assert stream_handle(streams_client, events.ref).ref == events.ref
     with pytest.raises(ValueError, match="carries its own topic"):
-        get_stream_handle(streams_client, events.ref, topic=TOKENS)
-    named = get_stream_handle(streams_client, "wf", chain_run_id="run")
+        stream_handle(streams_client, events.ref, topic=TOKENS)
+    named = stream_handle(streams_client, "wf", chain_run_id="run")
     assert named.ref == StreamRef.for_workflow("wf", chain_run_id="run")
     # Appends and positions name the chain's run. A read decides at its start.
     assert named._address("output").run_id == "run"
     with pytest.raises(ValueError, match="chain_run_id"):
-        get_stream_handle(streams_client, named.ref, chain_run_id="other")
+        stream_handle(streams_client, named.ref, chain_run_id="other")
     with pytest.raises(ValueError, match="no stream store is registered"):
-        get_stream_handle(client, "wf")
+        stream_handle(client, "wf")
 
 
 async def test_a_producer_retry_dedupes_and_a_divergent_one_is_refused(
@@ -199,7 +200,7 @@ async def test_a_producer_retry_dedupes_and_a_divergent_one_is_refused(
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         workflow_id = await running_owner(streams_client, worker.task_queue)
-        stream = get_stream_handle(streams_client, workflow_id, topic=TOKENS)
+        stream = stream_handle(streams_client, workflow_id, topic=TOKENS)
         assert await stream.latest() == BEGINNING
         producer = stream.producer(producer_id="p", attempt=1)
         assert await producer.append() == BEGINNING
@@ -224,7 +225,7 @@ async def test_a_resumed_read_continues_after_its_cursor(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
     async with new_worker(streams_client, Waits) as worker:
         workflow_id = await running_owner(streams_client, worker.task_queue)
-        stream = get_stream_handle(streams_client, workflow_id, topic=TOKENS)
+        stream = stream_handle(streams_client, workflow_id, topic=TOKENS)
         producer = stream.producer(producer_id="p", attempt=1)
         middle = await producer.append("a", "b")
         await producer.append("c")
@@ -244,13 +245,13 @@ async def test_a_resumed_read_continues_after_its_cursor(client: Client):
 
 async def test_a_stream_without_an_owner_is_not_found(client: Client):
     streams_client = await connect_with(client, MemoryStreams())
-    stream = get_stream_handle(streams_client, f"no-such-owner-{uuid.uuid4()}")
+    stream = stream_handle(streams_client, f"no-such-owner-{uuid.uuid4()}")
     with pytest.raises(StreamNotFoundError):
         await stream.producer(producer_id="p", attempt=1).append("a")
 
 
 async def test_a_producer_refuses_a_bad_identity(client: Client):
-    stream = get_stream_handle(await connect_with(client, MemoryStreams()), "wf")
+    stream = stream_handle(await connect_with(client, MemoryStreams()), "wf")
     with pytest.raises(ValueError, match="producer_id"):
         stream.producer(producer_id="", attempt=1)
     for attempt in (0, True, 1.5):
@@ -280,7 +281,7 @@ async def test_a_retry_through_a_nonce_codec_still_dedupes(client: Client):
     )
     async with new_worker(coded, Waits) as worker:
         workflow_id = await running_owner(coded, worker.task_queue)
-        stream = get_stream_handle(coded, workflow_id, topic=TOKENS)
+        stream = stream_handle(coded, workflow_id, topic=TOKENS)
         first = await stream.producer(producer_id="p", attempt=1).append("a")
         retry = stream.producer(producer_id="p", attempt=1)
         # The ciphertext differs, and the digest taken before the codec does not.
@@ -338,7 +339,7 @@ async def test_a_read_on_a_named_chain_follows_continue_as_new(client: Client):
         )
         first_run = handle.first_execution_run_id or ""
         await wait_for_run_after(streams_client, workflow_id, first_run)
-        stream = get_stream_handle(
+        stream = stream_handle(
             streams_client, workflow_id, topic=TOKENS, chain_run_id=first_run
         )
         producer = stream.producer(producer_id="p", attempt=1)
@@ -369,7 +370,7 @@ async def test_a_named_chain_stays_apart_from_a_newer_chain(client: Client):
         )
         old_run = old.first_execution_run_id or ""
         await (
-            get_stream_handle(streams_client, workflow_id, chain_run_id=old_run)
+            stream_handle(streams_client, workflow_id, chain_run_id=old_run)
             .producer(producer_id="p", attempt=1)
             .append("old")
         )
@@ -379,17 +380,17 @@ async def test_a_named_chain_stays_apart_from_a_newer_chain(client: Client):
             ContinuesThenWaits.run, 0, id=workflow_id, task_queue=worker.task_queue
         )
         await (
-            get_stream_handle(streams_client, workflow_id)
+            stream_handle(streams_client, workflow_id)
             .producer(producer_id="p", attempt=1)
             .append("new")
         )
         # The old chain ended, so its read delivers what it holds and ends.
         old_records = await read_all(
-            get_stream_handle(streams_client, workflow_id, chain_run_id=old_run).read()
+            stream_handle(streams_client, workflow_id, chain_run_id=old_run).read()
         )
         await new.signal(ContinuesThenWaits.finish)
         await new.result()
-    new_records = await read_all(get_stream_handle(streams_client, workflow_id).read())
+    new_records = await read_all(stream_handle(streams_client, workflow_id).read())
     assert [r.value for r in old_records] == ["old"]
     assert [r.value for r in new_records] == ["new"]
 
@@ -428,7 +429,7 @@ async def test_an_activity_producer_writes_in_every_run_of_a_chain(client: Clien
             CountThenContinue.run, 1, id=workflow_id, task_queue=worker.task_queue
         )
         (last_producer,) = await handle.result()
-    stream = get_stream_handle(streams_client, workflow_id, topic=TOKENS)
+    stream = stream_handle(streams_client, workflow_id, topic=TOKENS)
     records = await read_all(stream.read())
     # Both runs' records, under two producers: the run is part of the id.
     assert [r.value for r in records] == ["one", "two", "one", "two"]
@@ -501,15 +502,15 @@ async def test_both_sides_use_the_workflows_serialization_context(client: Client
             id=workflow_id,
             task_queue=worker.task_queue,
         )
-    records = await read_all(get_stream_handle(keyed, workflow_id).read(topic=TOKENS))
+    records = await read_all(stream_handle(keyed, workflow_id).read(topic=TOKENS))
     assert [r.value for r in records] == ["from the activity"]
 
 
 @activity.defn
 async def logs_twice() -> None:
-    # A helper that asks for the producer on every call.
-    for line in ["started", "started"]:
-        await activity_handle().producer(topic=TOKENS).append(line)
+    # A helper that asks for the producer on every call, in both ways.
+    await activity_handle().producer(topic=TOKENS).append("started")
+    await stream_producer(TOKENS).append("started")
 
 
 @workflow.defn
@@ -533,6 +534,11 @@ async def test_an_activity_gets_one_producer_per_topic(client: Client):
             RunsLogsTwice.run, id=workflow_id, task_queue=worker.task_queue
         )
     records = await read_all(
-        get_stream_handle(streams_client, workflow_id).read(topic=TOKENS)
+        stream_handle(streams_client, workflow_id).read(topic=TOKENS)
     )
     assert [r.value for r in records] == ["started", "started"]
+
+
+def test_a_producer_outside_workflow_and_activity_code_is_refused():
+    with pytest.raises(RuntimeError, match="needs Workflow code or an Activity"):
+        stream_producer(TOKENS)

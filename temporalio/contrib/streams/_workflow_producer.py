@@ -1,8 +1,8 @@
 """Publishing to a Workflow's own stream from its Workflow Task.
 
-Workflow code can't do I/O. :func:`workflow_writer` converts and hashes each
-value on the Workflow thread and adds the record to the activation's
-output. When the activation ends, the Worker runs each body through the
+Workflow code can't do I/O. The Workflow Producer of :func:`stream_producer`
+converts and hashes each value on the Workflow thread and adds the record to
+the activation's output. When the activation ends, the Worker runs each body through the
 payload codec and appends the records to the store with one
 ``PublishWorkflowTask`` call, before it gives the completion to Core.
 Nothing about them goes to History.
@@ -18,19 +18,21 @@ Replay publishes nothing, since the records are in the store already.
 
 from __future__ import annotations
 
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, Generic, Literal, TypeVar, cast
 
+import temporalio.activity
 from temporalio import workflow
 from temporalio.bridge.proto.streams import OutputRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.contrib.streams._body import content_hash
 from temporalio.contrib.streams._errors import StreamError, StreamUnsupportedError
+from temporalio.contrib.streams._handles import activity_handle
 from temporalio.contrib.streams._local_activity import _WorkflowInbound
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
 
 __all__ = [
-    "WorkflowStreamWriter",
-    "workflow_writer",
+    "WorkflowStreamProducer",
+    "stream_producer",
 ]
 
 T = TypeVar("T")
@@ -40,11 +42,11 @@ T = TypeVar("T")
 _MAX_RECORD_BYTES = 3 << 19
 
 
-class _RunWriters:
-    """One run's stream output, across all its writers."""
+class _RunProducers:
+    """One run's stream output, across all its producers."""
 
     def __init__(self) -> None:
-        # FINISH is a statement about the topic, not about a writer object.
+        # FINISH is a statement about the topic, not about a producer object.
         self.finished: set[str] = set()
 
     def add(self, record: OutputRecord) -> None:
@@ -62,22 +64,22 @@ class _RunWriters:
 
 # Held on the run's runtime, so the state goes with the run at eviction and is
 # rebuilt in order on replay.
-_STATE_ATTRIBUTE = "_temporal_stream_writers"
+_STATE_ATTRIBUTE = "_temporal_stream_producers"
 
 
-def _run_writers(*, create: bool) -> _RunWriters | None:
+def _run_producers(*, create: bool) -> _RunProducers | None:
     runtime = workflow._Runtime.current()
-    writers: _RunWriters | None = getattr(runtime, _STATE_ATTRIBUTE, None)
-    if writers is None and create:
+    producers: _RunProducers | None = getattr(runtime, _STATE_ATTRIBUTE, None)
+    if producers is None and create:
         if not _has_streams_interceptor(runtime):
             raise StreamUnsupportedError(
-                "workflow_writer needs the stream store's Worker interceptor; build "
+                "stream_producer needs the stream store's Worker interceptor; build "
                 "the Worker from a client that carries the store, or add the store "
                 "plugin to the Replayer"
             )
-        writers = _RunWriters()
-        setattr(runtime, _STATE_ATTRIBUTE, writers)
-    return writers
+        producers = _RunProducers()
+        setattr(runtime, _STATE_ATTRIBUTE, producers)
+    return producers
 
 
 def _has_streams_interceptor(runtime: Any) -> bool:
@@ -96,42 +98,42 @@ def _check_writable(action: str) -> None:
         )
 
 
-class WorkflowStreamWriter(Generic[T]):
-    """Publishes to one topic of the running Workflow's own stream.
+class WorkflowStreamProducer(Generic[T]):
+    """Appends to one topic of the running Workflow's own stream.
 
-    Each record goes with the completion of the activation that published
+    Each record goes with the completion of the activation that appended
     it, and the Worker appends it before it gives that completion to Core.
     """
 
-    def __init__(self, writers: _RunWriters, topic: str) -> None:
-        """Prefer :func:`temporalio.contrib.streams.workflow_writer`."""
-        self._writers = writers
+    def __init__(self, producers: _RunProducers, topic: str) -> None:
+        """Prefer :func:`temporalio.contrib.streams.stream_producer`."""
+        self._producers = producers
         self._topic = topic
 
     @property
     def topic(self) -> str:
-        """The name of the topic this writer is bound to."""
+        """The name of the topic this producer is bound to."""
         return self._topic
 
-    def publish(self, value: T) -> None:
-        """Publish ``value`` on this topic.
+    def append(self, value: T) -> None:
+        """Append ``value`` on this topic and return at once.
 
         The value is converted here, with the Workflow's payload converter. A
         :class:`temporalio.common.RawValue` passes through pre-encoded. The
-        record is visible when the activation that published it completes,
+        record is visible when the activation that appended it completes,
         which is before the Workflow Task completes. If the task then fails or
-        times out, the record stays, and the task's rerun publishes again
-        under a higher attempt, which readers see as ``SUPERSEDED``.
+        times out, the record stays, and the task's rerun appends again under
+        a higher attempt, which readers see as ``SUPERSEDED``.
 
         Raises:
             ValueError: The topic was already finished in this run.
             temporalio.contrib.streams.StreamError: The value's payload is
-                over 1.5 MiB. Nothing is published.
+                over 1.5 MiB. Nothing is appended.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator.
         """
-        _check_writable("publish to")
-        if self._topic in self._writers.finished:
+        _check_writable("append to")
+        if self._topic in self._producers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
         payload = workflow.payload_converter().to_payloads([value])[0]
         if payload.ByteSize() > _MAX_RECORD_BYTES:
@@ -139,7 +141,7 @@ class WorkflowStreamWriter(Generic[T]):
                 f"a record of {payload.ByteSize()} bytes on {self._topic!r} is over "
                 f"the per-record limit of {_MAX_RECORD_BYTES} bytes"
             )
-        self._writers.add(
+        self._producers.add(
             OutputRecord(
                 topic=self._topic,
                 kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
@@ -162,9 +164,9 @@ class WorkflowStreamWriter(Generic[T]):
     async def finish(self) -> None:
         """Write ``FINISH`` on this topic. Idempotent.
 
-        Says this run publishes nothing more on the topic. The record goes
-        with this activation, after what the run published before. A run
-        that follows by Continue-as-New can publish on the topic again. It
+        Says this run appends nothing more on the topic. The record goes
+        with this activation, after what the run appended before. A run
+        that follows by Continue-as-New can append on the topic again. It
         does not say the Workflow succeeded, and it does not end anyone's
         read.
 
@@ -173,49 +175,62 @@ class WorkflowStreamWriter(Generic[T]):
                 an update validator.
         """
         _check_writable("finish")
-        if self._topic in self._writers.finished:
+        if self._topic in self._producers.finished:
             return
-        self._writers.add(
+        self._producers.add(
             OutputRecord(
                 topic=self._topic, kind=StreamRecordKind.STREAM_RECORD_KIND_FINISH
             )
         )
-        self._writers.finished.add(self._topic)
+        self._producers.finished.add(self._topic)
 
 
-@overload
-def workflow_writer(topic: StreamTopic[T]) -> WorkflowStreamWriter[T]: ...
-
-
-@overload
-def workflow_writer(topic: str | None = None) -> WorkflowStreamWriter[Any]: ...
-
-
-def workflow_writer(
+# The result's type depends on the calling context, which a static type can't name.
+def stream_producer(
     topic: str | StreamTopic[Any] | None = None,
-) -> WorkflowStreamWriter[Any]:
-    """A writer on ``topic`` of the running Workflow's own stream.
+    scope: Literal["activity", "workflow"] | None = None,
+) -> Any:
+    """A producer on ``topic`` of the running Workflow's or Activity's stream.
 
-    Call it from Workflow code. All writers on one topic of a run share one
-    ``FINISH``. Publishing adds no event to History. A store that fails the
-    append fails the Workflow Task, which retries. A topic the store reports
-    closed drops the activation's records on it, since no retry could land.
+    Call it from Workflow code or from Activity code. In a Workflow it
+    returns a :class:`WorkflowStreamProducer`, whose ``append`` returns at
+    once. All Workflow Producers on one topic of a run share one ``FINISH``.
+    Appending adds no event to History. A store that fails the append fails
+    the Workflow Task, which retries. A topic the store reports closed drops
+    the activation's records on it, since no retry could land.
+
+    In an Activity it returns ``activity_handle(scope).producer(topic=topic)``, a
+    :class:`temporalio.contrib.streams.StreamProducer` whose ``append`` is
+    awaited. See :meth:`temporalio.contrib.streams.ActivityStreamHandle.producer`.
 
     Args:
         topic: A :func:`temporalio.contrib.streams.topic` definition, whose
-            value type the writer's ``publish`` takes, or a plain string.
-            Without one, the writer is on
+            value type the producer's ``append`` takes, or a plain string.
+            Without one, the producer is on
             :data:`temporalio.contrib.streams.DEFAULT_TOPIC`.
+        scope: In an Activity, which stream it writes, as
+            :func:`temporalio.contrib.streams.activity_handle` picks it. In a
+            Workflow only ``"workflow"`` or ``None``.
 
     Raises:
-        ValueError: ``topic`` is empty.
+        ValueError: ``topic`` is empty, or ``scope`` is not one the context
+            has.
+        RuntimeError: Called outside both Workflow code and an Activity.
         temporalio.workflow.ReadOnlyContextError: Called from a query or an
             update validator.
         temporalio.contrib.streams.StreamUnsupportedError: The Worker has no
-            stream store interceptor.
+            stream store interceptor, or the Activity has no stream in
+            ``scope``.
     """
-    _check_writable("open a writer on")
+    if not workflow.in_workflow():
+        if not temporalio.activity.in_activity():
+            raise RuntimeError("stream_producer needs Workflow code or an Activity")
+        return activity_handle(scope).producer(topic=topic)
+    # A caller without a type checker can pass any value.
+    if cast(Any, scope) not in (None, "workflow"):
+        raise ValueError(f"a Workflow writes only its own stream, not scope={scope!r}")
+    _check_writable("open a producer on")
     name, _ = resolve_topic(topic)
-    writers = _run_writers(create=True)
-    assert writers is not None
-    return WorkflowStreamWriter(writers, name)
+    producers = _run_producers(create=True)
+    assert producers is not None
+    return WorkflowStreamProducer(producers, name)
