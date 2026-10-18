@@ -36,6 +36,7 @@ from temporalio.converter._payload_converter import (
 from .types import CallableType
 
 if TYPE_CHECKING:
+    import temporalio.bridge.proto.workflow_activation
     from temporalio.client import Client
 
 
@@ -209,6 +210,10 @@ class _Context:
     runtime_metric_meter: temporalio.common.MetricMeter | None
     client: Client | None
     cancellation_details: _ActivityCancellationDetailsHolder
+    # For a Local Activity, the Workflow Task in which Core dispatched it.
+    workflow_task: (
+        temporalio.bridge.proto.workflow_activation.WorkflowTaskHistoryInfo | None
+    ) = None
     _logger_details: Mapping[str, Any] | None = None
     _payload_converter: temporalio.converter.PayloadConverter | None = None
     _metric_meter: temporalio.common.MetricMeter | None = None
