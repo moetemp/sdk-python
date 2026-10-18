@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import uuid
 import warnings
@@ -616,3 +617,111 @@ async def test_simple_plugin_no_duplication_in_interceptor_chain(
         assert interceptor.call_count["execute_workflow"] == 1, (
             f"Expected execute_workflow to be called once, but was called {interceptor.call_count['execute_workflow']} times. This indicates interceptor duplication in the chain."
         )
+
+
+class FinishesAfterTheWorker(temporalio.worker.Plugin):
+    """Does work of its own after the Worker it wraps has shut down."""
+
+    def __init__(self, work: float = 0.2, fails: Exception | None = None) -> None:
+        self.work = work
+        self.fails = fails
+        self.finished = False
+
+    def name(self) -> str:
+        return "finishes-after-the-worker"
+
+    def configure_worker(self, config: WorkerConfig) -> WorkerConfig:
+        return config
+
+    async def run_worker(
+        self, worker: Worker, next: Callable[[Worker], Awaitable[None]]
+    ) -> None:
+        await next(worker)
+        await asyncio.sleep(self.work)
+        if self.fails is not None:
+            raise self.fails
+        self.finished = True
+
+    def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:
+        return config
+
+    def run_replayer(
+        self,
+        replayer: Replayer,
+        histories: AsyncIterator[temporalio.client.WorkflowHistory],
+        next: Callable[
+            [Replayer, AsyncIterator[WorkflowHistory]],
+            AbstractAsyncContextManager[AsyncIterator[WorkflowReplayResult]],
+        ],
+    ) -> AbstractAsyncContextManager[AsyncIterator[WorkflowReplayResult]]:
+        return next(replayer, histories)
+
+
+async def test_leaving_async_with_lets_a_plugin_finish_without_cancelling_the_caller(
+    client: Client,
+) -> None:
+    plugin = FinishesAfterTheWorker()
+    async with Worker(
+        client,
+        task_queue=f"task-queue-{uuid.uuid4()}",
+        activities=[never_run_activity],
+        plugins=[plugin],
+    ):
+        pass
+    # The code that left the block is not cancelled later.
+    await asyncio.sleep(0.5)
+    # And the plugin's own work after the Worker stopped ran to its end.
+    assert plugin.finished
+
+
+async def test_a_cancel_of_the_caller_while_a_plugin_finishes_reaches_the_caller(
+    client: Client,
+) -> None:
+    plugin = FinishesAfterTheWorker(work=5)
+
+    async def leave_the_block() -> None:
+        async with Worker(
+            client,
+            task_queue=f"task-queue-{uuid.uuid4()}",
+            activities=[never_run_activity],
+            plugins=[plugin],
+        ):
+            pass
+
+    # The timeout fires while exit waits for the plugin's work.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(leave_the_block(), 1)
+    assert not plugin.finished
+
+
+async def test_an_error_from_a_plugins_work_after_the_worker_stops_is_raised(
+    client: Client,
+) -> None:
+    plugin = FinishesAfterTheWorker(fails=RuntimeError("the flush failed"))
+    with pytest.raises(RuntimeError, match="the flush failed"):
+        async with Worker(
+            client,
+            task_queue=f"task-queue-{uuid.uuid4()}",
+            activities=[never_run_activity],
+            plugins=[plugin],
+        ):
+            pass
+
+
+async def test_an_error_as_shutdown_completes_is_raised_as_itself(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fails_as_it_stops(self: Worker) -> None:
+        # As a poller that fails during graceful shutdown does.
+        await self._shutdown_event.wait()
+        self._shutdown_complete_event.set()
+        raise RuntimeError("a poller failed")
+
+    monkeypatch.setattr(Worker, "_run", fails_as_it_stops)
+    with pytest.raises(RuntimeError, match="a poller failed"):
+        async with Worker(
+            client,
+            task_queue=f"task-queue-{uuid.uuid4()}",
+            activities=[never_run_activity],
+        ):
+            pass
