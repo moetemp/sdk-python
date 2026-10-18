@@ -4,7 +4,7 @@ The payload converter turns a value into the body and stops there. Every
 other payload the SDK sends then passes through the payload codec and
 external storage, and a stream body owes the same, or a codec-protected
 deployment would leak plaintext through its streams. On the direct paths, a
-Workflow's writer and the outside handles, the stream runtime never sees a
+Workflow Producer and the outside handles, the stream runtime never sees a
 plaintext body, so both hashes that need one are taken here, before the codec.
 A codec that encrypts with a fresh nonce makes every retry's bytes differ, so a
 store that compared encoded bytes would refuse a retry as a divergent write.
