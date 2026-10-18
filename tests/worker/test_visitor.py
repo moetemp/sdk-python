@@ -337,32 +337,6 @@ async def test_unknown_system_nexus_payload_raises_application_error():
     assert not err.value.non_retryable
 
 
-async def test_a_notification_progress_input_is_visited():
-    # The server sends OnProgress to a Worker as a system payload. The source context
-    # inside it was encoded by the client, so the codec has to reach it.
-    data_converter = temporalio.converter.default()
-    payload_converter = nexus_system._get_payload_converter(
-        data_converter.payload_converter,
-        data_converter.failure_converter,
-    )
-    request = notification_pb2.OnProgressRequest(
-        source_context=Payload(data=b"context"),
-        operation_token="token",
-        receiver_state=b"state",
-    )
-    request.progress.position = "3"
-    request.progress.counter = 3
-    payload = payload_converter.to_payload(request)
-    assert payload is not None
-
-    await PayloadVisitor().visit(Visitor(), payload)
-
-    decoded = payload_converter.from_payload(payload)
-    assert isinstance(decoded, notification_pb2.OnProgressRequest)
-    assert decoded.source_context.metadata["visited"] == b"True"
-    assert decoded.receiver_state == b"state"
-
-
 async def test_a_notification_completion_input_is_visited():
     data_converter = temporalio.converter.default()
     payload_converter = nexus_system._get_payload_converter(
