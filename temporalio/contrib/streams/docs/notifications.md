@@ -33,7 +33,7 @@ deployments:
 |---------|---------|--------------|
 | `streamnotifier.pollMaxWait` | 60 s | How long a client reader's poll waits. At the limit the reader reads again |
 | `streamnotifier.recheckInitial` | 1 min | When the notifier first asks an idle Workflow reader to read again |
-| `streamnotifier.recheckMax` | 1 h | The longest gap between two such asks. The gap doubles up to it |
+| `streamnotifier.recheckMax` | 5 min | The longest gap between two such asks. The gap doubles up to it |
 | `streamwake.minInterval` | 1 s | The shortest time between two Workflow Tasks that only carry wakes |
 | `history.maximumStreamWakeSources` | 32 | How many readers one Workflow execution can have at once. A reader frees its place when it detaches, when its attach fails, or when its run takes its close or resubscribe wake |
 | `streamnotifier.maxCallbacks` | 2,000 | How many Workflow readers one stream can have |
@@ -274,12 +274,14 @@ ended, and a client reader ends at its next read.
 ## A lost notification
 
 A producer can stop after its append and before its notification lands.
-The next append by any producer notifies again. For the last append before
-a quiet period, a time-based check finds the record:
+Its append then gets no answer, so a retry appends again, which writes
+nothing twice and notifies. A producer that never retries, or a process
+with notifications off, leaves the record to the next append by any
+producer, or to a time-based check:
 
 - A client reader reads again at the poll limit (60 seconds).
 - The notifier asks an idle Workflow reader to read again after 1 minute,
-  doubling to 1 hour. That costs about 30 Workflow Tasks a day per idle
+  doubling to 5 minutes. That costs about 290 Workflow Tasks a day per idle
   reader.
 
 ## Live tests
