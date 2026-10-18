@@ -73,32 +73,3 @@ Differences to plan for:
    ```
 4. Remove `WorkflowStream` from a Workflow only after no reader needs its
    records.
-
-## Moving from the fork build
-
-The fork build ran the store in Python. This release runs it in the stream
-runtime, the `temporalio-streams` crate that every SDK links, and these
-changes reach application code:
-
-- **Register the store with `Client.connect`.** Pass `RedisStreams` or
-  `MemoryStreams` in `Client.connect(..., plugins=[...])`. Connecting the
-  client connects the store, and Workers built from that client take it. A
-  Worker refuses a store passed only to `Worker(plugins=[...])`, or one on a
-  client made without `Client.connect`, with `ValueError`, since the stream
-  runtime needs the client's connection to check a stream's owner. Handles
-  work on either client, and connect the store on first use. One store
-  instance serves one client connection, so a second connection needs its
-  own instance.
-- **`RedisStreams` takes URLs.** Pass a `redis://` or `rediss://` URL, or
-  the seed nodes of a cluster with `cluster=True`. It no longer takes an
-  application-owned `redis.asyncio` client, and `poll_interval` is gone.
-  There's no `redis` extra to install.
-- **No provider protocol.** `StreamProvider` and `StreamProviderPlugin` are
-  gone. `StreamStorePlugin` is the base of the two store classes, and
-  `StreamHandle` and `StreamProducer` are concrete classes.
-- **A bad cursor fails at the first iteration.** `StreamCursorError` for a
-  cursor from another store or stream is raised when the read's generator
-  first runs, not by the `read()` call, because the stream runtime checks
-  the cursor.
-- **A read from `END` starts at its first iteration.** To catch the next
-  record without a gap, position the reader with `latest()` first.
