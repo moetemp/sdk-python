@@ -628,12 +628,10 @@ class WorkflowStreamReader(Generic[T]):
                 "replay_from_store=False to record each batch in History"
             )
         response = ReadResponse.FromString(payload.data)
-        # A marker from before the reader named its run counts as this run's.
-        read_by = payload.metadata.get(_READ_BY_RUN_ID_KEY)
         return (
             response,
             payload.metadata.get(_READ_RUN_ID_KEY, b"").decode(),
-            read_by.decode() if read_by is not None else workflow.info().run_id,
+            payload.metadata[_READ_BY_RUN_ID_KEY].decode(),
             is_chained(payload),
         )
 

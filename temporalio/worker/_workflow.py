@@ -502,9 +502,12 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             else:
                 completion.failed.failure.SetInParent()
                 if isinstance(err, temporalio.workflow.NondeterminismError):
-                    # Lang found it before Workflow code ran, for example
+                    # The SDK found it before Workflow code ran, for example
                     # while turning a recorded result back into its value.
-                    completion.failed.force_cause = temporalio.api.enums.v1.WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
+                    cause = temporalio.api.enums.v1.WorkflowTaskFailedCause
+                    completion.failed.force_cause = (
+                        cause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
+                    )
                 try:
                     data_converter.failure_converter.to_failure(
                         err,
