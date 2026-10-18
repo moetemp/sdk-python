@@ -392,7 +392,7 @@ gate tests/contrib/streams/test_nexus_reader.py \
   test_live_a_new_reader_resumes_after_a_cursor \
   test_live_a_start_on_a_closed_stream_still_names_it \
   test_live_a_workflow_reads_every_record_then_none \
-  test_live_a_default_reader_without_a_transport_names_the_opt_out \
+  test_live_a_direct_reader_without_a_transport_names_the_opt_out \
   test_live_a_reader_after_continue_as_new_sees_a_later_attempt \
   test_live_each_read_carries_the_state_its_last_answer_gave \
   test_live_a_reader_reads_on_past_answers_cut_by_the_byte_budget \
