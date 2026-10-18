@@ -62,7 +62,7 @@ from temporalio.contrib.streams._plugin import (
     store_for_client,
 )
 from temporalio.contrib.streams._record import Cursor, StreamRecord
-from temporalio.contrib.streams._ref import StreamRef
+from temporalio.contrib.streams._ref import StreamRef, owner_context
 from temporalio.contrib.streams._replay_reads import (
     ReadChain,
     batch_payload,
@@ -71,7 +71,7 @@ from temporalio.contrib.streams._replay_reads import (
     positions_payload,
 )
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
-from temporalio.contrib.streams._wakes import wake_state
+from temporalio.contrib.streams._wakes import register_wake_context, wake_state
 from temporalio.contrib.streams._wire import decode_or_mark, to_record
 from temporalio.converter._payload_codec import _apply_to_failure_payloads
 from temporalio.exceptions import ApplicationError
@@ -288,6 +288,10 @@ class WorkflowStreamReader(Generic[T]):
         else:
             cursor, state = after.token, b""
         self._state = _ReaderState(cursor, state, _next_reader())
+        register_wake_context(
+            self.subscription_id,
+            owner_context(workflow.info().namespace, ref.workflow_id, ref.activity_id),
+        )
 
     @property
     def topic(self) -> str:

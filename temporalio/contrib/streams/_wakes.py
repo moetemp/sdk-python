@@ -8,7 +8,9 @@ job at the same point, so a reader that waits on this state waits
 deterministically.
 
 A wake says that the stream moved, not what it holds. The fold keeps the
-highest counter per reader, and the flags until the reader takes them.
+highest counter per reader, and the flags until the reader takes them. A
+close failure in a wake was encoded in the stream owner's context, so each
+reader registers that context, and the Worker decodes the failure in it.
 :func:`fold_stream_wakes` is the fold rule that every SDK shares, and the
 sdk-streams vectors ``testdata/wake_folds.json`` check it.
 """
@@ -19,11 +21,17 @@ from dataclasses import dataclass
 from typing import Any
 
 from temporalio import workflow
-from temporalio.api.common.v1 import Payload
 from temporalio.api.failure.v1 import Failure
 from temporalio.api.stream.v1 import StreamWake
+from temporalio.converter import SerializationContext
 
-__all__ = ["WakeState", "fold_stream_wakes", "fold_wake", "wake_state"]
+__all__ = [
+    "WakeState",
+    "fold_stream_wakes",
+    "fold_wake",
+    "register_wake_context",
+    "wake_state",
+]
 
 # Held on the run's runtime, so the state goes with the run at eviction and
 # replay builds it again from the same jobs.
@@ -41,7 +49,6 @@ class WakeState:
     resubscribe: bool = False
     """The notifier dropped the reader, and the reader has not attached again yet."""
     closed: bool = False
-    close_result: Payload | None = None
     close_failure: Failure | None = None
 
 
@@ -88,8 +95,6 @@ def fold_wake(runtime: Any, wake: StreamWake) -> None:
     if wake.closed and not state.closed:
         # The notifier keeps the first close, so later wakes repeat it.
         state.closed = True
-        if wake.HasField("close_result"):
-            state.close_result = wake.close_result
         if wake.HasField("close_failure"):
             state.close_failure = wake.close_failure
 
@@ -102,6 +107,12 @@ def wake_state(subscription_id: str) -> WakeState | None:
         fold_wake(runtime, wake)
     queued.clear()
     return _states(runtime).get(subscription_id)
+
+
+def register_wake_context(subscription_id: str, context: SerializationContext) -> None:
+    """Have the Worker decode the wakes of ``subscription_id`` in ``context``."""
+    runtime: Any = workflow._Runtime.current()
+    runtime._stream_wake_contexts[subscription_id] = context
 
 
 def _states(runtime: Any) -> dict[str, WakeState]:

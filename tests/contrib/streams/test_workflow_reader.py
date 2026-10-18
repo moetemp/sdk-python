@@ -1413,3 +1413,30 @@ async def test_a_read_stops_at_its_byte_budget_past_the_first_record(client: Cli
         )
         assert len(second.records) == 1
         await streams_client.get_workflow_handle(owner).signal(Waits.finish)
+
+
+@workflow.defn
+class RegistersReaders:
+    @workflow.run
+    async def run(self, owner: str) -> dict[str, str]:
+        workflow_reader(owner)
+        workflow_reader(StreamRef.for_activity("tool"))
+        contexts: dict[str, Any] = workflow._Runtime.current()._stream_wake_contexts  # type: ignore[attr-defined]
+        return {
+            sub: f"{type(c).__name__}/{getattr(c, 'activity_id', None) or c.workflow_id}"
+            for sub, c in contexts.items()
+        }
+
+
+async def test_each_reader_registers_its_owner_context(client: Client):
+    async with new_worker(client, RegistersReaders) as worker:
+        result = await client.execute_workflow(
+            RegistersReaders.run,
+            "owner-wf",
+            id=new_workflow_id(),
+            task_queue=worker.task_queue,
+        )
+    assert result == {
+        "1": "WorkflowSerializationContext/owner-wf",
+        "2": "ActivitySerializationContext/tool",
+    }

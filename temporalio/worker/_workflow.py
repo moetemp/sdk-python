@@ -407,11 +407,22 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                 )
             if workflow and self._stream_store:
                 owner_activities = _take_owner_resolutions(act, workflow)
+            wake_contexts = workflow.instance.stream_wake_contexts() if workflow else {}
+
+            def stream_wake_converter(
+                subscription_id: str,
+            ) -> temporalio.converter.DataConverter | None:
+                context = wake_contexts.get(subscription_id)
+                if context is None:
+                    return None
+                return self._data_converter.with_context(context)
+
             download_metrics = await temporalio.bridge.worker.decode_activation(
                 act,
                 data_converter,
                 decode_headers=self._encode_headers,
                 storage_concurrency_limit=self._max_workflow_task_external_storage_concurrency,
+                stream_wake_converter=stream_wake_converter,
             )
             if not workflow:
                 assert init_job
