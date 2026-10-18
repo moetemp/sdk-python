@@ -17,7 +17,7 @@ from temporalio.contrib.streams import (
     StreamRef,
     StreamUnsupportedError,
     activity_handle,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.testing import ActivityEnvironment
@@ -33,7 +33,7 @@ async def test_a_ref_refuses_owner_kinds_this_release_lacks_where_it_opens(
     for kind in ("standalone", "nexus"):
         ref = StreamRef(kind, "x")  # type: ignore[arg-type]
         with pytest.raises(StreamUnsupportedError, match="a Workflow or an Activity"):
-            get_stream_handle(streams_client, ref)
+            stream_handle(streams_client, ref)
 
 
 def _standalone_env(client: Client, run_id: str | None) -> ActivityEnvironment:
