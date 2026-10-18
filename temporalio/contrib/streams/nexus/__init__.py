@@ -63,6 +63,13 @@ in another namespace or store.
 """
 
 from temporalio.contrib.streams import StreamRef
+from temporalio.contrib.streams.nexus._direct import (
+    HttpTransport,
+    StreamDirectReads,
+    StreamDirectTransport,
+    StreamFollowTransport,
+    StreamServiceCallError,
+)
 from temporalio.contrib.streams.nexus._follower import (
     FollowerBatch,
     FollowOutcome,
@@ -107,6 +114,7 @@ __all__ = [
     "FollowerBatch",
     "FollowOutcome",
     "HTTPStatusError",
+    "HttpTransport",
     "ReadInput",
     "ReadOutput",
     "ReadStaleRecord",
@@ -116,6 +124,9 @@ __all__ = [
     "StoreTransport",
     "StreamAccess",
     "StreamCursor",
+    "StreamDirectReads",
+    "StreamDirectTransport",
+    "StreamFollowTransport",
     "StreamFollower",
     "StreamFollowerService",
     "StreamIncompleteError",
@@ -123,6 +134,7 @@ __all__ = [
     "StreamReadTransport",
     "StreamReader",
     "StreamRef",
+    "StreamServiceCallError",
     "TemporalStreams",
     "TemporalStreamsHandler",
     "TemporalStreamsHttpClient",
