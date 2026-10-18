@@ -64,6 +64,7 @@ in another namespace or store.
 
 from temporalio.contrib.streams import StreamRef
 from temporalio.contrib.streams.nexus._direct import (
+    ClientTransport,
     HttpTransport,
     StreamDirectReads,
     StreamDirectTransport,
@@ -111,6 +112,7 @@ from temporalio.contrib.streams.nexus._reader import (
 __all__ = [
     "AppendInput",
     "AppendOutput",
+    "ClientTransport",
     "FollowerBatch",
     "FollowOutcome",
     "HTTPStatusError",

@@ -19,11 +19,13 @@ Replayer, and every other payload passes through to the codec it wraps.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import dataclasses
 import json
+import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -32,6 +34,9 @@ import temporalio.workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import NexusHandlerErrorRetryBehavior
 from temporalio.api.failure.v1 import Failure
+from temporalio.api.workflowservice.v1 import ExecuteSyncNexusOperationRequest
+from temporalio.bridge.client import RPCError as BridgeRPCError
+from temporalio.bridge.streams import execute_sync_nexus_operation
 from temporalio.common import RawValue
 from temporalio.contrib.streams._errors import (
     StreamClosedError,
@@ -82,6 +87,7 @@ if TYPE_CHECKING:
     from temporalio.worker import WorkerConfig
 
 __all__ = [
+    "ClientTransport",
     "HttpTransport",
     "StreamDirectReads",
     "StreamDirectTransport",
@@ -277,6 +283,111 @@ class HttpTransport:
             ssl_context=self._ssl_context,
             payload_codec=self._payload_codec,
         )
+
+
+class ClientTransport:
+    """Reads through ``ExecuteSyncNexusOperation`` with a Temporal client.
+
+    .. warning::
+        This API is experimental and may change in future versions.
+
+    The call carries the client's own credential and namespace. The server
+    checks them against the caller's namespace, finds the endpoint as that
+    namespace sees it, and tells the handler the caller's namespace, which
+    ``authorize`` gets as :attr:`StreamAccess.caller_namespace`. It needs a
+    server with ``ExecuteSyncNexusOperation`` turned on
+    (``frontend.enableExecuteSyncNexusOperation``).
+
+    The input and the answer cross through the client's payload codec, which
+    must be the codec of the handler's namespace too. It uses the codec under
+    the wrappers of :class:`StreamDirectReads` and of the stream store, since
+    the replay step runs inside those wrappers.
+    """
+
+    def __init__(
+        self,
+        client: Client,
+        endpoint: str,
+        *,
+        timeout: timedelta = timedelta(seconds=10),
+    ) -> None:
+        """Read through ``endpoint`` as a caller in ``client``'s namespace.
+
+        Args:
+            client: The caller's client. A Replayer has none, so pass one
+                here for the transport a Replayer's plugin uses.
+            endpoint: The Nexus endpoint's name.
+            timeout: How long one call may take. The server cuts the
+                handler's deadline to its Nexus request timeout, 10 seconds
+                by default.
+        """
+        self._client = client
+        self._endpoint = endpoint
+        self._timeout = timeout
+
+    async def read(self, request: ReadInput) -> ReadOutput:
+        """Answer with the records after ``request``'s cursor."""
+        return _from_json(await self._call("read", request), ReadOutput)
+
+    async def read_range(self, request: ReadRangeInput) -> ReadOutput:
+        """Answer again the records of an earlier read that named a floor holder."""
+        return _from_json(await self._call("read_range", request), ReadOutput)
+
+    async def follow(self, request: FollowInput) -> FollowOutput:
+        """Answer with the items after ``request``'s position on a stream and its links."""
+        return _from_json(await self._call("follow", request), FollowOutput)
+
+    async def follow_range(self, request: FollowRangeInput) -> FollowOutput:
+        """Answer again the items of an earlier follow that named a floor holder."""
+        return _from_json(await self._call("follow_range", request), FollowOutput)
+
+    async def _call(self, operation: str, request: Any) -> bytes:
+        codec = innermost_codec(self._client.data_converter.payload_codec)
+        payload = Payload(
+            metadata={"encoding": b"json/plain"},
+            data=json.dumps(_transfer(request)).encode(),
+        )
+        if codec is not None:
+            [payload] = await codec.encode([payload])
+        # Core's client has no stub for the RPC, so the call goes through the
+        # stream runtime on the client's own connection.
+        bridge = await cast(Any, self._client.service_client)._connected_client()
+        request = ExecuteSyncNexusOperationRequest(
+            namespace=self._client.namespace,
+            identity=self._client.identity,
+            request_id=str(uuid.uuid4()),
+            endpoint=self._endpoint,
+            service=_SERVICE,
+            operation=operation,
+            input=payload,
+        )
+        try:
+            response = await asyncio.wait_for(
+                execute_sync_nexus_operation(bridge, request),
+                self._timeout.total_seconds(),
+            )
+        except BridgeRPCError as err:
+            status, message, details = err.args
+            raise RPCError(message, RPCStatusCode(status), details) from None
+        except asyncio.TimeoutError:
+            # The same error a typed call with this timeout raises.
+            raise RPCError(
+                f"{self._endpoint}/{operation} took longer than {self._timeout}",
+                RPCStatusCode.DEADLINE_EXCEEDED,
+                b"",
+            ) from None
+        if response.HasField("failure"):
+            raise _failed(response.failure, f"{self._endpoint}/{operation}")
+        result = response.result
+        if codec is not None:
+            [result] = await codec.decode([result])
+        encoding = result.metadata.get("encoding", b"")
+        if not encoding.startswith(b"json/"):
+            raise ValueError(
+                f"{self._endpoint}/{operation} answered with a {encoding!r} payload, "
+                "so the client's codec isn't the handler namespace's"
+            )
+        return result.data
 
 
 class StreamServiceCallError(RuntimeError):
