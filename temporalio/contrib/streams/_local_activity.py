@@ -11,105 +11,79 @@ store plugin gives each call an identity that holds across reruns:
   ``__temporal_local_<number>@<run id>``. The Activity id is not used, since a retry
   that backs off longer than ``local_retry_threshold`` is scheduled again
   under a new one.
-- **Producer attempt.** Before its first append, the Local Activity asks
-  the server for its run's History length and the attempt of the pending
-  Workflow Task. A rerun runs in a later Workflow Task attempt, which either
-  added an event to History or, while the task keeps failing, raised the
-  task's attempt with History unchanged. So that pair grows from one run of
-  the call to the next, and the producer attempt puts it in front of the
-  Local Activity's own attempt, which grows across local retries.
-
-The Workflow can't stamp the History length itself. Replay repeats the
-length a task had, so a call rescheduled by replaying a task that completed
-(for example a Workflow Task heartbeat while the call ran) gets the length
-of its first run. And a Workflow Task that fails again runs at the same
-length, since the server records only its first failure.
+- **Producer attempt.** The interceptor also stamps the Workflow Task facts
+  of the activation that schedules the call. Core takes them from History.
+  The task attempt is ``prefix << 16 | retry``, the same value the
+  Workflow's own records use, and the producer attempt is ``task attempt <<
+  14 | min(a, 16383)``, with ``a`` the Local Activity's own attempt. A rerun
+  in a later task attempt writes a higher attempt, and so does a local
+  retry. The task attempt stays below 2**32 for a History under the event
+  limit, so the producer attempt stays below 2**46 and a reader that holds it
+  in a double reads it exactly.
+- **Task facts.** The call's records carry the started event id of its
+  Workflow Task attempt and the run's last completed tasks, as the
+  Workflow's records do. So a later record of the run tells a reader that
+  the call's task never completed, and the reader withdraws the call's
+  records. That covers a retried task that doesn't run the call again.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import temporalio.activity
 import temporalio.worker
 from temporalio import workflow
 from temporalio.api.common.v1 import Payload
-from temporalio.client import Client
-from temporalio.contrib.streams._errors import StreamUnsupportedError
 
 LOCAL_ACTIVITY_HEADER = "__temporal_streams_local_activity"
-"""The header that carries a Local Activity call's number."""
+"""The header that carries a Local Activity call's number and task facts."""
 
-LOCAL_ATTEMPTS = 10_000
-"""How many Local Activity attempts a producer attempt has room for."""
-
-TASK_ATTEMPTS = 100_000
-"""How many attempts of one Workflow Task a producer attempt has room for."""
-
-# Kept below 2**53, so a reader that holds the attempt in a double reads it exactly.
-_MAX_HISTORY_LENGTH = (2**53 - 1) // (TASK_ATTEMPTS * LOCAL_ATTEMPTS)
+# The bits of the task attempt that hold the retry, and of the producer attempt that hold the
+# Local Activity's own attempt.
+_RETRY_BITS = 16
+_LOCAL_BITS = 14
 _ENCODING = b"json/plain"
 
 
-def producer_attempt(history_length: int, task_attempt: int, local_attempt: int) -> int:
-    """Encode a Local Activity's producer attempt.
-
-    Raises:
-        StreamUnsupportedError: A part is too large to encode.
-    """
-    for name, value, limit in (
-        ("History length", history_length, _MAX_HISTORY_LENGTH + 1),
-        ("Workflow Task attempt", task_attempt, TASK_ATTEMPTS),
-        ("Local Activity attempt", local_attempt, LOCAL_ATTEMPTS),
-    ):
-        if value >= limit:
-            raise StreamUnsupportedError(
-                f"a Local Activity at {name} {value} has no stream producer, since "
-                f"a producer attempt holds values below {limit}"
-            )
-    return (history_length * TASK_ATTEMPTS + task_attempt) * LOCAL_ATTEMPTS + (
-        local_attempt
-    )
+def task_attempt(
+    completed_started_event_ids: Sequence[int], failed_attempts: int
+) -> int:
+    """The attempt a Workflow Task's records write, from its History facts."""
+    prefix = completed_started_event_ids[0] if completed_started_event_ids else 0
+    retry = min(1 + failed_attempts, (1 << _RETRY_BITS) - 1)
+    return prefix << _RETRY_BITS | retry
 
 
-@dataclass
+def producer_attempt(task_attempt: int, local_attempt: int) -> int:
+    """Encode a Local Activity's producer attempt."""
+    return task_attempt << _LOCAL_BITS | min(local_attempt, (1 << _LOCAL_BITS) - 1)
+
+
+@dataclass(frozen=True)
 class LocalCall:
-    """One Local Activity call, as the running attempt sees it."""
+    """One Local Activity call, as its Workflow stamped it."""
 
     number: int
-    _attempt: int | None = None
-    _resolving: asyncio.Lock = field(default_factory=asyncio.Lock)
+    task_started_event_id: int
+    failed_attempts: int
+    completed_started_event_ids: tuple[int, ...]
 
     @property
     def producer_id_prefix(self) -> str:
         """What comes before ``@<run id>`` in the producer id."""
         return f"__temporal_local_{self.number}"
 
-    async def attempt(self, client: Client) -> int:
-        """The producer attempt of the running Local Activity attempt.
-
-        Asks the server once per Local Activity attempt.
-
-        Raises:
-            StreamUnsupportedError: A part is too large to encode.
-        """
-        async with self._resolving:
-            if self._attempt is None:
-                info = temporalio.activity.info()
-                assert info.workflow_id and info.workflow_run_id
-                described = await client.get_workflow_handle(
-                    info.workflow_id, run_id=info.workflow_run_id
-                ).describe()
-                task = described.raw_description.pending_workflow_task
-                self._attempt = producer_attempt(
-                    described.history_length, task.attempt, info.attempt
-                )
-            return self._attempt
+    def attempt(self, local_attempt: int) -> int:
+        """The producer attempt of the call's Local Activity attempt ``local_attempt``."""
+        return producer_attempt(
+            task_attempt(self.completed_started_event_ids, self.failed_attempts),
+            local_attempt,
+        )
 
 
 _local_call: contextvars.ContextVar[LocalCall | None] = contextvars.ContextVar(
@@ -123,7 +97,7 @@ def current_local_call() -> LocalCall | None:
 
 
 class StreamsInterceptor(temporalio.worker.Interceptor):
-    """Numbers each Local Activity call and reads the number in the Activity.
+    """Stamps each Local Activity call and reads the stamp in the Activity.
 
     Its Workflow interceptor also tells ``stream_producer`` that the Worker
     has a store.
@@ -132,13 +106,13 @@ class StreamsInterceptor(temporalio.worker.Interceptor):
     def intercept_activity(
         self, next: temporalio.worker.ActivityInboundInterceptor
     ) -> temporalio.worker.ActivityInboundInterceptor:
-        """Read the number of a Local Activity call."""
+        """Read the stamp of a Local Activity call."""
         return _ActivityInbound(next)
 
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor]:
-        """Number the Workflow's Local Activity calls."""
+        """Stamp the Workflow's Local Activity calls."""
         return _WorkflowInbound
 
 
@@ -149,7 +123,14 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         stamp = input.headers.get(LOCAL_ACTIVITY_HEADER)
         if stamp is None or not temporalio.activity.info().is_local:
             return await self.next.execute_activity(input)
-        token = _local_call.set(LocalCall(number=json.loads(stamp.data)["call"]))
+        fields = json.loads(stamp.data)
+        call = LocalCall(
+            number=fields["call"],
+            task_started_event_id=fields["started"],
+            failed_attempts=fields["failed"],
+            completed_started_event_ids=tuple(fields["completed"]),
+        )
+        token = _local_call.set(call)
         try:
             return await self.next.execute_activity(input)
         finally:
@@ -176,8 +157,15 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
 
 
 def _stamped(headers: Mapping[str, Payload], call: int) -> Mapping[str, Payload]:
+    task = workflow._Runtime.current().workflow_task_history_info()
+    fields = {
+        "call": call,
+        "started": task.started_event_id,
+        "failed": task.failed_attempts,
+        "completed": list(task.completed_started_event_ids),
+    }
     stamp = Payload(
         metadata={"encoding": _ENCODING},
-        data=json.dumps({"call": call}, separators=(",", ":")).encode(),
+        data=json.dumps(fields, separators=(",", ":")).encode(),
     )
     return {**headers, LOCAL_ACTIVITY_HEADER: stamp}
