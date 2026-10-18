@@ -1133,6 +1133,8 @@ async def test_a_direct_read_chains_only_after_a_read_of_the_same_run(
         now=lambda: datetime.now(timezone.utc),
     )
     monkeypatch.setattr(reader_module, "workflow", fake_workflow)
+    # No Workflow runs here, so there's no task to cut.
+    monkeypatch.setattr(reader_module, "cut_task", lambda _cutoff: None)
     reader = StreamReader(
         _CompletedHandle(),  # type: ignore[arg-type]
         item_type=Token,
