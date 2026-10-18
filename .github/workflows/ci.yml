@@ -237,10 +237,8 @@ jobs:
       # Rust build, so it's cached by the pin.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            .nexgen-system
-            .nexgen-streams
-          key: nexgen-${{ hashFiles('scripts/gen_nexus_system_api.py', 'scripts/gen_nexus_streams_api.py') }}
+          path: .nexgen
+          key: nexgen-${{ hashFiles('scripts/gen_nexus_system_api.py') }}
       - run: poe gen-protos
       - name: Check generation unchanged
         run: |
@@ -250,14 +248,13 @@ jobs:
         env:
           TEMPORAL_TEST_PROTO3: 1
 
-  # The stream service's bindings are generated from its Nexus contract by a
-  # pinned nexgen fork revision, so they get their own job rather than a place
-  # in check-protos, whose nexgen is the released one.
+  # The stream service's bindings come from the Nexus contract in the
+  # temporalio-streams crate that the bridge pins. Cargo fetches the crate, so
+  # this job needs no bridge build.
   check-nexus-streams-api:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      # The contract lives in the vendored Core.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           submodules: recursive

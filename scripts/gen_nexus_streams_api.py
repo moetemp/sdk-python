@@ -10,15 +10,12 @@ result differs from what is checked in, which is how CI keeps the two in step.
 The contract uses the ``x-nexus-long-poll``, ``x-nexus-cursor``,
 ``x-nexus-stream-ref``, ``x-nexus-handle`` and ``x-nexus-operation-token``
 annotations, and the bindings include the forwarding handler, which no nexgen
-release carries yet, so the generator is a pinned revision of the nexgen fork
-until they merge upstream. It is installed under its own root, so the
-``nexgen`` release that ``gen_nexus_system_api.py`` uses is left alone.
-``NEX_GEN_STREAMS_BIN`` points the script at a binary built some other way.
+release carries yet. So it uses the nexgen fork revision that
+``gen_nexus_system_api.py`` pins, and the same install.
 """
 
 import argparse
 import filecmp
-import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 import gen_protos
+from gen_nexus_system_api import nex_gen_command
 
 base_dir = Path(__file__).parent.parent
 package_dir = base_dir / "temporalio" / "contrib" / "streams" / "nexus"
@@ -33,37 +31,6 @@ contract_path = (
     gen_protos.streams_proto_dir.parent / "nexus" / "temporal_streams.nexusrpc.yaml"
 )
 output_dir = package_dir / "_generated"
-
-NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "cb0eb586a41724d3942b267a932793c604bf6015"
-nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
-
-
-def nex_gen_command() -> list[str]:
-    if bin_path := os.environ.get("NEX_GEN_STREAMS_BIN"):
-        return [bin_path]
-    binary = nex_gen_root / "bin" / "nexgen"
-    if not binary.exists():
-        subprocess.check_call(
-            [
-                "cargo",
-                "install",
-                "--locked",
-                "nexgen",
-                "--git",
-                NEX_GEN_REPOSITORY,
-                "--rev",
-                NEX_GEN_REVISION,
-                "--features",
-                "advanced",
-                "--root",
-                str(nex_gen_root),
-            ],
-            # The git CLI honours the user's URL rewrites and credentials,
-            # which cargo's built-in client does not.
-            env={**os.environ, "CARGO_NET_GIT_FETCH_WITH_CLI": "true"},
-        )
-    return [str(binary)]
 
 
 def generate(target: Path) -> None:

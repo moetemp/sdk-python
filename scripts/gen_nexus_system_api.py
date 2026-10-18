@@ -68,11 +68,12 @@ notificationservice_progress_proto = (
     / "v1"
     / "progress.proto"
 )
-# Temporary: the nexgen fixes the stream notifier bindings need (G6 to G13) are not
-# released yet. Once they land upstream, this moves back to a released nexgen version.
+# The stream bindings need nexgen fixes that no release carries yet, so both generators
+# use this pinned revision of the nexgen fork. NEX_GEN_BIN points them at a binary built
+# some other way.
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-NEX_GEN_REVISION = "47fc2c0c6cbeaeafd7929acbe280398214a2a754"
-nex_gen_root = base_dir / ".nexgen-system" / NEX_GEN_REVISION
+NEX_GEN_REVISION = "3c60ecc9987007d70f8d798d09373445b0219d54"
+nex_gen_root = base_dir / ".nexgen" / NEX_GEN_REVISION
 
 
 def nex_gen_command() -> list[str]:
