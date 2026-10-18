@@ -10,7 +10,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-
 from temporalio.api.workflowservice.v1 import (
     DescribeStreamNotifierRequest,
     DescribeStreamNotifierResponse,

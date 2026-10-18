@@ -160,14 +160,13 @@ async def test_live_an_idle_client_reader_wakes_on_the_next_append(
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
-@pytest.mark.parametrize("kind", ["redis"])
 async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
-    client: Client, kind: str
+    client: Client,
 ):
     # The producer's process never notifies, as after a crash between the
     # append and the notification. The reader's read at the poll limit
     # (streamnotifier.pollMaxWait, a few seconds in the lane) finds the record.
-    reading, silent = await two_processes(client, kind)
+    reading, silent = await two_processes(client)
     async with new_worker(reading, Waits) as worker:
         owner = await running_owner(reading, worker.task_queue)
         records = get_stream_handle(reading, owner, topic=TOKENS).read()
@@ -183,7 +182,7 @@ async def test_live_a_client_reader_finds_a_lost_notification_at_the_poll_limit(
         await reading.get_workflow_handle(owner).signal(Waits.finish)
 
 
-async def two_processes(client: Client, kind: str) -> tuple[Client, Client]:
+async def two_processes(client: Client) -> tuple[Client, Client]:
     """A reader's client that notifies, and a producer's that never does, on one store."""
     await skip_without_notifier(client)
     url = os.environ.get("STREAMS_REDIS_URL", "")
@@ -671,13 +670,12 @@ async def test_live_a_position_resumes_the_reader_after_continue_as_new(
         await notifying.get_workflow_handle(owner).signal(Waits.finish)
 
 
-@pytest.mark.parametrize("kind", ["redis"])
 async def test_live_a_recheck_finds_a_record_whose_notification_was_lost(
-    client: Client, kind: str
+    client: Client,
 ):
     # The producer's process never notifies, so only the notifier's recheck
     # (streamnotifier.recheckInitial, a few seconds in the lane) wakes the reader.
-    reading, silent = await two_processes(client, kind)
+    reading, silent = await two_processes(client)
     async with new_worker(reading, Waits, Reads) as worker:
         owner = await running_owner(reading, worker.task_queue)
         reader_id = new_workflow_id()
