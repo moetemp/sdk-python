@@ -48,7 +48,7 @@ from temporalio.contrib.streams import (
     RecordKind,
     StreamRef,
     StreamStorePlugin,
-    get_stream_handle,
+    stream_handle,
 )
 from temporalio.contrib.streams._cursor import BEGINNING
 from temporalio.contrib.streams.memory import MemoryStreams
@@ -859,7 +859,7 @@ async def test_a_workflow_reader_gets_plain_bodies_that_stay_encrypted_elsewhere
         assert all(result.metadata["encoding"] == b"binary/xor" for result in results)
 
         # Read through a handle with no codec: the stored body is the codec's.
-        plain = get_stream_handle(backing.client, ref)
+        plain = stream_handle(backing.client, ref)
         stored = plain.read(after=BEGINNING, result_type=RawValue)
         try:
             record = await asyncio.wait_for(anext(stored), 5)
