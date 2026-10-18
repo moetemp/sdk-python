@@ -688,6 +688,9 @@ class _ActivityWorker:
                 runtime_metric_meter=None if sync_non_threaded else self._metric_meter,
                 client=self._client if not running_activity.sync else None,
                 cancellation_details=running_activity.cancellation_details,
+                workflow_task=(
+                    start.workflow_task if start.HasField("workflow_task") else None
+                ),
             )
         )
         temporalio.activity.logger.debug("Starting activity")
