@@ -21,7 +21,7 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     ReadInput,
     StreamAccess,
@@ -138,7 +138,7 @@ class _Follower:
         self.outcomes: list[FollowOutcome] = []
         self.closed = asyncio.Event()
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         # A batch can repeat, so each supersession counts once.
         self.supersessions.update(
             (mark.supersession.previous_attempt, mark.supersession.attempt)

@@ -20,7 +20,7 @@ from temporalio.client import Client
 from temporalio.contrib.streams import StreamStorePlugin
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StreamFollowerService,
     StreamReader,
@@ -100,7 +100,7 @@ class _Follower:
         self.outcomes: list[FollowOutcome] = []
         self.closed = asyncio.Event()
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         for item in batch.items:
             if item.record is not None:
                 # A batch can repeat, so each record counts once.

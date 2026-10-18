@@ -31,7 +31,7 @@ from temporalio.contrib.streams import (
     workflow_writer,
 )
 from temporalio.contrib.streams.nexus import (
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StreamFollowerService,
     follow_stream,
@@ -86,7 +86,7 @@ class Dashboard:
     outcome: FollowOutcome | None = None
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         self.pages += 1
         for record in batch.records:
             self.stages.setdefault(record.cursor.token, record.value or "")

@@ -24,7 +24,7 @@ from typing import Any
 
 from temporalio.client import Client
 from temporalio.contrib.streams.nexus import (
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StreamFollowerService,
     TemporalStreamsHandler,
@@ -57,7 +57,7 @@ class SlackConnector:
     outcome: FollowOutcome | None = None
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         for record in batch.records:
             if record.cursor.token in self.posted:
                 continue

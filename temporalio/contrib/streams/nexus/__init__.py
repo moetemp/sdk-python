@@ -70,7 +70,7 @@ from temporalio.contrib.streams.nexus._direct import (
     StreamServiceCallError,
 )
 from temporalio.contrib.streams.nexus._follower import (
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StoreTransport,
     StreamFollower,
@@ -111,7 +111,7 @@ __all__ = [
     "AppendInput",
     "AppendOutput",
     "ClientTransport",
-    "FollowBatch",
+    "FollowerBatch",
     "FollowOutcome",
     "HTTPStatusError",
     "HttpTransport",

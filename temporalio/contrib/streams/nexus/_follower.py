@@ -70,7 +70,7 @@ from temporalio.nexus.system.notification_service import (
 )
 
 __all__ = [
-    "FollowBatch",
+    "FollowerBatch",
     "FollowOutcome",
     "StoreTransport",
     "StreamFollower",
@@ -164,7 +164,7 @@ class StoreTransport:
 
 
 @dataclass(frozen=True)
-class FollowBatch(Generic[T]):
+class FollowerBatch(Generic[T]):
     """The records one read handed a follower.
 
     .. warning::
@@ -203,7 +203,9 @@ class FollowBatch(Generic[T]):
     """For a follower with ``follow_links``, every item of the batch in follow
     order: records of the stream and of the streams its links open, each with
     its source, and link reports. :attr:`records` then holds the data records
-    of every source, and :attr:`cursor` is the root's."""
+    of every source, and :attr:`cursor` is the root's. The marks come only
+    through the items, as ``SUPERSEDED`` records and records with ``stale``
+    set, so :attr:`supersessions` and :attr:`stale_records` stay empty."""
 
 
 @dataclass(frozen=True)
@@ -235,19 +237,19 @@ class StreamFollower(Protocol[T]):
     .. warning::
         This API is experimental and may change in future versions.
 
-    The type argument of ``on_records``'s :class:`FollowBatch` annotation is
+    The type argument of ``on_records``'s :class:`FollowerBatch` annotation is
     what each record body decodes into. Without one, bodies decode with no
     type hint.
 
     A follower that sets ``follow_links = True`` asks for the streams its
     stream's link records open too. The service then calls the transport's
     ``follow``, which :class:`StoreTransport`, ``ClientTransport`` and
-    ``HttpTransport`` have, and each batch holds :attr:`FollowBatch.items`.
+    ``HttpTransport`` have, and each batch holds :attr:`FollowerBatch.items`.
     Only the root's records decode into the type argument.
     """
 
-    async def on_records(self, batch: FollowBatch[T]) -> None:
-        """Handle the next records. See :class:`FollowBatch` on repeats."""
+    async def on_records(self, batch: FollowerBatch[T]) -> None:
+        """Handle the next records. See :class:`FollowerBatch` on repeats."""
         ...
 
     async def on_close(self, outcome: FollowOutcome) -> None:
@@ -547,7 +549,7 @@ class StreamFollowerService:
         ]
         if items or errors:
             await followed.follower.on_records(
-                FollowBatch(
+                FollowerBatch(
                     stream=position.stream,
                     records=records,
                     supersessions=[],
@@ -657,7 +659,7 @@ class StreamFollowerService:
             records.append(record)
         if records or supersessions or stale or errors:
             await followed.follower.on_records(
-                FollowBatch(
+                FollowerBatch(
                     stream=stream,
                     records=records,
                     supersessions=supersessions,
@@ -804,7 +806,7 @@ def _item_type(follower: StreamFollower[Any]) -> type | None:
         (hint for name, hint in hints.items() if name != "return"),
         None,
     )
-    if typing.get_origin(batch) is not FollowBatch:
+    if typing.get_origin(batch) is not FollowerBatch:
         return None
     (item,) = typing.get_args(batch)
     return item if isinstance(item, type) else None

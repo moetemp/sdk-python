@@ -507,7 +507,7 @@ then hands over the close.
 
 ```python
 from temporalio.contrib.streams.nexus import (
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StreamFollowerService,
     follow_stream,
@@ -515,7 +515,7 @@ from temporalio.contrib.streams.nexus import (
 
 
 class OrderFollower:
-    async def on_records(self, batch: FollowBatch[OrderStage]) -> None:
+    async def on_records(self, batch: FollowerBatch[OrderStage]) -> None:
         for record in batch.records:
             await show(record.cursor, record.value)
 
@@ -542,7 +542,7 @@ handle = await follow_stream(
 )
 ```
 
-The type argument of the `FollowBatch` annotation on `on_records` is what
+The type argument of the `FollowerBatch` annotation on `on_records` is what
 each record body decodes into. One `StreamFollowerService` per Worker routes
 calls by the follower key, since a Worker registers a service name once.
 
@@ -704,7 +704,7 @@ while (items := await reader.next_followed()) is not None:
   replay reads the step's ranges again with `follow_range` through the same
   transport.
 - **Follower service.** A `StreamFollower` that sets `follow_links = True`
-  gets `FollowBatch.items` in follow order, and `FollowBatch.records` holds
+  gets `FollowerBatch.items` in follow order, and `FollowerBatch.records` holds
   the data records of every source. The receiver state holds the follow
   position, which holds every open link. A position larger than
   `max_receiver_state_bytes` fails the call, so raise the server's

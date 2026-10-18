@@ -33,7 +33,7 @@ from temporalio.contrib.streams import (
     workflow_writer,
 )
 from temporalio.contrib.streams.nexus import (
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     StreamFollowerService,
     StreamOperationHandler,
@@ -98,7 +98,7 @@ class AppFollower:
     outcome: FollowOutcome | None = None
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         self.batches += 1
         for record in batch.records:
             if record.cursor.token not in self.stages:

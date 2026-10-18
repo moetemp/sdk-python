@@ -34,7 +34,7 @@ from temporalio.contrib.streams._ref import to_reference
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.nexus import (
     ClientTransport,
-    FollowBatch,
+    FollowerBatch,
     FollowOutcome,
     ReadInput,
     ReadOutput,
@@ -142,10 +142,10 @@ def _stored(count: int, offset: int = 0) -> list[RecordWire]:
 
 class _Collector:
     def __init__(self) -> None:
-        self.batches: list[FollowBatch[str]] = []
+        self.batches: list[FollowerBatch[str]] = []
         self.outcomes: list[FollowOutcome] = []
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         self.batches.append(batch)
 
     async def on_close(self, outcome: FollowOutcome) -> None:
@@ -553,7 +553,7 @@ class _LiveFollower(_Collector):
         self.closed = asyncio.Event()
         self.seen: dict[str, str] = {}
 
-    async def on_records(self, batch: FollowBatch[str]) -> None:
+    async def on_records(self, batch: FollowerBatch[str]) -> None:
         await super().on_records(batch)
         for record in batch.records:
             # Delivery is at least once, so repeats are dropped by cursor.
