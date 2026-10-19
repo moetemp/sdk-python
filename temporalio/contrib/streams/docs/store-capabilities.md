@@ -79,8 +79,8 @@ Y means the store has it, and N means the stream runtime takes the fallback.
 
 | Store | Producer state | Kept last | Holds | Change feed | Cheap logs | Delete | Listing | Long poll |
 |---|---|---|---|---|---|---|---|---|
-| `MemoryStreams()` | Y | Y | N | N | Y | Y | Y | Y |
-| `RedisStreams(...)` | Y | Y | N | N | Y | Y | Y | Y |
+| `MemoryStreams()` | Y | Y | Y | N | Y | Y | Y | Y |
+| `RedisStreams(...)` | Y | Y | Y | N | Y | Y | Y | Y |
 | `RedisStreams(..., plain=True)` | N | N | N | N | Y | Y | Y | Y |
 
 `RedisStreams(plain=True)` runs no Lua scripts. Use it on a Redis that
