@@ -863,7 +863,7 @@ class AppendRecord(google.protobuf.message.Message):
     kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """Set on DATA only, after lang's payload codec and external storage."""
+        """Set on DATA, and optional on LINK, after lang's payload codec and external storage."""
     content_hash: builtins.bytes
     """The SHA-256 of the body as the payload converter made it, before the codec. A codec that
     encrypts with a fresh nonce makes a retry's bytes differ, so a retry is recognized by this.
