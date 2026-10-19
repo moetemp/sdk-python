@@ -67,9 +67,17 @@ class LinkStateKind(enum.IntEnum):
     """What happened to a link, as a follower reports it."""
 
     OPENED = 1
-    """The follower started reading the linked stream."""
+    """The follower started reading the linked stream.
+
+    With ``reason`` ``resumed``, a later attempt of the producer wrote the same ``OPEN``
+    again, and the follower reads the withdrawn segment on from where it paused.
+    """
     DONE = 2
-    """The linked stream ended, or reached the ``JOIN`` point."""
+    """The linked stream ended, or reached the ``JOIN`` point.
+
+    With ``reason`` ``withdrawn``, the attempt that wrote the ``OPEN`` was superseded. The
+    segment pauses, and the same ``OPEN`` from a later attempt resumes it.
+    """
     UNAVAILABLE = 3
     """The linked stream can't be read. The follow goes on without it."""
     SKIPPED = 4
@@ -88,7 +96,10 @@ class LinkState:
     """On ``DONE``, the failure the linked stream closed with. On
     ``UNAVAILABLE``, why it can't be read."""
     reason: str = ""
-    """On ``SKIPPED``: ``depth``, ``limit``, ``cycle``, ``open`` or ``endpoint``."""
+    """On ``SKIPPED``: ``depth``, ``limit``, ``cycle``, ``open`` or ``endpoint``.
+
+    On ``DONE``, ``withdrawn`` or empty. On ``OPENED``, ``resumed`` or empty.
+    """
 
 
 @dataclass(frozen=True)
