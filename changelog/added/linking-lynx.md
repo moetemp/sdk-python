@@ -1,0 +1,1 @@
+Experimental `temporalio.contrib.streams`: a producer writes `LINK` records with `link()` and `join()` to name a child Workflow's stream, and `StreamHandle.follow()` reads a stream and every stream its links open in one order, from client or Activity code. Each batch end gives a `FollowPosition` that resumes every open link with no loss and no repeat.
