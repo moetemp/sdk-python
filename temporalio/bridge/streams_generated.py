@@ -50,6 +50,14 @@ class StreamService:
             "DescribeStore", req, temporalio.bridge.proto.streams.DescribeStoreResponse
         )
 
+    async def follow(
+        self, req: temporalio.bridge.proto.streams.FollowRequest
+    ) -> temporalio.bridge.proto.streams.FollowResponse:
+        """Invokes the StreamService.follow call."""
+        return await self._store.call(
+            "Follow", req, temporalio.bridge.proto.streams.FollowResponse
+        )
+
     async def latest(
         self, req: temporalio.bridge.proto.streams.LatestRequest
     ) -> temporalio.bridge.proto.streams.LatestResponse:

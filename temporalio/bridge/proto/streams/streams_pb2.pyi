@@ -491,29 +491,41 @@ class AppendRecord(google.protobuf.message.Message):
     KIND_FIELD_NUMBER: builtins.int
     BODY_FIELD_NUMBER: builtins.int
     CONTENT_HASH_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
     kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """Set on DATA only, after lang's payload codec and external storage."""
+        """Set on DATA, and optional on LINK, after lang's payload codec and external storage."""
     content_hash: builtins.bytes
     """The SHA-256 of the body as the payload converter made it, before the codec. A codec that
     encrypts with a fresh nonce makes a retry's bytes differ, so a retry is recognized by this.
     Empty when there is no body.
     """
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink:
+        """Set on LINK only. A LINK's body is optional."""
     def __init__(
         self,
         *,
         kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType = ...,
         body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         content_hash: builtins.bytes = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body"]
+        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "body", b"body", "content_hash", b"content_hash", "kind", b"kind"
+            "body",
+            b"body",
+            "content_hash",
+            b"content_hash",
+            "kind",
+            b"kind",
+            "link",
+            b"link",
         ],
     ) -> None: ...
 
@@ -776,6 +788,7 @@ class ReadResponse(google.protobuf.message.Message):
     CURSOR_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
+    START_CURSOR_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -794,6 +807,10 @@ class ReadResponse(google.protobuf.message.Message):
     """The owner's chain ended and the read delivered every record the stream retains. No later
     call returns a record.
     """
+    start_cursor: builtins.str
+    """The cursor this answer reads strictly after, with `$end` resolved. A Follow that cuts a page
+    at a gate reads it again from here.
+    """
     def __init__(
         self,
         *,
@@ -801,6 +818,7 @@ class ReadResponse(google.protobuf.message.Message):
         cursor: builtins.str = ...,
         state: builtins.bytes = ...,
         done: builtins.bool = ...,
+        start_cursor: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
@@ -811,12 +829,298 @@ class ReadResponse(google.protobuf.message.Message):
             b"done",
             "records",
             b"records",
+            "start_cursor",
+            b"start_cursor",
             "state",
             b"state",
         ],
     ) -> None: ...
 
 global___ReadResponse = ReadResponse
+
+class FollowRequest(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAM_FIELD_NUMBER: builtins.int
+    AFTER_FIELD_NUMBER: builtins.int
+    STATE_FIELD_NUMBER: builtins.int
+    WAIT_FIELD_NUMBER: builtins.int
+    MAX_RECORDS_FIELD_NUMBER: builtins.int
+    MAX_DEPTH_FIELD_NUMBER: builtins.int
+    MAX_OPEN_FIELD_NUMBER: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress:
+        """The root stream."""
+    after: builtins.str
+    """The root cursor, on the first call. Later calls resume from `state` and ignore it."""
+    state: builtins.bytes
+    """The `state` of the previous answer. Empty on the first call."""
+    @property
+    def wait(self) -> google.protobuf.duration_pb2.Duration:
+        """How long to wait for a record when no source has one. The service waits at most 60 seconds."""
+    max_records: builtins.int
+    """How many stored records one answer holds at most, across all sources. Zero uses 100. The
+    service answers with at most 1,000.
+    """
+    max_depth: builtins.int
+    """How deep links are followed. The root is depth zero. Zero uses 4. The first call's limits
+    hold for the whole follow, and `state` keeps them.
+    """
+    max_open: builtins.int
+    """How many linked streams are open at once. Zero uses 16.
+    Jetty adds fields 8 and 9 for Workflow followers.
+    """
+    def __init__(
+        self,
+        *,
+        stream: global___StreamAddress | None = ...,
+        after: builtins.str = ...,
+        state: builtins.bytes = ...,
+        wait: google.protobuf.duration_pb2.Duration | None = ...,
+        max_records: builtins.int = ...,
+        max_depth: builtins.int = ...,
+        max_open: builtins.int = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal["stream", b"stream", "wait", b"wait"],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "after",
+            b"after",
+            "max_depth",
+            b"max_depth",
+            "max_open",
+            b"max_open",
+            "max_records",
+            b"max_records",
+            "state",
+            b"state",
+            "stream",
+            b"stream",
+            "wait",
+            b"wait",
+        ],
+    ) -> None: ...
+
+global___FollowRequest = FollowRequest
+
+class FollowedRecord(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SOURCE_FIELD_NUMBER: builtins.int
+    RECORD_FIELD_NUMBER: builtins.int
+    LINK_STATE_FIELD_NUMBER: builtins.int
+    source: builtins.int
+    """The source the item belongs to. Zero is the root. A SKIPPED link names the source that holds
+    the link.
+    """
+    @property
+    def record(self) -> global___ReadRecord: ...
+    @property
+    def link_state(self) -> global___LinkState: ...
+    def __init__(
+        self,
+        *,
+        source: builtins.int = ...,
+        record: global___ReadRecord | None = ...,
+        link_state: global___LinkState | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "item", b"item", "link_state", b"link_state", "record", b"record"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "item",
+            b"item",
+            "link_state",
+            b"link_state",
+            "record",
+            b"record",
+            "source",
+            b"source",
+        ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["item", b"item"]
+    ) -> typing_extensions.Literal["record", "link_state"] | None: ...
+
+global___FollowedRecord = FollowedRecord
+
+class LinkState(google.protobuf.message.Message):
+    """What happened to a link, as the follower saw it."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    class _Kind:
+        ValueType = typing.NewType("ValueType", builtins.int)
+        V: typing_extensions.TypeAlias = ValueType
+
+    class _KindEnumTypeWrapper(
+        google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+            LinkState._Kind.ValueType
+        ],
+        builtins.type,
+    ):  # noqa: F821
+        DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+        KIND_UNSPECIFIED: LinkState._Kind.ValueType  # 0
+        KIND_OPENED: LinkState._Kind.ValueType  # 1
+        """The linked stream is open, and its records follow."""
+        KIND_DONE: LinkState._Kind.ValueType  # 2
+        """The linked stream's segment ended: the stream closed, or it reached the JOIN's `until`."""
+        KIND_UNAVAILABLE: LinkState._Kind.ValueType  # 3
+        """The linked stream can't be read. `error` says why. The follow goes on without it."""
+        KIND_SKIPPED: LinkState._Kind.ValueType  # 4
+        """The link was not followed. `reason` says why."""
+
+    class Kind(_Kind, metaclass=_KindEnumTypeWrapper): ...
+    KIND_UNSPECIFIED: LinkState.Kind.ValueType  # 0
+    KIND_OPENED: LinkState.Kind.ValueType  # 1
+    """The linked stream is open, and its records follow."""
+    KIND_DONE: LinkState.Kind.ValueType  # 2
+    """The linked stream's segment ended: the stream closed, or it reached the JOIN's `until`."""
+    KIND_UNAVAILABLE: LinkState.Kind.ValueType  # 3
+    """The linked stream can't be read. `error` says why. The follow goes on without it."""
+    KIND_SKIPPED: LinkState.Kind.ValueType  # 4
+    """The link was not followed. `reason` says why."""
+
+    KIND_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
+    ERROR_FIELD_NUMBER: builtins.int
+    REASON_FIELD_NUMBER: builtins.int
+    kind: global___LinkState.Kind.ValueType
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink: ...
+    @property
+    def error(self) -> global___StreamFailure:
+        """Jetty adds fields 3 and 4 for the close outcome on DONE.
+        Set on UNAVAILABLE.
+        """
+    reason: builtins.str
+    """Set on SKIPPED: `depth`, `limit`, `cycle`, `open` or `endpoint`."""
+    def __init__(
+        self,
+        *,
+        kind: global___LinkState.Kind.ValueType = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
+        error: global___StreamFailure | None = ...,
+        reason: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["error", b"error", "link", b"link"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "error", b"error", "kind", b"kind", "link", b"link", "reason", b"reason"
+        ],
+    ) -> None: ...
+
+global___LinkState = LinkState
+
+class FollowSource(google.protobuf.message.Message):
+    """A source that an answer's records name."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NUMBER_FIELD_NUMBER: builtins.int
+    PARENT_FIELD_NUMBER: builtins.int
+    DEPTH_FIELD_NUMBER: builtins.int
+    STREAM_FIELD_NUMBER: builtins.int
+    NAME_FIELD_NUMBER: builtins.int
+    number: builtins.int
+    parent: builtins.int
+    """The source that holds the source's link. Zero for the root and its links."""
+    depth: builtins.int
+    @property
+    def stream(self) -> global___StreamAddress: ...
+    name: builtins.str
+    """The link's name. Empty for the root."""
+    def __init__(
+        self,
+        *,
+        number: builtins.int = ...,
+        parent: builtins.int = ...,
+        depth: builtins.int = ...,
+        stream: global___StreamAddress | None = ...,
+        name: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["stream", b"stream"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "depth",
+            b"depth",
+            "name",
+            b"name",
+            "number",
+            b"number",
+            "parent",
+            b"parent",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___FollowSource = FollowSource
+
+class FollowResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RECORDS_FIELD_NUMBER: builtins.int
+    STATE_FIELD_NUMBER: builtins.int
+    DONE_FIELD_NUMBER: builtins.int
+    SOURCES_FIELD_NUMBER: builtins.int
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___FollowedRecord
+    ]: ...
+    state: builtins.bytes
+    """The composite position: every source's cursor and read state, and the gates. Opaque to lang."""
+    done: builtins.bool
+    """The root ended and every linked segment ended. No later call returns a record."""
+    @property
+    def sources(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___FollowSource
+    ]:
+        """Each source that `records` names.
+        Jetty adds fields 5 to 9 for Workflow followers and their replay.
+        """
+    def __init__(
+        self,
+        *,
+        records: collections.abc.Iterable[global___FollowedRecord] | None = ...,
+        state: builtins.bytes = ...,
+        done: builtins.bool = ...,
+        sources: collections.abc.Iterable[global___FollowSource] | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "done",
+            b"done",
+            "records",
+            b"records",
+            "sources",
+            b"sources",
+            "state",
+            b"state",
+        ],
+    ) -> None: ...
+
+global___FollowResponse = FollowResponse
 
 class LatestRequest(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -1496,17 +1800,21 @@ class OutputRecord(google.protobuf.message.Message):
     KIND_FIELD_NUMBER: builtins.int
     BODY_FIELD_NUMBER: builtins.int
     CONTENT_HASH_FIELD_NUMBER: builtins.int
+    LINK_FIELD_NUMBER: builtins.int
     topic: builtins.str
     kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType
-    """DATA or FINISH."""
+    """DATA, FINISH or LINK."""
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
-        """The value on DATA, after lang's payload codec. Absent on FINISH."""
+        """The value on DATA, after lang's payload codec. Absent on FINISH. Optional on LINK."""
     content_hash: builtins.bytes
-    """The SHA-256 of the body as the payload converter made it, before the codec. Set on DATA. The
-    service builds each topic's batch digest from these, so a repeat of a batch matches whatever
-    the codec made of the bodies.
+    """The SHA-256 of the body as the payload converter made it, before the codec. Set with a body.
+    The service builds each topic's batch digest from these, so a repeat of a batch matches
+    whatever the codec made of the bodies.
     """
+    @property
+    def link(self) -> temporalio.bridge.proto.streams.v1.message_pb2.StreamLink:
+        """Set on LINK only."""
     def __init__(
         self,
         *,
@@ -1514,9 +1822,10 @@ class OutputRecord(google.protobuf.message.Message):
         kind: temporalio.bridge.proto.streams.v1.message_pb2.StreamRecordKind.ValueType = ...,
         body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         content_hash: builtins.bytes = ...,
+        link: temporalio.bridge.proto.streams.v1.message_pb2.StreamLink | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["body", b"body"]
+        self, field_name: typing_extensions.Literal["body", b"body", "link", b"link"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -1527,6 +1836,8 @@ class OutputRecord(google.protobuf.message.Message):
             b"content_hash",
             "kind",
             b"kind",
+            "link",
+            b"link",
             "topic",
             b"topic",
         ],
