@@ -129,7 +129,10 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
     described = await streams_client.get_workflow_handle(workflow_id).describe()
     # The stream runtime derives the same producer id the handle reports.
     producer_id = f"tokens@{described.run_id}"
-    assert records[1].supersession == Supersession(producer_id, 1, 2)
+    first, second = records[0].attempt, records[2].attempt
+    # The low 11 bits hold the Temporal attempt, the rest the attempt's start.
+    assert (first & 0x7FF, second & 0x7FF) == (1, 2)
+    assert records[1].supersession == Supersession(producer_id, first, second)
     assert [r.value for r in records if r.kind is RecordKind.DATA] == [
         "a",
         "a",
@@ -137,10 +140,10 @@ async def test_an_activity_retry_supersedes_its_first_attempt(client: Client):
         "c",
     ]
     assert [(r.producer_id, r.attempt, r.sequence) for r in records[2:]] == [
-        (producer_id, 2, 1),
-        (producer_id, 2, 2),
-        (producer_id, 2, 3),
-        (producer_id, 2, 4),
+        (producer_id, second, 1),
+        (producer_id, second, 2),
+        (producer_id, second, 3),
+        (producer_id, second, 4),
     ]
 
 
