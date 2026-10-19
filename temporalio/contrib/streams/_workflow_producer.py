@@ -41,7 +41,10 @@ from temporalio.contrib.streams._local_activity import (
     require_local_activity,
 )
 from temporalio.contrib.streams._plugin import call
+from temporalio.contrib.streams._record import Cursor, LinkEvent, StreamLink
+from temporalio.contrib.streams._ref import StreamRef
 from temporalio.contrib.streams._topic import StreamTopic, resolve_topic
+from temporalio.contrib.streams._wire import to_wire_link
 from temporalio.converter._payload_codec import _apply_to_failure_payloads
 from temporalio.exceptions import ApplicationError
 
@@ -185,6 +188,66 @@ class WorkflowStreamProducer(Generic[T]):
                 content_hash=content_hash(payload),
             )
         )
+
+    def link(
+        self,
+        ref: StreamRef,
+        *,
+        name: str,
+        after: Cursor | None = None,
+        value: Any = None,
+    ) -> None:
+        """Append a ``LINK`` that opens ``ref``'s stream on this topic.
+
+        A follower reads the linked stream from strictly after ``after``, or
+        from its oldest record, in one order with this stream. ``name`` names
+        the link within this run, and :meth:`join` names it again. ``ref``
+        is stored as plaintext. ``value``, when given, is converted as
+        :meth:`append` converts it. The record goes with this activation, as
+        :meth:`append` sends it.
+
+        Raises:
+            ValueError: The topic was already finished in this run,
+                ``name`` is empty or over 256 bytes, or ``ref`` names a
+                stream that no Workflow owns.
+            temporalio.workflow.ReadOnlyContextError: Called from a query or
+                an update validator.
+        """
+        self._add_link(StreamLink(LinkEvent.OPEN, ref, name, after=after), value)
+
+    def join(self, *, name: str, until: Cursor | None = None) -> None:
+        """Append a ``LINK`` that says this run waited for link ``name``.
+
+        A follower holds this stream's later records until the linked stream
+        reached ``until``, or its end when ``until`` is ``None``.
+
+        Raises:
+            ValueError: The topic was already finished in this run, or
+                ``name`` is empty or over 256 bytes.
+            temporalio.workflow.ReadOnlyContextError: Called from a query or
+                an update validator.
+        """
+        self._add_link(StreamLink(LinkEvent.JOIN, None, name, until=until), None)
+
+    def _add_link(self, link: StreamLink, value: Any) -> None:
+        _check_writable("link on")
+        if self._topic in self._producers.finished:
+            raise ValueError(f"topic {self._topic!r} was already finished")
+        record = OutputRecord(
+            topic=self._topic,
+            kind=StreamRecordKind.STREAM_RECORD_KIND_LINK,
+            link=to_wire_link(link),
+        )
+        if value is not None:
+            payload = workflow.payload_converter().to_payloads([value])[0]
+            if payload.ByteSize() > _MAX_RECORD_BYTES:
+                raise StreamError(
+                    f"a link value of {payload.ByteSize()} bytes on {self._topic!r} "
+                    f"is over the per-record limit of {_MAX_RECORD_BYTES} bytes"
+                )
+            record.body.CopyFrom(payload)
+            record.content_hash = content_hash(payload)
+        self._producers.add(record)
 
     async def flush(self) -> None:
         """Return at once, since each record goes with its activation.
