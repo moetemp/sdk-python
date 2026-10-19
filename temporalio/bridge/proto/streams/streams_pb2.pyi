@@ -1003,7 +1003,11 @@ class LinkState(google.protobuf.message.Message):
         Set on UNAVAILABLE.
         """
     reason: builtins.str
-    """Set on SKIPPED: `depth`, `limit`, `cycle`, `open` or `endpoint`."""
+    """Set on SKIPPED: `depth`, `limit`, `cycle`, `open` or `endpoint`. Set to `withdrawn` on a DONE
+    that a SUPERSEDED caused, since the attempt that wrote the OPEN was withdrawn. Set to
+    `resumed` on an OPENED where the same OPEN from a later attempt of that producer reads the
+    withdrawn segment on from its cursor.
+    """
     def __init__(
         self,
         *,
