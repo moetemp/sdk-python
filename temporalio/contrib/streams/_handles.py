@@ -742,6 +742,24 @@ class ActivityStreamHandle:
             topic=topic, after=after, result_type=result_type, idle_wait=idle_wait
         )
 
+    def follow(
+        self,
+        *,
+        topic: str | StreamTopic[Any] | None = None,
+        after: Cursor | FollowPosition = BEGINNING,
+        max_depth: int = 4,
+        max_open: int = 16,
+        result_type: type | None = None,
+    ) -> AsyncGenerator[FollowedItem[Any], None]:
+        """See :meth:`temporalio.contrib.streams.StreamHandle.follow`."""
+        return self._inner.follow(
+            topic=topic,
+            after=after,
+            max_depth=max_depth,
+            max_open=max_open,
+            result_type=result_type,
+        )
+
     async def latest(self, *, topic: str | StreamTopic[Any] | None = None) -> Cursor:
         """See :meth:`temporalio.contrib.streams.StreamHandle.latest`."""
         return await self._inner.latest(topic=topic)
