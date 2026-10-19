@@ -13,6 +13,9 @@ import dataclasses
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from temporalio.api.enums.v1 import StreamOwnerKind as _ApiOwnerKind
+from temporalio.api.stream.v1 import StreamReference
+from temporalio.bridge.proto.streams import StreamAddress
 from temporalio.contrib.streams._errors import StreamUnsupportedError
 from temporalio.contrib.streams._topic import (
     DEFAULT_TOPIC,
@@ -109,3 +112,51 @@ class StreamRef:
         """
         name, _ = resolve_topic(topic)
         return dataclasses.replace(self, topic=name)
+
+
+def from_address(address: StreamAddress) -> StreamRef:
+    """The ref of the Workflow stream the stream runtime's ``address`` names."""
+    return StreamRef.for_workflow(
+        address.workflow_id, topic=address.topic, chain_run_id=address.run_id or None
+    )
+
+
+def to_reference(ref: StreamRef) -> StreamReference:
+    """``ref`` as the API's stream reference, which a link record stores.
+
+    Raises:
+        ValueError: ``ref`` names a stream that no Workflow owns. A link
+            in this release names only a Workflow's stream.
+    """
+    if ref.kind != "workflow":
+        raise ValueError(
+            f"a link names a Workflow's stream, not one owned by kind {ref.kind!r}"
+        )
+    return StreamReference(
+        owner_kind=_ApiOwnerKind.STREAM_OWNER_KIND_WORKFLOW,
+        workflow_id=ref.workflow_id,
+        run_id=ref.chain_run_id or "",
+        topic=ref.topic,
+    )
+
+
+def from_reference(reference: StreamReference) -> StreamRef:
+    """The ref an API stream reference names.
+
+    An owner kind this release lacks decodes as ``"kind_<number>"``, which a
+    handle refuses where it opens.
+
+    Raises:
+        ValueError: The reference names no stream.
+    """
+    kind = (
+        "workflow"
+        if reference.owner_kind == _ApiOwnerKind.STREAM_OWNER_KIND_WORKFLOW
+        else f"kind_{int(reference.owner_kind)}"
+    )
+    return StreamRef(
+        kind,
+        reference.workflow_id,
+        topic=reference.topic,
+        chain_run_id=reference.run_id or None,
+    )
