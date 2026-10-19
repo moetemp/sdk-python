@@ -156,6 +156,70 @@ Known limit:
   on the topic, the reader can't prove the call's task failed, and its
   records stand.
 
+## Link records and followers
+
+A stream can hold a reference to another Workflow's stream, as a `LINK`
+record. A follower reads the stream and each stream its links open in one
+order. So an agent writes a link per child agent in place of copying the
+child's records, and a reader still sees one ordered view.
+
+```python
+# Workflow code (agent). Links go out with the activation, as appended values do.
+events = stream_producer(EVENTS)
+events.link(StreamRef.for_workflow(child_id), name="sub-3", after=child_cursor)  # OPEN
+reply = await child.execute_update(...)
+events.join(name="sub-3", until=reply.turn_end)  # JOIN, the agent waited here
+
+# Client code. One ordered view of the agent and every stream it links.
+async for item in stream_handle(client, agent_id, topic=EVENTS).follow():
+    if item.link_state is not None:      # OPENED, DONE, UNAVAILABLE or SKIPPED
+        ui.mark(item.source, item.link_state)
+    else:
+        ui.render(item.source, item.record)
+    if item.position is not None:
+        saved = item.position            # resumes every open link, not only the agent
+```
+
+- **Writing.** `StreamProducer.link(ref, *, name, after=None, value=None)`
+  and `WorkflowStreamProducer.link(...)` write an `OPEN`. The follower reads
+  the linked stream strictly after `after`, or from its oldest record.
+  `join(*, name, until=None)` writes a `JOIN`. It says the producer waited
+  for the link up to `until`, or to the linked stream's end. A link names a
+  Workflow's stream only. Any other ref raises `ValueError`.
+- **Following.** `StreamHandle.follow()` and `ActivityStreamHandle.follow()`
+  read a stream and the streams it links, from client or Activity code.
+  Workflow code can't follow.
+- **Order.** Each stream keeps its own order. A linked stream's records
+  never come before their `OPEN`. A record that comes after a `JOIN` waits
+  until the linked stream reached the join point or its end. Other records
+  come in the order they were read. No clock decides the order.
+- **Link reports.** Items with `link_state` say what happened to a link.
+  `OPENED` when a segment starts. `DONE` when it ends. `UNAVAILABLE` with
+  the error when it can't be read, for example a Workflow that never
+  started, after `owner_start_grace`. `SKIPPED` with a reason: `depth` past
+  `max_depth` (4), `limit` past `max_open` (16), `cycle` for a link back to
+  a stream on the path, `open` for a stream already open, and `endpoint`
+  for a stream in another namespace or behind a Nexus endpoint. A linked
+  stream never fails the follow.
+- **Positions.** Each record keeps its own stream's cursor. The last item of
+  each batch carries a `FollowPosition`, which resumes the root and every
+  open segment with no loss and no repeat. To resume from an earlier item,
+  resume from the previous batch end.
+- **Retries.** `SUPERSEDED` does not take back an expanded link. The link
+  record and the withdrawal both reach user code, and
+  `SupersessionTracker` withdraws the link.
+- **Plaintext.** A link's ref, name and cursors are stored as plaintext, as
+  Workflow ids are in History. A link's value goes through the codec, so put
+  secrets there.
+
+Known limits:
+
+- **Size.** The follow position grows with the open segments. With the
+  default bounds it stays below 64 KiB.
+- **Waits.** An idle follow holds one store wait per open source.
+- **Old readers.** A reader of an earlier release reads a `LINK` as a
+  record it can't decode.
+
 ## A Workflow publishes to its own stream
 
 `stream_producer` is one function for Workflow code and Activity code. In
