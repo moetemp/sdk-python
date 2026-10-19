@@ -353,6 +353,9 @@ async for item in stream_handle(client, agent_id, topic=EVENTS).follow():
   `join(*, name, until=None)` writes a `JOIN`. It says the producer waited for the link
   up to `until`, or to the linked stream's end. A tool stream needs no `JOIN`
   for its segment to end, since its stream closes with the call.
+- **Mixed batches.** `append` also takes a `StreamLink` next to plain values,
+  so `append(event, StreamLink(LinkEvent.OPEN, ref, name))` writes the event
+  and its link as one batch, with one dedupe identity.
 - **Order.** Each stream keeps its own order. A linked stream's records
   never come before their `OPEN`. A record that comes after a `JOIN` waits
   until the linked stream reached the join point or its end. Other records
