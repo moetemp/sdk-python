@@ -153,19 +153,25 @@ class WorkflowStreamProducer(Generic[T]):
         """The name of the topic this producer is bound to."""
         return self._topic
 
-    def append(self, value: T) -> None:
-        """Append ``value`` on this topic and return at once.
+    def append(self, *values: T | StreamLink) -> None:
+        """Append ``values`` on this topic, in order, and return at once.
 
-        The value is converted here, with the Workflow's payload converter. A
-        :class:`temporalio.common.RawValue` passes through pre-encoded. The
-        record is visible when the activation that appended it completes,
+        A :class:`temporalio.contrib.streams.StreamLink` among the values is a
+        ``LINK`` record, as :meth:`link` and :meth:`join` write it, and the
+        other values are ``DATA`` records. Every value is converted here, with
+        the Workflow's payload converter, before any record is added, so a
+        bad value adds none of them. A :class:`temporalio.common.RawValue`
+        passes through pre-encoded. The records go with the activation, in
+        one batch with the activation's other records. A record is visible
+        when the activation that appended it completes,
         which is before the Workflow Task completes. If the task then fails or
         times out, the record stays, and the task's rerun appends again under
         a higher attempt, which readers see as ``SUPERSEDED``.
 
         Raises:
-            ValueError: The topic was already finished in this run.
-            temporalio.contrib.streams.StreamError: The value's payload is
+            ValueError: The topic was already finished in this run, or a link
+                names nothing or names a stream that no Workflow owns.
+            temporalio.contrib.streams.StreamError: A value's payload is
                 over 1.5 MiB. Nothing is appended.
             temporalio.workflow.ReadOnlyContextError: Called from a query or
                 an update validator.
@@ -174,19 +180,27 @@ class WorkflowStreamProducer(Generic[T]):
         # A close finishes the topic first, so this covers a closed topic too.
         if self._topic in self._producers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
+        records = [
+            self._link_record(value, None)
+            if isinstance(value, StreamLink)
+            else self._data_record(value)
+            for value in values
+        ]
+        for record in records:
+            self._producers.add(record)
+
+    def _data_record(self, value: Any) -> OutputRecord:
         payload = workflow.payload_converter().to_payloads([value])[0]
         if payload.ByteSize() > _MAX_RECORD_BYTES:
             raise StreamError(
                 f"a record of {payload.ByteSize()} bytes on {self._topic!r} is over "
                 f"the per-record limit of {_MAX_RECORD_BYTES} bytes"
             )
-        self._producers.add(
-            OutputRecord(
-                topic=self._topic,
-                kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
-                body=payload,
-                content_hash=content_hash(payload),
-            )
+        return OutputRecord(
+            topic=self._topic,
+            kind=StreamRecordKind.STREAM_RECORD_KIND_DATA,
+            body=payload,
+            content_hash=content_hash(payload),
         )
 
     def link(
@@ -233,6 +247,9 @@ class WorkflowStreamProducer(Generic[T]):
         _check_writable("link on")
         if self._topic in self._producers.finished:
             raise ValueError(f"topic {self._topic!r} was already finished")
+        self._producers.add(self._link_record(link, value))
+
+    def _link_record(self, link: StreamLink, value: Any) -> OutputRecord:
         record = OutputRecord(
             topic=self._topic,
             kind=StreamRecordKind.STREAM_RECORD_KIND_LINK,
@@ -247,7 +264,7 @@ class WorkflowStreamProducer(Generic[T]):
                 )
             record.body.CopyFrom(payload)
             record.content_hash = content_hash(payload)
-        self._producers.add(record)
+        return record
 
     async def flush(self) -> None:
         """Return at once, since each record goes with its activation.
