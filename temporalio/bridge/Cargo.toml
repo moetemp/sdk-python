@@ -91,7 +91,7 @@ url = "2.2"
 # makes it use the submodule's crates, so the bridge sees one `Connection` type.
 [dependencies.temporalio-streams]
 git = "https://github.com/moetemp/sdk-streams"
-rev = "27d9a86ebb605639b4f2cbc4cc2dcf5068a7b251"
+rev = "fdf219a04b0f8e9c3636a85bb09d3d3e6bb75c6f"
 default-features = false
 features = ["envconfig", "redis"]
 
