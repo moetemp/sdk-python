@@ -2926,7 +2926,7 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
-source = "git+https://github.com/moetemp/sdk-streams?rev=32498e28ecc359f49b1fbaba649035d05bbbe527#32498e28ecc359f49b1fbaba649035d05bbbe527"
+source = "git+https://github.com/moetemp/sdk-streams?rev=e1fbf5c6bad7b65fe42bb2d35b9a130bc648ed47#e1fbf5c6bad7b65fe42bb2d35b9a130bc648ed47"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
