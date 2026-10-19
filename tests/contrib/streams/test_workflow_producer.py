@@ -50,7 +50,7 @@ from temporalio.contrib.streams import (
 )
 from temporalio.contrib.streams._local_activity import StreamsInterceptor
 from temporalio.contrib.streams._workflow import read_activity
-from temporalio.contrib.streams._workflow_producer import _RunProducers
+from temporalio.contrib.streams._workflow_producer import _RunProducers, close_activity
 from temporalio.contrib.streams.memory import MemoryStreams
 from temporalio.contrib.streams.redis import RedisStreams
 from temporalio.exceptions import ApplicationError
@@ -604,7 +604,10 @@ async def test_a_worker_registers_the_read_activity_once(client: Client):
     store = MemoryStreams()
     streams = await connect_with(client, store)
     worker = Worker(streams, task_queue=str(uuid.uuid4()), workflows=[FlushesOnce])
-    assert worker.config(active_config=True).get("activities") == [read_activity]
+    assert worker.config(active_config=True).get("activities") == [
+        read_activity,
+        close_activity,
+    ]
     with pytest.warns(UserWarning, match="same plugin type"):
         worker = Worker(
             streams,
@@ -613,7 +616,7 @@ async def test_a_worker_registers_the_read_activity_once(client: Client):
             plugins=[store],
         )
     config = worker.config(active_config=True)
-    assert config.get("activities") == [read_activity]
+    assert config.get("activities") == [read_activity, close_activity]
     interceptors = config.get("interceptors") or []
     assert sum(isinstance(i, StreamsInterceptor) for i in interceptors) == 1
 
