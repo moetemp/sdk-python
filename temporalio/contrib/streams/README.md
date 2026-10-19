@@ -383,9 +383,13 @@ async for item in stream_handle(client, agent_id, topic=EVENTS).follow():
   wakes of every open source. Each open source is one subscription of the
   Workflow. By default each step's marker holds its ranges and a digest,
   and replay reads them again through the stream runtime.
-- **Retries.** `SUPERSEDED` does not take back an expanded link. The link
-  record and the withdrawal both reach user code, and
-  `SupersessionTracker` withdraws the link.
+- **Retries.** An attempt owns the `OPEN`s it writes. A `SUPERSEDED` ends
+  each segment the withdrawn attempt opened, with `DONE` and reason
+  `withdrawn`. The same `OPEN` from a later attempt of that producer, with
+  the same name, stream and `after`, resumes the segment where it paused,
+  with `OPENED` and reason `resumed`. So a retry that writes the same `OPEN`
+  again shows each linked record once. Another `OPEN` of the name reads the
+  stream from its `after`.
 - **Plaintext.** A link's ref, name and cursors are stored as plaintext, as
   Workflow and Activity ids are in History. A link's value goes through the
   codec, so put secrets there.
@@ -396,6 +400,8 @@ Known limits:
   default bounds it stays below 64 KiB.
 - **Workflow followers.** A Workflow follower with more open sources than
   its free wake sources gets `SKIPPED` with reason `limit` for the rest.
+- **Withdrawn joins.** A `JOIN` from a withdrawn attempt stays in effect,
+  since its segment ended before the `SUPERSEDED`.
 
 ## A Workflow publishes to its own stream
 
