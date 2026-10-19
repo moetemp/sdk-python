@@ -80,6 +80,12 @@ from temporalio.contrib.streams._errors import (
     StreamStorageError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._follow import (
+    FollowedItem,
+    FollowPosition,
+    LinkState,
+    LinkStateKind,
+)
 from temporalio.contrib.streams._handles import (
     ActivityStreamHandle,
     StreamHandle,
@@ -90,7 +96,9 @@ from temporalio.contrib.streams._handles import (
 from temporalio.contrib.streams._plugin import StreamStorePlugin
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
     Supersession,
 )
@@ -111,6 +119,11 @@ __all__ = [
     "Cursor",
     "DEFAULT_TOPIC",
     "END",
+    "FollowPosition",
+    "FollowedItem",
+    "LinkEvent",
+    "LinkState",
+    "LinkStateKind",
     "RecordKind",
     "StoreCapabilities",
     "StreamClosedError",
@@ -118,6 +131,7 @@ __all__ = [
     "StreamError",
     "StreamExpiredError",
     "StreamHandle",
+    "StreamLink",
     "StreamNotFoundError",
     "StreamOutcomeUnknownError",
     "StreamOwnerKind",
