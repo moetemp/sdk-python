@@ -127,10 +127,14 @@ class StreamProducer(Generic[T]):
         """The attempt this producer writes."""
         return self._attempt
 
-    async def append(self, *values: T) -> Cursor:
+    async def append(self, *values: T | StreamLink) -> Cursor:
         """Append ``values`` as one batch and return the cursor of its last record.
 
-        The batch lands whole and in order. The producer moves its sequence
+        A :class:`temporalio.contrib.streams.StreamLink` among the values is a
+        ``LINK`` record, as :meth:`link` and :meth:`join` write it, and the
+        other values are ``DATA`` records. So one batch can hold a value and
+        the link that goes with it, under one dedupe identity. The batch lands
+        whole and in order. The producer moves its sequence
         past the batch only when the append succeeds, so a call that raised
         :class:`temporalio.contrib.streams.StreamOutcomeUnknownError` can be
         repeated with the same values: the store answers a repeat of the
@@ -156,11 +160,19 @@ class StreamProducer(Generic[T]):
             StreamRefusedError: The store refused the batch, for example
                 because it is out of memory. Nothing was written.
             StreamClosedError: The stream refuses appends.
+            ValueError: A link names nothing, or names a stream that no
+                Workflow owns. Nothing was written.
         """
+        items: list[tuple[RecordKind, Any, StreamLink | None]] = [
+            (RecordKind.LINK, None, v)
+            if isinstance(v, StreamLink)
+            else (RecordKind.DATA, v, None)
+            for v in values
+        ]
         async with self._lock:
-            if not values:
+            if not items:
                 return self._last
-            return await self._write(RecordKind.DATA, values)
+            return await self._write(items)
 
     async def finish(self) -> Cursor:
         """Write ``FINISH`` for this producer on this topic and return its cursor.
@@ -169,7 +181,7 @@ class StreamProducer(Generic[T]):
         work behind it succeeded, and it does not end anyone's read.
         """
         async with self._lock:
-            return await self._write(RecordKind.FINISH, [None])
+            return await self._write([(RecordKind.FINISH, None, None)])
 
     async def link(
         self,
@@ -194,7 +206,7 @@ class StreamProducer(Generic[T]):
         """
         link = StreamLink(LinkEvent.OPEN, ref, name, after=after)
         async with self._lock:
-            return await self._write(RecordKind.LINK, [value], link)
+            return await self._write([(RecordKind.LINK, value, link)])
 
     async def join(self, *, name: str, until: Cursor | None = None) -> Cursor:
         """Write a ``LINK`` that says this producer waited for link ``name``.
@@ -208,10 +220,10 @@ class StreamProducer(Generic[T]):
         """
         link = StreamLink(LinkEvent.JOIN, None, name, until=until)
         async with self._lock:
-            return await self._write(RecordKind.LINK, [None], link)
+            return await self._write([(RecordKind.LINK, None, link)])
 
     async def _write(
-        self, kind: RecordKind, values: Any, link: StreamLink | None = None
+        self, items: list[tuple[RecordKind, Any, StreamLink | None]]
     ) -> Cursor:
         converter = self._handle._converter
         wires = [
@@ -225,7 +237,7 @@ class StreamProducer(Generic[T]):
                 sequence=self._sequence + index,
                 link=link,
             )
-            for index, value in enumerate(values)
+            for index, (kind, value, link) in enumerate(items)
         ]
         request = AppendRequest(
             stream=self._handle._address(self._topic),
