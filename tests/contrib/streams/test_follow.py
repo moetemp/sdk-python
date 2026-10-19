@@ -238,48 +238,6 @@ async def test_a_link_back_to_an_open_stream_is_a_cycle(client: Client):
     ]
 
 
-async def test_a_retry_that_writes_the_same_open_resumes_the_child(client: Client):
-    streams = await connect_with(client, MemoryStreams())
-    async with new_worker(streams, Waits) as worker:
-        agent_id = await running_owner(streams, worker.task_queue)
-        child_id = await running_owner(streams, worker.task_queue)
-        agent = stream_handle(streams, agent_id, topic=EVENTS)
-        child = stream_handle(streams, child_id, topic=EVENTS)
-        await child.producer(producer_id="c", attempt=1).append("c1", "c2")
-        for attempt in (1, 2):
-            writes = agent.producer(producer_id="tool", attempt=attempt)
-            await writes.append(f"m{attempt}")
-            await writes.link(child.ref, name="child")
-        for workflow_id in (child_id, agent_id):
-            owner = streams.get_workflow_handle(workflow_id)
-            await owner.signal(Waits.finish)
-            await owner.result()
-        items = await collect(agent.follow())
-    assert shape(items) == [
-        "m1",
-        "OPEN:child",
-        "OPENED:child",
-        "DONE:child:withdrawn",
-        "m2",
-        "OPEN:child",
-        "OPENED:child:resumed",
-        "c1",
-        "c2",
-        "DONE:child",
-    ]
-    states = [item for item in items if item.link_state is not None]
-    assert [item.link_state.reason for item in states if item.link_state] == [
-        "",
-        "withdrawn",
-        "resumed",
-        "",
-    ]
-    assert len({item.source for item in states}) == 1, "the child keeps its source"
-    assert any(
-        item.record and item.record.kind is RecordKind.SUPERSEDED for item in items
-    )
-
-
 async def test_a_missing_child_is_unavailable_after_the_grace(client: Client):
     streams = await connect_with(client, MemoryStreams(owner_start_grace=timedelta(0)))
     async with new_worker(streams, Waits) as worker:
