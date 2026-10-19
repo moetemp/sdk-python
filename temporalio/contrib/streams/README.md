@@ -186,6 +186,9 @@ async for item in stream_handle(client, agent_id, topic=EVENTS).follow():
   `join(*, name, until=None)` writes a `JOIN`. It says the producer waited
   for the link up to `until`, or to the linked stream's end. A link names a
   Workflow's stream only. Any other ref raises `ValueError`.
+- **Mixed batches.** `append` also takes a `StreamLink` next to plain values,
+  so `append(event, StreamLink(LinkEvent.OPEN, ref, name))` writes the event
+  and its link as one batch, with one dedupe identity.
 - **Following.** `StreamHandle.follow()` and `ActivityStreamHandle.follow()`
   read a stream and the streams it links, from client or Activity code.
   Workflow code can't follow.

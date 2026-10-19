@@ -725,3 +725,79 @@ async def test_a_producer_links_and_joins(client: Client):
     assert records[1].value == {"label": "search"}
     assert records[2].link == StreamLink(LinkEvent.JOIN, None, "sub-1")
     assert [r.sequence for r in records] == [1, 2, 3]
+
+
+@workflow.defn
+class AppendsMixed:
+    @workflow.run
+    async def run(self) -> str:
+        steps = stream_producer(STEPS)
+        child = StreamRef.for_workflow("child")
+        steps.append("d1", StreamLink(LinkEvent.OPEN, child, "sub-1"), "d2")
+        try:
+            steps.append("lost", StreamLink(LinkEvent.OPEN, child, ""))
+        except ValueError as error:
+            return str(error)
+        return ""
+
+
+async def test_a_workflow_appends_values_and_links_in_one_call(client: Client):
+    streams = await connect_with(client, MemoryStreams())
+    workflow_id = new_workflow_id()
+    async with new_worker(streams, AppendsMixed) as worker:
+        refused = await streams.execute_workflow(
+            AppendsMixed.run, id=workflow_id, task_queue=worker.task_queue
+        )
+    records = await read_all(stream_handle(streams, workflow_id).read(topic=STEPS))
+    assert [(r.kind, r.value) for r in records] == [
+        (RecordKind.DATA, "d1"),
+        (RecordKind.LINK, None),
+        (RecordKind.DATA, "d2"),
+    ]
+    assert records[1].link == StreamLink(
+        LinkEvent.OPEN, StreamRef.for_workflow("child"), "sub-1"
+    )
+    # A bad link adds none of the call's records.
+    assert "1 to 256" in refused
+
+
+async def mixed_batch_appends_once(streams: Client) -> None:
+    async with new_worker(streams, Waits) as worker:
+        workflow_id = await running_owner(streams, worker.task_queue)
+        stream = stream_handle(streams, workflow_id, topic=STEPS)
+        child = StreamRef.for_workflow(f"{workflow_id}-child", topic=STEPS)
+        batch = (
+            "sent",
+            StreamLink(LinkEvent.OPEN, child, "sub-1"),
+            StreamLink(LinkEvent.JOIN, None, "sub-1"),
+            "received",
+        )
+        first = stream.producer(producer_id="agent", attempt=1)
+        last = await first.append(*batch)
+        # A resend of the same batch from a fresh producer object dedupes.
+        again = stream.producer(producer_id="agent", attempt=1)
+        assert await again.append(*batch) == last
+        with pytest.raises(ValueError, match="1 to 256"):
+            await first.append("x", StreamLink(LinkEvent.OPEN, child, ""))
+        await first.append("after")
+        await streams.get_workflow_handle(workflow_id).signal(Waits.finish)
+        records = await read_all(stream.read())
+    assert [r.kind for r in records] == [
+        RecordKind.DATA,
+        RecordKind.LINK,
+        RecordKind.LINK,
+        RecordKind.DATA,
+        RecordKind.DATA,
+    ]
+    assert records[3].cursor == last
+    assert records[1].link == StreamLink(LinkEvent.OPEN, child, "sub-1")
+    assert records[2].link == StreamLink(LinkEvent.JOIN, None, "sub-1")
+    assert [r.sequence for r in records] == [1, 2, 3, 4, 5]
+
+
+async def test_a_producer_appends_values_and_links_as_one_batch(client: Client):
+    await mixed_batch_appends_once(await connect_with(client, MemoryStreams()))
+
+
+async def test_a_resent_mixed_batch_dedupes_on_redis(client: Client):
+    await mixed_batch_appends_once(await connect_with(client, redis_store()))
