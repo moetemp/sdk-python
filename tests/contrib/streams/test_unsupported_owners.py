@@ -26,9 +26,9 @@ async def test_a_ref_refuses_owner_kinds_this_release_lacks_where_it_opens(
     client: Client,
 ):
     streams_client = await connect_with(client, MemoryStreams())
-    for kind in ("activity", "standalone"):
+    for kind in ("standalone", "nexus"):
         ref = StreamRef(kind, "x")  # type: ignore[arg-type]
-        with pytest.raises(StreamUnsupportedError, match="only Workflow-owned"):
+        with pytest.raises(StreamUnsupportedError, match="a Workflow or an Activity"):
             stream_handle(streams_client, ref)
 
 
