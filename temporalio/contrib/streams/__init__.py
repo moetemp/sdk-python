@@ -77,6 +77,8 @@ from temporalio.contrib.streams._errors import (
     StreamProducerError,
     StreamRecordError,
     StreamRefusedError,
+    StreamReplayMismatchError,
+    StreamReplayRangeLostError,
     StreamStorageError,
     StreamUnsupportedError,
 )
@@ -141,6 +143,8 @@ __all__ = [
     "StreamRecordError",
     "StreamRef",
     "StreamRefusedError",
+    "StreamReplayMismatchError",
+    "StreamReplayRangeLostError",
     "StreamStorageError",
     "StreamStorePlugin",
     "StreamTopic",
