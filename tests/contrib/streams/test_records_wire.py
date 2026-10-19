@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Sequence
+from typing import Any
 
 import pytest
 
 from temporalio.api.common.v1 import Payload
+from temporalio.api.stream.v1 import StreamReference
 from temporalio.bridge.proto.streams import ReadRecord, Supersession
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.common import RawValue
-from temporalio.contrib.streams import Cursor, RecordKind, StreamRecordError
+from temporalio.contrib.streams import (
+    Cursor,
+    LinkEvent,
+    RecordKind,
+    StreamLink,
+    StreamRecordError,
+    StreamRef,
+    StreamUnsupportedError,
+)
 from temporalio.contrib.streams import Supersession as ReportedSupersession
 from temporalio.contrib.streams._body import (
     batch_digest,
@@ -19,8 +31,16 @@ from temporalio.contrib.streams._body import (
     decode_body,
     encode_bodies,
 )
-from temporalio.contrib.streams._wire import RUN_ID_KEY, WireRecord, from_read, to_wire
+from temporalio.contrib.streams._ref import from_reference, to_reference
+from temporalio.contrib.streams._wire import (
+    RUN_ID_KEY,
+    WireRecord,
+    from_read,
+    to_wire,
+    to_wire_link,
+)
 from temporalio.converter import DataConverter, PayloadCodec
+from tests.contrib.streams._support import streams_crate_dir
 
 CONVERTER = DataConverter.default
 
@@ -193,3 +213,161 @@ async def test_the_codec_runs_on_the_body_and_never_on_the_hashes():
         str,
     )
     assert record.value == "a"
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        StreamLink(
+            LinkEvent.OPEN,
+            StreamRef.for_workflow("child", topic="tokens"),
+            "sub-1",
+            after=Cursor("c7"),
+        ),
+        StreamLink(
+            LinkEvent.OPEN,
+            StreamRef.for_workflow("child", chain_run_id="r"),
+            "sub-3",
+            namespace="other",
+            endpoint="streams",
+        ),
+        StreamLink(LinkEvent.JOIN, None, "sub-3", until=Cursor("c9")),
+        StreamLink(LinkEvent.JOIN, None, "sub-1"),
+    ],
+    ids=["workflow-after", "workflow-remote", "join-until", "join-end"],
+)
+async def test_a_link_reads_back_as_it_was_written(link: StreamLink):
+    wire = to_wire(
+        CONVERTER.payload_converter,
+        topic="events",
+        kind=RecordKind.LINK,
+        link=link,
+        producer_id="p",
+        attempt=1,
+        sequence=4,
+    )
+    assert wire.kind == StreamRecordKind.STREAM_RECORD_KIND_LINK
+    assert not wire.HasField("body")
+    record = await from_read(CONVERTER, stored(wire, "c4"), None)
+    assert record.kind is RecordKind.LINK
+    assert record.link == link
+    assert record.value is None
+
+
+async def test_a_link_carries_an_optional_value_through_the_codec():
+    link = StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("child"), "sub")
+    wire = to_wire(
+        CONVERTER.payload_converter,
+        topic="events",
+        kind=RecordKind.LINK,
+        link=link,
+        value={"label": "search"},
+    )
+    record = await from_read(CONVERTER, stored(wire), dict)
+    assert record.value == {"label": "search"}
+    assert record.link == link
+
+
+@pytest.mark.parametrize(
+    "link, message",
+    [
+        (StreamLink(LinkEvent.OPEN, None, "x"), "needs a ref"),
+        (StreamLink(LinkEvent.JOIN, StreamRef.for_workflow("wf"), "x"), "needs a ref"),
+        (StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("wf"), ""), "1 to 256"),
+        (
+            StreamLink(LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x" * 257),
+            "1 to 256",
+        ),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", until=Cursor("c")
+            ),
+            "no until",
+        ),
+        (StreamLink(LinkEvent.JOIN, None, "x", after=Cursor("c")), "no after"),
+        (
+            StreamLink(
+                LinkEvent.OPEN, StreamRef.for_workflow("wf"), "x", endpoint="e" * 1025
+            ),
+            "endpoint takes at most 1024",
+        ),
+        (
+            StreamLink(LinkEvent.OPEN, StreamRef("activity", "", topic="t"), "x"),
+            "names a Workflow's stream",
+        ),
+    ],
+)
+def test_a_link_that_names_nothing_is_refused(link: StreamLink, message: str):
+    with pytest.raises(ValueError, match=message):
+        to_wire(CONVERTER.payload_converter, topic="t", kind=RecordKind.LINK, link=link)
+    with pytest.raises(ValueError, match="needs a link"):
+        to_wire(CONVERTER.payload_converter, topic="t", kind=RecordKind.LINK)
+
+
+def test_a_ref_of_a_later_owner_kind_decodes_from_a_link():
+    reference = to_reference(StreamRef.for_workflow("wf"))
+    reference.owner_kind = 9  # type: ignore[assignment]
+    ref = from_reference(reference)
+    assert ref.kind == "kind_9"
+    with pytest.raises(StreamUnsupportedError):
+        ref._require_supported()
+
+
+def _workflow_batch_digest(topic: str, records: list[tuple[int, bytes, Any]]) -> str:
+    # The stream runtime's rule for a Workflow batch, so a link the SDK writes keeps the digest
+    # that a rerun of its task must repeat.
+    digest = hashlib.sha256()
+    for kind, hashed, link in records:
+        fields: list[bytes] = []
+        if link is not None:
+            stream = link.stream
+            fields = [
+                link.event.to_bytes(4, "big"),
+                stream.owner_kind.to_bytes(4, "big"),
+                stream.workflow_id.encode(),
+                stream.run_id.encode(),
+                stream.topic.encode(),
+                stream.activity_id.encode(),
+                link.name.encode(),
+                link.after.encode(),
+                link.until.encode(),
+                link.namespace.encode(),
+                link.endpoint.encode(),
+            ]
+        body = (
+            len(topic).to_bytes(8, "big")
+            + topic.encode()
+            + kind.to_bytes(4, "big")
+            + len(hashed).to_bytes(8, "big")
+            + hashed
+            + b"".join(len(f).to_bytes(8, "big") + f for f in fields)
+        )
+        digest.update(len(body).to_bytes(8, "big") + body)
+    return digest.hexdigest()
+
+
+def test_a_link_keeps_the_batch_digest_of_the_shared_vectors():
+    path = streams_crate_dir() / "testdata/workflow_attempts.json"
+    cases = json.loads(path.read_text())["batch_digests"]
+    assert any("link" in r for case in cases for r in case["records"])
+    for case in cases:
+        records: list[tuple[int, bytes, Any]] = []
+        for record in case["records"]:
+            link = None
+            if "link" in record:
+                spec = record["link"]
+                stream = spec.get("stream")
+                link = to_wire_link(
+                    StreamLink(
+                        LinkEvent(spec["event"]),
+                        from_reference(StreamReference(**stream)) if stream else None,
+                        spec["name"],
+                        after=Cursor(spec["after"]) if spec.get("after") else None,
+                        until=Cursor(spec["until"]) if spec.get("until") else None,
+                    )
+                )
+            hashed = bytes.fromhex(record.get("content_hash", ""))
+            records.append((record["kind"], hashed, link))
+        assert _workflow_batch_digest(case["topic"], records) == case["digest"], case[
+            "label"
+        ]

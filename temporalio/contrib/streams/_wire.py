@@ -12,18 +12,34 @@ from typing import Any
 
 import temporalio.converter
 from temporalio.bridge.proto.streams import ReadRecord
+from temporalio.bridge.proto.streams.v1 import StreamLink as WireLink
 from temporalio.bridge.proto.streams.v1 import StreamRecord as WireRecord
 from temporalio.bridge.proto.streams.v1 import StreamRecordKind
 from temporalio.contrib.streams._body import decode_body
 from temporalio.contrib.streams._errors import StreamRecordError
 from temporalio.contrib.streams._record import (
     Cursor,
+    LinkEvent,
     RecordKind,
+    StreamLink,
     StreamRecord,
     Supersession,
 )
+from temporalio.contrib.streams._ref import from_reference, to_reference
 
-__all__ = ["RUN_ID_KEY", "WireRecord", "from_read", "to_wire"]
+__all__ = [
+    "RUN_ID_KEY",
+    "WireRecord",
+    "from_read",
+    "from_wire_link",
+    "to_record",
+    "to_wire",
+    "to_wire_link",
+]
+
+# The most bytes a link's name and its other strings may take, as the stream runtime checks them.
+_MAX_LINK_NAME_BYTES = 256
+_MAX_LINK_FIELD_BYTES = 1024
 
 RUN_ID_KEY = "temporal.io/run-id"
 """The record metadata key the producing run id is stored under.
@@ -44,18 +60,22 @@ def to_wire(
     producer_id: str = "",
     attempt: int = 0,
     sequence: int = 0,
+    link: StreamLink | None = None,
 ) -> WireRecord:
     """The record as the converter produced it, before the codec.
 
-    Only a ``DATA`` record carries a body; the converter encodes ``value``
-    into it.
+    A ``DATA`` record carries a body, and the converter encodes ``value``
+    into it. A ``LINK`` record carries ``link``, and a body only when
+    ``value`` is not ``None``.
 
     Raises:
         ValueError: ``kind`` is ``SUPERSEDED`` or ``UNSPECIFIED``, which no
-            writer stores.
+            writer stores, or a ``LINK`` has no valid ``link``.
     """
-    if kind not in (RecordKind.DATA, RecordKind.FINISH):
-        raise ValueError(f"a writer stores DATA or FINISH records, not {kind.name}")
+    if kind not in (RecordKind.DATA, RecordKind.FINISH, RecordKind.LINK):
+        raise ValueError(
+            f"a writer stores DATA, FINISH or LINK records, not {kind.name}"
+        )
     record = WireRecord(
         topic=topic,
         kind=StreamRecordKind.ValueType(int(kind)),
@@ -63,9 +83,69 @@ def to_wire(
         attempt=attempt,
         sequence=sequence,
     )
-    if kind is RecordKind.DATA:
+    if kind is RecordKind.LINK:
+        if link is None:
+            raise ValueError("a LINK record needs a link")
+        record.link.CopyFrom(to_wire_link(link))
+        if value is not None:
+            record.body.CopyFrom(converter.to_payloads([value])[0])
+    elif kind is RecordKind.DATA:
         record.body.CopyFrom(converter.to_payloads([value])[0])
     return record
+
+
+def to_wire_link(link: StreamLink) -> WireLink:
+    """``link`` as the stream runtime stores it.
+
+    Raises:
+        ValueError: The name is empty or over 256 bytes, a cursor, the
+            namespace or the endpoint is over 1024 bytes, an ``OPEN`` has no
+            ref or has ``until``, or a ``JOIN`` has a ref or ``after``.
+    """
+    if not link.name or len(link.name.encode()) > _MAX_LINK_NAME_BYTES:
+        raise ValueError(
+            f"a link name needs 1 to {_MAX_LINK_NAME_BYTES} bytes, got {link.name!r}"
+        )
+    if (link.event is LinkEvent.OPEN) != (link.ref is not None):
+        raise ValueError("an OPEN link needs a ref, and a JOIN link has none")
+    if link.event is LinkEvent.OPEN and link.until is not None:
+        raise ValueError("an OPEN link has no until")
+    if link.event is LinkEvent.JOIN and link.after is not None:
+        raise ValueError("a JOIN link has no after")
+    wire = WireLink(
+        event=WireLink.Event.ValueType(int(link.event)),
+        name=link.name,
+        after=link.after.token if link.after is not None else "",
+        until=link.until.token if link.until is not None else "",
+        namespace=link.namespace,
+        endpoint=link.endpoint,
+    )
+    for name, text in (
+        ("after", wire.after),
+        ("until", wire.until),
+        ("namespace", wire.namespace),
+        ("endpoint", wire.endpoint),
+    ):
+        if len(text.encode()) > _MAX_LINK_FIELD_BYTES:
+            raise ValueError(
+                f"a link's {name} takes at most {_MAX_LINK_FIELD_BYTES} bytes"
+            )
+    if link.ref is not None:
+        wire.stream.CopyFrom(to_reference(link.ref))
+    return wire
+
+
+def from_wire_link(wire: WireLink) -> StreamLink:
+    """The link the stream runtime stored in ``wire``."""
+    return StreamLink(
+        event=LinkEvent(wire.event),
+        ref=from_reference(wire.stream) if wire.HasField("stream") else None,
+        name=wire.name,
+        after=Cursor(wire.after) if wire.after else None,
+        until=Cursor(wire.until) if wire.until else None,
+        namespace=wire.namespace,
+        endpoint=wire.endpoint,
+    )
 
 
 async def from_read(
@@ -78,6 +158,34 @@ async def from_read(
     Raises:
         StreamRecordError: The body did not decode or convert, or the record
             holds a kind this SDK does not know.
+    """
+    if read.HasField("stored") and read.stored.HasField("body"):
+        try:
+            body = await decode_body(converter, read.stored.body)
+        except Exception as error:
+            raise StreamRecordError(
+                f"stream record at {read.cursor} could not be decoded: {error}",
+                Cursor(read.cursor),
+            ) from error
+        decoded = ReadRecord()
+        decoded.CopyFrom(read)
+        decoded.stored.body.CopyFrom(body)
+        read = decoded
+    return to_record(converter.payload_converter, read, result_type)
+
+
+def to_record(
+    payload_converter: temporalio.converter.PayloadConverter,
+    read: ReadRecord,
+    result_type: type | None,
+) -> StreamRecord[Any]:
+    """The record a reader yields for a record whose body the codec already decoded.
+
+    A follower reads with it, since it decodes each source in its own context.
+
+    Raises:
+        StreamRecordError: The body did not convert, or the record holds a
+            kind this SDK does not know.
     """
     cursor = Cursor(read.cursor)
     if read.HasField("superseded"):
@@ -98,10 +206,18 @@ async def from_read(
         if kind is RecordKind.SUPERSEDED:
             raise ValueError("a SUPERSEDED record is synthesized, never stored")
         value: Any = None
-        if kind in (RecordKind.DATA, RecordKind.UNSPECIFIED) and wire.HasField("body"):
-            body = await decode_body(converter, wire.body)
-            hints = [result_type] if result_type is not None else None
-            value = converter.payload_converter.from_payloads([body], hints)[0]
+        if kind in (
+            RecordKind.DATA,
+            RecordKind.UNSPECIFIED,
+            RecordKind.LINK,
+        ) and wire.HasField("body"):
+            hints = (
+                [result_type]
+                if result_type is not None and kind is not RecordKind.LINK
+                else None
+            )
+            value = payload_converter.from_payloads([wire.body], hints)[0]
+        link = from_wire_link(wire.link) if kind is RecordKind.LINK else None
     except Exception as error:
         raise StreamRecordError(
             f"stream record at {cursor} could not be decoded: {error}", cursor
@@ -117,5 +233,6 @@ async def from_read(
         if RUN_ID_KEY in wire.metadata
         else "",
         value=value,
+        link=link,
         stale=read.stale,
     )
