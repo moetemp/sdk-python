@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import timedelta
 
@@ -17,7 +18,7 @@ from tests.helpers import assert_task_fail_eventually, new_worker
 
 
 class RecordingPlugin(SimplePlugin):
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: BaseException | None = None) -> None:
         super().__init__("test-activation-complete")
         self.inputs: list[WorkflowActivationCompleteInput] = []
         self.fail = fail
@@ -27,7 +28,7 @@ class RecordingPlugin(SimplePlugin):
     ) -> None:
         self.inputs.append(input)
         if self.fail:
-            raise RuntimeError("plugin refused")
+            raise self.fail
 
     def items(self) -> list[str]:
         return [item for input in self.inputs for item in input.items]
@@ -81,8 +82,11 @@ async def test_plugin_gets_only_replay_items_on_cache_miss(client: Client):
     assert any(input.is_replaying for input in plugin.inputs)
 
 
-async def test_plugin_failure_fails_workflow_task(client: Client):
-    plugin = RecordingPlugin(fail=True)
+@pytest.mark.parametrize(
+    "error", [RuntimeError("plugin refused"), asyncio.CancelledError("plugin refused")]
+)
+async def test_plugin_failure_fails_workflow_task(client: Client, error: BaseException):
+    plugin = RecordingPlugin(fail=error)
     async with new_worker(client, SendingWorkflow, plugins=[plugin]) as worker:
         handle = await client.start_workflow(
             SendingWorkflow.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
