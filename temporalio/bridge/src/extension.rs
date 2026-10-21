@@ -2,11 +2,14 @@
 
 use std::sync::Arc;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use temporalio_sdk_core::WorkerExtension;
+use temporalio_sdk_core::{ExtensionError, WorkerExtension};
 
 use crate::runtime;
+
+// Its args are the gRPC code, the message and the encoded details, as with `RPCError`.
+pyo3::create_exception!(temporal_sdk_bridge, ExtensionCallError, PyException);
 
 /// An extension that a Worker config can carry. Python keeps it to reach the same instance that
 /// Core calls.
@@ -14,6 +17,7 @@ use crate::runtime;
 #[derive(Clone)]
 pub struct WorkerExtensionRef {
     pub(crate) extension: Arc<dyn WorkerExtension>,
+    runtime: runtime::Runtime,
 }
 
 #[pymethods]
@@ -22,6 +26,37 @@ impl WorkerExtensionRef {
     fn name(&self) -> String {
         self.extension.name().to_string()
     }
+
+    /// Calls `method` and waits for its output. Workflow code can't await, so this is for code
+    /// that runs between the activation and its completion.
+    fn call(&self, py: Python<'_>, method: &str, input: Vec<u8>) -> PyResult<Vec<u8>> {
+        self.runtime
+            .assert_same_process("call a worker extension")?;
+        let extension = self.extension.clone();
+        py.detach(|| extension.call(method, &input))
+            .map_err(call_error)
+    }
+
+    fn call_async<'p>(
+        &self,
+        py: Python<'p>,
+        method: String,
+        input: Vec<u8>,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        self.runtime
+            .assert_same_process("call a worker extension")?;
+        let extension = self.extension.clone();
+        self.runtime.future_into_py(py, async move {
+            extension
+                .call_async(method, input)
+                .await
+                .map_err(call_error)
+        })
+    }
+}
+
+fn call_error(err: ExtensionError) -> PyErr {
+    ExtensionCallError::new_err((err.code as u32, err.message, err.details))
 }
 
 /// Builds the extension with `name` from its encoded config. Only the extensions that this build
@@ -46,7 +81,7 @@ pub fn new_worker_extension(
             )))
         }
     };
-    Ok(WorkerExtensionRef { extension })
+    Ok(WorkerExtensionRef { extension, runtime })
 }
 
 /// An extension for the SDK's own tests. Release builds leave it out.

@@ -70,6 +70,10 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::LocalActivitySlotInfo>()?;
     m.add_function(wrap_pyfunction!(new_worker, m)?)?;
     m.add_function(wrap_pyfunction!(new_replay_worker, m)?)?;
+    m.add(
+        "ExtensionCallError",
+        py.get_type::<extension::ExtensionCallError>(),
+    )?;
     m.add_class::<extension::WorkerExtensionRef>()?;
     m.add_function(wrap_pyfunction!(new_worker_extension, m)?)?;
 

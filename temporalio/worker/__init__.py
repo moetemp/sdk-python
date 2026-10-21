@@ -2,7 +2,7 @@
 
 from ..common import WorkerDeploymentVersion
 from ._activity import SharedHeartbeatSender, SharedStateManager
-from ._extension import WorkerExtension
+from ._extension import ExtensionError, WorkerExtension
 from ._interceptor import (
     ActivityInboundInterceptor,
     ActivityOutboundInterceptor,
@@ -81,6 +81,7 @@ __all__ = [
     "PollerBehaviorAutoscaling",
     "PatchActivationInput",
     "WorkerExtension",
+    "ExtensionError",
     # Interceptor base classes
     "Interceptor",
     "ActivityInboundInterceptor",
