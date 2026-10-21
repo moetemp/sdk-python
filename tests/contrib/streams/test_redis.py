@@ -19,7 +19,7 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import UnsandboxedWorkflowRunner
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -600,3 +600,67 @@ async def test_read_ends_idle_and_resumes(stream_client: Client):
     ]
     assert [item.data for item in resumed if isinstance(item, streams.Record)] == [2]
     assert await stream.get_offset() > items[-1].offset
+
+
+@workflow.defn
+class WaitsForSignal:
+    def __init__(self) -> None:
+        self.go = False
+
+    @workflow.run
+    async def run(self) -> str:
+        turns = streams.workflow_stream().topic("turns", type=str)
+        turns.publish("before restart")
+        with streams.create_workflow_stream("scoped") as scoped:
+            scoped.topic("t", type=str).publish("scoped")
+        await workflow.wait_condition(lambda: self.go)
+        turns.publish("after restart")
+        return "done"
+
+    @workflow.signal
+    def proceed(self) -> None:
+        self.go = True
+
+
+async def test_new_worker_replays_and_writes_each_record_once(stream_client: Client):
+    task_queue = f"tq-{uuid.uuid4()}"
+    async with new_worker(stream_client, WaitsForSignal, task_queue=task_queue):
+        handle = await stream_client.start_workflow(
+            WaitsForSignal.run, id=f"wf-{uuid.uuid4()}", task_queue=task_queue
+        )
+        first = streams.for_handle(handle, wait_for_create=timedelta(seconds=20))
+        assert isinstance(await anext(aiter(first.subscribe())), streams.Record)
+    # The new Worker has no cache, so it replays the run and sends the creates and the close
+    # of the scoped Stream again.
+    async with new_worker(stream_client, WaitsForSignal, task_queue=task_queue):
+        await handle.signal(WaitsForSignal.proceed)
+        assert await handle.result() == "done"
+        items = await read_all(streams.for_handle(handle))
+        scoped = await read_all(streams.for_handle(handle, name="scoped"))
+    data = [i.data for i in items if isinstance(i, streams.Record)]
+    assert data == ["before restart", "after restart"]
+    assert isinstance(items[-1], streams.Closed)
+    assert [i.data for i in scoped if isinstance(i, streams.Record)] == ["scoped"]
+    assert [type(i) for i in scoped].count(streams.Closed) == 1
+
+
+async def test_plugin_replays_a_history_made_without_it(
+    client: Client, stream_client: Client
+):
+    async with new_worker(client, RandomAroundActivity, activities=[noop]) as worker:
+        handle = await client.start_workflow(
+            RandomAroundActivity.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result()
+    history = await handle.fetch_history()
+    replayer = Replayer(
+        workflows=[RandomAroundActivity],
+        plugins=[
+            p
+            for p in stream_client.config()["plugins"]
+            if isinstance(p, RedisStreamPlugin)
+        ],
+    )
+    await replayer.replay_workflow(history)
