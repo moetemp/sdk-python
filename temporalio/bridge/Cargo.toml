@@ -25,18 +25,23 @@ crate-type = ["cdylib"]
 # The extra `tokio-rustls/*` entry is sdk-python-specific: the bridge has its own
 # direct tokio-rustls dep (client.rs custom verifier) that Ruby lacked, so its
 # provider must track the build too — else `cargo tree -i ring` would still find ring.
-default = ["tls-ring"]
+default = ["tls-ring", "streams"]
 tls-ring = [
     "temporalio-sdk-core/tls-ring",
     "temporalio-client/tls-ring",
+    "temporalio-streams?/tls-ring",
     "tokio-rustls/ring",
 ]
 tls-aws-lc = [
     "temporalio-sdk-core/tls-aws-lc",
     "temporalio-client/tls-aws-lc",
+    "temporalio-streams?/tls-aws-lc",
     "tokio-rustls/aws_lc_rs",
 ]
-fips = ["tls-aws-lc", "dep:aws-lc-rs"]
+fips = ["tls-aws-lc", "dep:aws-lc-rs", "streams", "temporalio-streams?/fips"]
+# Links the Stream runtime as the `temporalio-streams-redis` worker extension. No stream code
+# runs unless a plugin builds the extension.
+streams = ["dep:temporalio-streams"]
 
 [dependencies]
 anyhow = "1.0"
@@ -83,6 +88,20 @@ tokio-stream = "0.1"
 tonic = "0.14"
 tracing = "0.1"
 url = "2.2"
+
+# The rev moves with the sdk-core pin, and the patch below makes the crate use the submodule's
+# crates, so the bridge sees one type of each.
+[dependencies.temporalio-streams]
+git = "https://github.com/moetemp/sdk-streams"
+rev = "5b366595abc08adf26358dd1a54afdf3fb3d4097"
+default-features = false
+optional = true
+
+# The key must match the sdk-rust URL in the sdk-streams manifest byte for byte, or Cargo
+# ignores the patch with only a warning.
+[patch."https://github.com/moetemp/sdk-rust"]
+temporalio-common = { path = "./sdk-core/crates/common" }
+temporalio-sdk-core = { path = "./sdk-core/crates/sdk-core" }
 
 [profile.release]
 opt-level = 3
