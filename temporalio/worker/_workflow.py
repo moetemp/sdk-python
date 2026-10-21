@@ -561,7 +561,8 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         try:
             for plugin in self._activation_complete_plugins:
                 await plugin.on_workflow_activation_complete(input)
-        except Exception as err:
+        # A cancel too must fail the task, or the Activation never completes.
+        except BaseException as err:
             logger.exception(
                 "Failed plugin activation hook on workflow with run ID %s", act.run_id
             )
