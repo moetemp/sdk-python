@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -34,31 +35,56 @@ class StreamWriter:
         backend: StreamBackend,
         converter: temporalio.converter.DataConverter,
         namespace: str,
-        stream_id: str,
+        stream_id: Callable[[], Awaitable[str]],
         producer: stream_pb.Producer,
         batch: BatchOptions,
         create_first: bool,
+        loop: asyncio.AbstractEventLoop,
     ) -> None:
-        """Create a writer. It opens on its first publish."""
+        """Create a writer. It opens on its first publish.
+
+        ``loop`` runs the writer's async work, so a sync Activity on another thread can
+        publish too.
+        """
         self._backend = backend
         self._converter = converter
         self._namespace = namespace
-        self._stream_id = stream_id
+        self._resolve_id = stream_id
+        self._stream_id = ""
         self._producer = producer
         self._batch = batch
         self._create_first = create_first
+        self._loop = loop
         self._writer_id: int | None = None
         self._open_lock = asyncio.Lock()
         self._pending: asyncio.Task[None] | None = None
         self._closed = False
 
-    async def open(self) -> int:
+    @property
+    def producer(self) -> stream_pb.Producer:
+        """The Producer that the writer writes as."""
+        return self._producer
+
+    async def withdraw_earlier_attempts(self) -> None:
+        """Open the writer of a new attempt, which withdraws the Records of the earlier ones.
+
+        It creates no Stream. A Stream that does not exist has nothing to withdraw, and the
+        first publish creates it.
+        """
+        try:
+            await self.open(create=False)
+        except _errors.StreamNotFoundError:
+            pass
+
+    async def open(self, *, create: bool = True) -> int:
         """Open the crate's writer once. The open of a new attempt withdraws the earlier one's
         Records, even when it publishes nothing.
         """
         async with self._open_lock:
             if self._writer_id is None:
-                if self._create_first:
+                if not self._stream_id:
+                    self._stream_id = await self._resolve_id()
+                if self._create_first and create:
                     await self._backend.call_async(
                         "CreateStream",
                         stream_pb.CreateStreamRequest(
@@ -84,6 +110,23 @@ class StreamWriter:
 
     def publish(self, topic: str, value: Any, force_flush: bool) -> None:
         """Add one Record to the buffer and return at once."""
+        try:
+            on_loop = asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            on_loop = False
+        if not on_loop:
+            # A sync Activity runs on another thread, so the loop does the publish, and the
+            # thread waits only for the hand-off.
+            asyncio.run_coroutine_threadsafe(
+                self._publish_on_loop(topic, value, force_flush), self._loop
+            ).result()
+            return
+        self._publish(topic, value, force_flush)
+
+    async def _publish_on_loop(self, topic: str, value: Any, force_flush: bool) -> None:
+        self._publish(topic, value, force_flush)
+
+    def _publish(self, topic: str, value: Any, force_flush: bool) -> None:
         if self._closed:
             raise _errors.StreamClosedError(
                 "The writer is closed", reason="stream_closed"
@@ -95,7 +138,7 @@ class StreamWriter:
         # The open and the codec are async, so they run in order in the background, and a
         # flush raises what they raised.
         previous = self._pending
-        self._pending = asyncio.get_running_loop().create_task(
+        self._pending = self._loop.create_task(
             self._publish_later(previous, topic, value, force_flush)
         )
 

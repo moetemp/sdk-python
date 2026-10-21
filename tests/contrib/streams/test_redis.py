@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import dataclasses
 import shutil
 import socket
@@ -19,6 +20,10 @@ from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import UnsandboxedWorkflowRunner
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 from tests.helpers import new_worker
 
 # Ports that other local services own.
@@ -271,6 +276,190 @@ async def test_workflow_code_can_not_read(stream_client: Client):
         )
     assert "can't read" in result
     await asyncio.sleep(0)
+
+
+@activity.defn
+async def noop() -> None:
+    pass
+
+
+@workflow.defn
+class RandomAroundActivity:
+    @workflow.run
+    async def run(self) -> bool:
+        before = workflow.random().getstate()
+        handle = workflow.start_activity(
+            noop, start_to_close_timeout=timedelta(seconds=30)
+        )
+        same = workflow.random().getstate() == before
+        await handle
+        return same
+
+
+async def test_plugin_leaves_the_workflow_random_alone(stream_client: Client):
+    async with new_worker(
+        stream_client, RandomAroundActivity, activities=[noop]
+    ) as worker:
+        assert await stream_client.execute_workflow(
+            RandomAroundActivity.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+
+
+retries: dict[str, int] = {}
+
+
+@activity.defn
+async def fails_once(key: str) -> None:
+    retries[key] = retries.get(key, 0) + 1
+    if retries[key] == 1:
+        raise RuntimeError("first attempt fails")
+
+
+@workflow.defn
+class NoStreams:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        await workflow.execute_activity(
+            fails_once,
+            key,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+
+
+async def test_workflow_without_streams_creates_none(stream_client: Client):
+    async with new_worker(stream_client, NoStreams, activities=[fails_once]) as w:
+        handle = await stream_client.start_workflow(
+            NoStreams.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=w.task_queue,
+        )
+        await handle.result()
+    # The retry withdrew nothing and the run's close found no Stream, so none exists.
+    with pytest.raises(streams.StreamNotFoundError):
+        await streams.for_handle(handle).get_offset()
+
+
+@workflow.defn
+class WritesThenContinues:
+    @workflow.run
+    async def run(self, write: bool) -> str:
+        if write:
+            streams.workflow_stream().topic("t", type=str).publish("first run")
+            workflow.continue_as_new(False)
+        return "second run"
+
+
+async def test_last_run_closes_a_stream_it_did_not_write(stream_client: Client):
+    async with new_worker(stream_client, WritesThenContinues) as worker:
+        handle = await stream_client.start_workflow(
+            WritesThenContinues.run,
+            True,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "second run"
+        stream = streams.for_handle(handle)
+        stream.topic("t", type=str)
+        items = await read_all(stream)
+    assert [i.data for i in items if isinstance(i, streams.Record)] == ["first run"]
+    closed = items[-1]
+    assert isinstance(closed, streams.Closed) and closed.result == "second run"
+
+
+@workflow.defn
+class CancelledBlock:
+    @workflow.run
+    async def run(self) -> None:
+        with streams.create_workflow_stream("turn") as turn:
+            turn.topic("t", type=str).publish("started")
+            await workflow.wait_condition(lambda: False)
+
+
+async def test_cancelled_block_closes_with_a_failure(stream_client: Client):
+    async with new_worker(stream_client, CancelledBlock) as worker:
+        handle = await stream_client.start_workflow(
+            CancelledBlock.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        turn = streams.for_handle(
+            handle, name="turn", wait_for_create=timedelta(seconds=20)
+        )
+        turn.topic("t", type=str)
+        first = await anext(aiter(turn.subscribe()))
+        assert isinstance(first, streams.Record)
+        await handle.cancel()
+        items = await read_all(turn)
+    closed = items[-1]
+    assert isinstance(closed, streams.Closed)
+    assert closed.failure is not None
+
+
+@activity.defn
+def sync_tokens(count: int) -> None:
+    tokens = streams.activity_stream().topic("tokens", type=int)
+    for n in range(count):
+        tokens.publish(n)
+
+
+@workflow.defn
+class SyncWriter:
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.execute_activity(
+            sync_tokens, 3, start_to_close_timeout=timedelta(seconds=30)
+        )
+
+
+async def test_sync_activity_publishes(stream_client: Client):
+    async with new_worker(
+        stream_client,
+        SyncWriter,
+        activities=[sync_tokens],
+        activity_executor=concurrent.futures.ThreadPoolExecutor(2),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            SyncWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+        stream = streams.for_handle(handle)
+        stream.topic("tokens", type=int)
+        items = await read_all(stream)
+    assert [i.data for i in items if isinstance(i, streams.Record)] == [0, 1, 2]
+
+
+@workflow.defn
+class PlainWriter:
+    @workflow.run
+    async def run(self) -> str:
+        streams.workflow_stream().topic("t", type=str).publish("plain")
+        with streams.create_workflow_stream("scoped") as scoped:
+            scoped.topic("t", type=str).publish("scoped")
+        return "done"
+
+
+async def test_temporal_only_passthrough_keeps_records(stream_client: Client):
+    # Only the minimum modules and temporalio pass through. Values are plain, since a
+    # dataclass from a sandbox with its own dataclasses module can't convert outside it.
+    runner = SandboxedWorkflowRunner(
+        restrictions=dataclasses.replace(
+            SandboxRestrictions.default,
+            passthrough_modules=SandboxRestrictions.passthrough_modules_with_temporal,
+        )
+    )
+    async with new_worker(stream_client, PlainWriter, workflow_runner=runner) as worker:
+        handle = await stream_client.start_workflow(
+            PlainWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+        items = await read_all(streams.for_handle(handle))
+        scoped = await read_all(streams.for_handle(handle, name="scoped"))
+    assert [i.data for i in items if isinstance(i, streams.Record)] == ["plain"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+    assert [i.data for i in scoped if isinstance(i, streams.Record)] == ["scoped"]
+    assert isinstance(scoped[-1], streams.Closed)
 
 
 @activity.defn
