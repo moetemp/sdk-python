@@ -15,7 +15,7 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -900,3 +900,52 @@ async def test_workflow_calls_carry_the_owner(stream_client: Client):
     for ref in refs:
         assert ref.workflow_id == handle.id
         assert ref.first_execution_run_id == handle.first_execution_run_id
+
+
+@workflow.defn
+class AlwaysFails:
+    @workflow.run
+    async def run(self, non_retryable: bool) -> None:
+        attempt = workflow.info().attempt
+        streams.workflow_stream().topic("t", type=str).publish(f"run-{attempt}")
+        raise ApplicationError(f"attempt {attempt} fails", non_retryable=non_retryable)
+
+
+@pytest.mark.parametrize("non_retryable", [False, True])
+async def test_final_failure_under_a_retry_policy(
+    stream_client: Client, non_retryable: bool
+):
+    async with new_worker(stream_client, AlwaysFails) as worker:
+        handle = await stream_client.start_workflow(
+            AlwaysFails.run,
+            non_retryable,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(milliseconds=10), maximum_attempts=3
+            ),
+        )
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+        reader = streams.for_handle(
+            handle, end_with_run=True, wait_for_create=timedelta(seconds=20)
+        )
+        items = [item async for item in reader.subscribe(type=str)]
+    records = [item for item in items if isinstance(item, streams.Record)]
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    # Only the run that ends the chain closes the Stream, with its failure, and it is last.
+    assert len(closes) == 1 and items[-1] is closes[0]
+    assert closes[0].failure is not None
+    if non_retryable:
+        # A non-retryable failure ends the chain on attempt 1, so it closes at once.
+        assert [r.data for r in records] == ["run-1"]
+        assert superseded == []
+        return
+    # Attempts 1 and 2 left the Stream open, so attempts 2 and 3 could write. Each retry run
+    # withdraws the run before it.
+    assert [r.data for r in records] == ["run-1", "run-2", "run-3"]
+    assert len(superseded) == 2
+    assert [r.data for r in records if superseded[0].withdraws(r)] == ["run-1"]
+    assert [r.data for r in records if superseded[1].withdraws(r)] == ["run-2"]
+    assert not any(s.withdraws(records[-1]) for s in superseded)
