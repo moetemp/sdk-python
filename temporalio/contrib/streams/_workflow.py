@@ -7,7 +7,7 @@ import weakref
 from collections.abc import Coroutine
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
 
 import temporalio.exceptions
 import temporalio.workflow
@@ -107,8 +107,16 @@ class WorkflowStream(_Writable):
         """Whether the run closes the Stream when it closes."""
         return self._auto_close
 
-    def topic(self, name: str, *, type: type[T] = Any) -> Topic[T]:  # type: ignore[assignment]
-        """A Topic of this Stream."""
+    @overload
+    def topic(self, name: str) -> Topic[Any]: ...
+
+    @overload
+    def topic(self, name: str, *, type: type[T]) -> Topic[T]: ...
+
+    def topic(self, name: str, *, type: Any = None) -> Topic[Any]:
+        """A Topic of this Stream. ``type`` decodes its values, and ``RawValue`` keeps the
+        Payload. With no type, values decode as the converter gives them.
+        """
         return Topic(self, name, type)
 
     def _check(self, action: str) -> None:
