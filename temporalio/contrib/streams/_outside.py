@@ -102,6 +102,7 @@ class OutsideStream(_Readable):
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
+        type: Any = None,
     ) -> AsyncGenerator[Item, None]:
         """Read the Stream's items in order.
 
@@ -114,6 +115,8 @@ class OutsideStream(_Readable):
             from_offset: Start at this offset, inclusive. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
             idle_timeout: End with an ``Idle`` item when no new Record comes for this long.
+            type: Decode the values of Topics with no type as this type. A Topic from
+                :py:meth:`topic` with a type keeps its own.
         """
         return self._read(
             topics=[topic.name for topic in topics] if topics else None,
@@ -121,6 +124,7 @@ class OutsideStream(_Readable):
                 **self._types,
                 **{topic.name: topic.type for topic in topics or []},
             },
+            default_type=type,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
             idle_timeout=idle_timeout,
@@ -131,6 +135,7 @@ class OutsideStream(_Readable):
         *,
         topics: list[str] | None,
         types: dict[str, Any],
+        default_type: Any,
         from_offset: int | None,
         wait_new_records: bool,
         idle_timeout: timedelta | None,
@@ -141,6 +146,7 @@ class OutsideStream(_Readable):
             await self._stream_id(),
             topics=topics,
             types=types,
+            default_type=default_type,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
             idle_timeout=idle_timeout,

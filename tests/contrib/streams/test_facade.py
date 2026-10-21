@@ -306,3 +306,18 @@ async def test_create_wait_ends_with_the_run(client: Client):
     start = asyncio.get_running_loop().time()
     assert [item async for item in stream.subscribe()] == []
     assert asyncio.get_running_loop().time() - start < 30
+
+
+async def test_read_default_type_for_untyped_topics(client: Client):
+    client, _ = fake_client(client)
+    stream = await streams.create_stream(client, "default-type")
+    stream.topic("turns").publish(Turn("model"))
+    stream.topic("tokens").publish("hi")
+    await stream.flush()
+    reader = streams.for_ref(client, stream.ref)
+    reader.topic("tokens", type=RawValue)
+    items = [item async for item in reader.subscribe(type=Turn, wait_new_records=False)]
+    first, second = items
+    assert isinstance(first, streams.Record) and first.data == Turn("model")
+    # A typed Topic keeps its own type.
+    assert isinstance(second, streams.Record) and isinstance(second.data, RawValue)

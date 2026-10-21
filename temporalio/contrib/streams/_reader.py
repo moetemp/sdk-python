@@ -31,6 +31,7 @@ async def read(
     *,
     topics: Sequence[str] | None,
     types: Mapping[str, Any],
+    default_type: Any = None,
     from_offset: int | None,
     wait_new_records: bool,
     idle_timeout: timedelta | None,
@@ -78,7 +79,7 @@ async def read(
                 continue
             raise
         for record in answer.records or []:
-            item = await _item(converter, record, types)
+            item = await _item(converter, record, types, default_type)
             if item is None:
                 continue
             yield item
@@ -98,11 +99,12 @@ async def _item(
     converter: temporalio.converter.DataConverter,
     record: models.StreamRecord,
     types: Mapping[str, Any],
+    default_type: Any,
 ) -> Item | None:
     offset = record.offset or 0
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_DATA:
         topic = record.topic or ""
-        type_hint = types.get(topic)
+        type_hint = types.get(topic) or default_type
         data = await _convert.decode(converter, record.body, type_hint)
         return Record(topic=topic, data=data, offset=offset, producer=record.producer)
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_SUPERSEDED:
