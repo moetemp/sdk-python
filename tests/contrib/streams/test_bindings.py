@@ -65,11 +65,9 @@ async def test_long_poll_carries_the_offset_until_records_come():
         stream_pb.ReadRecordsResponse(next_offset=8),
         stream_pb.ReadRecordsResponse(records=[record], next_offset=10),
     )
-    handle = client.StreamServiceClient(transport).stream(
-        stream=models.StreamRef(id="wf:run")
-    )
-    answer = await handle.read_records_until_records(
-        from_offset=1, deadline=timedelta(seconds=5)
+    answer = await client.StreamServiceClient(transport).read_records_until_records(
+        models.ReadRecordsRequest(stream=models.StreamRef(id="wf:run"), from_offset=1),
+        deadline=timedelta(seconds=5),
     )
     assert answer.records and answer.records[0].offset == 9
     first, second = (

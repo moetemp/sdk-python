@@ -12,8 +12,6 @@ world system {
 /// @nexus.endpoint "__temporal_system"
 /// @nexus.service-name "temporal.api.streamservice.v1.StreamService"
 /// @nexus.experimental
-/// @nexus.handle "stream-handle" keys="stream"
-/// @nexus.handle "stream-producer" keys="stream producer"
 interface stream-service {
   use nexus:temporal-types/model@1.0.0.{
     duration,
@@ -141,7 +139,7 @@ interface stream-service {
     /// @nexus.doc "The place of this Record in the Stream. Ordered and unique, with gaps."
     /// @nexus.offset "stream-offset"
     offset: option<s64>,
-    /// @nexus.doc "Empty on a SUPERSEDED, close or IDLE Record, and for the default Topic."
+    /// @nexus.doc "Empty on CLOSE, IDLE and SUPERSEDED Records."
     topic: option<string>,
     producer: option<producer>,
     /// @nexus.doc "Set on a data Record."

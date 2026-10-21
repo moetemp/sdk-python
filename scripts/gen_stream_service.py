@@ -2,8 +2,9 @@
 
 The WIT and the protos are copies of the temporalio-streams crate's, in scripts/_wit and
 scripts/_proto. Run scripts/gen_protos.py first for the proto modules. No nexgen release has the
-offset, one-way, long-poll, handle and client features yet, so NEX_GEN_STREAMS_BIN must name an
-advanced build of moetemp/nexgen moe/brook/v3/n9-handles.
+offset, one-way, long-poll and client features yet, so the script installs nexgen at
+NEX_GEN_REVISION from moetemp/nexgen. NEX_GEN_STREAMS_BIN may name a build of that revision
+instead.
 """
 
 import os
@@ -30,12 +31,37 @@ proto_path = (
 )
 output_dir = base_dir / "temporalio" / "contrib" / "streams" / "system"
 
+NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
+# The head of moe/brook/v3/n7-long-poll-loop. A branch moves, so the pin is the commit.
+NEX_GEN_REVISION = "64ee48a79abe18077d727f5067a6302c45c25c9d"
+nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
+
 
 def nex_gen_command() -> list[str]:
-    bin_path = os.environ.get("NEX_GEN_STREAMS_BIN")
-    if not bin_path:
-        raise RuntimeError("set NEX_GEN_STREAMS_BIN to a nexgen build with --client")
-    return [bin_path]
+    if bin_path := os.environ.get("NEX_GEN_STREAMS_BIN"):
+        return [bin_path]
+    binary = nex_gen_root / "bin" / "nexgen"
+    if not binary.exists():
+        subprocess.check_call(
+            [
+                "cargo",
+                "install",
+                "--locked",
+                "nexgen",
+                "--git",
+                NEX_GEN_REPOSITORY,
+                "--rev",
+                NEX_GEN_REVISION,
+                "--features",
+                "advanced",
+                "--root",
+                str(nex_gen_root),
+            ],
+            # The git CLI honours the user's URL rewrites and credentials, which cargo's
+            # built-in client does not.
+            env={**os.environ, "CARGO_NET_GIT_FETCH_WITH_CLI": "true"},
+        )
+    return [str(binary)]
 
 
 def api_protos() -> list[Path]:
@@ -99,6 +125,10 @@ def generate_stream_service() -> None:
 
 
 if __name__ == "__main__":
-    print("Generating the Stream service bindings...", file=sys.stderr)
+    print(
+        f"Generating the Stream service bindings with nexgen {NEX_GEN_REPOSITORY}"
+        f"@{NEX_GEN_REVISION}...",
+        file=sys.stderr,
+    )
     generate_stream_service()
     print("Done", file=sys.stderr)
