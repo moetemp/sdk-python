@@ -30,6 +30,7 @@ async def read(
     stream_id: str,
     *,
     topics: Sequence[str] | None,
+    topic_prefixes: Sequence[str] = (),
     types: Mapping[str, Any],
     default_type: Any = None,
     from_offset: int | None,
@@ -61,6 +62,7 @@ async def read(
             from_offset=offset,
             start=None if offset is not None else ReadStart.READ_START_BEGINNING,
             topics=names,
+            topic_prefixes=list(topic_prefixes),
             idle_timeout=idle_timeout,
             create_wait=min(create_left, create_step) if create_left else None,
         )

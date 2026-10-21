@@ -99,6 +99,7 @@ class OutsideStream(_Readable):
         self,
         *,
         topics: Sequence[Topic[Any]] | None = None,
+        topic_prefixes: Sequence[str] = (),
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
@@ -111,7 +112,9 @@ class OutsideStream(_Readable):
         a failed attempt, and it passes every Topic filter.
 
         Args:
-            topics: Read only these Topics. Defaults to every Topic.
+            topics: Read these Topics, by exact match.
+            topic_prefixes: Also read the Topics that start with one of these. With no
+                ``topics`` and no prefixes, the read gives every Topic.
             from_offset: Start at this offset, inclusive. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
             idle_timeout: End with an ``Idle`` item when no new Record comes for this long.
@@ -120,6 +123,7 @@ class OutsideStream(_Readable):
         """
         return self._read(
             topics=[topic.name for topic in topics] if topics else None,
+            topic_prefixes=topic_prefixes,
             types={
                 **self._types,
                 **{topic.name: topic.type for topic in topics or []},
@@ -134,6 +138,7 @@ class OutsideStream(_Readable):
         self,
         *,
         topics: list[str] | None,
+        topic_prefixes: Sequence[str],
         types: dict[str, Any],
         default_type: Any,
         from_offset: int | None,
@@ -145,6 +150,7 @@ class OutsideStream(_Readable):
             self._converter,
             await self._stream_id(),
             topics=topics,
+            topic_prefixes=topic_prefixes,
             types=types,
             default_type=default_type,
             from_offset=from_offset,

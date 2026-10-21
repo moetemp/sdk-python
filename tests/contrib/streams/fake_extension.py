@@ -124,9 +124,10 @@ class FakeExtension(WorkerExtension):
                 for record in stream.records
                 if record.offset >= offset
                 and (
-                    not request.topics
+                    (not request.topics and not request.topic_prefixes)
                     or record.kind != stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA
                     or record.topic in request.topics
+                    or any(record.topic.startswith(p) for p in request.topic_prefixes)
                 )
             ]
             if found:

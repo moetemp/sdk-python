@@ -321,3 +321,21 @@ async def test_read_default_type_for_untyped_topics(client: Client):
     assert isinstance(first, streams.Record) and first.data == Turn("model")
     # A typed Topic keeps its own type.
     assert isinstance(second, streams.Record) and isinstance(second.data, RawValue)
+
+
+async def test_read_by_topic_prefix(client: Client):
+    client, _ = fake_client(client)
+    stream = await streams.create_stream(client, "prefixes")
+    for topic in ("agent/a", "agent/b", "other", "exact"):
+        stream.topic(topic).publish(topic)
+    await stream.flush()
+    read = [
+        item.topic
+        async for item in stream.subscribe(
+            topics=[stream.topic("exact")],
+            topic_prefixes=["agent/"],
+            wait_new_records=False,
+        )
+        if isinstance(item, streams.Record)
+    ]
+    assert read == ["agent/a", "agent/b", "exact"]

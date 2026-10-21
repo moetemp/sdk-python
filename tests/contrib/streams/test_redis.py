@@ -783,3 +783,20 @@ async def test_get_offset_of_a_created_empty_stream(stream_client: Client):
     # A Stream that nobody created is still an error.
     with pytest.raises(streams.StreamNotFoundError):
         await streams.for_handle(handle, name="missing").get_offset()
+
+
+async def test_read_by_topic_prefix_on_redis(stream_client: Client):
+    stream = await streams.create_stream(stream_client, f"prefix-{uuid.uuid4()}")
+    for topic in ("agent/a", "agent/b", "other", "exact"):
+        stream.topic(topic, type=str).publish(topic)
+    await stream.flush()
+    read = [
+        item.topic
+        async for item in stream.subscribe(
+            topics=[stream.topic("exact", type=str)],
+            topic_prefixes=["agent/"],
+            wait_new_records=False,
+        )
+        if isinstance(item, streams.Record)
+    ]
+    assert read == ["agent/a", "agent/b", "exact"]

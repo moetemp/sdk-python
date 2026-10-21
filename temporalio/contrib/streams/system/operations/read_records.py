@@ -35,6 +35,7 @@ async def read_records(
     start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
     | None = None,
     topics: list[str] | None = None,
+    topic_prefixes: list[str] | None = None,
     max_records: int | None = None,
     wait: datetime.timedelta | None = None,
     create_wait: datetime.timedelta | None = None,
@@ -46,7 +47,9 @@ async def read_records(
         from_offset: Start at this offset. Empty uses start. INVALID_ARGUMENT if past
             the newest offset + 1.
         start: Where to start when from-offset is empty. Unspecified is the beginning.
-        topics: Empty reads every Topic.
+        topics: Topics to read, by exact match. With topic-prefixes, empty reads every
+            Topic.
+        topic_prefixes: Also read the Topics that start with one of these.
         max_records: At most this many Records. 1 to 1000.
         wait: How long to wait for a new Record before an empty answer. At most 60 s.
         create_wait: How long to wait for an uncreated Stream. Empty fails at once. At
@@ -59,6 +62,7 @@ async def read_records(
         from_offset=from_offset,
         start=start,
         topics=topics or [],
+        topic_prefixes=topic_prefixes or [],
         max_records=max_records,
         wait=wait,
         create_wait=create_wait,
