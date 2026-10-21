@@ -730,6 +730,7 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     WAIT_FIELD_NUMBER: builtins.int
     CREATE_WAIT_FIELD_NUMBER: builtins.int
     IDLE_TIMEOUT_FIELD_NUMBER: builtins.int
+    TOPIC_PREFIXES_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(self) -> global___StreamRef: ...
@@ -754,6 +755,13 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         """End the read with an IDLE Record when no new Record comes for this long. Empty never
         ends on idle. The facade counts it across reads, since one read waits at most 60 s.
         """
+    @property
+    def topic_prefixes(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
+        """Also read the Topics that start with one of these. A Record passes when its Topic is in
+        topics or starts with a prefix. Both empty reads every Topic.
+        """
     def __init__(
         self,
         *,
@@ -766,6 +774,7 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         create_wait: google.protobuf.duration_pb2.Duration | None = ...,
         idle_timeout: google.protobuf.duration_pb2.Duration | None = ...,
+        topic_prefixes: collections.abc.Iterable[builtins.str] | None = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -797,6 +806,8 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"start",
             "stream",
             b"stream",
+            "topic_prefixes",
+            b"topic_prefixes",
             "topics",
             b"topics",
             "wait",

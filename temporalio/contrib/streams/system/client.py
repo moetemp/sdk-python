@@ -511,6 +511,7 @@ class StreamHandle:
         start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
         | None = None,
         topics: list[str] | None = None,
+        topic_prefixes: list[str] | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         create_wait: datetime.timedelta | None = None,
@@ -522,6 +523,7 @@ class StreamHandle:
             from_offset=from_offset,
             start=start,
             topics=topics or [],
+            topic_prefixes=topic_prefixes or [],
             max_records=max_records,
             wait=wait,
             create_wait=create_wait,
@@ -536,6 +538,7 @@ class StreamHandle:
         start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
         | None = None,
         topics: list[str] | None = None,
+        topic_prefixes: list[str] | None = None,
         max_records: int | None = None,
         create_wait: datetime.timedelta | None = None,
         idle_timeout: datetime.timedelta | None = None,
@@ -547,6 +550,7 @@ class StreamHandle:
             from_offset=from_offset,
             start=start,
             topics=topics or [],
+            topic_prefixes=topic_prefixes or [],
             max_records=max_records,
             create_wait=create_wait,
             idle_timeout=idle_timeout,

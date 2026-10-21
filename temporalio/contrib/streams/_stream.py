@@ -39,6 +39,7 @@ class _Readable(_Writable):
         self,
         *,
         topics: Sequence[Topic[Any]] | None = None,
+        topic_prefixes: Sequence[str] = (),
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,

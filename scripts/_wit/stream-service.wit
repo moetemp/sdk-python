@@ -243,8 +243,10 @@ interface stream-service {
     from-offset: option<s64>,
     /// @nexus.doc "Where to start when from-offset is empty. Unspecified is the beginning."
     start: option<read-start>,
-    /// @nexus.doc "Empty reads every Topic."
+    /// @nexus.doc "Topics to read, by exact match. With topic-prefixes, empty reads every Topic."
     topics: list<string>,
+    /// @nexus.doc "Also read the Topics that start with one of these."
+    topic-prefixes: list<string>,
     /// @nexus.doc "At most this many Records. 1 to 1000."
     max-records: option<s32>,
     /// @nexus.doc "How long to wait for a new Record before an empty answer. At most 60 s."

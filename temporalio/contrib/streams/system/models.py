@@ -778,6 +778,7 @@ class ReadRecordsRequest:
         temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType | None
     ) = None
     topics: list[str] | None = dataclasses.field(default_factory=list)
+    topic_prefixes: list[str] | None = dataclasses.field(default_factory=list)
     max_records: int | None = None
     wait: datetime.timedelta | None = None
     create_wait: datetime.timedelta | None = None
@@ -814,6 +815,7 @@ class _ReadRecordsRequestTransferTypeConverter(
             if value.start != 0
             else None,
             topics=list(value.topics),
+            topic_prefixes=list(value.topic_prefixes),
             max_records=value.max_records if value.max_records != 0 else None,
             wait=_support.duration_from_proto(value.wait)
             if value.HasField("wait")
@@ -848,6 +850,8 @@ class _ReadRecordsRequestTransferTypeConverter(
             )
         if value.topics:
             message.topics.extend(value.topics)
+        if value.topic_prefixes:
+            message.topic_prefixes.extend(value.topic_prefixes)
         if value.max_records is not None:
             message.max_records = value.max_records
         if value.wait is not None:
