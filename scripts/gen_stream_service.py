@@ -2,8 +2,8 @@
 
 The WIT and the protos are copies of the temporalio-streams crate's, in scripts/_wit and
 scripts/_proto. Run scripts/gen_protos.py first for the proto modules. No nexgen release has the
-offset, one-way, long-poll, handle and client features yet, so NEX_GEN_STREAMS_BIN must name an
-advanced build of moetemp/nexgen moe/brook/v3/n9-handles.
+offset, one-way, long-poll and client features yet, so NEX_GEN_STREAMS_BIN must name an
+advanced build of moetemp/nexgen moe/brook/v3/n7-long-poll-loop.
 """
 
 import os
