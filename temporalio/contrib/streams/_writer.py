@@ -59,6 +59,7 @@ class StreamWriter:
         self._open_lock = asyncio.Lock()
         self._pending: asyncio.Task[None] | None = None
         self._closed = False
+        backend.writers.add(self)
 
     @property
     def producer(self) -> stream_pb.Producer:
@@ -163,6 +164,10 @@ class StreamWriter:
             [stream_pb.AppendRecord(topic=topic, body=body.payload)],
             force_flush,
         )
+
+    async def settle(self) -> None:
+        """Wait for the publishes that still open the writer or run the codec."""
+        await self._settle()
 
     async def _settle(self) -> None:
         pending, self._pending = self._pending, None

@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from collections.abc import Generator, Sequence
+import logging
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -31,9 +32,13 @@ from temporalio.contrib.streams.system import models
 from temporalio.plugin import SimplePlugin
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
+logger = logging.getLogger(__name__)
+
 EXTENSION_NAME = "temporalio-streams-redis"
 
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
+# How long a Worker's shutdown waits for the Stream closes that are still going out.
+_DRAIN_TIMEOUT = timedelta(seconds=10)
 # The plugin puts these into the headers of each Activity and Local Activity that a Workflow
 # schedules. The key keeps the Producer id the same across retries.
 _REF_HEADER = "__temporal_stream_ref"
@@ -125,6 +130,39 @@ class RedisStreamPlugin(SimplePlugin):
                 ),
             )
         return config
+
+    async def run_worker(
+        self,
+        worker: temporalio.worker.Worker,
+        next: Callable[[temporalio.worker.Worker], Awaitable[None]],
+    ) -> None:
+        """Run the Worker, then wait for the Stream closes that are still going out.
+
+        Each Activity attempt already closed its writers. Client writers may still be in use,
+        so the Worker leaves them. Call :py:meth:`shutdown` when the process is done.
+        """
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            pending = await self._temporal_stream_backend.drain_closes(_DRAIN_TIMEOUT)
+            if pending:
+                logger.warning(
+                    "Worker shutdown left %d Stream closes in flight", pending
+                )
+
+    async def shutdown(self) -> None:
+        """Flush and drop every open writer, including the client's, and wait for the closes
+        in flight. Call it once the process no longer writes Streams.
+        """
+        backend = self._temporal_stream_backend
+        failed = await backend.close_writers()
+        pending = await backend.drain_closes(_DRAIN_TIMEOUT)
+        if failed or pending:
+            logger.warning(
+                "Stream shutdown left %d failed writers and %d closes in flight",
+                failed,
+                pending,
+            )
 
     async def on_workflow_activation_complete(
         self, input: temporalio.worker.WorkflowActivationCompleteInput

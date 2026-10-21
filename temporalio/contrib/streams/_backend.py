@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import weakref
 from datetime import timedelta
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import google.protobuf.message
 
@@ -47,6 +48,8 @@ class StreamBackend:
     def __init__(self, extension: temporalio.worker.WorkerExtension) -> None:
         """Create a backend over an extension."""
         self._extension = extension
+        # Writers whose open or encode may still run on the loop, for close_writers.
+        self.writers: weakref.WeakSet[Any] = weakref.WeakSet()
 
     @property
     def extension(self) -> temporalio.worker.WorkerExtension:
@@ -109,6 +112,19 @@ class StreamBackend:
             ext_pb.CloseWriterResponse,
         )
         return response.last_offset
+
+    async def close_writers(self) -> int:
+        """Flush and drop every open writer of the extension, and return how many failed."""
+        failed = 0
+        for writer in list(self.writers):
+            try:
+                await writer.settle()
+            except Exception:
+                failed += 1
+        response = await self.call_async(
+            "CloseWriters", ext_pb.CloseWritersRequest(), ext_pb.CloseWritersResponse
+        )
+        return failed + response.failed
 
     async def drain_closes(self, timeout: timedelta) -> int:
         """Wait for the Workflow closes in flight, and return how many are left."""
