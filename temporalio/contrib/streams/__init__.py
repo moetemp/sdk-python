@@ -28,6 +28,7 @@ from temporalio.contrib.streams._errors import (
     StreamOffsetError,
     StreamStorageError,
     StreamTransportMissingError,
+    StreamUnsupportedError,
 )
 from temporalio.contrib.streams._items import Closed, Idle, Record, Superseded
 from temporalio.contrib.streams._outside import OutsideStream
@@ -56,6 +57,7 @@ __all__ = [
     "StreamRef",
     "StreamStorageError",
     "StreamTransportMissingError",
+    "StreamUnsupportedError",
     "Superseded",
     "Topic",
     "WorkflowStream",
