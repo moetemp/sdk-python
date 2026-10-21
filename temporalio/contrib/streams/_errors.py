@@ -77,6 +77,10 @@ class StreamBufferFullError(StreamError):
     """The writer's buffer is full. Flush, or publish less often."""
 
 
+class StreamUnsupportedError(StreamError):
+    """The Store lacks a capability that the call needs. The message ends with its name."""
+
+
 class StreamTransportMissingError(StreamError):
     """No plugin carries Stream calls, such as ``RedisStreamPlugin``."""
 
@@ -93,6 +97,7 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
     "stream_buffer_full": StreamBufferFullError,
+    "stream_unsupported": StreamUnsupportedError,
 }
 
 

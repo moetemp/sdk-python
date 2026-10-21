@@ -393,3 +393,15 @@ def test_snake_case_refs_still_decode():
     assert converter.from_payload(payload, streams.StreamRef) == streams.StreamRef(
         "old", workflow_id="wf", first_execution_run_id="run"
     )
+
+
+def test_unsupported_capability_maps_to_its_error():
+    details = ext_pb.StreamErrorDetails(reason="stream_unsupported").SerializeToString()
+    err = _errors.from_extension_error(
+        ExtensionError(
+            "The Store lacks replica_wait", RPCStatusCode.UNIMPLEMENTED, details
+        )
+    )
+    assert isinstance(err, streams.StreamUnsupportedError)
+    assert err.non_retryable and err.code == RPCStatusCode.UNIMPLEMENTED
+    assert err.message.endswith("replica_wait")

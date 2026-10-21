@@ -37,7 +37,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.helpers import new_worker
+from tests.helpers import assert_task_fail_eventually, new_worker
 
 # Ports that other local services own.
 _RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}
@@ -949,3 +949,17 @@ async def test_final_failure_under_a_retry_policy(
     assert [r.data for r in records if superseded[0].withdraws(r)] == ["run-1"]
     assert [r.data for r in records if superseded[1].withdraws(r)] == ["run-2"]
     assert not any(s.withdraws(records[-1]) for s in superseded)
+
+
+async def test_missing_capability_fails_the_workflow_task(client: Client):
+    # The Workflow flush runs in Core's before_complete, so a Store that lacks a capability
+    # fails the Workflow Task with the capability's name, not a call in Workflow code.
+    config = client.config()
+    config["plugins"] = [MemoryStreamPlugin(durable_writes=1)]
+    memory_client = Client(**config)
+    async with new_worker(memory_client, QuickWriter) as worker:
+        handle = await memory_client.start_workflow(
+            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await assert_task_fail_eventually(handle, message_contains="replica_wait")
+        await handle.terminate()
