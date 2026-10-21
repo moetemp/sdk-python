@@ -664,3 +664,40 @@ async def test_plugin_replays_a_history_made_without_it(
         ],
     )
     await replayer.replay_workflow(history)
+
+
+@workflow.defn
+class QuickWriter:
+    @workflow.run
+    async def run(self) -> str:
+        streams.workflow_stream().topic("t", type=str).publish("quick")
+        return "done"
+
+
+async def test_worker_shutdown_drains_closes(stream_client: Client):
+    async with new_worker(stream_client, QuickWriter) as worker:
+        handle = await stream_client.start_workflow(
+            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+    # Calls after the Worker exits still work, and the drain waited for the run's close.
+    items = [
+        item
+        async for item in streams.for_handle(handle).subscribe(wait_new_records=False)
+    ]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+
+
+async def test_plugin_shutdown_flushes_client_writers(stream_client: Client):
+    [plugin] = [
+        p for p in stream_client.config()["plugins"] if isinstance(p, RedisStreamPlugin)
+    ]
+    stream = await streams.create_stream(stream_client, f"shutdown-{uuid.uuid4()}")
+    stream.topic("t", type=str).publish("unflushed")
+    await plugin.shutdown()
+    written = [
+        item.data
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+    assert written == ["unflushed"]
