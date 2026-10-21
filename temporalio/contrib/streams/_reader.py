@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -18,6 +18,8 @@ Item = Record[Any] | Superseded | Closed | Idle
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
+# How often a reader that ends with the run checks the run while it waits for the create.
+_RUN_CHECK = timedelta(seconds=2)
 # How long one loop of the generated long poll may run before the facade looks again.
 _POLL_DEADLINE = timedelta(minutes=5)
 
@@ -34,7 +36,7 @@ async def read(
     idle_timeout: timedelta | None,
     wait_for_create: timedelta | None,
     run_ended: Callable[[], Awaitable[bool]] | None = None,
-) -> AsyncIterator[Item]:
+) -> AsyncGenerator[Item, None]:
     """Give the items of a Stream in order, until a close, an idle end, or the newest Record
     when ``wait_new_records`` is False.
     """
@@ -44,6 +46,9 @@ async def read(
     )
     offset = from_offset
     names = list(topics or [])
+    # A reader that ends with the run waits for the create in short steps, so it sees the
+    # run end soon.
+    create_step = _RUN_CHECK if run_ended is not None else _MAX_WAIT
     while True:
         create_left = (
             timedelta(seconds=max(create_until - loop.time(), 0))
@@ -56,7 +61,7 @@ async def read(
             start=None if offset is not None else ReadStart.READ_START_BEGINNING,
             topics=names,
             idle_timeout=idle_timeout,
-            create_wait=min(create_left, _MAX_WAIT) if create_left else None,
+            create_wait=min(create_left, create_step) if create_left else None,
         )
         try:
             with _convert.raw_bodies(converter.failure_converter):
@@ -68,6 +73,8 @@ async def read(
                     answer = await service.read_records(request)
         except _errors.StreamNotFoundError:
             if create_until is not None and loop.time() < create_until:
+                if run_ended is not None and await run_ended():
+                    return
                 continue
             raise
         for record in answer.records or []:

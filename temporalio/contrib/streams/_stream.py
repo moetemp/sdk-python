@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -42,7 +42,7 @@ class _Readable(_Writable):
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
-    ) -> AsyncIterator[Item]: ...
+    ) -> AsyncGenerator[Item, None]: ...
 
 
 class Topic(Generic[T]):
@@ -84,7 +84,7 @@ class Topic(Generic[T]):
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
-    ) -> AsyncIterator[Item]:
+    ) -> AsyncGenerator[Item, None]:
         """Read this Topic only. See the Stream's ``subscribe``."""
         if not isinstance(self._stream, _Readable):
             raise TypeError("Workflow code can't read a Stream")

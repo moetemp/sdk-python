@@ -313,6 +313,10 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
             # The next run continues the run chain's Streams.
             raise
         except BaseException as err:
+            if not isinstance(err, (Exception, asyncio.CancelledError)):
+                # A GeneratorExit or another eviction exception closes the coroutine outside
+                # the Workflow's loop. The run did not end, so there is nothing to close.
+                raise
             if (
                 isinstance(err, asyncio.CancelledError)
                 and temporalio.workflow.cancellation_reason() is not None
