@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -11,6 +12,7 @@ from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams._stream import _Writable
 from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
@@ -260,3 +262,47 @@ async def test_writer_publishes_from_another_thread(client: Client):
     await asyncio.to_thread(writer.publish, "t", "from a thread", False)
     await writer.flush()
     assert len(extension.streams["threads"].records) == 1
+
+
+async def test_for_ref_opens_a_client_stream(client: Client):
+    client, _ = fake_client(client)
+    created = await streams.create_stream(client, "by-ref")
+    created.topic("t", type=int).publish(7)
+    await created.flush()
+    opened = streams.for_ref(client, created.ref)
+    reader = opened.topic("t", type=int).subscribe(wait_new_records=False)
+    first = await reader.__anext__()
+    await reader.aclose()
+    assert isinstance(first, streams.Record) and first.data == 7
+
+
+def test_topic_types_check():
+    untyped: streams.Topic[Any] = streams.Topic(_NoWrites(), "t", None)
+    typed: streams.Topic[int] = streams.Topic(_NoWrites(), "t", int)
+    assert untyped.type is None and typed.type is int
+
+
+class _NoWrites(_Writable):
+    def _publish(self, topic: str, value: Any, force_flush: bool) -> None:
+        raise AssertionError("no writes")
+
+
+async def test_create_wait_ends_with_the_run(client: Client):
+    async with new_worker(client, PublishWithoutPlugin) as worker:
+        handle = await client.start_workflow(
+            PublishWithoutPlugin.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    fake, _ = fake_client(client)
+    stream = streams.for_handle(
+        fake.get_workflow_handle(
+            handle.id, first_execution_run_id=handle.first_execution_run_id
+        ),
+        wait_for_create=timedelta(minutes=5),
+        end_with_run=True,
+    )
+    start = asyncio.get_running_loop().time()
+    assert [item async for item in stream.subscribe()] == []
+    assert asyncio.get_running_loop().time() - start < 30

@@ -1,7 +1,7 @@
 """Streams of Records that Workflows, Activities and clients write and read.
 
 Workflow code writes with :py:func:`workflow_stream` and :py:func:`create_workflow_stream`.
-Activities use :py:func:`activity_stream`. Clients read with :py:func:`for_handle` and create
+Activities use :py:func:`activity_stream`. Clients read with :py:func:`for_handle` or :py:func:`for_ref` and create
 standalone Streams with :py:func:`create_stream`. A Stream plugin, such as
 :py:class:`temporalio.contrib.streams.redis.RedisStreamPlugin`, carries the calls.
 
@@ -11,7 +11,12 @@ standalone Streams with :py:func:`create_stream`. A Stream plugin, such as
 
 from temporalio.contrib.streams._activity import activity_stream
 from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams._client import ClientStream, create_stream, for_handle
+from temporalio.contrib.streams._client import (
+    ClientStream,
+    create_stream,
+    for_handle,
+    for_ref,
+)
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
     StreamBufferFullError,
@@ -58,5 +63,6 @@ __all__ = [
     "create_stream",
     "create_workflow_stream",
     "for_handle",
+    "for_ref",
     "workflow_stream",
 ]

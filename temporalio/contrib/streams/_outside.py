@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from datetime import timedelta
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
@@ -69,9 +69,15 @@ class OutsideStream(_Readable):
             self._id = await self._find_id()
         return self._id
 
-    def topic(self, name: str, *, type: type[T] = Any) -> Topic[T]:  # type: ignore[assignment]
-        """A Topic of this Stream. ``type`` decodes its values. ``RawValue`` keeps the
-        Payload.
+    @overload
+    def topic(self, name: str) -> Topic[Any]: ...
+
+    @overload
+    def topic(self, name: str, *, type: type[T]) -> Topic[T]: ...
+
+    def topic(self, name: str, *, type: Any = None) -> Topic[Any]:
+        """A Topic of this Stream. ``type`` decodes its values, and ``RawValue`` keeps the
+        Payload. With no type, values decode as the converter gives them.
         """
         self._types[name] = type
         return Topic(self, name, type)
@@ -96,7 +102,7 @@ class OutsideStream(_Readable):
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
-    ) -> AsyncIterator[Item]:
+    ) -> AsyncGenerator[Item, None]:
         """Read the Stream's items in order.
 
         The read ends after a ``Closed`` item, after an ``Idle`` item, or at the newest Record
@@ -128,7 +134,7 @@ class OutsideStream(_Readable):
         from_offset: int | None,
         wait_new_records: bool,
         idle_timeout: timedelta | None,
-    ) -> AsyncIterator[Item]:
+    ) -> AsyncGenerator[Item, None]:
         items = _reader.read(
             self._backend.service(self._namespace),
             self._converter,

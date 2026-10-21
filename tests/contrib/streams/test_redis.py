@@ -1,13 +1,15 @@
 import asyncio
 import concurrent.futures
 import dataclasses
+import gc
 import shutil
 import socket
 import subprocess
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Generator, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any, cast
 
 import pytest
 
@@ -16,10 +18,15 @@ from temporalio.api.common.v1 import Payload
 from temporalio.client import Client
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
-from temporalio.contrib.streams.redis import RedisStreamPlugin
+from temporalio.contrib.streams.redis import RedisStreamPlugin, _WorkflowInbound
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from temporalio.worker import (
+    ExecuteWorkflowInput,
+    Replayer,
+    UnsandboxedWorkflowRunner,
+    WorkflowInboundInterceptor,
+)
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -664,3 +671,78 @@ async def test_plugin_replays_a_history_made_without_it(
         ],
     )
     await replayer.replay_workflow(history)
+
+
+@workflow.defn
+class WaitsForever:
+    @workflow.run
+    async def run(self) -> None:
+        streams.workflow_stream().topic("t", type=str).publish("waiting")
+        await workflow.wait_condition(lambda: False)
+
+
+class _Suspends:
+    def __await__(self) -> Generator[None, None, None]:
+        yield
+
+
+class _NeverEnds(WorkflowInboundInterceptor):
+    def __init__(self) -> None:  # pyright: ignore[reportMissingSuperCall]
+        pass
+
+    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        await _Suspends()
+
+
+def test_closing_an_evicted_run_touches_no_runtime():
+    # Python closes the coroutine of an evicted run with GeneratorExit, outside the
+    # Workflow's loop. The interceptor must let it pass with no call to the runtime, or
+    # Python prints "Exception ignored".
+    inbound = _WorkflowInbound(_NeverEnds())
+    run = inbound.execute_workflow(cast(ExecuteWorkflowInput, object()))
+    run.send(None)
+    run.close()
+
+
+@pytest.mark.parametrize("cache, safe", [(0, True), (10, True), (10, False)])
+async def test_eviction_prints_nothing(
+    stream_client: Client, capfd: pytest.CaptureFixture[str], cache: int, safe: bool
+):
+    # With no cache, each Workflow Task evicts the run. With a cache, the Worker's shutdown
+    # evicts it. Either way the run's coroutine closes.
+    async with new_worker(
+        stream_client,
+        WaitsForever,
+        max_cached_workflows=cache,
+        disable_safe_workflow_eviction=not safe,
+    ) as w:
+        handle = await stream_client.start_workflow(
+            WaitsForever.run, id=f"wf-{uuid.uuid4()}", task_queue=w.task_queue
+        )
+        stream = streams.for_handle(handle, wait_for_create=timedelta(seconds=20))
+        assert isinstance(await anext(aiter(stream.subscribe())), streams.Record)
+    await handle.terminate()
+    gc.collect()
+    captured = capfd.readouterr()
+    assert "Exception ignored" not in captured.err + captured.out
+
+
+@workflow.defn
+class CreatesEmpty:
+    @workflow.run
+    async def run(self) -> None:
+        streams.create_workflow_stream("empty")
+        await workflow.sleep(timedelta(milliseconds=10))
+
+
+async def test_get_offset_of_a_created_empty_stream(stream_client: Client):
+    async with new_worker(stream_client, CreatesEmpty) as worker:
+        handle = await stream_client.start_workflow(
+            CreatesEmpty.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+    # A created Stream with no Record gives the start offset, so a reader can begin there.
+    assert await streams.for_handle(handle, name="empty").get_offset() == 0
+    # A Stream that nobody created is still an error.
+    with pytest.raises(streams.StreamNotFoundError):
+        await streams.for_handle(handle, name="missing").get_offset()
