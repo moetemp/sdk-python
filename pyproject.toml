@@ -116,6 +116,7 @@ gen-protos = [
   { cmd = "uv run scripts/gen_bridge_client.py" },
   { ref = "format" },
 ]
+gen-stream-service = "uv run scripts/gen_stream_service.py"
 gen-protos-docker = [
   { cmd = "uv run scripts/gen_protos_docker.py" },
   { ref = "gen-nexus-system-api" },
@@ -183,10 +184,16 @@ exclude = [
   'temporalio/api',
   'temporalio/bridge/proto',
   'temporalio/nexus/system/workflow_service',
+  'temporalio/contrib/streams/proto',
+  'temporalio/contrib/streams/system',
 ]
 
 [[tool.mypy.overrides]]
 module = "temporalio.nexus.system.workflow_service.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["temporalio.contrib.streams.proto.*", "temporalio.contrib.streams.system.*"]
 ignore_errors = true
 
 [tool.pydocstyle]
@@ -258,6 +265,7 @@ exclude = [
   "temporalio/api",
   "temporalio/bridge/proto",
   "temporalio/bridge/_visitor.py",
+  "temporalio/contrib/streams/proto",
   "tests/worker/workflow_sandbox/testmodules/proto",
 ]
 
