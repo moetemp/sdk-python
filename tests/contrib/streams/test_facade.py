@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.converter
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import RawValue
@@ -339,3 +340,17 @@ async def test_read_by_topic_prefix(client: Client):
         if isinstance(item, streams.Record)
     ]
     assert read == ["agent/a", "agent/b", "exact"]
+
+
+def test_ref_without_owner_cannot_end_with_run(client: Client):
+    client, _ = fake_client(client)
+    with pytest.raises(ValueError):
+        streams.for_ref(client, streams.StreamRef("standalone"), end_with_run=True)
+
+
+def test_old_refs_still_decode():
+    converter = temporalio.converter.DataConverter.default.payload_converter
+    payload = converter.to_payload({"id": "old"})
+    ref = converter.from_payload(payload, streams.StreamRef)
+    assert ref == streams.StreamRef("old")
+    assert ref.workflow_id is None and ref.first_execution_run_id is None

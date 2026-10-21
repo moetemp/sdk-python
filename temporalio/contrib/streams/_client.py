@@ -138,6 +138,7 @@ def for_handle(
             raise ValueError(
                 "The server gave no first run id, so the Stream id is unknown"
             )
+        stream._owner = (handle.id, first)
         return stream_id_of(first)
 
     def stream_id_of(first_run_id: str) -> str:
@@ -150,7 +151,7 @@ def for_handle(
         if handle.first_execution_run_id
         else find_id
     )
-    return ClientStream(
+    stream = ClientStream(
         handle._client,
         backend_of_client(handle._client),
         stream_id,
@@ -158,6 +159,9 @@ def for_handle(
         wait_for_create=wait_for_create,
         handle=handle if end_with_run else None,
     )
+    if handle.first_execution_run_id:
+        stream._owner = (handle.id, handle.first_execution_run_id)
+    return stream
 
 
 def for_ref(
@@ -165,6 +169,7 @@ def for_ref(
     ref: StreamRef,
     *,
     wait_for_create: timedelta | None = None,
+    end_with_run: bool = False,
     batch_interval: timedelta | None = None,
     max_batch_size: int | None = None,
     max_retry_duration: timedelta | None = None,
@@ -178,17 +183,33 @@ def for_ref(
         ref: The reference of the Stream.
         wait_for_create: How long a read waits for a Stream that doesn't exist yet. Defaults
             to no wait.
+        end_with_run: End a read when the owning Workflow's run is no longer running, as
+            :py:func:`for_handle` does. Only a Workflow's Stream has an owner.
         batch_interval: How often this client's writes flush. Defaults to 100 ms.
         max_batch_size: At most this many Records in one batch.
         max_retry_duration: How long a flush retries a Store failure.
+
+    Raises:
+        ValueError: ``end_with_run`` is set, and the ref has no owning Workflow.
     """
-    return ClientStream(
+    handle = None
+    if end_with_run:
+        if not ref.workflow_id or not ref.first_execution_run_id:
+            raise ValueError("end_with_run needs a ref of a Workflow's Stream")
+        handle = client.get_workflow_handle(
+            ref.workflow_id, first_execution_run_id=ref.first_execution_run_id
+        )
+    stream = ClientStream(
         client,
         backend_of_client(client),
         ref.id,
         batch_options(batch_interval, max_batch_size, max_retry_duration),
         wait_for_create=wait_for_create,
+        handle=handle,
     )
+    if ref.workflow_id and ref.first_execution_run_id:
+        stream._owner = (ref.workflow_id, ref.first_execution_run_id)
+    return stream
 
 
 async def create_stream(

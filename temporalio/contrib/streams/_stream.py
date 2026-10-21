@@ -25,6 +25,14 @@ class StreamRef:
     id: str
     """The Stream id. It is opaque to callers."""
 
+    workflow_id: str | None = None
+    """For a Workflow's Stream, the id of the Workflow that owns it. None for a standalone
+    Stream."""
+
+    first_execution_run_id: str | None = None
+    """For a Workflow's Stream, the first run id of the owning run chain. None for a
+    standalone Stream."""
+
 
 class _Writable(abc.ABC):
     # A Stream kind that Topics publish to.

@@ -142,14 +142,31 @@ class StreamRef(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     ID_FIELD_NUMBER: builtins.int
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    FIRST_EXECUTION_RUN_ID_FIELD_NUMBER: builtins.int
     id: builtins.str
+    workflow_id: builtins.str
+    """The Workflow that owns the Stream. Set on a Workflow's ref, empty on a standalone,
+    client or Activity ref. The Store keys on id only and never reads these.
+    """
+    first_execution_run_id: builtins.str
     def __init__(
         self,
         *,
         id: builtins.str = ...,
+        workflow_id: builtins.str = ...,
+        first_execution_run_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
-        self, field_name: typing_extensions.Literal["id", b"id"]
+        self,
+        field_name: typing_extensions.Literal[
+            "first_execution_run_id",
+            b"first_execution_run_id",
+            "id",
+            b"id",
+            "workflow_id",
+            b"workflow_id",
+        ],
     ) -> None: ...
 
 global___StreamRef = StreamRef

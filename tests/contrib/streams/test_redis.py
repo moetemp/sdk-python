@@ -813,3 +813,57 @@ async def test_read_by_topic_prefix_on_redis(stream_client: Client):
         if isinstance(item, streams.Record)
     ]
     assert read == ["agent/a", "agent/b", "exact"]
+
+
+@workflow.defn
+class LeavesStreamOpen:
+    @workflow.run
+    async def run(self) -> streams.StreamRef:
+        # Not in a with block, so nothing closes it when the run ends.
+        open_stream = streams.create_workflow_stream("open")
+        open_stream.topic("t", type=str).publish("only")
+        return open_stream.ref
+
+
+async def test_for_ref_ends_with_the_owning_run(stream_client: Client):
+    async with new_worker(stream_client, LeavesStreamOpen) as worker:
+        handle = await stream_client.start_workflow(
+            LeavesStreamOpen.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        ref = await handle.result()
+    assert ref.workflow_id == handle.id
+    assert ref.first_execution_run_id == handle.first_execution_run_id
+    stream = streams.for_ref(stream_client, ref, end_with_run=True)
+    items = [item async for item in stream.subscribe(type=str)]
+    assert [i.data for i in items if isinstance(i, streams.Record)] == ["only"]
+    # A ref to a Stream that the finished run never created ends at once, not after the
+    # whole wait.
+    missing = streams.StreamRef(
+        ref.id + "-missing",
+        workflow_id=ref.workflow_id,
+        first_execution_run_id=ref.first_execution_run_id,
+    )
+    waiting = streams.for_ref(
+        stream_client, missing, end_with_run=True, wait_for_create=timedelta(minutes=5)
+    )
+    start = asyncio.get_running_loop().time()
+    assert [item async for item in waiting.subscribe()] == []
+    assert asyncio.get_running_loop().time() - start < 30
+
+
+async def test_idle_ends_a_read_that_ends_with_the_run(stream_client: Client):
+    async with new_worker(stream_client, WaitsForever) as worker:
+        handle = await stream_client.start_workflow(
+            WaitsForever.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        stream = streams.for_handle(
+            handle, end_with_run=True, wait_for_create=timedelta(seconds=20)
+        )
+        # The read polls in short steps to look at the run, and the idle time still counts
+        # across them.
+        items = [
+            item async for item in stream.subscribe(idle_timeout=timedelta(seconds=3))
+        ]
+        await handle.terminate()
+    assert isinstance(items[0], streams.Record)
+    assert isinstance(items[-1], streams.Idle)
