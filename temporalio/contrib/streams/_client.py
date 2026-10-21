@@ -14,6 +14,7 @@ import temporalio.client
 from temporalio.contrib.streams import _convert, _errors, _ids
 from temporalio.contrib.streams._backend import StreamBackend, backend_of_client
 from temporalio.contrib.streams._outside import OutsideStream, batch_options
+from temporalio.contrib.streams._stream import StreamRef
 from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 
 # A client's Producer id has a key per process and writer, so two writers never share a
@@ -122,7 +123,8 @@ def for_handle(
         name: The name that the Workflow gave ``create_workflow_stream``.
         wait_for_create: How long a read waits for a Stream that doesn't exist yet. Defaults
             to no wait.
-        end_with_run: End a read when the run is no longer running, also with no close.
+        end_with_run: End a read when the run is no longer running, also with no close. It
+            also ends a wait for the create.
         batch_interval: How often this client's writes flush. Defaults to 100 ms.
         max_batch_size: At most this many Records in one batch.
         max_retry_duration: How long a flush retries a Store failure.
@@ -155,6 +157,37 @@ def for_handle(
         batch_options(batch_interval, max_batch_size, max_retry_duration),
         wait_for_create=wait_for_create,
         handle=handle if end_with_run else None,
+    )
+
+
+def for_ref(
+    client: temporalio.client.Client,
+    ref: StreamRef,
+    *,
+    wait_for_create: timedelta | None = None,
+    batch_interval: timedelta | None = None,
+    max_batch_size: int | None = None,
+    max_retry_duration: timedelta | None = None,
+) -> ClientStream:
+    """A Stream from a :py:class:`StreamRef`, such as one that a Workflow published.
+
+    It makes no call.
+
+    Args:
+        client: The client with the Stream plugin.
+        ref: The reference of the Stream.
+        wait_for_create: How long a read waits for a Stream that doesn't exist yet. Defaults
+            to no wait.
+        batch_interval: How often this client's writes flush. Defaults to 100 ms.
+        max_batch_size: At most this many Records in one batch.
+        max_retry_duration: How long a flush retries a Store failure.
+    """
+    return ClientStream(
+        client,
+        backend_of_client(client),
+        ref.id,
+        batch_options(batch_interval, max_batch_size, max_retry_duration),
+        wait_for_create=wait_for_create,
     )
 
 
