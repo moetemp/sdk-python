@@ -5,7 +5,8 @@ import pytest
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.runtime import Runtime, TelemetryConfig
-from temporalio.worker import WorkerExtension
+from temporalio.service import RPCStatusCode
+from temporalio.worker import ExtensionError, WorkerExtension
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 # Debug bridge builds link this extension for the SDK's tests.
@@ -36,15 +37,16 @@ def test_extension_name():
 
 
 async def test_extension_lets_workflow_task_complete(client: Client):
-    async with new_worker(
-        client, SimpleWorkflow, extension=load_test_extension()
-    ) as worker:
+    worker_extension = load_test_extension()
+    async with new_worker(client, SimpleWorkflow, extension=worker_extension) as worker:
         result = await client.execute_workflow(
             SimpleWorkflow.run,
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
     assert result == "done"
+    before, after, accepted = map(int, extension_counts(worker_extension))
+    assert before >= 1 and after == before and accepted == before
 
 
 async def test_extension_failure_fails_workflow_task(client: Client):
@@ -66,3 +68,31 @@ async def test_extension_must_use_client_runtime(client: Client):
     extension = WorkerExtension(TEST_EXTENSION, runtime=other)
     with pytest.raises(ValueError, match="same runtime as the client"):
         new_worker(client, SimpleWorkflow, extension=extension)
+
+
+def extension_counts(extension: WorkerExtension) -> list[str]:
+    return extension.call("Counts", b"").decode().split(",")
+
+
+async def test_extension_calls():
+    extension = load_test_extension()
+    assert extension.call("Echo", b"abc") == b"abc"
+    assert await extension.call_async("Echo", b"xyz") == b"xyz"
+    assert extension_counts(extension) == ["0", "0", "0"]
+
+
+async def test_extension_call_errors():
+    extension = load_test_extension()
+    with pytest.raises(ExtensionError) as sync_err:
+        extension.call("Fail", b"details")
+    assert sync_err.value.code == RPCStatusCode.NOT_FOUND
+    assert sync_err.value.message == "test failure"
+    assert sync_err.value.details == b"details"
+    with pytest.raises(ExtensionError) as async_err:
+        await extension.call_async("Fail", b"")
+    assert async_err.value.code == RPCStatusCode.NOT_FOUND
+    assert async_err.value.details == b""
+    with pytest.raises(ExtensionError) as unknown_err:
+        await extension.call_async("Missing", b"")
+    assert unknown_err.value.code == RPCStatusCode.UNIMPLEMENTED
+    assert "Missing" in unknown_err.value.message
