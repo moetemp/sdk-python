@@ -43,6 +43,14 @@ class _StreamRefJson(
         )
 
 
+def _ref_from_json(value: Any) -> StreamRef:
+    if isinstance(value, StreamRef):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected a StreamRef or its JSON object, got {type(value)}")
+    return _StreamRefJson().from_transfer_type(value, StreamRef)
+
+
 @temporalio.converter.transfer_type_convertible(_StreamRefJson)
 @dataclass(frozen=True)
 class StreamRef:
@@ -62,6 +70,32 @@ class StreamRef:
     first_execution_run_id: str | None = None
     """For a Workflow's Stream, the first run id of the owning run chain. None for a
     standalone Stream."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: Any, handler: Any) -> Any:
+        """Give pydantic models the proto JSON form of the ref, as the payload converter does.
+
+        Pydantic is optional, so it is imported only when a model uses the ref.
+        """
+        from pydantic_core import core_schema
+
+        return core_schema.no_info_plain_validator_function(
+            _ref_from_json,
+            json_schema_input_schema=core_schema.typed_dict_schema(
+                {
+                    "id": core_schema.typed_dict_field(core_schema.str_schema()),
+                    "workflowId": core_schema.typed_dict_field(
+                        core_schema.str_schema(), required=False
+                    ),
+                    "firstExecutionRunId": core_schema.typed_dict_field(
+                        core_schema.str_schema(), required=False
+                    ),
+                }
+            ),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                _StreamRefJson().to_transfer_type
+            ),
+        )
 
 
 class _Writable(abc.ABC):
