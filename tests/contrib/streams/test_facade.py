@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -10,8 +11,10 @@ from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
+from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCStatusCode
 from temporalio.worker import ExtensionError
@@ -145,8 +148,6 @@ async def test_read_waits_for_create(client: Client):
         created.topic("t", type=int).publish(5)
         await created.close()
 
-    import asyncio
-
     task = asyncio.create_task(create_later())
     items = [item async for item in waiting.subscribe()]
     await task
@@ -179,3 +180,83 @@ async def test_workflow_without_plugin_has_no_transport(client: Client):
             task_queue=worker.task_queue,
         )
     assert result == "StreamTransportMissingError"
+
+
+def test_stream_errors_fail_the_workflow_not_the_task():
+    err = streams.StreamClosedError("closed", reason="stream_closed")
+    assert isinstance(err, ApplicationError)
+    assert err.non_retryable and err.type == "StreamClosedError"
+    assert not streams.StreamStorageError("down").non_retryable
+    details = ext_pb.StreamErrorDetails(reason="stream_closed").SerializeToString()
+    mapped = _errors.from_extension_error(
+        ExtensionError("closed", RPCStatusCode.FAILED_PRECONDITION, details)
+    )
+    assert mapped.code == RPCStatusCode.FAILED_PRECONDITION
+
+
+async def test_each_client_writer_is_its_own_producer(client: Client):
+    client, _ = fake_client(client)
+    stream = await streams.create_stream(client, "two-writers")
+    other = streams.for_handle(
+        client.get_workflow_handle("unused", first_execution_run_id="run")
+    )
+    other._id = stream.ref.id
+    stream.topic("t", type=int).publish(1)
+    other.topic("t", type=int).publish(2)
+    await stream.flush()
+    await other.flush()
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    producers = {
+        item.producer.id
+        for item in items
+        if isinstance(item, streams.Record) and item.producer
+    }
+    assert len(producers) == 2
+
+
+async def test_for_handle_finds_the_first_run_with_one_describe(client: Client):
+    async with new_worker(client, PublishWithoutPlugin) as worker:
+        handle = await client.start_workflow(
+            PublishWithoutPlugin.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    fake, _ = fake_client(client)
+    first_run = handle.first_execution_run_id
+    assert first_run
+    await streams.create_stream(fake, _ids.default_stream_id(handle.id, first_run))
+    by_id = streams.for_handle(fake.get_workflow_handle(handle.id))
+    with pytest.raises(RuntimeError):
+        by_id.ref
+    assert await by_id.get_offset() == 0
+    assert by_id.ref.id == _ids.default_stream_id(handle.id, first_run)
+
+
+async def test_writer_publishes_from_another_thread(client: Client):
+    extension = FakeExtension()
+    backend = streams.StreamBackend(extension)
+    await backend.call_async(
+        "CreateStream",
+        stream_pb.CreateStreamRequest(stream_id="threads"),
+        stream_pb.CreateStreamResponse,
+    )
+
+    async def stream_id() -> str:
+        return "threads"
+
+    writer = StreamWriter(
+        backend=backend,
+        converter=client.data_converter,
+        namespace="default",
+        stream_id=stream_id,
+        producer=stream_pb.Producer(
+            kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT, id="client:a:b"
+        ),
+        batch=BatchOptions(),
+        create_first=False,
+        loop=asyncio.get_running_loop(),
+    )
+    await asyncio.to_thread(writer.publish, "t", "from a thread", False)
+    await writer.flush()
+    assert len(extension.streams["threads"].records) == 1

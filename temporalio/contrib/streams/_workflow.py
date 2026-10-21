@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import weakref
 from collections.abc import Coroutine
 from datetime import timedelta
 from types import TracebackType
 from typing import Any, TypeVar
 
+import temporalio.exceptions
 import temporalio.workflow
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._stream import StreamRef, Topic, _Writable
@@ -162,10 +164,19 @@ class WorkflowStream(_Writable):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        """Close the Stream, with the exception as its failure if there is one."""
-        if not self._closed:
-            failure = exc if isinstance(exc, Exception) else None
-            self.close(failure=failure)
+        """Close the Stream, with the exception as its failure if there is one.
+
+        A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
+        an eviction, leaves it open, since the block did not end in Workflow code.
+        """
+        if self._closed:
+            return
+        if isinstance(exc, asyncio.CancelledError):
+            self.close(
+                failure=temporalio.exceptions.CancelledError(str(exc) or "Cancelled")
+            )
+        elif exc is None or isinstance(exc, Exception):
+            self.close(failure=exc)
 
 
 def workflow_stream(

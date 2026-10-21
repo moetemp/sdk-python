@@ -30,7 +30,7 @@ class OutsideStream(_Readable):
         backend: StreamBackend,
         converter: temporalio.converter.DataConverter,
         namespace: str,
-        stream_id: str,
+        stream_id: str | Callable[[], Awaitable[str]],
         writer: Callable[[], StreamWriter],
         wait_for_create: timedelta | None = None,
         run_ended: Callable[[], Awaitable[bool]] | None = None,
@@ -39,7 +39,9 @@ class OutsideStream(_Readable):
         self._backend = backend
         self._converter = converter
         self._namespace = namespace
-        self._id = stream_id
+        # A client that has only a Workflow id learns the first run id on its first call.
+        self._id = stream_id if isinstance(stream_id, str) else ""
+        self._find_id = None if isinstance(stream_id, str) else stream_id
         self._writer_factory = writer
         self._writer: StreamWriter | None = None
         self._wait_for_create = wait_for_create
@@ -49,8 +51,23 @@ class OutsideStream(_Readable):
 
     @property
     def ref(self) -> StreamRef:
-        """Reference to pass to Workflows, Activities and other clients."""
+        """Reference to pass to Workflows, Activities and other clients.
+
+        Raises:
+            RuntimeError: The Stream id needs the first run id, and no call has found it yet.
+                Call :py:meth:`get_offset` first.
+        """
+        if not self._id:
+            raise RuntimeError(
+                "The Stream id is not known yet. Call get_offset() first."
+            )
         return StreamRef(self._id)
+
+    async def _stream_id(self) -> str:
+        if not self._id:
+            assert self._find_id is not None
+            self._id = await self._find_id()
+        return self._id
 
     def topic(self, name: str, *, type: type[T] = Any) -> Topic[T]:  # type: ignore[assignment]
         """A Topic of this Stream. ``type`` decodes its values. ``RawValue`` keeps the
@@ -92,10 +109,7 @@ class OutsideStream(_Readable):
             wait_new_records: Wait for new Records at the end of the Stream.
             idle_timeout: End with an ``Idle`` item when no new Record comes for this long.
         """
-        return _reader.read(
-            self._backend.service(self._namespace),
-            self._converter,
-            self._id,
+        return self._read(
             topics=[topic.name for topic in topics] if topics else None,
             types={
                 **self._types,
@@ -104,16 +118,39 @@ class OutsideStream(_Readable):
             from_offset=from_offset,
             wait_new_records=wait_new_records,
             idle_timeout=idle_timeout,
+        )
+
+    async def _read(
+        self,
+        *,
+        topics: list[str] | None,
+        types: dict[str, Any],
+        from_offset: int | None,
+        wait_new_records: bool,
+        idle_timeout: timedelta | None,
+    ) -> AsyncIterator[Item]:
+        items = _reader.read(
+            self._backend.service(self._namespace),
+            self._converter,
+            await self._stream_id(),
+            topics=topics,
+            types=types,
+            from_offset=from_offset,
+            wait_new_records=wait_new_records,
+            idle_timeout=idle_timeout,
             wait_for_create=self._wait_for_create,
             run_ended=self._run_ended,
         )
+        async for item in items:
+            yield item
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one."""
         response = await self._backend.call_async(
             "DescribeStream",
             stream_pb.DescribeStreamRequest(
-                namespace=self._namespace, stream=stream_pb.StreamRef(id=self._id)
+                namespace=self._namespace,
+                stream=stream_pb.StreamRef(id=await self._stream_id()),
             ),
             stream_pb.DescribeStreamResponse,
         )

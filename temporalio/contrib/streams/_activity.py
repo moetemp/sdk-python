@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -28,6 +30,7 @@ class ActivityStreams:
     namespace: str
     producer: stream_pb.Producer
     default_ref: StreamRef | None
+    loop: asyncio.AbstractEventLoop
     batch: BatchOptions = BatchOptions()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
 
@@ -39,13 +42,14 @@ class ActivityStreams:
                 backend=self.backend,
                 converter=self.converter,
                 namespace=self.namespace,
-                stream_id=stream_id,
+                stream_id=_known(stream_id),
                 producer=self.producer,
                 batch=batch or self.batch,
                 # The default Stream has no key until its first write, so its create goes
                 # first. A received Stream must exist already.
                 create_first=self.default_ref is not None
                 and stream_id == self.default_ref.id,
+                loop=self.loop,
             )
             self.writers[stream_id] = writer
         return writer
@@ -60,6 +64,13 @@ class ActivityStreams:
                 errors.append(err)
         if errors:
             raise errors[0]
+
+
+def _known(stream_id: str) -> Callable[[], Awaitable[str]]:
+    async def find() -> str:
+        return stream_id
+
+    return find
 
 
 current: contextvars.ContextVar[ActivityStreams | None] = contextvars.ContextVar(
