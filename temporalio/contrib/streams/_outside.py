@@ -41,6 +41,8 @@ class OutsideStream(_Readable):
         self._namespace = namespace
         # A client that has only a Workflow id learns the first run id on its first call.
         self._id = stream_id if isinstance(stream_id, str) else ""
+        # The owning Workflow of a Workflow's Stream, which its ref carries.
+        self._owner: tuple[str, str] | None = None
         self._find_id = None if isinstance(stream_id, str) else stream_id
         self._writer_factory = writer
         self._writer: StreamWriter | None = None
@@ -61,7 +63,13 @@ class OutsideStream(_Readable):
             raise RuntimeError(
                 "The Stream id is not known yet. Call get_offset() first."
             )
-        return StreamRef(self._id)
+        if self._owner is None:
+            return StreamRef(self._id)
+        return StreamRef(
+            self._id,
+            workflow_id=self._owner[0],
+            first_execution_run_id=self._owner[1],
+        )
 
     async def _stream_id(self) -> str:
         if not self._id:

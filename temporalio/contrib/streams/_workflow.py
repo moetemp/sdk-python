@@ -80,7 +80,7 @@ class WorkflowStream(_Writable):
 
     def __init__(
         self,
-        stream_id: str,
+        ref: StreamRef,
         *,
         create: bool,
         retention: timedelta | None,
@@ -89,7 +89,8 @@ class WorkflowStream(_Writable):
         """Create a Stream handle. Use :py:func:`workflow_stream` or
         :py:func:`create_workflow_stream` instead.
         """
-        self._id = stream_id
+        self._ref = ref
+        self._id = ref.id
         self._create = create
         self._retention = retention
         self._auto_close = auto_close
@@ -100,7 +101,14 @@ class WorkflowStream(_Writable):
     @property
     def ref(self) -> StreamRef:
         """Reference to pass to Activities, child Workflows and clients."""
-        return StreamRef(self._id)
+        return self._ref
+
+    def _model_ref(self) -> models.StreamRef:
+        return models.StreamRef(
+            id=self._id,
+            workflow_id=self._ref.workflow_id,
+            first_execution_run_id=self._ref.first_execution_run_id,
+        )
 
     @property
     def auto_close(self) -> bool:
@@ -143,7 +151,7 @@ class WorkflowStream(_Writable):
         self._ensure_created()
         self._used = True
         append_records(
-            stream=models.StreamRef(id=self._id),
+            stream=self._model_ref(),
             records=[models.AppendRecord(topic=topic, body=value)],
         )
 
@@ -158,9 +166,7 @@ class WorkflowStream(_Writable):
         self._check("close")
         self._ensure_created()
         self._closed = True
-        close_stream(
-            stream=models.StreamRef(id=self._id), result=result, failure=failure
-        )
+        close_stream(stream=self._model_ref(), result=result, failure=failure)
 
     def __enter__(self) -> WorkflowStream:
         """Use the Stream in a ``with`` block, which closes it at the end."""
@@ -202,18 +208,18 @@ def workflow_stream(
     state = _state()
     if ref is None:
         info = temporalio.workflow.info()
-        stream_id = _ids.default_stream_id(
-            info.workflow_id, info.first_execution_run_id
+        ref = StreamRef(
+            _ids.default_stream_id(info.workflow_id, info.first_execution_run_id),
+            workflow_id=info.workflow_id,
+            first_execution_run_id=info.first_execution_run_id,
         )
         create, close = True, True if auto_close is None else auto_close
     else:
-        stream_id = ref.id
         create, close = False, bool(auto_close)
+    stream_id = ref.id
     stream = state.streams.get(stream_id)
     if stream is None:
-        stream = WorkflowStream(
-            stream_id, create=create, retention=None, auto_close=close
-        )
+        stream = WorkflowStream(ref, create=create, retention=None, auto_close=close)
         state.streams[stream_id] = stream
     elif auto_close is not None:
         stream._auto_close = auto_close
@@ -237,9 +243,12 @@ def create_workflow_stream(
     stream_id = _ids.scoped_stream_id(
         info.workflow_id, info.first_execution_run_id, name
     )
-    stream = WorkflowStream(
-        stream_id, create=True, retention=retention, auto_close=False
+    ref = StreamRef(
+        stream_id,
+        workflow_id=info.workflow_id,
+        first_execution_run_id=info.first_execution_run_id,
     )
+    stream = WorkflowStream(ref, create=True, retention=retention, auto_close=False)
     stream._check("create")
     stream._ensure_created()
     _state().streams[stream_id] = stream

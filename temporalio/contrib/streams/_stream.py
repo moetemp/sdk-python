@@ -8,12 +8,42 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+import temporalio.converter
+
 if TYPE_CHECKING:
     from temporalio.contrib.streams._reader import Item
 
 T = TypeVar("T")
 
 
+class _StreamRefJson(
+    temporalio.converter.TransferTypeConverter["StreamRef", dict[str, str]]
+):
+    # The JSON form is the proto JSON of temporal.api.streamservice.v1.StreamRef, so every SDK
+    # reads a ref that another wrote. Snake case keys from older refs still decode.
+    transfer_type: type[dict[str, str]] | None = dict
+
+    def to_transfer_type(self, value: StreamRef) -> dict[str, str]:
+        json = {"id": value.id}
+        if value.workflow_id:
+            json["workflowId"] = value.workflow_id
+        if value.first_execution_run_id:
+            json["firstExecutionRunId"] = value.first_execution_run_id
+        return json
+
+    def from_transfer_type(
+        self, value: dict[str, str], type_hint: type[StreamRef]
+    ) -> StreamRef:
+        return StreamRef(
+            value["id"],
+            workflow_id=value.get("workflowId") or value.get("workflow_id") or None,
+            first_execution_run_id=value.get("firstExecutionRunId")
+            or value.get("first_execution_run_id")
+            or None,
+        )
+
+
+@temporalio.converter.transfer_type_convertible(_StreamRefJson)
 @dataclass(frozen=True)
 class StreamRef:
     """Names one Stream. Pass it to Workflows and Activities as an argument.
@@ -24,6 +54,14 @@ class StreamRef:
 
     id: str
     """The Stream id. It is opaque to callers."""
+
+    workflow_id: str | None = None
+    """For a Workflow's Stream, the id of the Workflow that owns it. None for a standalone
+    Stream."""
+
+    first_execution_run_id: str | None = None
+    """For a Workflow's Stream, the first run id of the owning run chain. None for a
+    standalone Stream."""
 
 
 class _Writable(abc.ABC):

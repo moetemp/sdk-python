@@ -18,8 +18,11 @@ Item = Record[Any] | Superseded | Closed | Idle
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
-# How often a reader that ends with the run checks the run while it waits for the create.
+# How often a reader that ends with the run checks the run, while it waits for the create
+# or for new Records.
 _RUN_CHECK = timedelta(seconds=2)
+# The shortest idle time a read asks for, so a read never asks for none.
+_MIN_IDLE = timedelta(milliseconds=1)
 # How long one loop of the generated long poll may run before the facade looks again.
 _POLL_DEADLINE = timedelta(minutes=5)
 
@@ -51,7 +54,15 @@ async def read(
     # A reader that ends with the run waits for the create in short steps, so it sees the
     # run end soon.
     create_step = _RUN_CHECK if run_ended is not None else _MAX_WAIT
+    # The idle time counts from the last Record across reads, since a read that ends with the
+    # run polls in short steps.
+    idle_since = loop.time()
     while True:
+        idle_left = (
+            max(idle_timeout - timedelta(seconds=loop.time() - idle_since), _MIN_IDLE)
+            if idle_timeout is not None
+            else None
+        )
         create_left = (
             timedelta(seconds=max(create_until - loop.time(), 0))
             if create_until is not None
@@ -63,14 +74,18 @@ async def read(
             start=None if offset is not None else ReadStart.READ_START_BEGINNING,
             topics=names,
             topic_prefixes=list(topic_prefixes),
-            idle_timeout=idle_timeout,
+            idle_timeout=idle_left,
             create_wait=min(create_left, create_step) if create_left else None,
         )
         try:
             with _convert.raw_bodies(converter.failure_converter):
                 if wait_new_records:
+                    # A reader that ends with the run looks at the run between short polls.
                     answer = await service.read_records_until_records(
-                        request, deadline=_POLL_DEADLINE
+                        request,
+                        deadline=_RUN_CHECK
+                        if run_ended is not None
+                        else _POLL_DEADLINE,
                     )
                 else:
                     answer = await service.read_records(request)
@@ -90,6 +105,7 @@ async def read(
         if answer.next_offset is not None:
             offset = answer.next_offset
         if answer.records:
+            idle_since = loop.time()
             continue
         if answer.done or not wait_new_records:
             return

@@ -260,7 +260,12 @@ async def _encode_call(
         if request.retention is not None:
             create.retention.FromTimedelta(request.retention)
         return ext_pb.WorkflowCall(create=create)
-    stream = stream_pb.StreamRef(id=request.stream.id if request.stream else "")
+    ref = request.stream or models.StreamRef(id="")
+    stream = stream_pb.StreamRef(
+        id=ref.id,
+        workflow_id=ref.workflow_id or "",
+        first_execution_run_id=ref.first_execution_run_id or "",
+    )
     if call.operation == "AppendRecords":
         records = request.records or []
         bodies = await converter.encode([record.body for record in records])
@@ -433,7 +438,10 @@ def _close_with_run(
                 "CloseStream",
                 _convert_in_sandbox(
                     models.CloseStreamRequest(
-                        stream=models.StreamRef(id=stream_id),
+                        # A received ref keeps its own owner.
+                        stream=state.streams[stream_id]._model_ref()
+                        if stream_id in state.streams
+                        else _owned_ref(stream_id),
                         result=result,
                         failure=failure,
                     )
@@ -470,6 +478,16 @@ def _convert_in_sandbox(request: Any) -> Any:
     return request
 
 
+def _owned_ref(stream_id: str) -> models.StreamRef:
+    # A Stream that the run creates, or its default Stream, is the run chain's own.
+    info = temporalio.workflow.info()
+    return models.StreamRef(
+        id=stream_id,
+        workflow_id=info.workflow_id,
+        first_execution_run_id=info.first_execution_run_id,
+    )
+
+
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_transport = True
 
@@ -500,7 +518,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         operation = input.operation_name
         if operation == "CreateStream":
             result: Any = models.CreateStreamResponse(
-                stream=models.StreamRef(id=input.input.stream_id)
+                stream=_owned_ref(input.input.stream_id)
             )
         elif operation == "AppendRecords":
             result = models.AppendRecordsResponse()

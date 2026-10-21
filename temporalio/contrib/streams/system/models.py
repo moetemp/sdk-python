@@ -152,6 +152,8 @@ class StreamRef:
     """Identifies one Stream. The id is opaque to callers."""
 
     id: str
+    workflow_id: str | None = None
+    first_execution_run_id: str | None = None
 
 
 class _StreamRefTransferTypeConverter(
@@ -174,6 +176,10 @@ class _StreamRefTransferTypeConverter(
         id = value.id
         return StreamRef(
             id=id,
+            workflow_id=value.workflow_id if bool(value.workflow_id) else None,
+            first_execution_run_id=value.first_execution_run_id
+            if bool(value.first_execution_run_id)
+            else None,
         )
 
     @typing_extensions.override
@@ -183,6 +189,10 @@ class _StreamRefTransferTypeConverter(
     ) -> temporalio.api.streamservice.v1.stream_service_pb2.StreamRef:
         message = temporalio.api.streamservice.v1.stream_service_pb2.StreamRef()
         message.id = value.id
+        if value.workflow_id is not None:
+            message.workflow_id = value.workflow_id
+        if value.first_execution_run_id is not None:
+            message.first_execution_run_id = value.first_execution_run_id
         return message
 
 

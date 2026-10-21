@@ -36,6 +36,10 @@ interface stream-service {
   record stream-ref {
     /// @nexus.doc "The Stream id. 1 to 4096 bytes after encoding."
     id: string,
+    /// @nexus.doc "The Workflow that owns the Stream. Empty on a standalone, client or Activity ref."
+    workflow-id: option<string>,
+    /// @nexus.doc "The first run id of the owning run chain. Empty when workflow-id is."
+    first-execution-run-id: option<string>,
   }
 
   /// @nexus.proto "temporal.api.streamservice.v1.ProducerKind"

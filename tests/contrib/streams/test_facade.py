@@ -1,12 +1,16 @@
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+import google.protobuf.json_format
 import pytest
 
+import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.converter
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import RawValue
@@ -339,3 +343,53 @@ async def test_read_by_topic_prefix(client: Client):
         if isinstance(item, streams.Record)
     ]
     assert read == ["agent/a", "agent/b", "exact"]
+
+
+def test_ref_without_owner_cannot_end_with_run(client: Client):
+    client, _ = fake_client(client)
+    with pytest.raises(ValueError):
+        streams.for_ref(client, streams.StreamRef("standalone"), end_with_run=True)
+
+
+def test_old_refs_still_decode():
+    converter = temporalio.converter.DataConverter.default.payload_converter
+    payload = converter.to_payload({"id": "old"})
+    ref = converter.from_payload(payload, streams.StreamRef)
+    assert ref == streams.StreamRef("old")
+    assert ref.workflow_id is None and ref.first_execution_run_id is None
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        streams.StreamRef("only-id"),
+        streams.StreamRef("wf:run", workflow_id="wf", first_execution_run_id="run"),
+    ],
+)
+def test_ref_json_is_the_proto_json(ref: streams.StreamRef):
+    converter = temporalio.converter.DataConverter.default.payload_converter
+    payload = converter.to_payload(ref)
+    proto = stream_pb.StreamRef(
+        id=ref.id,
+        workflow_id=ref.workflow_id or "",
+        first_execution_run_id=ref.first_execution_run_id or "",
+    )
+    assert json.loads(payload.data) == json.loads(
+        google.protobuf.json_format.MessageToJson(proto)
+    )
+    # Another SDK's proto JSON decodes to the same ref.
+    from_proto = temporalio.api.common.v1.Payload(
+        metadata={"encoding": b"json/plain"},
+        data=google.protobuf.json_format.MessageToJson(proto).encode(),
+    )
+    assert converter.from_payload(from_proto, streams.StreamRef) == ref
+
+
+def test_snake_case_refs_still_decode():
+    converter = temporalio.converter.DataConverter.default.payload_converter
+    payload = converter.to_payload(
+        {"id": "old", "workflow_id": "wf", "first_execution_run_id": "run"}
+    )
+    assert converter.from_payload(payload, streams.StreamRef) == streams.StreamRef(
+        "old", workflow_id="wf", first_execution_run_id="run"
+    )
