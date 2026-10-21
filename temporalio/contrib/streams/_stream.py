@@ -42,6 +42,7 @@ class _Readable(_Writable):
         from_offset: int | None = None,
         wait_new_records: bool = True,
         idle_timeout: timedelta | None = None,
+        type: Any = None,
     ) -> AsyncGenerator[Item, None]: ...
 
 
