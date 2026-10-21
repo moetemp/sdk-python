@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+import temporalio.converter
+import temporalio.workflow
 from temporalio.client import WorkflowHistory
 
 if TYPE_CHECKING:
@@ -15,6 +18,32 @@ if TYPE_CHECKING:
         WorkerConfig,
         WorkflowReplayResult,
     )
+
+
+@dataclass(frozen=True)
+class WorkflowActivationCompleteInput:
+    """Input for :py:meth:`Plugin.on_workflow_activation_complete`.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    run_id: str
+    """Run ID of the Workflow."""
+
+    info: temporalio.workflow.Info
+    """Info of the Workflow."""
+
+    is_replaying: bool
+    """True if the Workflow replayed History in this Activation."""
+
+    items: Sequence[Any]
+    """Values that Workflow code gave to :py:func:`temporalio.workflow.send_to_plugins` in this
+    Activation, in order. Values given during replay are not here, unless they were given with
+    ``during_replay=True``."""
+
+    data_converter: temporalio.converter.DataConverter
+    """Data converter of the Worker, with the Workflow's serialization context."""
 
 
 class Plugin(abc.ABC):
@@ -63,6 +92,25 @@ class Plugin(abc.ABC):
             worker: The worker instance to run.
             next: Callable to continue the worker execution.
         """
+
+    async def on_workflow_activation_complete(
+        self,
+        input: WorkflowActivationCompleteInput,  # pyright: ignore[reportUnusedParameter]
+    ) -> None:
+        """Hook called at the end of each successful Workflow Activation on a Worker.
+
+        The Worker calls it outside the sandbox, after it encodes the Activation's completion and
+        before it sends the completion to Core. So the hook can run the payload codec and call
+        native code. An exception fails the Workflow Task. The :py:class:`Replayer` never calls
+        it. The default does nothing.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            input: The Activation's values and context.
+        """
+        pass
 
     @abc.abstractmethod
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:

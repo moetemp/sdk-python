@@ -238,3 +238,16 @@ class _Instance(WorkflowInstance):
             )  # type: ignore
         finally:
             self.importer.restriction_context.is_runtime = False
+
+    def take_plugin_items(self) -> list[Any]:
+        # Forward call to the sandboxed instance
+        self.importer.restriction_context.is_runtime = True
+        try:
+            self._run_code(
+                "with __temporal_importer.applied():\n"
+                "  __temporal_items = __temporal_in_sandbox.take_plugin_items()\n",
+                __temporal_importer=self.importer,
+            )
+            return self.globals_and_locals.pop("__temporal_items", [])  # type: ignore
+        finally:
+            self.importer.restriction_context.is_runtime = False

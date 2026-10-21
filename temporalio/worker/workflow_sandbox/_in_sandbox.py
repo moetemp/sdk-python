@@ -90,6 +90,10 @@ class InSandbox:
         """Get serialization context."""
         return self.instance.get_serialization_context(command_info)
 
+    def take_plugin_items(self) -> list[Any]:
+        """Take the values for plugins from the last activation."""
+        return self.instance.take_plugin_items()
+
     def get_external_store_context(
         self,
         command_info: _command_aware_visitor.CommandInfo | None,
