@@ -4,6 +4,7 @@ use pyo3::types::PyTuple;
 mod client;
 mod client_rpc_generated;
 mod envconfig;
+mod extension;
 mod metric;
 mod runtime;
 mod testing;
@@ -69,6 +70,8 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::LocalActivitySlotInfo>()?;
     m.add_function(wrap_pyfunction!(new_worker, m)?)?;
     m.add_function(wrap_pyfunction!(new_replay_worker, m)?)?;
+    m.add_class::<extension::WorkerExtensionRef>()?;
+    m.add_function(wrap_pyfunction!(new_worker_extension, m)?)?;
 
     // envconfig
     let envconfig_module = PyModule::new(py, "envconfig")?;
@@ -129,6 +132,15 @@ fn new_worker(
     config: worker::WorkerConfig,
 ) -> PyResult<worker::WorkerRef> {
     worker::new_worker(runtime_ref, client, config)
+}
+
+#[pyfunction]
+fn new_worker_extension(
+    runtime_ref: &runtime::RuntimeRef,
+    name: &str,
+    config: Vec<u8>,
+) -> PyResult<extension::WorkerExtensionRef> {
+    extension::new_worker_extension(runtime_ref, name, config)
 }
 
 #[pyfunction]
