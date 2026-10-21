@@ -45,11 +45,8 @@ _REF_HEADER = "__temporal_stream_ref"
 _KEY_HEADER = "__temporal_stream_key"
 
 
-class RedisStreamPlugin(SimplePlugin):
-    """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
-
-    Put it on the client. A Worker takes its client's plugins, so one plugin serves Workflow
-    code, Activities and the client.
+class StreamPlugin(SimplePlugin):
+    """Base of the plugins that carry Stream calls to a temporalio-streams extension.
 
     .. warning::
         This API is experimental.
@@ -57,54 +54,18 @@ class RedisStreamPlugin(SimplePlugin):
 
     def __init__(
         self,
-        url: str | Sequence[str],
-        *,
-        cluster: bool = False,
-        key_prefix: str | None = None,
-        retention: timedelta | None = None,
-        safety_ttl: timedelta | None = None,
-        durable_writes: int = 0,
-        durable_timeout: timedelta | None = None,
-        response_timeout: timedelta | None = None,
-        runtime: temporalio.runtime.Runtime | None = None,
+        name: str,
+        extension_name: str,
+        config: ext_pb.RedisStreamConfig,
+        runtime: temporalio.runtime.Runtime | None,
     ) -> None:
-        """Create the plugin. It connects to Redis on the first Stream call.
-
-        Args:
-            url: A Redis URL, or the seed URLs of a cluster. Credentials and TLS come from the
-                URL.
-            cluster: Whether the URLs are of a Redis cluster.
-            key_prefix: The prefix of every key. Defaults to ``temporal-streams``.
-            retention: The default Retention of a new Stream. Defaults to 7 days.
-            safety_ttl: How long an open Workflow-owned Stream stays after its last write.
-                Defaults to 90 days.
-            durable_writes: When above zero, each Workflow flush waits for this many replicas.
-            durable_timeout: How long that wait takes at most. Defaults to 1 s.
-            response_timeout: How long one Redis call takes at most. Defaults to 5 s.
-            runtime: The runtime of the client. Defaults to the default runtime.
-        """
-        config = ext_pb.RedisStreamConfig(
-            urls=[url] if isinstance(url, str) else list(url),
-            cluster=cluster,
-            key_prefix=key_prefix or "",
-            durable_writes=durable_writes,
-        )
-        for name, value in (
-            ("retention", retention),
-            ("safety_ttl", safety_ttl),
-            ("durable_timeout", durable_timeout),
-            ("response_timeout", response_timeout),
-        ):
-            if value is not None:
-                getattr(config, name).FromTimedelta(value)
+        """Create the plugin over the bridge's extension with ``extension_name``."""
         self._extension = temporalio.worker.WorkerExtension(
-            EXTENSION_NAME, config.SerializeToString(), runtime=runtime
+            extension_name, config.SerializeToString(), runtime=runtime
         )
         self._temporal_stream_backend = StreamBackend(self._extension)
         self._converter = temporalio.converter.DataConverter.default
-        super().__init__(
-            "temporalio.RedisStreamPlugin", interceptors=[_StreamInterceptor(self)]
-        )
+        super().__init__(name, interceptors=[_StreamInterceptor(self)])
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
@@ -188,6 +149,63 @@ class RedisStreamPlugin(SimplePlugin):
         # The call only adds to the run's buffer under a short lock, so it doesn't block the
         # event loop.
         self._temporal_stream_backend.call("BufferWorkflowCalls", request)
+
+
+class RedisStreamPlugin(StreamPlugin):
+    """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
+
+    Put it on the client. A Worker takes its client's plugins, so one plugin serves Workflow
+    code, Activities and the client.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(
+        self,
+        url: str | Sequence[str],
+        *,
+        cluster: bool = False,
+        key_prefix: str | None = None,
+        retention: timedelta | None = None,
+        safety_ttl: timedelta | None = None,
+        durable_writes: int = 0,
+        durable_timeout: timedelta | None = None,
+        response_timeout: timedelta | None = None,
+        runtime: temporalio.runtime.Runtime | None = None,
+    ) -> None:
+        """Create the plugin. It connects to Redis on the first Stream call.
+
+        Args:
+            url: A Redis URL, or the seed URLs of a cluster. Credentials and TLS come from the
+                URL.
+            cluster: Whether the URLs are of a Redis cluster.
+            key_prefix: The prefix of every key. Defaults to ``temporal-streams``.
+            retention: The default Retention of a new Stream. Defaults to 7 days.
+            safety_ttl: How long an open Workflow-owned Stream stays after its last write.
+                Defaults to 90 days.
+            durable_writes: When above zero, each Workflow flush waits for this many replicas.
+            durable_timeout: How long that wait takes at most. Defaults to 1 s.
+            response_timeout: How long one Redis call takes at most. Defaults to 5 s.
+            runtime: The runtime of the client. Defaults to the default runtime.
+        """
+        config = ext_pb.RedisStreamConfig(
+            urls=[url] if isinstance(url, str) else list(url),
+            cluster=cluster,
+            key_prefix=key_prefix or "",
+            durable_writes=durable_writes,
+        )
+        for name, value in (
+            ("retention", retention),
+            ("safety_ttl", safety_ttl),
+            ("durable_timeout", durable_timeout),
+            ("response_timeout", response_timeout),
+        ):
+            if value is not None:
+                getattr(config, name).FromTimedelta(value)
+        super().__init__(
+            "temporalio.RedisStreamPlugin", EXTENSION_NAME, config, runtime
+        )
 
 
 def _withdraw_run(info: temporalio.workflow.Info) -> str:
@@ -285,7 +303,7 @@ class _DoneHandle(temporalio.workflow.NexusOperationHandle[Any]):
 
 
 class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interceptor):
-    def __init__(self, plugin: RedisStreamPlugin) -> None:
+    def __init__(self, plugin: StreamPlugin) -> None:
         super().__init__()
         self._plugin = plugin
 
@@ -515,7 +533,7 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
     def __init__(
         self,
         next: temporalio.worker.ActivityInboundInterceptor,
-        plugin: RedisStreamPlugin,
+        plugin: StreamPlugin,
     ) -> None:
         super().__init__(next)
         self._plugin = plugin
@@ -554,7 +572,7 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: RedisStreamPlugin
+    input: temporalio.worker.ExecuteActivityInput, plugin: StreamPlugin
 ) -> _activity.ActivityStreams:
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()

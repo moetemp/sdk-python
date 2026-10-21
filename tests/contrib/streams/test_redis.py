@@ -18,7 +18,12 @@ from temporalio.api.common.v1 import Payload
 from temporalio.client import Client
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
-from temporalio.contrib.streams.redis import RedisStreamPlugin, _WorkflowInbound
+from temporalio.contrib.streams.redis import (
+    RedisStreamPlugin,
+    StreamPlugin,
+    _WorkflowInbound,
+)
+from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import (
@@ -71,10 +76,20 @@ def redis_url() -> Iterator[str]:
         process.wait()
 
 
-@pytest.fixture
-async def stream_client(client: Client, redis_url: str) -> AsyncIterator[Client]:
+@pytest.fixture(params=["memory", "redis"])
+async def stream_client(
+    client: Client, request: pytest.FixtureRequest
+) -> AsyncIterator[Client]:
+    # Every live test runs on the memory Store and on Redis, since both must keep one set of
+    # rules.
+    plugin: StreamPlugin
+    if request.param == "memory":
+        plugin = MemoryStreamPlugin()
+    else:
+        redis_url = request.getfixturevalue("redis_url")
+        plugin = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
     config = client.config()
-    config["plugins"] = [RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")]
+    config["plugins"] = [plugin]
     yield Client(**config)
 
 
@@ -665,9 +680,7 @@ async def test_plugin_replays_a_history_made_without_it(
     replayer = Replayer(
         workflows=[RandomAroundActivity],
         plugins=[
-            p
-            for p in stream_client.config()["plugins"]
-            if isinstance(p, RedisStreamPlugin)
+            p for p in stream_client.config()["plugins"] if isinstance(p, StreamPlugin)
         ],
     )
     await replayer.replay_workflow(history)
@@ -697,7 +710,7 @@ async def test_worker_shutdown_drains_closes(stream_client: Client):
 
 async def test_plugin_shutdown_flushes_client_writers(stream_client: Client):
     [plugin] = [
-        p for p in stream_client.config()["plugins"] if isinstance(p, RedisStreamPlugin)
+        p for p in stream_client.config()["plugins"] if isinstance(p, StreamPlugin)
     ]
     stream = await streams.create_stream(stream_client, f"shutdown-{uuid.uuid4()}")
     stream.topic("t", type=str).publish("unflushed")
