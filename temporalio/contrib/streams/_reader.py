@@ -1,0 +1,110 @@
+"""Reads of a Stream, for Activities and clients."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from datetime import timedelta
+from typing import Any
+
+import temporalio.converter
+from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
+from temporalio.contrib.streams import _convert, _errors
+from temporalio.contrib.streams._items import Closed, Idle, Record, Superseded
+from temporalio.contrib.streams.system import client as service_client
+from temporalio.contrib.streams.system import models
+
+Item = Record[Any] | Superseded | Closed | Idle
+
+# The service waits at most 60 s per read, so a longer wait is a loop of reads.
+_MAX_WAIT = timedelta(seconds=60)
+# How long one loop of the generated long poll may run before the facade looks again.
+_POLL_DEADLINE = timedelta(minutes=5)
+
+
+async def read(
+    service: service_client.StreamServiceClient,
+    converter: temporalio.converter.DataConverter,
+    stream_id: str,
+    *,
+    topics: Sequence[str] | None,
+    types: Mapping[str, Any],
+    from_offset: int | None,
+    wait_new_records: bool,
+    idle_timeout: timedelta | None,
+    wait_for_create: timedelta | None,
+    run_ended: Callable[[], Awaitable[bool]] | None = None,
+) -> AsyncIterator[Item]:
+    """Give the items of a Stream in order, until a close, an idle end, or the newest Record
+    when ``wait_new_records`` is False.
+    """
+    loop = asyncio.get_running_loop()
+    create_until = (
+        loop.time() + wait_for_create.total_seconds() if wait_for_create else None
+    )
+    offset = from_offset
+    names = list(topics or [])
+    while True:
+        create_left = (
+            timedelta(seconds=max(create_until - loop.time(), 0))
+            if create_until is not None
+            else None
+        )
+        request = models.ReadRecordsRequest(
+            stream=models.StreamRef(id=stream_id),
+            from_offset=offset,
+            start=None if offset is not None else ReadStart.READ_START_BEGINNING,
+            topics=names,
+            idle_timeout=idle_timeout,
+            create_wait=min(create_left, _MAX_WAIT) if create_left else None,
+        )
+        try:
+            with _convert.raw_bodies(converter.failure_converter):
+                if wait_new_records:
+                    answer = await service.read_records_until_records(
+                        request, deadline=_POLL_DEADLINE
+                    )
+                else:
+                    answer = await service.read_records(request)
+        except _errors.StreamNotFoundError:
+            if create_until is not None and loop.time() < create_until:
+                continue
+            raise
+        for record in answer.records or []:
+            item = await _item(converter, record, types)
+            if item is None:
+                continue
+            yield item
+            if isinstance(item, (Closed, Idle)):
+                return
+        if answer.next_offset is not None:
+            offset = answer.next_offset
+        if answer.records:
+            continue
+        if answer.done or not wait_new_records:
+            return
+        if run_ended is not None and await run_ended():
+            return
+
+
+async def _item(
+    converter: temporalio.converter.DataConverter,
+    record: models.StreamRecord,
+    types: Mapping[str, Any],
+) -> Item | None:
+    offset = record.offset or 0
+    if record.kind == StreamRecordKind.STREAM_RECORD_KIND_DATA:
+        topic = record.topic or ""
+        type_hint = types.get(topic)
+        data = await _convert.decode(converter, record.body, type_hint)
+        return Record(topic=topic, data=data, offset=offset, producer=record.producer)
+    if record.kind == StreamRecordKind.STREAM_RECORD_KIND_SUPERSEDED:
+        if record.supersession is None:
+            return None
+        return Superseded(offset=offset, supersession=record.supersession)
+    if record.kind == StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
+        result = await _convert.decode(converter, record.close_result, None)
+        return Closed(offset=offset, result=result, failure=record.close_failure)
+    if record.kind == StreamRecordKind.STREAM_RECORD_KIND_IDLE:
+        return Idle(offset=offset)
+    return None
