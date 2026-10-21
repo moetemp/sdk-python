@@ -61,8 +61,11 @@ fn call_error(err: ExtensionError) -> PyErr {
 
 /// Builds the extension with `name` from its encoded config. Only the extensions that this build
 /// links are known.
-// A release build links no extension yet, so it never reads the config.
-#[cfg_attr(not(debug_assertions), allow(unused_variables))]
+// A release build with no extension feature never reads the config.
+#[cfg_attr(
+    not(any(debug_assertions, feature = "streams")),
+    allow(unused_variables)
+)]
 pub fn new_worker_extension(
     runtime_ref: &runtime::RuntimeRef,
     name: &str,
@@ -73,6 +76,12 @@ pub fn new_worker_extension(
     // An extension may start tasks on the runtime that it lives on.
     let _guard = runtime.core.tokio_handle().enter();
     let extension: Arc<dyn WorkerExtension> = match name {
+        #[cfg(feature = "streams")]
+        temporalio_streams::EXTENSION_NAME => {
+            let meter = runtime.core.telemetry().get_temporal_metric_meter();
+            temporalio_streams::RedisStreamExtension::from_config_bytes(&config, meter)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?
+        }
         #[cfg(debug_assertions)]
         test_extension::NAME => Arc::new(test_extension::TestExtension::new(&config)?),
         _ => {
