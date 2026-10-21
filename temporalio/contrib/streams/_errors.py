@@ -3,26 +3,48 @@
 from __future__ import annotations
 
 import temporalio.exceptions
+import temporalio.service
 import temporalio.worker
 from temporalio.contrib.streams.proto.v1 import StreamErrorDetails
 
 
-class StreamError(temporalio.exceptions.TemporalError):
+class StreamError(temporalio.exceptions.ApplicationError):
     """Base of every Stream error.
+
+    It is an application error that is not retryable, except
+    :py:class:`StreamStorageError`. So in Workflow code, where only
+    :py:class:`StreamClosedError` and the plugin errors are raised, an uncaught one fails the
+    Workflow and does not fail the Workflow Task again and again.
 
     .. warning::
         This API is experimental.
     """
 
-    def __init__(self, message: str, *, reason: str = "") -> None:
+    _retryable = False
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str = "",
+        code: temporalio.service.RPCStatusCode | None = None,
+    ) -> None:
         """Create a Stream error."""
-        super().__init__(message)
+        super().__init__(
+            message, type=type(self).__name__, non_retryable=not self._retryable
+        )
         self._reason = reason
+        self._code = code
 
     @property
     def reason(self) -> str:
         """Token of the cause, such as ``stream_closed``. Empty if the error has none."""
         return self._reason
+
+    @property
+    def code(self) -> temporalio.service.RPCStatusCode | None:
+        """Status code of the failed call, as in gRPC. None if no call failed."""
+        return self._code
 
 
 class StreamNotFoundError(StreamError):
@@ -42,7 +64,9 @@ class StreamFencedError(StreamError):
 
 
 class StreamStorageError(StreamError):
-    """The Store failed."""
+    """The Store failed. A retry of the Activity may succeed."""
+
+    _retryable = True
 
 
 class StreamOffsetError(StreamError):
@@ -77,4 +101,6 @@ def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
     reason = ""
     if err.details:
         reason = StreamErrorDetails.FromString(err.details).reason
-    return _BY_REASON.get(reason, StreamError)(err.message, reason=reason)
+    return _BY_REASON.get(reason, StreamError)(
+        err.message, reason=reason, code=err.code
+    )

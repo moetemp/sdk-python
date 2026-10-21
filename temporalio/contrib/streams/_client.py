@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import itertools
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -13,15 +16,18 @@ from temporalio.contrib.streams._backend import StreamBackend, backend_of_client
 from temporalio.contrib.streams._outside import OutsideStream, batch_options
 from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 
-# A client's Producer id has a key per process, so two processes with one identity don't fence
-# each other.
+# A client's Producer id has a key per process and writer, so two writers never share a
+# fence or a sequence. The crate takes two parts after `client:`, so the writer number goes into
+# the key.
 _PROCESS_KEY = str(uuid.uuid4())
+_WRITERS = itertools.count(1)
 
 
 def _client_producer(client: temporalio.client.Client) -> stream_pb.Producer:
+    key = f"{_PROCESS_KEY}-{next(_WRITERS)}"
     return stream_pb.Producer(
         kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT,
-        id=_ids.client_producer_id(client.identity, _PROCESS_KEY),
+        id=_ids.client_producer_id(client.identity, key),
         epoch=stream_pb.ProducerEpoch(attempt=1),
     )
 
@@ -37,7 +43,7 @@ class ClientStream(OutsideStream):
         self,
         client: temporalio.client.Client,
         backend: StreamBackend,
-        stream_id: str,
+        stream_id: str | Callable[[], Awaitable[str]],
         batch: BatchOptions,
         *,
         wait_for_create: timedelta | None = None,
@@ -56,10 +62,11 @@ class ClientStream(OutsideStream):
                 backend=backend,
                 converter=converter,
                 namespace=client.namespace,
-                stream_id=stream_id,
+                stream_id=self._stream_id,
                 producer=_client_producer(client),
                 batch=batch,
                 create_first=False,
+                loop=asyncio.get_running_loop(),
             ),
             wait_for_create=wait_for_create,
             run_ended=self._handle_closed if handle is not None else None,
@@ -77,12 +84,12 @@ class ClientStream(OutsideStream):
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
         """Flush this client's Records and close the Stream. Only its creator closes it."""
-        if self._writer is not None:
-            await self._writer.close()
+        producer = self._get_writer().producer
+        await self._get_writer().close()
         request = stream_pb.CloseStreamRequest(
             namespace=self._namespace,
-            stream=stream_pb.StreamRef(id=self._id),
-            producer=_client_producer(self._client),
+            stream=stream_pb.StreamRef(id=await self._stream_id()),
+            producer=producer,
         )
         if result is not None:
             request.result.CopyFrom(
@@ -107,10 +114,11 @@ def for_handle(
 ) -> ClientStream:
     """The default Stream of a Workflow, or the Stream it created with ``name``.
 
-    It builds the id from the Workflow id and the first run id, so it makes no call.
+    It builds the id from the Workflow id and the first run id, so it makes no call. A handle
+    with no first run id makes one Describe call on the Stream's first use.
 
     Args:
-        handle: A handle with a first run id, such as one that ``start_workflow`` returned.
+        handle: A handle of the Workflow, best one that ``start_workflow`` returned.
         name: The name that the Workflow gave ``create_workflow_stream``.
         wait_for_create: How long a read waits for a Stream that doesn't exist yet. Defaults
             to no wait.
@@ -119,13 +127,26 @@ def for_handle(
         max_batch_size: At most this many Records in one batch.
         max_retry_duration: How long a flush retries a Store failure.
     """
-    first_run_id = handle.first_execution_run_id or handle.run_id
-    if not first_run_id:
-        raise ValueError("The handle has no first run id, so the Stream id is unknown")
+
+    async def find_id() -> str:
+        # The design allows one Describe call when the handle has no first run id.
+        description = await handle.describe()
+        first = description.raw_description.workflow_execution_info.first_run_id
+        if not first:
+            raise ValueError(
+                "The server gave no first run id, so the Stream id is unknown"
+            )
+        return stream_id_of(first)
+
+    def stream_id_of(first_run_id: str) -> str:
+        if name is not None:
+            return _ids.scoped_stream_id(handle.id, first_run_id, name)
+        return _ids.default_stream_id(handle.id, first_run_id)
+
     stream_id = (
-        _ids.scoped_stream_id(handle.id, first_run_id, name)
-        if name is not None
-        else _ids.default_stream_id(handle.id, first_run_id)
+        stream_id_of(handle.first_execution_run_id)
+        if handle.first_execution_run_id
+        else find_id
     )
     return ClientStream(
         handle._client,
