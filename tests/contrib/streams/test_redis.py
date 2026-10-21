@@ -18,6 +18,7 @@ from temporalio.api.common.v1 import Payload
 from temporalio.client import Client
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
+from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
     RedisStreamPlugin,
     StreamPlugin,
@@ -867,3 +868,35 @@ async def test_idle_ends_a_read_that_ends_with_the_run(stream_client: Client):
         await handle.terminate()
     assert isinstance(items[0], streams.Record)
     assert isinstance(items[-1], streams.Idle)
+
+
+async def test_workflow_calls_carry_the_owner(stream_client: Client):
+    [plugin] = [
+        p for p in stream_client.config()["plugins"] if isinstance(p, StreamPlugin)
+    ]
+    sent: list[bytes] = []
+    call = plugin._temporal_stream_backend.call
+
+    def record(method: str, request: Any) -> bytes:
+        if method == "BufferWorkflowCalls":
+            sent.append(request.SerializeToString())
+        return call(method, request)
+
+    plugin._temporal_stream_backend.call = record  # type: ignore[method-assign]
+    async with new_worker(stream_client, QuickWriter) as worker:
+        handle = await stream_client.start_workflow(
+            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+    refs = []
+    for data in sent:
+        request = ext_pb.BufferWorkflowCallsRequest.FromString(data)
+        for workflow_call in request.calls:
+            if workflow_call.HasField("append"):
+                refs.append(workflow_call.append.stream)
+            if workflow_call.HasField("close"):
+                refs.append(workflow_call.close.stream)
+    assert refs
+    for ref in refs:
+        assert ref.workflow_id == handle.id
+        assert ref.first_execution_run_id == handle.first_execution_run_id
