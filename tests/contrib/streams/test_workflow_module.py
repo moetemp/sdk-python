@@ -339,3 +339,30 @@ async def test_sync_handlers_publish_and_close_with_no_await(stream_client: Clie
         items = await read(handle)
     assert data(items) == ["a", "p"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "finished"
+
+
+@workflow.defn
+class CreatesInInit:
+    @workflow.init
+    def __init__(self, prompt: str) -> None:
+        self._stream = stream_workflow.create_stream_nowait(Events)
+        self._stream.topic(Events.tokens).publish_nowait(prompt)
+
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        await self._stream.topic(Events.tokens).publish(prompt.upper())
+        return "done"
+
+
+async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
+    async with new_worker(stream_client, CreatesInInit) as worker:
+        handle = await stream_client.start_workflow(
+            CreatesInInit.run,
+            "hi",
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "done"
+        items = await read(handle)
+    assert data(items) == ["hi", "HI"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
