@@ -31,6 +31,7 @@ async def create_stream(
     stream_id: str,
     retention: datetime.timedelta | None = None,
     withdraw_run: str | None = None,
+    auto_close: datetime.timedelta | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[CreateStreamResponse,]:
     """
     Args:
@@ -39,10 +40,13 @@ async def create_stream(
         retention: The age after which a Record is dropped. Empty is the Store default.
         withdraw_run: Workflow only. A retry run's first batch or create: the previous
             run, whose Records it withdraws.
+        auto_close: Close the Stream with no result when no Record was appended for this
+            long. Empty never closes on its own. It is separate from Retention.
     """
     request = CreateStreamRequest(
         stream_id=stream_id,
         retention=retention,
         withdraw_run=withdraw_run,
+        auto_close=auto_close,
     )
     return await _create_stream(request)

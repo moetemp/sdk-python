@@ -5,7 +5,6 @@ from __future__ import annotations
 import abc
 from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import temporalio.converter
@@ -114,7 +113,6 @@ class _Readable(_Writable):
         topic_prefixes: Sequence[str] = (),
         from_offset: int | None = None,
         wait_new_records: bool = True,
-        idle_timeout: timedelta | None = None,
         type: Any = None,
     ) -> AsyncGenerator[Item, None]: ...
 
@@ -157,7 +155,6 @@ class Topic(Generic[T]):
         *,
         from_offset: int | None = None,
         wait_new_records: bool = True,
-        idle_timeout: timedelta | None = None,
     ) -> AsyncGenerator[Item, None]:
         """Read this Topic only. See the Stream's ``subscribe``."""
         if not isinstance(self._stream, _Readable):
@@ -166,5 +163,4 @@ class Topic(Generic[T]):
             topics=[self],
             from_offset=from_offset,
             wait_new_records=wait_new_records,
-            idle_timeout=idle_timeout,
         )
