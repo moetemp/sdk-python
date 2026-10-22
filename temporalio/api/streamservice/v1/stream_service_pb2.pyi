@@ -806,6 +806,8 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     WAIT_FIELD_NUMBER: builtins.int
     CREATE_WAIT_FIELD_NUMBER: builtins.int
     TOPIC_PREFIXES_FIELD_NUMBER: builtins.int
+    TO_OFFSET_FIELD_NUMBER: builtins.int
+    WAKE_ONLY_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(self) -> global___StreamRef: ...
@@ -832,6 +834,14 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         """Also read the Topics that start with one of these. A Record passes when its Topic is in
         topics or starts with a prefix. Both empty reads every Topic.
         """
+    to_offset: builtins.int
+    """The exclusive end of the read. The read scans no entry at or after it, the close Record
+    included, so a replay reads the same range. Zero means no end.
+    """
+    wake_only: builtins.bool
+    """Park as a normal read, then answer with no Records and next_offset = from_offset, when a
+    Record that passes the filter exists, when the Stream closes (done), or when wait ends.
+    """
     def __init__(
         self,
         *,
@@ -844,6 +854,8 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         create_wait: google.protobuf.duration_pb2.Duration | None = ...,
         topic_prefixes: collections.abc.Iterable[builtins.str] | None = ...,
+        to_offset: builtins.int = ...,
+        wake_only: builtins.bool = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -866,12 +878,16 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"start",
             "stream",
             b"stream",
+            "to_offset",
+            b"to_offset",
             "topic_prefixes",
             b"topic_prefixes",
             "topics",
             b"topics",
             "wait",
             b"wait",
+            "wake_only",
+            b"wake_only",
         ],
     ) -> None: ...
 
