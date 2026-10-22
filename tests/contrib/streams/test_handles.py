@@ -171,3 +171,10 @@ def test_from_handle_keeps_the_stream():
     assert DataConverter.default.payload_converter.to_payload(
         other
     ) == DataConverter.default.payload_converter.to_payload(OWNED)
+
+
+def test_any_type_argument_has_no_definition():
+    converter = DataConverter.default.payload_converter
+    decoded = converter.from_payload(converter.to_payload(OWNED), PlainStream[Any])
+    assert type(decoded) is PlainStream and decoded.definition is None
+    assert decoded.id == OWNED.id
