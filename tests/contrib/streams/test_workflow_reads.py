@@ -13,7 +13,6 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import StreamPlugin
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
@@ -88,7 +87,7 @@ def plugins_of(client: Client) -> list[Any]:
     return [
         plugin
         for plugin in client.config()["plugins"]
-        if isinstance(plugin, (StreamPlugin, NativeStreamPlugin))
+        if isinstance(plugin, streams.StreamPlugin)
     ]
 
 
