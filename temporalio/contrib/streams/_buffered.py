@@ -49,7 +49,9 @@ class BufferedPublisher(Generic[T]):
         self._last_offset = 0
         self._unwritten = 0
         self._reported = False
-        streams = _activity.current.get()
+        attempt = _activity.current.get()
+        # The attempt's end flushes the publisher before its backend drops the writers.
+        streams = attempt.get(topic._stream.backend) if attempt is not None else None
         if streams is not None:
             streams.publishers.append(self)
 

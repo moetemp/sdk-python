@@ -28,15 +28,16 @@ _WAIT_STEP = 0.1
 
 
 def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
-    streams = _activity.current.get()
-    if streams is None:
+    attempt = _activity.current.get()
+    if attempt is None:
         raise _errors.StreamTransportMissingError(
             "No Stream plugin runs this Activity, such as RedisStreamPlugin"
         )
-    if handle.backend and handle.backend != streams.backend_name:
+    streams = attempt.get(handle.backend)
+    if streams is None:
         raise _errors.StreamUnsupportedError(
-            f"The Stream {handle.id} is of the backend {handle.backend}. The Worker has only "
-            f"{streams.backend_name}.",
+            f"The Stream {handle.id} is of the backend {handle.backend}. The Worker has "
+            f"{', '.join(attempt.backends)}.",
             reason="stream_unsupported",
         )
     return streams

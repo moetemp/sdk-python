@@ -424,7 +424,9 @@ def test_sync_call_stops_when_the_thread_is_cancelled():
 
     stream: streams.SyncActivityStream[Any] = streams.SyncActivityStream(id="s")
     token = _activity.current.set(
-        cast(Any, SimpleNamespace(loop=loop, backend_name=""))
+        _activity.AttemptStreams(
+            default="", backends={"": cast(Any, SimpleNamespace(loop=loop))}
+        )
     )
     errors: list[BaseException] = []
 

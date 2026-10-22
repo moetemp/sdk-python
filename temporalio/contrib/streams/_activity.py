@@ -62,6 +62,19 @@ class ActivityStreams:
             raise errors[0]
 
 
-current: contextvars.ContextVar[ActivityStreams | None] = contextvars.ContextVar(
+@dataclass
+class AttemptStreams:
+    """The Stream state of one Activity attempt, one entry for each backend of the Worker."""
+
+    # The backend that a handle with no backend name uses.
+    default: str
+    backends: dict[str, ActivityStreams] = field(default_factory=dict)
+
+    def get(self, backend: str | None) -> ActivityStreams | None:
+        """The attempt's state for a backend name. None or empty is the default."""
+        return self.backends.get(backend or self.default)
+
+
+current: contextvars.ContextVar[AttemptStreams | None] = contextvars.ContextVar(
     "__temporal_activity_streams", default=None
 )

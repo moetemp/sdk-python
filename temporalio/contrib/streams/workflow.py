@@ -11,6 +11,7 @@ Workflow code creates a Stream with :py:func:`create_stream` and gets one again 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import weakref
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
@@ -46,6 +47,8 @@ class _RunStream:
     ref: models.StreamRef
     close_with_run: bool = False
     closed: bool = False
+    # The backend that keeps the Stream. Empty is the Worker's default.
+    backend: str = ""
 
 
 @dataclass
@@ -75,39 +78,69 @@ def _state() -> _RunState:
     return state
 
 
-def _backend_name() -> str | None:
-    # A Stream plugin marks its outbound interceptor with its backend name. With none, the
-    # call would go to the server as a System Nexus command, which only native Streams serve.
+# The backend of the call that the facade makes now. Each Stream plugin's interceptor takes
+# only the calls of its own backend and passes the others on.
+_target: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "__temporal_stream_target", default=None
+)
+
+
+def _backends() -> list[tuple[str, bool]]:
+    # Each Stream plugin marks its outbound interceptor with its backend name, so the chain of
+    # this run lists the Worker's backends, with their default marks.
+    backends = []
     outbound = getattr(temporalio.workflow._Runtime.current(), "_outbound", None)
     while outbound is not None:
         if getattr(outbound, "_temporal_stream_transport", False):
-            return getattr(outbound, "_temporal_stream_backend_name", "")
+            backends.append(
+                (
+                    getattr(outbound, "_temporal_stream_backend_name", ""),
+                    getattr(outbound, "_temporal_stream_default", False),
+                )
+            )
         outbound = getattr(outbound, "next", None)
-    return None
+    # Each plugin's inbound interceptor wraps the outbound chain that the plugins before it
+    # built, so the chain has the last plugin first.
+    backends.reverse()
+    return backends
+
+
+def _backend_name() -> str | None:
+    # The Worker's default backend: the one marked default, or else the first.
+    backends = _backends()
+    if not backends:
+        return None
+    return next((name for name, default in backends if default), backends[0][0])
 
 
 def _check_backend(backend: str | None, action: str) -> str:
     # The Worker's config gives these errors, not the history, so they fail the Workflow Task
     # and a Worker with the right config retries it. An ApplicationError would fail the run.
-    worker_backend = _backend_name()
-    if worker_backend is None:
+    backends = _backends()
+    if not backends:
         raise RuntimeError(
             "No Stream plugin is on the Worker, such as RedisStreamPlugin"
         )
-    if backend and backend != worker_backend:
+    names = [name for name, _ in backends]
+    if not backend:
+        return next((name for name, default in backends if default), names[0])
+    if backend not in names:
         raise RuntimeError(
-            f"Can't {action} a Stream of the backend {backend}. The Worker has only "
-            f"{worker_backend}."
+            f"Can't {action} a Stream of the backend {backend}. The Worker has "
+            f"{', '.join(names)}."
         )
-    return worker_backend
+    return backend
 
 
-def _now(call: Coroutine[Any, Any, _R]) -> _R:
+def _now(call: Coroutine[Any, Any, _R], backend: str) -> _R:
     # The plugin's interceptor answers at once, so the call ends in its first step.
+    token = _target.set(backend)
     try:
         call.send(None)
     except StopIteration as done:
         return done.value
+    finally:
+        _target.reset(token)
     call.close()
     raise RuntimeError("No Stream plugin took the call, such as RedisStreamPlugin")
 
@@ -209,7 +242,7 @@ class WorkflowStream(StreamHandle[E]):
         name, topic_type = self._topic_spec(topic, type)
         return WorkflowTopic(self, name, topic_type)
 
-    def _check(self, action: str, *, backend_checked: bool = False) -> _RunStream:
+    def _check(self, action: str, *, backend: str | None = None) -> _RunStream:
         if temporalio.workflow.unsafe.is_read_only():
             raise _errors.ReadOnlyContextError(
                 f"Can't {action} a Stream in read-only code"
@@ -220,21 +253,21 @@ class WorkflowStream(StreamHandle[E]):
                 f"Can't {action} the Stream {self.id}, since this run closed it",
                 reason="stream_closed",
             )
-        if not backend_checked:
-            _check_backend(self.backend, action)
+        run_stream.backend = backend or _check_backend(self.backend, action)
         return run_stream
 
     def _append(self, topic: str, values: tuple[Any, ...]) -> None:
         if not values:
             raise TypeError("publish takes one or more values")
-        self._check("write to")
+        run_stream = self._check("write to")
         # The backend's answer has no offsets that replay could give again, so it is dropped.
         _now(
             self._resource().append_records(
                 records=[
                     models.AppendRecord(topic=topic, body=value) for value in values
                 ]
-            )
+            ),
+            run_stream.backend,
         )
 
     async def close(
@@ -257,7 +290,7 @@ class WorkflowStream(StreamHandle[E]):
         """
         run_stream = self._check("close")
         run_stream.closed = True
-        _now(self._resource().close(result=result, failure=failure))
+        _now(self._resource().close(result=result, failure=failure), run_stream.backend)
 
     async def __aenter__(self) -> WorkflowStream[E]:
         """Use the Stream in ``async with``, which closes it at the end."""
@@ -324,7 +357,8 @@ async def create_stream(
             long, so a Stream that nobody closes does not stay open. Defaults to never.
         close_with_run: Close the Stream when the run chain closes, with the result or the
             failure of its last run. A run that continues as new passes it on.
-        backend: The name of the backend. Defaults to the Worker's.
+        backend: The name of the backend. Defaults to the Worker's default backend: the
+            Stream plugin with ``default=True``, or else the first.
 
     Raises:
         StreamClosedError: This run closed the Stream.
@@ -359,15 +393,17 @@ def create_stream_nowait(
     is for code that can't await ``put``. It takes the options of :py:func:`create_stream`
     and has the same buffer and errors.
     """
-    stream = _own_handle(definition, name, _check_backend(backend, "create"))
-    run_stream = stream._check("create", backend_checked=True)
+    backend_name = _check_backend(backend, "create")
+    stream = _own_handle(definition, name, backend_name)
+    run_stream = stream._check("create", backend=backend_name)
     if run_stream.close_with_run and not close_with_run:
         raise ValueError(
             f"The Stream {stream.id} already closes with the run chain, and "
             "close_with_run=False can't turn that off"
         )
     _now(
-        _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close)
+        _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close),
+        backend_name,
     )
     run_stream.close_with_run = close_with_run
     return stream

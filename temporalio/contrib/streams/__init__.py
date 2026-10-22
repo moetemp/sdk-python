@@ -10,9 +10,9 @@ that context, such as :py:class:`ActivityStream`.
 A Stream plugin carries the calls and registers a backend name with ``name=``, such as
 :py:class:`temporalio.contrib.streams.redis.RedisStreamPlugin` (``redis``) and
 :py:class:`temporalio.contrib.streams.testing.MemoryStreamPlugin` (``memory``). A handle
-carries the name of its backend. A client may have two plugins, and ``default=True`` marks the
-one that a create with no ``backend=`` uses. For now a Worker has one Stream plugin, so it
-serves one backend.
+carries the name of its backend. A client and a Worker may have more than one Stream plugin,
+and each call goes to the backend that the handle names. ``default=True`` marks the one that a
+create with no ``backend=`` uses, or else the first plugin is the default.
 
 .. warning::
     This package is experimental.
