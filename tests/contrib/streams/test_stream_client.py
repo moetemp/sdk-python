@@ -2,6 +2,8 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -9,6 +11,7 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
 from temporalio.plugin import SimplePlugin
 from tests.contrib.streams.fake_extension import FakeExtension
@@ -186,3 +189,42 @@ async def test_auto_close_of_a_client_stream(stream_client: Client):
     assert isinstance(items[-1], streams.Closed) and items[-1].result is None
     with pytest.raises(streams.StreamClosedError):
         await stream.topic(Events.tokens).publish("late")
+
+
+async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
+    client, _ = fake_client(client)
+    stream_client = streams.StreamClient(client)
+    handle = client.get_workflow_handle("agent-2")
+    first = stream_client.get_workflow_stream(handle, Events)
+    same = stream_client.get_workflow_stream(handle, Events)
+    other = stream_client.get_workflow_stream(handle, Events, name="other")
+    key = hash(first)
+    assert first == same and first != other
+    assert "agent-2" in repr(first) and "events" in repr(first)
+    describes = []
+
+    async def describe() -> Any:
+        describes.append(1)
+        await asyncio.sleep(0.05)
+        info = SimpleNamespace(first_run_id="run-2")
+        return SimpleNamespace(
+            raw_description=SimpleNamespace(workflow_execution_info=info)
+        )
+
+    setattr(handle, "describe", describe)
+    await stream_client.create(Events, id="agent-2:run-2:events")
+    # Calls that start together share one Describe call.
+    assert await asyncio.gather(first.get_offset(), first.get_offset()) == [0, 0]
+    assert describes == [1]
+    assert first.id == "agent-2:run-2:events"
+    assert hash(first) == key
+
+
+async def test_default_plugin_is_the_default_backend(client: Client):
+    config = client.config()
+    config["plugins"] = [
+        MemoryStreamPlugin(),
+        MemoryStreamPlugin(name="b", default=True),
+    ]
+    stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
+    assert stream.backend == "b"
