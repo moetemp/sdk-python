@@ -25,6 +25,9 @@ class ActivityStreams:
     producer: stream_pb.Producer
     loop: asyncio.AbstractEventLoop
     backend_name: str = ""
+    # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.
+    previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None
+    failed_tasks: tuple[int, ...] = ()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
@@ -41,6 +44,8 @@ class ActivityStreams:
                 writers=self.backend.writers(self.namespace, self.converter),
                 ref=ref,
                 producer=self.producer,
+                previous_completed_task=self.previous_completed_task,
+                failed_tasks=self.failed_tasks,
             )
             self.writers[handle.id] = writer
         return writer

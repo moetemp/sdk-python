@@ -23,6 +23,8 @@ class StreamWriter:
         writers: writer_client.StreamWriterClient,
         ref: Callable[[], Awaitable[system_models.StreamRef]],
         producer: stream_pb.Producer,
+        previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None,
+        failed_tasks: Sequence[int] = (),
     ) -> None:
         """Create a writer. It opens on its first write.
 
@@ -31,6 +33,8 @@ class StreamWriter:
         self._writers = writers
         self._resolve_ref = ref
         self._producer = producer
+        self._previous_completed_task = previous_completed_task
+        self._failed_tasks = list(failed_tasks)
         self._writer: writer_client.Writer | None = None
         self._open_lock = asyncio.Lock()
         self._closed = False
@@ -62,6 +66,7 @@ class StreamWriter:
                     self._producer, models.Producer
                 )
                 ref = await self._resolve_ref()
+                previous = self._previous_completed_task
                 self._writer = await self._writers.open_writer(
                     models.OpenWriterRequest(
                         stream=models.StreamRef(
@@ -70,6 +75,12 @@ class StreamWriter:
                             first_execution_run_id=ref.first_execution_run_id,
                         ),
                         producer=producer,
+                        previous_completed_task=models.WorkflowTaskEpoch(
+                            started_event_id=previous.started_event_id
+                        )
+                        if previous is not None
+                        else None,
+                        failed_tasks=self._failed_tasks,
                     )
                 )
             return self._writer

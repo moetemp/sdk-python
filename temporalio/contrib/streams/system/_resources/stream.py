@@ -214,10 +214,9 @@ async def append_records(
         producer: Required outside a Workflow. In a Workflow the transport sets it.
         sequence: The batch number in this epoch, 1 or more. It is part of the dedupe
             key.
-        previous_completed_task: Workflow only. The previous completed Workflow Task of
-            the run.
-        failed_tasks: Workflow only. Failed or timed out tasks since this run's last
-            flush here.
+        previous_completed_task: Local Activity only. The run's last completed Workflow
+            Task.
+        failed_tasks: Local Activity only. The run's failed or timed out Workflow Tasks.
         withdraw_run: Retry run only. The previous run, whose Records this withdraws.
     """
     request = AppendRecordsRequest(
