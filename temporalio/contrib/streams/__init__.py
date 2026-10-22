@@ -20,7 +20,6 @@ from temporalio.contrib.streams._activity_stream import (
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._client import (
-    ClientStream,
     create_stream,
     for_handle,
     for_ref,
@@ -48,6 +47,11 @@ from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import Closed, Record, Superseded
 from temporalio.contrib.streams._outside import OutsideStream
 from temporalio.contrib.streams._stream import StreamRef, Topic
+from temporalio.contrib.streams._stream_client import (
+    ClientStream,
+    ClientTopic,
+    StreamClient,
+)
 from temporalio.contrib.streams._workflow import (
     WorkflowStream,
     create_workflow_stream,
@@ -59,12 +63,14 @@ __all__ = [
     "ActivityTopic",
     "BufferedPublisher",
     "ClientStream",
+    "ClientTopic",
     "Closed",
     "OutsideStream",
     "ReadOnlyContextError",
     "Record",
     "StreamBackend",
     "StreamBufferFullError",
+    "StreamClient",
     "StreamDefinition",
     "StreamClosedError",
     "StreamError",
