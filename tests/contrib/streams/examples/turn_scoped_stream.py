@@ -104,8 +104,8 @@ async def main(client: Client, task_queue: str) -> dict[int, list[str]]:
     async for item in index.subscribe():
         if not isinstance(item, streams.Record):
             continue
-        # A Stream from a payload has no client, so the reader gets it again by id.
-        turn = stream_client.get_handle(Events, id=item.data.stream.id)
+        # A Stream from a payload has no client, so the reader binds it to this one.
+        turn = stream_client.get_handle(Events, stream=item.data.stream)
         turns[item.data.n] = [
             token.data
             async for token in turn.subscribe()

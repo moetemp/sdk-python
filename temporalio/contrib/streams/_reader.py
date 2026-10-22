@@ -11,7 +11,7 @@ from typing import Any
 import temporalio.converter
 from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
 from temporalio.contrib.streams import _convert, _errors
-from temporalio.contrib.streams._items import Closed, Record, Superseded
+from temporalio.contrib.streams._items import Closed, End, Record, Superseded
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
@@ -29,7 +29,7 @@ async def read(
     topics: Sequence[str] | None,
     topic_prefixes: Sequence[str] = (),
     types: Mapping[str, Any],
-    from_offset: int | None,
+    from_offset: int | End | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
@@ -48,8 +48,13 @@ async def read(
         )
         return models.ReadRecordsRequest(
             stream=models.StreamRef(id=stream_id),
-            from_offset=offset,
-            start=None if offset is not None else ReadStart.READ_START_BEGINNING,
+            # END is only the first page's start. Each answer's next offset pins later pages.
+            from_offset=offset if isinstance(offset, int) else None,
+            start=ReadStart.READ_START_END
+            if offset is End.END
+            else ReadStart.READ_START_BEGINNING
+            if offset is None
+            else None,
             topics=list(topics or []),
             topic_prefixes=list(topic_prefixes),
             create_wait=min(create_left, _MAX_WAIT) if create_left else None,
@@ -66,9 +71,7 @@ async def read(
         try:
             while True:
                 try:
-                    # Only the service's own conversion keeps Record bodies raw.
-                    with _convert.raw_bodies(converter.failure_converter):
-                        record = await records.__anext__()
+                    record = await records.__anext__()
                 except StopAsyncIteration:
                     return
                 item = await _item(converter, record, types)
@@ -106,13 +109,13 @@ async def _item(
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_DATA:
         topic = record.topic or ""
         type_hint = types.get(topic)
-        data = await _convert.decode(converter, record.body, type_hint)
+        data = _convert.decode(converter, record.body, type_hint)
         return Record(topic=topic, data=data, offset=offset, producer=record.producer)
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_SUPERSEDED:
         if record.supersession is None:
             return None
         return Superseded(offset=offset, supersession=record.supersession)
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
-        result = await _convert.decode(converter, record.close_result, None)
+        result = _convert.decode(converter, record.close_result, None)
         return Closed(offset=offset, result=result, failure=record.close_failure)
     return None

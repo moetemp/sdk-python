@@ -400,6 +400,23 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
     assert first.data.payload.metadata["encoding"] == b"json/plain"
 
 
+async def test_client_close_goes_through_the_payload_codec(stream_client: Client):
+    config = stream_client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, payload_codec=_Rot13Codec()
+    )
+    stream_client_ = streams.StreamClient(Client(**config))
+    done = await stream_client_.create(Events, id=f"done-{uuid.uuid4()}")
+    await done.close(result=Turn("done"))
+    failed = await stream_client_.create(Events, id=f"failed-{uuid.uuid4()}")
+    await failed.close(failure=ApplicationError("bad turn"))
+    [closed] = [item async for item in done.subscribe()]
+    assert isinstance(closed, streams.Closed)
+    assert closed.result == {"kind": "done", "text": ""}
+    [closed] = [item async for item in failed.subscribe()]
+    assert isinstance(closed, streams.Closed) and str(closed.failure) == "bad turn"
+
+
 @workflow.defn
 class WaitsForSignal:
     def __init__(self) -> None:

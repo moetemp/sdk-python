@@ -14,9 +14,10 @@ import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
+import temporalio.nexus.system
 import temporalio.workflow
 from temporalio.contrib.streams import _convert, _errors
-from temporalio.contrib.streams._items import Closed, Record, Superseded
+from temporalio.contrib.streams._items import Closed, End, Record, Superseded
 from temporalio.contrib.streams.system import models
 
 Item = Record[Any] | Superseded | Closed
@@ -49,7 +50,7 @@ async def read(
     topics: Sequence[str] | None,
     prefixes: Sequence[str],
     types: Mapping[str, Any],
-    from_offset: int | None,
+    from_offset: int | End | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
@@ -59,7 +60,10 @@ async def read(
     request = stream_pb.ReadRecordsRequest(
         stream=ref, topics=list(topics or []), topic_prefixes=list(prefixes)
     )
-    if from_offset:
+    if from_offset is End.END:
+        # END is only the first page's start. Each answer's next offset pins later pages.
+        request.start = stream_pb.ReadStart.READ_START_END
+    elif from_offset:
         request.from_offset = from_offset
     else:
         request.start = stream_pb.ReadStart.READ_START_BEGINNING
@@ -124,7 +128,12 @@ def workflow_item(
     converter = temporalio.workflow.payload_converter()
     # The generated converter makes the producer and the supersession models, and the body
     # stays a Payload that the Topic's type decodes.
-    with _convert.raw_bodies(_failure_converter()):
+    with temporalio.nexus.system._user_converter_context(
+        temporalio.nexus.system._SystemNexusUserConverters(
+            payload_converter=_convert._RawPayloadConverter(),
+            failure_converter=_failure_converter(),
+        )
+    ):
         model = models._StreamRecordTransferTypeConverter().from_transfer_type(
             record, models.StreamRecord
         )
