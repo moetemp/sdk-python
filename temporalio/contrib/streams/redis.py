@@ -17,7 +17,6 @@ import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
-import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.runtime
@@ -287,7 +286,7 @@ async def _close_with_run(
     for stream_id, run_stream in streams_workflow._state().streams.items():
         if not run_stream.close_with_run or run_stream.closed:
             continue
-        stream = streams_workflow.WorkflowStream(
+        stream: streams_workflow.WorkflowStream[Any] = streams_workflow.WorkflowStream(
             id=stream_id,
             workflow_id=run_stream.ref.workflow_id,
             first_execution_run_id=run_stream.ref.first_execution_run_id,

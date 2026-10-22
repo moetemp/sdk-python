@@ -120,7 +120,10 @@ def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
     )
 
 
-_BY_TYPE = {cls.__name__: cls for cls in (StreamError, *_BY_REASON.values())}
+_BY_TYPE: dict[str, type[StreamError]] = {
+    "StreamError": StreamError,
+    **{cls.__name__: cls for cls in _BY_REASON.values()},
+}
 
 
 def from_activity_error(err: Exception) -> Exception:
