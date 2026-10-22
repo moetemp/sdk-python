@@ -147,6 +147,15 @@ class WorkflowTopic(Generic[T]):
             RuntimeError: No Stream plugin is on the Worker, or the Stream is of a backend
                 that the Worker does not have. It fails the Workflow Task, not the run.
         """
+        self.publish_nowait(*values)
+
+    def publish_nowait(self, *values: T) -> None:
+        """Add one Record for each value, in order, with no await.
+
+        It is for sync Workflow code, such as ``@workflow.init`` and sync signal and update
+        handlers, as ``asyncio.Queue.put_nowait`` is for code that can't await ``put``. It has
+        the buffer and the errors of :py:meth:`publish`.
+        """
         self._stream._append(self._name, values)
 
 
@@ -230,6 +239,16 @@ class WorkflowStream(StreamHandle[E]):
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. Later writes in this run raise :py:class:`StreamClosedError`.
+        """
+        self.close_nowait(result=result, failure=failure)
+
+    def close_nowait(
+        self, *, result: Any | None = None, failure: BaseException | None = None
+    ) -> None:
+        """Close the Stream with no await, for sync Workflow code.
+
+        It is to :py:meth:`close` what ``asyncio.Queue.put_nowait`` is to ``put``, with the same
+        buffer and errors.
         """
         run_stream = self._check("close")
         run_stream.closed = True

@@ -44,7 +44,10 @@ def _from_json(value: Any, type_hint: Any) -> StreamHandle[Any]:
             "ActivityStream[Events]"
         )
     args = typing.get_args(type_hint)
-    definition = args[0] if args and isinstance(args[0], type) else None
+    # Any is a class from Python 3.11, and a hint such as ActivityStream[Any] has no definition.
+    definition = (
+        args[0] if args and args[0] is not Any and isinstance(args[0], type) else None
+    )
     return origin(
         id=value["id"],
         workflow_id=value.get("workflowId") or None,
