@@ -694,7 +694,7 @@ def test_closing_an_evicted_run_touches_no_runtime():
     # Python prints "Exception ignored".
     inbound = _WorkflowInbound(_NeverEnds())
     run = inbound.execute_workflow(
-        cast(ExecuteWorkflowInput, SimpleNamespace(headers={}))
+        cast(ExecuteWorkflowInput, cast(object, SimpleNamespace(headers={})))
     )
     run.send(None)
     run.close()
