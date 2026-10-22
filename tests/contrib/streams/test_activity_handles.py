@@ -47,7 +47,7 @@ class SyncInput:
 async def read(
     client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
 ) -> list[object]:
-    stream = streams.StreamClient(client).get_workflow_stream(handle, Events, name=name)
+    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
