@@ -110,6 +110,10 @@ def transfer_type_convertible(
 ) -> _TransferTypeConvertibleDecorator[ValueT, TransferTypeT]:
     """Decorate a class with a transfer type converter class.
 
+    A value of the class takes its transfer type at the top level of a payload, and inside a
+    JSON value such as a list or a dataclass field. A dataclass is the exception inside a
+    JSON value: ``dataclasses.asdict`` writes it as its fields, and it decodes from them.
+
     .. warning::
         This API is experimental and subject to change.
     """
