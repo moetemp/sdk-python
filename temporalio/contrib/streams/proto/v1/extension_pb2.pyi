@@ -32,17 +32,28 @@ class NativeStreamConfig(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     BACKEND_FIELD_NUMBER: builtins.int
+    RETENTION_FIELD_NUMBER: builtins.int
     backend: builtins.str
     """The backend name that lang registered this extension under. Empty is `native`. The crate
     puts it in each StreamRef it builds.
     """
+    @property
+    def retention(self) -> google.protobuf.duration_pb2.Duration:
+        """The Retention of a create that gives none. Empty leaves it to the server's default."""
     def __init__(
         self,
         *,
         backend: builtins.str = ...,
+        retention: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["retention", b"retention"]
+    ) -> builtins.bool: ...
     def ClearField(
-        self, field_name: typing_extensions.Literal["backend", b"backend"]
+        self,
+        field_name: typing_extensions.Literal[
+            "backend", b"backend", "retention", b"retention"
+        ],
     ) -> None: ...
 
 global___NativeStreamConfig = NativeStreamConfig

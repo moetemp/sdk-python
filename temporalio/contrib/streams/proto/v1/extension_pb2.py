@@ -21,7 +21,7 @@ from temporalio.api.streamservice.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"%\n\x12NativeStreamConfig\x12\x0f\n\x07\x62\x61\x63kend\x18\x01 \x01(\t"\xd6\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x16\n\x0e\x64urable_writes\x18\x06 \x01(\x05\x12\x32\n\x0f\x64urable_timeout\x18\x07 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t"\x91\x01\n\x1a\x42ufferWorkflowCallsRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x14\n\x0cwithdraw_run\x18\x02 \x01(\t\x12\x34\n\x05\x63\x61lls\x18\x03 \x03(\x0b\x32%.temporal.sdk.streams.v1.WorkflowCall\x12\x17\n\x0f\x63hain_continues\x18\x04 \x01(\x08"\x80\x02\n\x0cWorkflowCall\x12\x44\n\x06\x63reate\x18\x01 \x01(\x0b\x32\x32.temporal.api.streamservice.v1.CreateStreamRequestH\x00\x12\x45\n\x06\x61ppend\x18\x02 \x01(\x0b\x32\x33.temporal.api.streamservice.v1.AppendRecordsRequestH\x00\x12\x42\n\x05\x63lose\x18\x03 \x01(\x0b\x32\x31.temporal.api.streamservice.v1.CloseStreamRequestH\x00\x12\x17\n\x0fwhen_run_closes\x18\x04 \x01(\x08\x42\x06\n\x04\x63\x61ll"\x1d\n\x1b\x42ufferWorkflowCallsResponse"\xaf\x01\n\x15\x46lushRunBufferRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12G\n\rworkflow_task\x18\x03 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12*\n\x07timeout\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration")\n\x16\x46lushRunBufferResponse\x12\x0f\n\x07records\x18\x01 \x01(\x05"\x9c\x02\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.DurationJ\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"@\n\x12\x44rainClosesRequest\x12*\n\x07timeout\x18\x01 \x01(\x0b\x32\x19.google.protobuf.Duration"&\n\x13\x44rainClosesResponse\x12\x0f\n\x07pending\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
+    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"S\n\x12NativeStreamConfig\x12\x0f\n\x07\x62\x61\x63kend\x18\x01 \x01(\t\x12,\n\tretention\x18\x02 \x01(\x0b\x32\x19.google.protobuf.Duration"\xd6\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x16\n\x0e\x64urable_writes\x18\x06 \x01(\x05\x12\x32\n\x0f\x64urable_timeout\x18\x07 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t"\x91\x01\n\x1a\x42ufferWorkflowCallsRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x14\n\x0cwithdraw_run\x18\x02 \x01(\t\x12\x34\n\x05\x63\x61lls\x18\x03 \x03(\x0b\x32%.temporal.sdk.streams.v1.WorkflowCall\x12\x17\n\x0f\x63hain_continues\x18\x04 \x01(\x08"\x80\x02\n\x0cWorkflowCall\x12\x44\n\x06\x63reate\x18\x01 \x01(\x0b\x32\x32.temporal.api.streamservice.v1.CreateStreamRequestH\x00\x12\x45\n\x06\x61ppend\x18\x02 \x01(\x0b\x32\x33.temporal.api.streamservice.v1.AppendRecordsRequestH\x00\x12\x42\n\x05\x63lose\x18\x03 \x01(\x0b\x32\x31.temporal.api.streamservice.v1.CloseStreamRequestH\x00\x12\x17\n\x0fwhen_run_closes\x18\x04 \x01(\x08\x42\x06\n\x04\x63\x61ll"\x1d\n\x1b\x42ufferWorkflowCallsResponse"\xaf\x01\n\x15\x46lushRunBufferRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12G\n\rworkflow_task\x18\x03 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12*\n\x07timeout\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration")\n\x16\x46lushRunBufferResponse\x12\x0f\n\x07records\x18\x01 \x01(\x05"\x9c\x02\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.DurationJ\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"@\n\x12\x44rainClosesRequest\x12*\n\x07timeout\x18\x01 \x01(\x0b\x32\x19.google.protobuf.Duration"&\n\x13\x44rainClosesResponse\x12\x0f\n\x07pending\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
 )
 
 
@@ -248,39 +248,39 @@ _sym_db.RegisterMessage(StreamErrorDetails)
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     _NATIVESTREAMCONFIG._serialized_start = 152
-    _NATIVESTREAMCONFIG._serialized_end = 189
-    _REDISSTREAMCONFIG._serialized_start = 192
-    _REDISSTREAMCONFIG._serialized_end = 534
-    _BUFFERWORKFLOWCALLSREQUEST._serialized_start = 537
-    _BUFFERWORKFLOWCALLSREQUEST._serialized_end = 682
-    _WORKFLOWCALL._serialized_start = 685
-    _WORKFLOWCALL._serialized_end = 941
-    _BUFFERWORKFLOWCALLSRESPONSE._serialized_start = 943
-    _BUFFERWORKFLOWCALLSRESPONSE._serialized_end = 972
-    _FLUSHRUNBUFFERREQUEST._serialized_start = 975
-    _FLUSHRUNBUFFERREQUEST._serialized_end = 1150
-    _FLUSHRUNBUFFERRESPONSE._serialized_start = 1152
-    _FLUSHRUNBUFFERRESPONSE._serialized_end = 1193
-    _OPENWRITERREQUEST._serialized_start = 1196
-    _OPENWRITERREQUEST._serialized_end = 1480
-    _OPENWRITERRESPONSE._serialized_start = 1482
-    _OPENWRITERRESPONSE._serialized_end = 1521
-    _WRITERECORDSREQUEST._serialized_start = 1523
-    _WRITERECORDSREQUEST._serialized_end = 1625
-    _WRITERECORDSRESPONSE._serialized_start = 1627
-    _WRITERECORDSRESPONSE._serialized_end = 1692
-    _CLOSEWRITERREQUEST._serialized_start = 1694
-    _CLOSEWRITERREQUEST._serialized_end = 1733
-    _CLOSEWRITERRESPONSE._serialized_start = 1735
-    _CLOSEWRITERRESPONSE._serialized_end = 1777
-    _CLOSEWRITERSREQUEST._serialized_start = 1779
-    _CLOSEWRITERSREQUEST._serialized_end = 1800
-    _CLOSEWRITERSRESPONSE._serialized_start = 1802
-    _CLOSEWRITERSRESPONSE._serialized_end = 1840
-    _DRAINCLOSESREQUEST._serialized_start = 1842
-    _DRAINCLOSESREQUEST._serialized_end = 1906
-    _DRAINCLOSESRESPONSE._serialized_start = 1908
-    _DRAINCLOSESRESPONSE._serialized_end = 1946
-    _STREAMERRORDETAILS._serialized_start = 1948
-    _STREAMERRORDETAILS._serialized_end = 1984
+    _NATIVESTREAMCONFIG._serialized_end = 235
+    _REDISSTREAMCONFIG._serialized_start = 238
+    _REDISSTREAMCONFIG._serialized_end = 580
+    _BUFFERWORKFLOWCALLSREQUEST._serialized_start = 583
+    _BUFFERWORKFLOWCALLSREQUEST._serialized_end = 728
+    _WORKFLOWCALL._serialized_start = 731
+    _WORKFLOWCALL._serialized_end = 987
+    _BUFFERWORKFLOWCALLSRESPONSE._serialized_start = 989
+    _BUFFERWORKFLOWCALLSRESPONSE._serialized_end = 1018
+    _FLUSHRUNBUFFERREQUEST._serialized_start = 1021
+    _FLUSHRUNBUFFERREQUEST._serialized_end = 1196
+    _FLUSHRUNBUFFERRESPONSE._serialized_start = 1198
+    _FLUSHRUNBUFFERRESPONSE._serialized_end = 1239
+    _OPENWRITERREQUEST._serialized_start = 1242
+    _OPENWRITERREQUEST._serialized_end = 1526
+    _OPENWRITERRESPONSE._serialized_start = 1528
+    _OPENWRITERRESPONSE._serialized_end = 1567
+    _WRITERECORDSREQUEST._serialized_start = 1569
+    _WRITERECORDSREQUEST._serialized_end = 1671
+    _WRITERECORDSRESPONSE._serialized_start = 1673
+    _WRITERECORDSRESPONSE._serialized_end = 1738
+    _CLOSEWRITERREQUEST._serialized_start = 1740
+    _CLOSEWRITERREQUEST._serialized_end = 1779
+    _CLOSEWRITERRESPONSE._serialized_start = 1781
+    _CLOSEWRITERRESPONSE._serialized_end = 1823
+    _CLOSEWRITERSREQUEST._serialized_start = 1825
+    _CLOSEWRITERSREQUEST._serialized_end = 1846
+    _CLOSEWRITERSRESPONSE._serialized_start = 1848
+    _CLOSEWRITERSRESPONSE._serialized_end = 1886
+    _DRAINCLOSESREQUEST._serialized_start = 1888
+    _DRAINCLOSESREQUEST._serialized_end = 1952
+    _DRAINCLOSESRESPONSE._serialized_start = 1954
+    _DRAINCLOSESRESPONSE._serialized_end = 1992
+    _STREAMERRORDETAILS._serialized_start = 1994
+    _STREAMERRORDETAILS._serialized_end = 2030
 # @@protoc_insertion_point(module_scope)
