@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -35,7 +36,7 @@ async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[o
     return [item async for item in stream.subscribe()]
 
 
-def data(items: list[object]) -> list[object]:
+def data(items: Sequence[object]) -> list[object]:
     return [item.data for item in items if isinstance(item, streams.Record)]
 
 
