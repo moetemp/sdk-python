@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -172,3 +173,16 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
     ]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "HI THERE"
     assert stream.workflow_id == handle.id
+
+
+async def test_auto_close_of_a_client_stream(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)
+    )
+    await stream.topic(Events.tokens).publish("only")
+    await asyncio.sleep(1.5)
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert [item.data for item in items if isinstance(item, streams.Record)] == ["only"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result is None
+    with pytest.raises(streams.StreamClosedError):
+        await stream.topic(Events.tokens).publish("late")

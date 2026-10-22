@@ -217,23 +217,26 @@ class StreamClient:
         *,
         id: str,
         retention: timedelta | None = None,
+        auto_close: timedelta | None = None,
         backend: str | None = None,
     ) -> ClientStream[E]:
         """Create a Stream that this client owns, so only a client closes it.
 
-        It is idempotent for one id and one Retention.
+        It is idempotent for one id, one Retention and one ``auto_close``.
 
         Args:
             definition: The Stream definition class.
             id: The Stream id, as a Workflow takes a Workflow id.
             retention: How long the Records stay after the close. Defaults to the backend's.
+            auto_close: Close the Stream with no result when no Record was appended for this
+                long, so a Stream that nobody closes does not stay open. Defaults to never.
             backend: The name of the backend. Defaults to the client's first Stream plugin.
 
         Raises:
             StreamUnsupportedError: The client has no backend of that name. No call is made.
             StreamClosedError: A Stream of that id was created and closed before.
-            StreamError: The Stream exists with another Retention, with the reason
-                ``stream_already_exists``.
+            StreamError: The Stream exists with another Retention or ``auto_close``, with
+                the reason ``stream_already_exists``.
         """
         definition_of(definition)
         backend_name, stream_backend = client_backend(self._client, backend)
@@ -242,6 +245,8 @@ class StreamClient:
         )
         if retention is not None:
             request.retention.FromTimedelta(retention)
+        if auto_close is not None:
+            request.auto_close.FromTimedelta(auto_close)
         response = await stream_backend.call_async(
             "CreateStream", request, stream_pb.CreateStreamResponse
         )
