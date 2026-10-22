@@ -17,6 +17,7 @@ from temporalio.contrib.streams._access import (
 )
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 
 E = TypeVar("E")
@@ -104,7 +105,7 @@ class ActivityStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -117,7 +118,8 @@ class ActivityStream(StreamHandle[E]):
 
         Args:
             topics: Read these Topics. With no Topics and no prefixes, read every Topic.
-            from_offset: Start at this offset, inclusive. Defaults to the first Record.
+            from_offset: Start at this offset, inclusive, or at ``streams.END`` for new
+                Records only. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
             prefixes: Also read the Topics whose names start with one of these.
             create_wait: How long to wait for a Stream that nobody created yet. Defaults to
@@ -171,7 +173,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
     def subscribe(
         self,
         *,
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> Iterator[Item]:
@@ -243,7 +245,7 @@ class SyncActivityStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,

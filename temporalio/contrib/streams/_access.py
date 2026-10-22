@@ -13,6 +13,7 @@ from temporalio.contrib.streams import _convert, _reader
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import models
@@ -42,7 +43,7 @@ class Access:
         topics: list[str] | None,
         prefixes: Sequence[str],
         types: dict[str, Any],
-        from_offset: int | None,
+        from_offset: int | End | None,
         wait_new_records: bool,
         create_wait: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
@@ -62,7 +63,7 @@ class Access:
         topics: list[str] | None,
         prefixes: Sequence[str],
         types: dict[str, Any],
-        from_offset: int | None,
+        from_offset: int | End | None,
         wait_new_records: bool,
         create_wait: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
@@ -165,7 +166,7 @@ class _AsyncTopic(Generic[T]):
     def subscribe(
         self,
         *,
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> AsyncGenerator[Item, None]:

@@ -16,6 +16,7 @@ from temporalio.contrib.streams._access import Access, _AsyncTopic, read_spec
 from temporalio.contrib.streams._backend import StreamBackend, client_backend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import models
@@ -234,7 +235,7 @@ class ClientStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | ClientTopic[Any],
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -248,7 +249,8 @@ class ClientStream(StreamHandle[E]):
 
         Args:
             topics: Read these Topics. With no Topics and no prefixes, read every Topic.
-            from_offset: Start at this offset, inclusive. Defaults to the first Record.
+            from_offset: Start at this offset, inclusive, or at ``streams.END`` for new
+                Records only. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
             prefixes: Also read the Topics whose names start with one of these.
             create_wait: How long to wait for a Stream that nobody created yet, such as the

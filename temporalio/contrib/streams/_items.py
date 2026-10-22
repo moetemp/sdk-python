@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
@@ -9,6 +10,16 @@ from temporalio.api.streamservice.v1 import ProducerKind
 from temporalio.contrib.streams.system import models
 
 T = TypeVar("T")
+
+
+class End(enum.Enum):
+    """The type of :py:data:`END`."""
+
+    END = "END"
+
+
+END = End.END
+"""A ``from_offset`` that starts a read after the newest Record, for new Records only."""
 
 
 @dataclass(frozen=True)
