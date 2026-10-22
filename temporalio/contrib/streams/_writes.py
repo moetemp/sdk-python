@@ -29,14 +29,26 @@ def _context() -> tuple[_activity.ActivityStreams, service_client.StreamServiceC
 
 
 def _producer(streams: _activity.ActivityStreams) -> models.Producer:
-    # Every attempt writes as one Producer epoch with one sequence, so the backend drops the
-    # copy that a retry sends.
+    # Every attempt of one Workflow Task writes as one epoch with one sequence, so the backend
+    # drops the copy that a retry sends. A later task has a higher epoch, so its write
+    # withdraws what a failed task wrote under the same call key.
     producer = streams.producer
+    epoch = producer.epoch
+    started = epoch.task_started_time if epoch.HasField("task_started_time") else None
     return models.Producer(
         kind=producer.kind,
         id=producer.id,
         run_id=producer.run_id or None,
-        epoch=models.ProducerEpoch(attempt=1),
+        epoch=models.ProducerEpoch(
+            task_started_event_id=epoch.task_started_event_id or None,
+            task_attempt=epoch.task_attempt or None,
+            task_started_time=models.Timestamp(
+                seconds=started.seconds, nanos=started.nanos
+            )
+            if started is not None
+            else None,
+            attempt=1,
+        ),
     )
 
 

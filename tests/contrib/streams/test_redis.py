@@ -151,9 +151,12 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
         )
         await handle.result()
         items = await read_all(workflow_stream(stream_client, handle))
-    # The failed task wrote nothing, so the reader gets each Record once.
-    assert [record.data for record in records(items)] == ["before", "after"]
-    assert not any(isinstance(item, streams.Superseded) for item in items)
+    # The retried task writes "after" again, and withdraws the copy of the failed task.
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    assert [record.data for record in written] == ["before", "after", "after"]
+    assert len(superseded) == 1
+    assert [r for r in written if superseded[0].withdraws(r)] == [written[1]]
     assert isinstance(items[-1], streams.Closed)
 
 
@@ -311,6 +314,40 @@ async def test_local_activity_writes_with_the_task_epoch(stream_client: Client):
     assert (
         producer.epoch is not None and (producer.epoch.task_started_event_id or 0) > 0
     )
+
+
+@workflow.defn
+class LocalOnlyInFailedTask:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        stream = await stream_workflow.create_stream(Events)
+        if attempts.setdefault(key, 0) == 0:
+            attempts[key] = 1
+            await workflow.execute_local_activity(
+                local_tokens,
+                CallModelInput("0 1", streams.ActivityStream.from_handle(stream)),
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            raise RuntimeError("fail this Workflow Task once")
+
+
+async def test_retried_task_reuses_a_local_activity_key(stream_client: Client):
+    # The retried task skips the Local Activity, so its run-end close takes that call key.
+    async with new_worker(
+        stream_client,
+        LocalOnlyInFailedTask,
+        activities=[local_tokens],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            LocalOnlyInFailedTask.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await read_all(workflow_stream(stream_client, handle))
+    assert isinstance(items[-1], streams.Closed)
 
 
 @workflow.defn
