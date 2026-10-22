@@ -19,7 +19,8 @@ class MemoryStreamPlugin(StreamPlugin):
     """Keeps Streams in this process, with the same rules as on Redis, for tests.
 
     Put it on the client, as with ``RedisStreamPlugin``. Every Worker and client that shares one
-    plugin shares its Streams, and they go when the process ends.
+    plugin shares its Streams, and they go when the process ends. It registers the backend
+    name ``memory``, so tests swap the Store with no change to Workflow code.
 
     .. warning::
         This API is experimental.

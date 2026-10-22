@@ -74,7 +74,7 @@ class Access:
             types=types,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
-            wait_for_create=create_wait,
+            create_wait=create_wait,
         )
         async for item in items:
             yield item

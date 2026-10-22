@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import weakref
 from datetime import timedelta
-from typing import Any, TypeVar
+from typing import TypeVar
 
 import google.protobuf.message
 
@@ -48,8 +47,6 @@ class StreamBackend:
     def __init__(self, extension: temporalio.worker.WorkerExtension) -> None:
         """Create a backend over an extension."""
         self._extension = extension
-        # Writers whose open or encode may still run on the loop, for close_writers.
-        self.writers: weakref.WeakSet[Any] = weakref.WeakSet()
 
     @property
     def extension(self) -> temporalio.worker.WorkerExtension:
@@ -84,23 +81,10 @@ class StreamBackend:
         )
         return response.writer_id
 
-    def publish(
-        self, writer_id: int, records: list[stream_pb.AppendRecord], force_flush: bool
-    ) -> None:
-        """Add encoded Records to a writer's buffer."""
-        self.call(
-            "Publish",
-            ext_pb.PublishRequest(
-                writer_id=writer_id, records=records, force_flush=force_flush
-            ),
-        )
-
     async def write_records(
         self, writer_id: int, records: list[stream_pb.AppendRecord]
     ) -> int:
-        """Write Records at once for a writer, after its buffered ones. Returns the last
-        Record's offset.
-        """
+        """Write Records at once for a writer. Returns the last Record's offset."""
         response = await self.call_async(
             "WriteRecords",
             ext_pb.WriteRecordsRequest(writer_id=writer_id, records=records),
@@ -124,15 +108,6 @@ class StreamBackend:
         )
         return response.records
 
-    async def flush_writer(self, writer_id: int) -> int:
-        """Wait until the writer's Records are in the Store."""
-        response = await self.call_async(
-            "FlushWriter",
-            ext_pb.FlushWriterRequest(writer_id=writer_id),
-            ext_pb.FlushWriterResponse,
-        )
-        return response.last_offset
-
     async def close_writer(self, writer_id: int) -> int:
         """Flush and drop a writer. The Stream stays open."""
         response = await self.call_async(
@@ -143,17 +118,11 @@ class StreamBackend:
         return response.last_offset
 
     async def close_writers(self) -> int:
-        """Flush and drop every open writer of the extension, and return how many failed."""
-        failed = 0
-        for writer in list(self.writers):
-            try:
-                await writer.settle()
-            except Exception:
-                failed += 1
+        """Drop every open writer of the extension, and return how many failed."""
         response = await self.call_async(
             "CloseWriters", ext_pb.CloseWritersRequest(), ext_pb.CloseWritersResponse
         )
-        return failed + response.failed
+        return response.failed
 
     async def drain_closes(self, timeout: timedelta) -> int:
         """Wait for the Workflow closes in flight, and return how many are left."""
@@ -192,17 +161,6 @@ class _ExtensionTransport:
             },
             data=response.SerializeToString(),
         )
-
-
-def backend_of_client(client: temporalio.client.Client) -> StreamBackend:
-    """The backend that a client's Stream plugin gives."""
-    for plugin in client.config()["plugins"]:
-        backend = getattr(plugin, "_temporal_stream_backend", None)
-        if isinstance(backend, StreamBackend):
-            return backend
-    raise _errors.StreamTransportMissingError(
-        "The client has no Stream plugin, such as RedisStreamPlugin"
-    )
 
 
 def client_backend(

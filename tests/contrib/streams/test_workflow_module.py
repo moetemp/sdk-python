@@ -33,13 +33,11 @@ class Events:
     tokens = streams.topic(str)
 
 
-async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[object]:
-    stream = streams.for_handle(
-        handle, name=name, wait_for_create=timedelta(seconds=20)
-    )
-    stream.topic("turns", type=Turn)
-    stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe()]
+async def read(
+    client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
+) -> list[object]:
+    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
 def data(items: Sequence[object]) -> list[object]:
@@ -63,7 +61,7 @@ async def test_create_publish_and_close_with_run(stream_client: Client):
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "HI THERE"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == [Turn("user", "hi there"), Turn("model"), "hi", "there"]
     closed = items[-1]
     assert isinstance(closed, streams.Closed) and closed.result == "HI THERE"
@@ -92,8 +90,8 @@ async def test_async_with_closes_the_stream(stream_client: Client):
             Turns.run, 1, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        first = await read(handle, "turn-0")
-        second = await read(handle, "turn-1")
+        first = await read(stream_client, handle, "turn-0")
+        second = await read(stream_client, handle, "turn-1")
     assert data(first) == ["token-0"]
     assert isinstance(first[-1], streams.Closed) and first[-1].failure is None
     assert data(second) == ["token-1"]
@@ -121,7 +119,7 @@ async def test_continue_as_new_passes_the_stream(stream_client: Client):
             Continuing.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "done"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["run 1", "run 2"]
     closed = [item for item in items if isinstance(item, streams.Closed)]
     assert len(closed) == 1 and closed[0].result == "done"
@@ -175,7 +173,7 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
             "stream_closed",
         ]
         assert await handle.query(Mistakes.publish_in_query) == "ReadOnlyContextError"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "early"
 
 
@@ -195,7 +193,7 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
         )
         with pytest.raises(WorkflowFailureError):
             await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
@@ -218,7 +216,7 @@ async def test_auto_close_closes_a_quiet_stream(stream_client: Client):
         )
         await handle.result()
         await asyncio.sleep(1.5)
-        stream = streams.for_handle(handle, name="events")
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
         items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert data(items) == ["only"]
     assert isinstance(items[-1], streams.Closed)
@@ -274,10 +272,8 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
             task_queue=worker.task_queue,
             cron_schedule="@every 1s",
         )
-        stream = streams.for_handle(
-            handle, name="events", wait_for_create=timedelta(seconds=20)
-        )
-        reader = stream.subscribe()
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
+        reader = stream.subscribe(create_wait=timedelta(seconds=20))
         first = await reader.__anext__()
         second = await reader.__anext__()
         await reader.aclose()
@@ -336,7 +332,7 @@ async def test_sync_handlers_publish_and_close_with_no_await(stream_client: Clie
         await handle.signal(SyncHandlers.token, "a")
         assert await handle.execute_update(SyncHandlers.finish) == "stream_closed"
         await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["a", "p"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "finished"
 
@@ -363,6 +359,6 @@ async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
             task_queue=worker.task_queue,
         )
         assert await handle.result() == "done"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["hi", "HI"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"

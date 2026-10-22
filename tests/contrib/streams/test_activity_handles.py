@@ -44,13 +44,11 @@ class SyncInput:
     stream: streams.SyncActivityStream[Events]
 
 
-async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[object]:
-    stream = streams.for_handle(
-        handle, name=name, wait_for_create=timedelta(seconds=20)
-    )
-    stream.topic("turns", type=Turn)
-    stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe()]
+async def read(
+    client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
+) -> list[object]:
+    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
 def records(items: list[object]) -> list[streams.Record[Any]]:
@@ -121,7 +119,7 @@ async def test_activity_publishes_and_returns_offsets(stream_client: Client):
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         offsets, last, read_tokens = await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     data = records(items)
     assert [record.data for record in data] == [
         "hi",
@@ -176,7 +174,7 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
             Retrying.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     # The second attempt writes nothing, and its start still withdraws the first one's Record.
     assert len(superseded) == 1
@@ -225,7 +223,7 @@ async def test_activity_closes_and_checks_the_backend(stream_client: Client):
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "stream_unsupported"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert [r.data for r in records(items)] == ["last"]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == "closed by activity"
@@ -302,7 +300,7 @@ async def test_run_buffer_goes_out_before_a_local_activity(stream_client: Client
             LocalOrder.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == ["before"]
-        items = await read(handle)
+        items = await read(stream_client, handle)
     written = records(items)
     assert [record.data for record in written] == ["before", "local", "after"]
     producer = written[1].producer
@@ -402,8 +400,8 @@ async def test_attempt_end_flushes_and_retry_finds_nested_streams(
         )
         # The publisher was never flushed, so the end of the attempt wrote its values.
         assert await handle.result() == ["a", "b", "attempt-1"]
-        items = await read(handle)
-        other = await read(handle, "other")
+        items = await read(stream_client, handle)
+        other = await read(stream_client, handle, "other")
     for read_items in (items, other):
         superseded = [i for i in read_items if isinstance(i, streams.Superseded)]
         withdrawn = [r.data for r in records(read_items) if superseded[0].withdraws(r)]

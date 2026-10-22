@@ -24,11 +24,10 @@ import temporalio.exceptions
 import temporalio.runtime
 import temporalio.worker
 import temporalio.workflow
-from temporalio.contrib.streams import _activity, _errors, _ids, _workflow
+from temporalio.contrib.streams import _activity, _errors, _ids
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._stream import StreamRef
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.plugin import SimplePlugin
@@ -41,9 +40,8 @@ EXTENSION_NAME = "temporalio-streams-redis"
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 # How long a Worker's shutdown waits for the Stream closes that are still going out.
 _DRAIN_TIMEOUT = timedelta(seconds=10)
-# The plugin puts these into the headers of each Activity and Local Activity that a Workflow
-# schedules. The key keeps the Producer id the same across retries.
-_REF_HEADER = "__temporal_stream_ref"
+# The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
+# schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
 # Continue-as-new passes the ids of the open Streams that close with the run chain to the next
 # run, in this header.
@@ -179,7 +177,9 @@ class RedisStreamPlugin(StreamPlugin):
     """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
 
     Put it on the client. A Worker takes its client's plugins, so one plugin serves Workflow
-    code, Activities and the client.
+    code, Activities and the client. It registers the backend name ``redis``, which the
+    Stream handles it creates carry. For now a Worker takes one Stream plugin, so it serves one
+    backend. A client may have more than one, and ``backend=`` picks one.
 
     .. warning::
         This API is experimental.
@@ -422,9 +422,9 @@ def chain_continues(
 ) -> bool:
     """Whether the server starts another run of the chain after this run ends.
 
-    Then the next run goes on with the default Stream, so the runtime skips this run's closes.
-    A cron run always continues. A failed run continues when its retry policy has attempts and
-    time left for the failure.
+    Then the next run goes on with the run chain's Streams, so the runtime skips this run's
+    closes. A cron run always continues. A failed run continues when its retry policy has
+    attempts and time left for the failure.
     """
     if info.cron_schedule:
         return True
@@ -462,45 +462,16 @@ def _close_with_run(
     failure: BaseException | None = None,
     chain_continues: bool = False,
 ) -> None:
-    info = temporalio.workflow.info()
-    default_id = _ids.default_stream_id(info.workflow_id, info.first_execution_run_id)
-    state = _workflow._state()
-    # The default Stream closes with the run even when this run wrote nothing, since an
-    # earlier run of the chain may have written it. A close of a Stream with no key does
-    # nothing.
-    ids = (
-        []
-        if (default := state.streams.get(default_id)) and default._closed
-        else [default_id]
-    )
-    for stream in state.streams.values():
-        if stream.ref.id == default_id or stream._closed:
-            continue
-        if stream.auto_close and stream._used:
-            ids.append(stream.ref.id)
-    for stream in state.streams.values():
-        if stream.ref.id in ids:
-            stream._closed = True
-    # A received ref keeps its own owner.
-    refs = {
-        stream_id: state.streams[stream_id]._model_ref()
-        if stream_id in state.streams
-        else _owned_ref(stream_id)
-        for stream_id in ids
-    }
     for run_stream in streams_workflow._state().streams.values():
-        if run_stream.close_with_run and not run_stream.closed:
-            run_stream.closed = True
-            refs[run_stream.ref.id] = run_stream.ref
-    for ref in refs.values():
+        if not run_stream.close_with_run or run_stream.closed:
+            continue
+        run_stream.closed = True
         temporalio.workflow.send_to_plugins(
             _WorkflowCall(
                 "CloseStream",
                 _convert_in_sandbox(
                     models.CloseStreamRequest(
-                        stream=ref,
-                        result=result,
-                        failure=failure,
+                        stream=run_stream.ref, result=result, failure=failure
                     )
                 ),
                 when_run_closes=True,
@@ -536,7 +507,7 @@ def _convert_in_sandbox(request: Any) -> Any:
 
 
 def _owned_ref(stream_id: str) -> models.StreamRef:
-    # A Stream that the run creates, or its default Stream, is the run chain's own.
+    # A Stream that the run chain creates is the chain's own.
     info = temporalio.workflow.info()
     return models.StreamRef(
         id=stream_id,
@@ -572,15 +543,10 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
 
     def _activity_headers(self) -> dict[str, temporalio.api.common.v1.Payload]:
         self._activity_calls += 1
-        info = temporalio.workflow.info()
         # Both ends use the default converter, so a custom user converter can't break the
-        # headers.
+        # header.
         converter = temporalio.converter.PayloadConverter.default
-        ref = _ids.default_stream_id(info.workflow_id, info.first_execution_run_id)
-        return {
-            _REF_HEADER: converter.to_payload(ref),
-            _KEY_HEADER: converter.to_payload(str(self._activity_calls)),
-        }
+        return {_KEY_HEADER: converter.to_payload(str(self._activity_calls))}
 
     async def start_system_nexus_operation(
         self, input: temporalio.worker.StartNexusOperationInput[Any, Any]
@@ -653,8 +619,6 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
                 stream_ids = [handle.id for handle in _stream_arguments(input.args)]
-                if streams.default_ref is not None:
-                    stream_ids.append(streams.default_ref.id)
                 for stream_id in dict.fromkeys(stream_ids):
                     await streams.writer(stream_id).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
@@ -740,7 +704,6 @@ def _activity_streams(
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()
     converter = temporalio.converter.PayloadConverter.default
-    ref = input.headers.get(_REF_HEADER)
     key = input.headers.get(_KEY_HEADER)
     key_text = converter.from_payload(key, str) if key is not None else ""
     epoch = stream_pb.ProducerEpoch(attempt=info.attempt)
@@ -779,9 +742,6 @@ def _activity_streams(
         converter=plugin._converter,
         namespace=info.namespace,
         producer=producer,
-        default_ref=StreamRef(converter.from_payload(ref, str))
-        if ref is not None
-        else None,
         loop=asyncio.get_running_loop(),
         backend_name=plugin.backend_name,
     )

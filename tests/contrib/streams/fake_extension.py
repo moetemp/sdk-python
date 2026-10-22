@@ -76,6 +76,25 @@ class FakeExtension(WorkerExtension):
             writer_id = len(self.writers) + 1
             self.writers[writer_id] = (open_writer.stream.id, open_writer.producer)
             return ext_pb.OpenWriterResponse(writer_id=writer_id).SerializeToString()
+        if method == "WriteRecords":
+            write = ext_pb.WriteRecordsRequest.FromString(input)
+            stream_id, producer = self.writers[write.writer_id]
+            offsets = [
+                self._append(
+                    stream_id,
+                    stream_pb.StreamRecord(
+                        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA,
+                        topic=record.topic,
+                        body=record.body,
+                        producer=producer,
+                    ),
+                )
+                for record in write.records
+            ]
+            return ext_pb.WriteRecordsResponse(
+                first_offset=offsets[0] if offsets else 0,
+                last_offset=offsets[-1] if offsets else 0,
+            ).SerializeToString()
         if method in ("FlushWriter", "CloseWriter"):
             return ext_pb.FlushWriterResponse(
                 last_offset=self.next_offset - 1

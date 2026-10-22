@@ -55,15 +55,6 @@ async def encode(
     return temporalio.common.RawValue(payload)
 
 
-def encode_now(
-    converter: temporalio.converter.DataConverter, value: Any
-) -> temporalio.common.RawValue | None:
-    """Convert one value at once, or None when a codec makes it async."""
-    if converter.payload_codec is not None:
-        return None
-    return temporalio.common.RawValue(converter.payload_converter.to_payload(value))
-
-
 async def decode(
     converter: temporalio.converter.DataConverter, body: Any, type_hint: Any
 ) -> Any:

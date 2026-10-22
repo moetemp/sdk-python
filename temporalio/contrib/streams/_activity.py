@@ -1,59 +1,46 @@
-"""Streams in Activity code."""
+"""The Stream state of one Activity attempt."""
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
 from typing import Any
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
-from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams._outside import OutsideStream, batch_options
-from temporalio.contrib.streams._stream import StreamRef
-from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
+from temporalio.contrib.streams._writer import StreamWriter
 
 
 @dataclass
 class ActivityStreams:
-    """What a Stream plugin gives the facade for one Activity attempt.
-
-    .. warning::
-        This API is experimental.
-    """
+    """What a Stream plugin gives the Activity handles for one Activity attempt."""
 
     backend: StreamBackend
     converter: temporalio.converter.DataConverter
     namespace: str
     producer: stream_pb.Producer
-    default_ref: StreamRef | None
     loop: asyncio.AbstractEventLoop
     backend_name: str = ""
-    batch: BatchOptions = BatchOptions()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
 
-    def writer(self, stream_id: str, batch: BatchOptions | None = None) -> StreamWriter:
+    def writer(self, stream_id: str) -> StreamWriter:
         """The attempt's writer for a Stream, one per Stream."""
         writer = self.writers.get(stream_id)
         if writer is None:
+
+            async def known_id() -> str:
+                return stream_id
+
             writer = StreamWriter(
                 backend=self.backend,
                 converter=self.converter,
                 namespace=self.namespace,
-                stream_id=_known(stream_id),
+                stream_id=known_id,
                 producer=self.producer,
-                batch=batch or self.batch,
-                # The default Stream has no key until its first write, so its create goes
-                # first. A received Stream must exist already.
-                create_first=self.default_ref is not None
-                and stream_id == self.default_ref.id,
-                loop=self.loop,
             )
             self.writers[stream_id] = writer
         return writer
@@ -75,56 +62,6 @@ class ActivityStreams:
             raise errors[0]
 
 
-def _known(stream_id: str) -> Callable[[], Awaitable[str]]:
-    async def find() -> str:
-        return stream_id
-
-    return find
-
-
 current: contextvars.ContextVar[ActivityStreams | None] = contextvars.ContextVar(
     "__temporal_activity_streams", default=None
 )
-
-
-def activity_stream(
-    ref: StreamRef | None = None,
-    *,
-    batch_interval: timedelta | None = None,
-    max_batch_size: int | None = None,
-    max_retry_duration: timedelta | None = None,
-) -> OutsideStream:
-    """A Stream for this Activity to write to and read.
-
-    Writes are buffered and flushed every ``batch_interval``. The plugin flushes before the
-    Activity completes, and a failed flush fails the attempt.
-
-    Args:
-        ref: A Stream that the Activity received. With none, the default Stream of the
-            Workflow that scheduled the Activity.
-        batch_interval: How often the writer flushes. Defaults to 100 ms.
-        max_batch_size: At most this many Records in one batch.
-        max_retry_duration: How long a flush retries a Store failure.
-    """
-    streams = current.get()
-    if streams is None:
-        raise _errors.StreamTransportMissingError(
-            "No Stream plugin runs this Activity, such as RedisStreamPlugin"
-        )
-    if ref is None:
-        if streams.default_ref is None:
-            raise _errors.StreamError(
-                "A Standalone Activity has no default Stream, so pass a StreamRef"
-            )
-        ref = streams.default_ref
-    stream_id = ref.id
-    batch = None
-    if batch_interval or max_batch_size or max_retry_duration:
-        batch = batch_options(batch_interval, max_batch_size, max_retry_duration)
-    return OutsideStream(
-        backend=streams.backend,
-        converter=streams.converter,
-        namespace=streams.namespace,
-        stream_id=stream_id,
-        writer=lambda: streams.writer(stream_id, batch),
-    )

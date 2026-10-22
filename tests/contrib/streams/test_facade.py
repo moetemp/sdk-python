@@ -1,23 +1,14 @@
 import asyncio
-import json
-import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
 
-import google.protobuf.json_format
 import pytest
 
-import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
-import temporalio.converter
-from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors, _ids
-from temporalio.contrib.streams._stream import _Writable
-from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
@@ -25,7 +16,6 @@ from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCStatusCode
 from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
-from tests.helpers import new_worker
 
 
 @dataclass
@@ -44,7 +34,6 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
 
 
 def test_ids_match_the_crate():
-    assert _ids.default_stream_id("agent-1", "run-1") == "agent-1:run-1"
     assert (
         _ids.scoped_stream_id("a:b/c", "r%1", "é name")
         == "a%3Ab%2Fc:r%251:%C3%A9%20name"
@@ -90,14 +79,19 @@ def test_superseded_withdraws_earlier_attempts_of_one_producer():
     assert not item.withdraws(new)
 
 
+@streams.defn(name="events")
+class Events:
+    turns = streams.topic(Turn)
+    tokens = streams.topic(str)
+
+
 async def test_client_writes_reads_and_closes(client: Client):
     client, extension = fake_client(client)
-    stream = await streams.create_stream(client, "chat-42")
-    turns = stream.topic("turns", type=Turn)
-    turns.publish(Turn("model"))
-    stream.topic("tokens", type=str).publish("hello", force_flush=True)
-    await stream.flush()
-    assert await stream.get_offset() == 3
+    stream = await streams.StreamClient(client).create(Events, id="chat-42")
+    first = await stream.topic(Events.turns).publish(Turn("model"))
+    second = await stream.topic("tokens").publish("hello")
+    assert second == first + 1
+    assert await stream.get_offset() == second + 1
     await stream.close(result="bye")
     items = [item async for item in stream.subscribe()]
     assert [type(item) for item in items] == [
@@ -105,70 +99,39 @@ async def test_client_writes_reads_and_closes(client: Client):
         streams.Record,
         streams.Closed,
     ]
-    first, second, closed = items
-    assert isinstance(first, streams.Record) and first.data == Turn("model")
-    assert isinstance(second, streams.Record) and second.data == "hello"
-    assert first.producer is not None
-    assert first.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_CLIENT
+    turn, token, closed = items
+    assert isinstance(turn, streams.Record) and turn.data == Turn("model")
+    assert isinstance(token, streams.Record) and token.data == "hello"
+    assert turn.producer is not None
+    assert turn.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_CLIENT
     assert isinstance(closed, streams.Closed) and closed.result == "bye"
     assert extension.namespaces == {client.namespace}
 
-    only_tokens = [
-        item async for item in stream.topic("tokens", type=RawValue).subscribe()
-    ]
-    assert isinstance(only_tokens[0], streams.Record)
-    assert isinstance(only_tokens[0].data, RawValue)
-    resumed = [item async for item in stream.subscribe(from_offset=second.offset)]
-    assert [item.offset for item in resumed] == [second.offset, closed.offset]
+    raw = stream.topic("raw", type=RawValue)
+    assert raw.type is RawValue
+    resumed = [item async for item in stream.subscribe(from_offset=token.offset)]
+    assert [item.offset for item in resumed] == [token.offset, closed.offset]
 
 
 async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
+    stream_client = streams.StreamClient(client)
     handle = client.get_workflow_handle("wf-1", first_execution_run_id="run-1")
+    stream = stream_client.workflow_stream(handle, Events)
     with pytest.raises(streams.StreamNotFoundError):
-        async for _ in streams.for_handle(handle).subscribe():
+        async for _ in stream.subscribe():
             pass
-    waiting = streams.for_handle(handle, wait_for_create=timedelta(seconds=5))
 
     async def create_later() -> None:
-        created = await streams.create_stream(
-            client, _ids.default_stream_id("wf-1", "run-1")
-        )
-        created.topic("t", type=int).publish(5)
+        created = await stream_client.create(Events, id=stream.id)
+        await created.topic(Events.tokens).publish("five")
         await created.close()
 
     task = asyncio.create_task(create_later())
-    items = [item async for item in waiting.subscribe()]
+    items = [item async for item in stream.subscribe(create_wait=timedelta(seconds=5))]
     await task
-    assert isinstance(items[0], streams.Record) and items[0].data == 5
+    assert isinstance(items[0], streams.Record) and items[0].data == "five"
     assert isinstance(items[-1], streams.Closed)
-
-
-def test_client_without_plugin_has_no_transport(client: Client):
-    handle = client.get_workflow_handle("wf-1", first_execution_run_id="run-1")
-    with pytest.raises(streams.StreamTransportMissingError):
-        streams.for_handle(handle)
-
-
-@workflow.defn
-class PublishWithoutPlugin:
-    @workflow.run
-    async def run(self) -> str:
-        try:
-            streams.workflow_stream().topic("t", type=str).publish("x")
-        except streams.StreamTransportMissingError as err:
-            return type(err).__name__
-        return "published"
-
-
-async def test_workflow_without_plugin_has_no_transport(client: Client):
-    async with new_worker(client, PublishWithoutPlugin) as worker:
-        result = await client.execute_workflow(
-            PublishWithoutPlugin.run,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-    assert result == "StreamTransportMissingError"
 
 
 def test_stream_errors_fail_the_workflow_not_the_task():
@@ -183,17 +146,13 @@ def test_stream_errors_fail_the_workflow_not_the_task():
     assert mapped.code == RPCStatusCode.FAILED_PRECONDITION
 
 
-async def test_each_client_writer_is_its_own_producer(client: Client):
+async def test_each_client_handle_is_its_own_producer(client: Client):
     client, _ = fake_client(client)
-    stream = await streams.create_stream(client, "two-writers")
-    other = streams.for_handle(
-        client.get_workflow_handle("unused", first_execution_run_id="run")
-    )
-    other._id = stream.ref.id
-    stream.topic("t", type=int).publish(1)
-    other.topic("t", type=int).publish(2)
-    await stream.flush()
-    await other.flush()
+    stream_client = streams.StreamClient(client)
+    stream = await stream_client.create(Events, id="two-writers")
+    other = stream_client.get_handle(Events, id="two-writers")
+    await stream.topic(Events.tokens).publish("1")
+    await other.topic(Events.tokens).publish("2")
     items = [item async for item in stream.subscribe(wait_new_records=False)]
     producers = {
         item.producer.id
@@ -203,179 +162,9 @@ async def test_each_client_writer_is_its_own_producer(client: Client):
     assert len(producers) == 2
 
 
-async def test_for_handle_finds_the_first_run_with_one_describe(client: Client):
-    async with new_worker(client, PublishWithoutPlugin) as worker:
-        handle = await client.start_workflow(
-            PublishWithoutPlugin.run,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-        await handle.result()
-    fake, _ = fake_client(client)
-    first_run = handle.first_execution_run_id
-    assert first_run
-    await streams.create_stream(fake, _ids.default_stream_id(handle.id, first_run))
-    by_id = streams.for_handle(fake.get_workflow_handle(handle.id))
-    with pytest.raises(RuntimeError):
-        by_id.ref
-    assert await by_id.get_offset() == 0
-    assert by_id.ref.id == _ids.default_stream_id(handle.id, first_run)
-
-
-async def test_writer_publishes_from_another_thread(client: Client):
-    extension = FakeExtension()
-    backend = streams.StreamBackend(extension)
-    await backend.call_async(
-        "CreateStream",
-        stream_pb.CreateStreamRequest(stream_id="threads"),
-        stream_pb.CreateStreamResponse,
-    )
-
-    async def stream_id() -> str:
-        return "threads"
-
-    writer = StreamWriter(
-        backend=backend,
-        converter=client.data_converter,
-        namespace="default",
-        stream_id=stream_id,
-        producer=stream_pb.Producer(
-            kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT, id="client:a:b"
-        ),
-        batch=BatchOptions(),
-        create_first=False,
-        loop=asyncio.get_running_loop(),
-    )
-    await asyncio.to_thread(writer.publish, "t", "from a thread", False)
-    await writer.flush()
-    assert len(extension.streams["threads"].records) == 1
-
-
-async def test_for_ref_opens_a_client_stream(client: Client):
-    client, _ = fake_client(client)
-    created = await streams.create_stream(client, "by-ref")
-    created.topic("t", type=int).publish(7)
-    await created.flush()
-    opened = streams.for_ref(client, created.ref)
-    reader = opened.topic("t", type=int).subscribe(wait_new_records=False)
-    first = await reader.__anext__()
-    await reader.aclose()
-    assert isinstance(first, streams.Record) and first.data == 7
-
-
-def test_topic_types_check():
-    untyped: streams.Topic[Any] = streams.Topic(_NoWrites(), "t", None)
-    typed: streams.Topic[int] = streams.Topic(_NoWrites(), "t", int)
-    assert untyped.type is None and typed.type is int
-
-
-class _NoWrites(_Writable):
-    def _publish(self, topic: str, value: Any, force_flush: bool) -> None:
-        raise AssertionError("no writes")
-
-
-async def test_create_wait_ends_with_the_run(client: Client):
-    async with new_worker(client, PublishWithoutPlugin) as worker:
-        handle = await client.start_workflow(
-            PublishWithoutPlugin.run,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-        await handle.result()
-    fake, _ = fake_client(client)
-    stream = streams.for_handle(
-        fake.get_workflow_handle(
-            handle.id, first_execution_run_id=handle.first_execution_run_id
-        ),
-        wait_for_create=timedelta(minutes=5),
-        end_with_run=True,
-    )
-    start = asyncio.get_running_loop().time()
-    assert [item async for item in stream.subscribe()] == []
-    assert asyncio.get_running_loop().time() - start < 30
-
-
-async def test_read_default_type_for_untyped_topics(client: Client):
-    client, _ = fake_client(client)
-    stream = await streams.create_stream(client, "default-type")
-    stream.topic("turns").publish(Turn("model"))
-    stream.topic("tokens").publish("hi")
-    await stream.flush()
-    reader = streams.for_ref(client, stream.ref)
-    reader.topic("tokens", type=RawValue)
-    items = [item async for item in reader.subscribe(type=Turn, wait_new_records=False)]
-    first, second = items
-    assert isinstance(first, streams.Record) and first.data == Turn("model")
-    # A typed Topic keeps its own type.
-    assert isinstance(second, streams.Record) and isinstance(second.data, RawValue)
-
-
-async def test_read_by_topic_prefix(client: Client):
-    client, _ = fake_client(client)
-    stream = await streams.create_stream(client, "prefixes")
-    for topic in ("agent/a", "agent/b", "other", "exact"):
-        stream.topic(topic).publish(topic)
-    await stream.flush()
-    read = [
-        item.topic
-        async for item in stream.subscribe(
-            topics=[stream.topic("exact")],
-            topic_prefixes=["agent/"],
-            wait_new_records=False,
-        )
-        if isinstance(item, streams.Record)
-    ]
-    assert read == ["agent/a", "agent/b", "exact"]
-
-
-def test_ref_without_owner_cannot_end_with_run(client: Client):
-    client, _ = fake_client(client)
-    with pytest.raises(ValueError):
-        streams.for_ref(client, streams.StreamRef("standalone"), end_with_run=True)
-
-
-def test_old_refs_still_decode():
-    converter = temporalio.converter.DataConverter.default.payload_converter
-    payload = converter.to_payload({"id": "old"})
-    ref = converter.from_payload(payload, streams.StreamRef)
-    assert ref == streams.StreamRef("old")
-    assert ref.workflow_id is None and ref.first_execution_run_id is None
-
-
-@pytest.mark.parametrize(
-    "ref",
-    [
-        streams.StreamRef("only-id"),
-        streams.StreamRef("wf:run", workflow_id="wf", first_execution_run_id="run"),
-    ],
-)
-def test_ref_json_is_the_proto_json(ref: streams.StreamRef):
-    converter = temporalio.converter.DataConverter.default.payload_converter
-    payload = converter.to_payload(ref)
-    proto = stream_pb.StreamRef(
-        id=ref.id,
-        workflow_id=ref.workflow_id or "",
-        first_execution_run_id=ref.first_execution_run_id or "",
-    )
-    assert json.loads(payload.data) == json.loads(
-        google.protobuf.json_format.MessageToJson(proto)
-    )
-    # Another SDK's proto JSON decodes to the same ref.
-    from_proto = temporalio.api.common.v1.Payload(
-        metadata={"encoding": b"json/plain"},
-        data=google.protobuf.json_format.MessageToJson(proto).encode(),
-    )
-    assert converter.from_payload(from_proto, streams.StreamRef) == ref
-
-
-def test_snake_case_refs_still_decode():
-    converter = temporalio.converter.DataConverter.default.payload_converter
-    payload = converter.to_payload(
-        {"id": "old", "workflow_id": "wf", "first_execution_run_id": "run"}
-    )
-    assert converter.from_payload(payload, streams.StreamRef) == streams.StreamRef(
-        "old", workflow_id="wf", first_execution_run_id="run"
-    )
+def test_workflow_stream_has_no_reads():
+    assert not hasattr(streams.WorkflowStream, "subscribe")
+    assert not hasattr(streams.WorkflowStream, "get_offset")
 
 
 def test_unsupported_capability_maps_to_its_error():

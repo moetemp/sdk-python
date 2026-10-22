@@ -14,11 +14,6 @@ def _join(*parts: str) -> str:
     return ":".join(encode_part(part) for part in parts)
 
 
-def default_stream_id(workflow_id: str, first_run_id: str) -> str:
-    """Id of a Workflow's default Stream."""
-    return _join(workflow_id, first_run_id)
-
-
 def scoped_stream_id(workflow_id: str, first_run_id: str, name: str) -> str:
     """Id of a Stream that a Workflow creates with a name."""
     return _join(workflow_id, first_run_id, name)
