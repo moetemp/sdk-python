@@ -442,7 +442,16 @@ def _create(
             f"The Stream {stream.id} already closes with the run chain, and "
             "close_with_run=False can't turn that off"
         )
-    request = stream_pb.CreateStreamRequest(stream_id=stream.id)
+    run_id = temporalio.workflow.info().run_id
+    # The owner makes the Stream the run chain's, and names a retry run's withdrawal.
+    request = stream_pb.CreateStreamRequest(
+        stream_id=stream.id,
+        owner=stream_pb.Producer(
+            kind=stream_pb.ProducerKind.PRODUCER_KIND_WORKFLOW,
+            id=_ids.workflow_producer_id(run_id),
+            run_id=run_id,
+        ),
+    )
     if retention is not None:
         request.retention.FromTimedelta(retention)
     if auto_close is not None:

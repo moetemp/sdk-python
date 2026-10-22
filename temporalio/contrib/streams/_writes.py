@@ -62,6 +62,11 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
             if request.HasField("auto_close")
             else None,
             withdraw_run=request.withdraw_run or None,
+            owner=models.Producer(
+                kind=request.owner.kind,
+                id=request.owner.id,
+                run_id=request.owner.run_id or None,
+            ),
         )
     )
     if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
