@@ -15,6 +15,8 @@ from temporalio.client import (
 )
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams.redis import RedisStreamPlugin
+from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.exceptions import ApplicationError
 from tests.helpers import assert_task_fail_eventually, new_worker
 
@@ -284,3 +286,12 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
     assert isinstance(second, streams.Record) and second.data == "turn"
     items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert not any(isinstance(item, streams.Closed) for item in items)
+
+
+def test_plugins_take_their_backend_name():
+    redis = RedisStreamPlugin(
+        "redis://127.0.0.1:1", response_timeout=timedelta(seconds=1), default=True
+    )
+    assert (redis.backend_name, redis.default) == ("redis", True)
+    assert RedisStreamPlugin("redis://127.0.0.1:1", name="old").backend_name == "old"
+    assert MemoryStreamPlugin().backend_name == "memory"

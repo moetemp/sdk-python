@@ -224,14 +224,14 @@ class RedisStreamPlugin(StreamPlugin):
             key_prefix=key_prefix or "",
             durable_writes=durable_writes,
         )
-        for name, value in (
+        for field, value in (
             ("retention", retention),
             ("safety_ttl", safety_ttl),
             ("durable_timeout", durable_timeout),
             ("response_timeout", response_timeout),
         ):
             if value is not None:
-                getattr(config, name).FromTimedelta(value)
+                getattr(config, field).FromTimedelta(value)
         super().__init__(
             "temporalio.RedisStreamPlugin",
             EXTENSION_NAME,
