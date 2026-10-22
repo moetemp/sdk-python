@@ -1,6 +1,6 @@
 """Brook API proposal, "A Workflow scopes a Stream to one turn and closes it".
 
-Each turn gets its own Stream, named with ``name=``, which ``async with`` closes at the end of
+Each turn gets its own Stream, named with ``streams.with_name``, which ``async with`` closes at the end of
 the turn. An index Stream lists the turns, and continue-as-new passes it to the next run.
 """
 
@@ -64,8 +64,7 @@ class ChatTurns:
         batch = input.prompts[:2]
         for i, prompt in enumerate(batch):
             async with await stream_workflow.create_stream(
-                Events,
-                name=f"turn-{input.next + i}",
+                streams.with_name(Events, f"turn-{input.next + i}"),
                 retention=timedelta(days=1),
                 close_with_run=False,
             ) as turn:

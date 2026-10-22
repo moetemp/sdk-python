@@ -59,7 +59,9 @@ class CallModelInput:
 def workflow_stream(
     client: Client, handle: WorkflowHandle[Any, Any], name: str | None = None
 ) -> streams.ClientStream[Events]:
-    return streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    return streams.StreamClient(client).workflow_stream(
+        handle, streams.with_name(Events, name) if name else Events
+    )
 
 
 async def read_all(stream: streams.ClientStream[Any]) -> list[Any]:
@@ -220,7 +222,7 @@ class CancelledBlock:
     @workflow.run
     async def run(self) -> None:
         async with await stream_workflow.create_stream(
-            Events, name="turn", close_with_run=False
+            streams.with_name(Events, "turn"), close_with_run=False
         ) as turn:
             await turn.topic(Events.tokens).publish("started")
             await workflow.wait_condition(lambda: False)
@@ -254,7 +256,7 @@ class PlainWriter:
         stream = await stream_workflow.create_stream(Plain)
         await stream.topic(Plain.t).publish("plain")
         async with await stream_workflow.create_stream(
-            Plain, name="scoped", close_with_run=False
+            streams.with_name(Plain, "scoped"), close_with_run=False
         ) as scoped:
             await scoped.topic(Plain.t).publish("scoped")
         return "done"
@@ -276,7 +278,9 @@ async def test_temporal_only_passthrough_keeps_records(stream_client: Client):
         await handle.result()
         plain = streams.StreamClient(stream_client)
         items = await read_all(plain.workflow_stream(handle, Plain))
-        scoped = await read_all(plain.workflow_stream(handle, Plain, name="scoped"))
+        scoped = await read_all(
+            plain.workflow_stream(handle, streams.with_name(Plain, "scoped"))
+        )
     assert [i.data for i in records(items)] == ["plain"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
     assert [i.data for i in records(scoped)] == ["scoped"]
@@ -517,7 +521,7 @@ class WaitsForSignal:
         turns = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
         await turns.publish("before restart")
         async with await stream_workflow.create_stream(
-            Events, name="scoped", close_with_run=False
+            streams.with_name(Events, "scoped"), close_with_run=False
         ) as scoped:
             await scoped.topic(Events.tokens).publish("scoped")
         await workflow.wait_condition(lambda: self.go)
