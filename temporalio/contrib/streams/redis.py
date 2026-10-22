@@ -24,7 +24,7 @@ import temporalio.exceptions
 import temporalio.runtime
 import temporalio.worker
 import temporalio.workflow
-from temporalio.contrib.streams import _activity, _errors, _ids
+from temporalio.contrib.streams import _activity, _errors, _ids, _workflow_reader
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._handle import StreamHandle
@@ -40,6 +40,9 @@ EXTENSION_NAME = "temporalio-streams-redis"
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 # How long a Worker's shutdown waits for the Stream closes that are still going out.
 _DRAIN_TIMEOUT = timedelta(seconds=10)
+# How long a Workflow read's Local Activity waits for new Records. Its timeout adds a margin.
+_READ_WAIT = timedelta(seconds=10)
+_READ_MARGIN = timedelta(seconds=10)
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
@@ -80,6 +83,7 @@ class StreamPlugin(SimplePlugin):
         )
         self._temporal_stream_backend = StreamBackend(self._extension)
         self._converter = temporalio.converter.DataConverter.default
+        self._read_activity = _read_activity(self)
         super().__init__(name, interceptors=[_StreamInterceptor(self)])
 
     @property
@@ -110,6 +114,8 @@ class StreamPlugin(SimplePlugin):
         client = config.get("client")
         if client is not None:
             self._converter = client.data_converter
+        # Workflow reads run as this Local Activity, so the Worker must have it.
+        config["activities"] = [*config.get("activities", []), self._read_activity]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -181,6 +187,55 @@ class StreamPlugin(SimplePlugin):
         # The call only adds to the run's buffer under a short lock, so it doesn't block the
         # event loop.
         self._temporal_stream_backend.call("BufferWorkflowCalls", request)
+
+
+def read_activity_name(backend: str) -> str:
+    """The name of the Local Activity that reads a page of a backend for Workflow code."""
+    return f"__temporal_stream_read:{backend}"
+
+
+def _read_activity(plugin: StreamPlugin) -> Callable[..., Any]:
+    @temporalio.activity.defn(name=read_activity_name(plugin.backend_name))
+    async def read_page(
+        request: stream_pb.ReadRecordsRequest,
+    ) -> stream_pb.ReadRecordsResponse:
+        request.namespace = temporalio.activity.info().namespace
+        try:
+            page = await plugin._temporal_stream_backend.call_async(
+                "ReadRecords", request, stream_pb.ReadRecordsResponse
+            )
+        except _errors.StreamError as err:
+            # The reason goes in the details, so Workflow code gets the same Stream error.
+            raise temporalio.exceptions.ApplicationError(
+                str(err.message),
+                err.reason,
+                type=type(err).__name__,
+                non_retryable=err.non_retryable,
+            ) from None
+        # Workflow code can't run the codec, so the page's bodies go to it decoded. The page
+        # as a whole goes through the codec as the Local Activity's result.
+        await _decode_page(plugin._converter, page)
+        return page
+
+    return read_page
+
+
+async def _decode_page(
+    converter: temporalio.converter.DataConverter, page: stream_pb.ReadRecordsResponse
+) -> None:
+    codec = converter.payload_codec
+    if codec is None:
+        return
+    payloads = [
+        payload
+        for record in page.records
+        for payload in (record.body, record.close_result)
+        if payload.ByteSize()
+    ]
+    if not payloads:
+        return
+    for payload, decoded in zip(payloads, await codec.decode(payloads)):
+        payload.CopyFrom(decoded)
 
 
 class RedisStreamPlugin(StreamPlugin):
@@ -579,6 +634,9 @@ def _take_close_with_run(
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_transport = True
+    # The runtime can't park a read yet, so a reader pauses on a timer after an empty page.
+    _temporal_stream_parks_reads = False
+    _temporal_stream_read_wait = _READ_WAIT
 
     def __init__(
         self,
@@ -628,6 +686,25 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             during_replay=operation != "AppendRecords",
         )
         return _DoneHandle(result)
+
+    async def _temporal_stream_read_page(
+        self, request: stream_pb.ReadRecordsRequest
+    ) -> stream_pb.ReadRecordsResponse:
+        # The page is the Local Activity's result, so it is in History.
+        try:
+            return await temporalio.workflow.execute_local_activity(
+                read_activity_name(self._temporal_stream_backend_name),
+                request,
+                result_type=stream_pb.ReadRecordsResponse,
+                start_to_close_timeout=_READ_WAIT + _READ_MARGIN,
+            )
+        except (
+            temporalio.exceptions.ActivityError,
+            temporalio.exceptions.ApplicationError,
+        ) as err:
+            # A Local Activity's failure may come as its application error, with no
+            # ActivityError around it.
+            raise _workflow_reader.error_of(err) from None
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         open_streams = {

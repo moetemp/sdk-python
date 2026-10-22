@@ -162,8 +162,10 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
     assert len(producers) == 2
 
 
-def test_workflow_stream_has_no_reads():
-    assert not hasattr(streams.WorkflowStream, "subscribe")
+def test_workflow_stream_reads_only_by_subscribe():
+    # A read's pages are in History. An offset that a replay could not give again is not.
+    assert hasattr(streams.WorkflowStream, "subscribe")
+    assert hasattr(streams.WorkflowTopic, "subscribe")
     assert not hasattr(streams.WorkflowStream, "get_offset")
 
 

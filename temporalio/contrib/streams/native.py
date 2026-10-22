@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import itertools
 from collections.abc import Coroutine, Generator
+from datetime import timedelta
 from typing import Any, NoReturn, TypeVar
 
 import google.protobuf.message
@@ -23,7 +24,7 @@ import temporalio.exceptions
 import temporalio.service
 import temporalio.worker
 import temporalio.workflow
-from temporalio.contrib.streams import _activity, _errors
+from temporalio.contrib.streams import _activity, _errors, _workflow_reader
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import _REQUESTS, _RESPONSES, StreamBackend
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -49,6 +50,9 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
 
+# How long a Workflow read asks the server to park when the Stream has no new Record. The
+# operation is async, so the wait costs no Worker resource.
+_READ_WAIT = timedelta(seconds=60)
 # The writer ids of this process. A native writer lives only in the process.
 _WRITER_IDS = itertools.count(1)
 
@@ -405,6 +409,10 @@ def _operation_input(
 
 class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_transport = True
+    # The server parks a read at the end of the Stream, and completes it on an append or a
+    # close, so a reader needs no timer.
+    _temporal_stream_parks_reads = True
+    _temporal_stream_read_wait = _READ_WAIT
 
     def __init__(
         self,
@@ -439,6 +447,22 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         # answer has nothing that Workflow code needs.
         _schedule_now(_call_and_drop(super().start_system_nexus_operation, input))
         return _DoneHandle(result)
+
+    async def _temporal_stream_read_page(
+        self, request: stream_pb.ReadRecordsRequest
+    ) -> stream_pb.ReadRecordsResponse:
+        # Another Stream plugin further down the chain passes a call of this backend on.
+        token = streams_workflow._target.set(self._temporal_stream_backend_name)
+        try:
+            handle = await self.next.start_system_nexus_operation(
+                _operation_input("ReadRecords", request, stream_pb.ReadRecordsResponse)
+            )
+        finally:
+            streams_workflow._target.reset(token)
+        try:
+            return await handle
+        except temporalio.exceptions.NexusOperationError as err:
+            raise _workflow_reader.error_of(err) from None
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         open_streams = {

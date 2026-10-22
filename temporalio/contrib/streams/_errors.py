@@ -104,3 +104,21 @@ def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
     return _BY_REASON.get(reason, StreamError)(
         err.message, reason=reason, code=err.code
     )
+
+
+_ERROR_CLASSES: list[type[StreamError]] = [StreamError, *_BY_REASON.values()]
+_BY_NAME: dict[str, type[StreamError]] = {cls.__name__: cls for cls in _ERROR_CLASSES}
+
+
+def from_application_error(
+    err: temporalio.exceptions.ApplicationError,
+) -> StreamError | None:
+    """The Stream error that an application error of a failed call carries, if any.
+
+    A Stream error's type is its class name, and its first detail is its reason.
+    """
+    cls = _BY_NAME.get(err.type or "")
+    if cls is None:
+        return None
+    reason = err.details[0] if err.details and isinstance(err.details[0], str) else ""
+    return cls(err.message, reason=reason)

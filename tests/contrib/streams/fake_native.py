@@ -21,6 +21,7 @@ import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
 import temporalio.converter
+import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.worker
 import temporalio.workflow
@@ -326,8 +327,24 @@ class _FakeOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         request = _REQUESTS[input.operation_name].FromString(
             converter.to_payload(input.input).data
         )
-        request.namespace = temporalio.workflow.info().namespace
-        response = self._service.handle(input.operation_name, request)
+        info = temporalio.workflow.info()
+        request.namespace = info.namespace
+        if input.operation_name == "AppendRecords":
+            # The server knows the caller, so it sets the Workflow's Producer.
+            request.producer.CopyFrom(
+                stream_pb.Producer(
+                    kind=stream_pb.ProducerKind.PRODUCER_KIND_WORKFLOW,
+                    id=f"workflow:{info.run_id}",
+                    run_id=info.run_id,
+                )
+            )
+        response = self._answer(input.operation_name, request)
+        if input.operation_name == "ReadRecords" and request.HasField("wait"):
+            # The server parks the read. Here a durable timer polls the store instead.
+            until = temporalio.workflow.now() + request.wait.ToTimedelta()
+            while not response.records and temporalio.workflow.now() < until:
+                await temporalio.workflow.sleep(0.2)
+                response = self._answer(input.operation_name, request)
         payload = temporalio.api.common.v1.Payload(
             metadata={
                 "encoding": b"binary/protobuf",
@@ -339,6 +356,25 @@ class _FakeOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         # answer in the first step.
         await asyncio.sleep(0)
         return _Answered(converter.from_payload(payload, input.output_type or Any))
+
+    def _answer(self, operation: str, request: Any) -> Any:
+        try:
+            return self._service.handle(operation, request)
+        except FakeError as err:
+            # A failed operation's cause is the handler's application error, with the Stream
+            # error's class name as its type and the reason as its detail.
+            failed = temporalio.exceptions.NexusOperationError(
+                err.reason,
+                scheduled_event_id=0,
+                endpoint="__temporal_system",
+                service=SERVICE,
+                operation=operation,
+                operation_token="",
+            )
+            name = "".join(part.title() for part in err.reason.split("_")) + "Error"
+            raise failed from temporalio.exceptions.ApplicationError(
+                err.reason, err.reason, type=name, non_retryable=True
+            )
 
 
 class _Answered(temporalio.workflow.NexusOperationHandle[Any]):

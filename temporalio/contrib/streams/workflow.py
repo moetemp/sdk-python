@@ -13,17 +13,20 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import TracebackType
 from typing import Any, Generic, TypeVar, overload
 
+import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.exceptions
 import temporalio.workflow
-from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams import _errors, _ids, _workflow_reader
+from temporalio.contrib.streams._access import read_spec
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._workflow_reader import Item
 from temporalio.contrib.streams.system import create_stream as _create_stream
 from temporalio.contrib.streams.system import models
 from temporalio.contrib.streams.system._resources.stream import Stream as _Stream
@@ -192,9 +195,24 @@ class WorkflowTopic(Generic[T]):
         """
         self._stream._append(self._name, values)
 
+    def subscribe(
+        self,
+        *,
+        from_offset: int | None = None,
+        wait_new_records: bool = True,
+        create_wait: timedelta | None = None,
+    ) -> AsyncIterator[Item]:
+        """Read this Topic only. See :py:meth:`WorkflowStream.subscribe`."""
+        return self._stream.subscribe(
+            self,
+            from_offset=from_offset,
+            wait_new_records=wait_new_records,
+            create_wait=create_wait,
+        )
+
 
 class WorkflowStream(StreamHandle[E]):
-    """A Stream in Workflow code. Workflow code writes and closes it, and can't read it.
+    """A Stream in Workflow code. Workflow code writes, reads and closes it.
 
     Pass it to an Activity, a child Workflow or the next run of continue-as-new as an
     argument. Use it in ``async with`` to close it at the end of the block.
@@ -241,6 +259,59 @@ class WorkflowStream(StreamHandle[E]):
         """
         name, topic_type = self._topic_spec(topic, type)
         return WorkflowTopic(self, name, topic_type)
+
+    def subscribe(
+        self,
+        *topics: str | TopicDefinition[Any] | WorkflowTopic[Any],
+        from_offset: int | None = None,
+        wait_new_records: bool = True,
+        prefixes: Sequence[str] = (),
+        create_wait: timedelta | None = None,
+    ) -> AsyncIterator[Item]:
+        """Read the Stream's items in order, in Workflow code.
+
+        It is an async iterator, as on the client, and it yields the same ``Record``,
+        ``Superseded`` and ``Closed`` items. Each page is a call whose answer is in History,
+        so a replay reads the same items. On a native Stream a page is a System Nexus
+        ``ReadRecords`` operation, and a read at the end of the Stream waits on the server
+        until a Record comes or the Stream closes. On Redis a page is a Local Activity that
+        waits a short time for new Records, and a page with none is followed by a durable
+        timer from 1 s up to 60 s.
+
+        A read sees this run's writes once they went out: at the end of the Workflow Task,
+        or on Redis before the page's Local Activity.
+
+        Args:
+            topics: Read these Topics. With no Topics and no prefixes, read every Topic.
+            from_offset: Start at this offset, inclusive. Defaults to the first Record.
+            wait_new_records: Wait for new Records at the end of the Stream. When False,
+                the read ends at the newest Record.
+            prefixes: Also read the Topics whose names start with one of these.
+            create_wait: How long to wait for a Stream that nobody created yet. Defaults to
+                no wait.
+
+        Raises:
+            StreamNotFoundError: The Stream does not exist, or it was not created in time.
+            ReadOnlyContextError: The code must not change state, such as a query handler.
+            RuntimeError: No Stream plugin is on the Worker, or the Stream is of a backend
+                that the Worker does not have. It fails the Workflow Task, not the run.
+        """
+        names, types = read_spec(self, topics)
+        reader = _workflow_reader.reader_of(_check_backend(self.backend, "read"))
+        return _workflow_reader.read(
+            reader,
+            stream_pb.StreamRef(
+                id=self.id,
+                workflow_id=self.workflow_id or "",
+                first_execution_run_id=self.first_execution_run_id or "",
+            ),
+            topics=names,
+            prefixes=prefixes,
+            types=types,
+            from_offset=from_offset,
+            wait_new_records=wait_new_records,
+            create_wait=create_wait,
+        )
 
     def _check(self, action: str, *, backend: str | None = None) -> _RunStream:
         if temporalio.workflow.unsafe.is_read_only():

@@ -116,22 +116,26 @@ class Access:
 
 def read_spec(
     handle: StreamHandle[Any],
+    # Any is a Topic of Workflow code, which this module can't import.
     topics: Sequence[
-        str | TopicDefinition[Any] | _AsyncTopic[Any] | SyncTopicBase[Any]
+        str | TopicDefinition[Any] | _AsyncTopic[Any] | SyncTopicBase[Any] | Any
     ],
 ) -> tuple[list[str] | None, dict[str, Any]]:
-    """The Topic names of a read and the decode type of each known Topic."""
+    """The Topic names of a read and the decode type of each known Topic.
+
+    A Topic object of any context, such as a ``WorkflowTopic``, gives its name and type.
+    """
     types = handle._known_types()
     names = []
     for topic in topics:
-        if isinstance(topic, (_AsyncTopic, SyncTopicBase)):
-            name, topic_type = topic.name, topic.type
-        elif isinstance(topic, TopicDefinition):
+        if isinstance(topic, TopicDefinition):
             name, topic_type = handle._topic_spec(topic, None)
-        else:
+        elif isinstance(topic, str):
             # A read names a Topic outside the definition with no type, and its values
             # decode as the converter gives them.
             name, topic_type = topic, types.get(topic)
+        else:
+            name, topic_type = topic.name, topic.type
         names.append(name)
         if topic_type is not None:
             types[name] = topic_type
