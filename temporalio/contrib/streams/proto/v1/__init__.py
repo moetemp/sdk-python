@@ -15,6 +15,7 @@ from .extension_pb2 import (
     RedisStreamConfig,
     StreamErrorDetails,
     WorkflowCall,
+    WorkflowReadRecordsRequest,
     WriteRecordsRequest,
     WriteRecordsResponse,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "RedisStreamConfig",
     "StreamErrorDetails",
     "WorkflowCall",
+    "WorkflowReadRecordsRequest",
     "WriteRecordsRequest",
     "WriteRecordsResponse",
 ]

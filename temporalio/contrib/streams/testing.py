@@ -31,7 +31,6 @@ class MemoryStreamPlugin(_ExtensionStreamPlugin):
         *,
         retention: timedelta | None = None,
         safety_ttl: timedelta | None = None,
-        durable_writes: int = 0,
         runtime: temporalio.runtime.Runtime | None = None,
         name: str = "memory",
         default: bool = False,
@@ -42,15 +41,12 @@ class MemoryStreamPlugin(_ExtensionStreamPlugin):
             retention: The default Retention of a new Stream. Defaults to 7 days.
             safety_ttl: How long an open Workflow-owned Stream stays after its last write.
                 Defaults to 90 days.
-            durable_writes: When above zero, each Workflow flush waits for this many
-                replicas. The memory Store has none, so each Workflow flush fails with the
-                missing ``replica_wait`` capability. It is for tests of that failure.
             runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry.
             default: Make this the client's default backend when the client has more than
                 one Stream plugin.
         """
-        config = ext_pb.RedisStreamConfig(durable_writes=durable_writes)
+        config = ext_pb.RedisStreamConfig()
         if retention is not None:
             config.retention.FromTimedelta(retention)
         if safety_ttl is not None:
