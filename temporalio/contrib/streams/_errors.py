@@ -100,6 +100,8 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
     "stream_unsupported": StreamUnsupportedError,
+    # The native server's Workflow reader cap. Readers leave, so a retry may get in.
+    "stream_exhausted": StreamStorageError,
 }
 
 
