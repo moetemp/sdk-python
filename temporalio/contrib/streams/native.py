@@ -65,7 +65,9 @@ def _from_rpc_error(err: temporalio.service.RPCError) -> _errors.StreamError:
     mapped = _errors.from_rpc_error(err)
     if isinstance(mapped, _errors.StreamError):
         return mapped
-    reason = _BY_CODE.get(err.status, "")
+    # A server may also lead the message with the reason, such as `stream_closed: ...`.
+    token = err.message.split(":", 1)[0].strip()
+    reason = token if token in _errors._BY_REASON else _BY_CODE.get(err.status, "")
     return _errors._BY_REASON.get(reason, _errors.StreamError)(
         err.message, reason=reason, code=err.status
     )

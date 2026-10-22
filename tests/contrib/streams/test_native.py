@@ -15,6 +15,7 @@ from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.converter import PayloadConverter
+from temporalio.service import RPCError, RPCStatusCode
 from tests.contrib.streams.fake_native import (
     FakeStreamService,
     FakeSystemNexus,
@@ -179,3 +180,18 @@ async def test_redis_and_native_in_one_worker(
         "redis"
     ]
     assert isinstance(items[-1], streams.Closed)
+
+
+def test_a_reason_at_the_start_of_the_message_maps():
+    err = native._from_rpc_error(
+        RPCError(
+            "stream_closed: the Stream is closed",
+            RPCStatusCode.FAILED_PRECONDITION,
+            b"",
+        )
+    )
+    assert isinstance(err, streams.StreamClosedError) and err.reason == "stream_closed"
+    err = native._from_rpc_error(
+        RPCError("Nobody created the Stream", RPCStatusCode.NOT_FOUND, b"")
+    )
+    assert isinstance(err, streams.StreamNotFoundError)
