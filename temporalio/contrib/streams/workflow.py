@@ -392,12 +392,13 @@ def create_stream_nowait(
             f"The Stream {stream.id} already closes with the run chain, and "
             "close_with_run=False can't turn that off"
         )
+    # Set before the create, since a Store that closes with the run chain reads it there.
+    run_stream.close_with_run = close_with_run
+    run_stream.backend = stream.backend
     _now(
         _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close),
         backend_name,
     )
-    run_stream.close_with_run = close_with_run
-    run_stream.backend = stream.backend
     return stream
 
 

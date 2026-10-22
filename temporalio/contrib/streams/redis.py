@@ -51,6 +51,8 @@ class _ExtensionStreamPlugin(StreamPlugin):
     # The Redis, memory and native plugins: the Stream calls go to a temporalio-streams
     # extension.
     _backend_class = _ExtensionStreamBackend
+    # Whether the Store closes a Stream with its owner's run chain on the server.
+    _server_closes_with_run = False
 
     def __init__(
         self,
@@ -260,6 +262,8 @@ class _WorkflowCall:
     when_run_closes: bool = False
     chain_continues: bool = False
     backend: str = ""
+    # A create's ref with the owner fields, when the Stream closes with the run chain.
+    close_with_run_ref: models.StreamRef | None = None
 
 
 def check_worker_backends(config: temporalio.worker.WorkerConfig) -> None:
@@ -311,6 +315,16 @@ async def _encode_call(
         create = stream_pb.CreateStreamRequest(
             namespace=namespace, stream_id=request.stream_id
         )
+        owner = call.close_with_run_ref
+        if owner is not None:
+            create.close_with_run = True
+            create.ref.CopyFrom(
+                stream_pb.StreamRef(
+                    id=owner.id,
+                    workflow_id=owner.workflow_id or "",
+                    first_execution_run_id=owner.first_execution_run_id or "",
+                )
+            )
         if request.retention is not None:
             create.retention.FromTimedelta(request.retention)
         if request.auto_close is not None:
@@ -378,6 +392,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
             {
                 "_backend_name": self._plugin.backend_name,
                 "_default": self._plugin.default,
+                "_server_closes_with_run": self._plugin._server_closes_with_run,
             },
         )
 
@@ -390,6 +405,12 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend_name = ""
     _default = False
+    _server_closes_with_run = False
+
+    def _close_run_streams(self, **options: Any) -> None:
+        # A server that closes a Stream with its owner's run chain needs no close from here.
+        if not self._server_closes_with_run:
+            _close_with_run(self._backend_name, **options)
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
         super().init(_WorkflowOutbound(outbound, self._backend_name, self._default))
@@ -413,13 +434,11 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 and temporalio.workflow.cancellation_reason() is not None
             ):
                 # The run ends cancelled.
-                _close_with_run(
-                    self._backend_name,
+                self._close_run_streams(
                     failure=temporalio.exceptions.CancelledError("Workflow cancelled"),
                 )
             elif _fails_run(err):
-                _close_with_run(
-                    self._backend_name,
+                self._close_run_streams(
                     failure=err,
                     chain_continues=chain_continues(
                         temporalio.workflow.info(), temporalio.workflow.now(), err
@@ -427,8 +446,7 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 )
             raise
         # A cron run that completes still goes on with the chain.
-        _close_with_run(
-            self._backend_name,
+        self._close_run_streams(
             result=result,
             chain_continues=chain_continues(
                 temporalio.workflow.info(), temporalio.workflow.now(), None
@@ -537,6 +555,17 @@ def _convert_in_sandbox(request: Any) -> Any:
     return request
 
 
+def _close_with_run_ref(
+    input: temporalio.worker.StartNexusOperationInput[Any, Any],
+) -> models.StreamRef | None:
+    if input.operation_name != "CreateStream":
+        return None
+    run_stream = streams_workflow._state().streams.get(input.input.stream_id)
+    if run_stream is None or not run_stream.close_with_run:
+        return None
+    return _owned_ref(input.input.stream_id)
+
+
 def _owned_ref(stream_id: str) -> models.StreamRef:
     # A Stream that the run chain creates is the chain's own.
     info = temporalio.workflow.info()
@@ -626,6 +655,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
                 operation,
                 _convert_in_sandbox(input.input),
                 backend=self._temporal_stream_backend_name,
+                close_with_run_ref=_close_with_run_ref(input),
             ),
             # The runtime already has the Records of a replayed task. A create or a close is
             # idempotent, so it goes again, for a run whose buffer an eviction dropped.

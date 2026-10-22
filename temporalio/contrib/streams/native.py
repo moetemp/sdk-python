@@ -39,6 +39,7 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
     """
 
     _backend_class = _NativeBackend
+    _server_closes_with_run = True
 
     def __init__(
         self,
