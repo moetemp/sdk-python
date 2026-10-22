@@ -13,13 +13,12 @@ T = TypeVar("T")
 
 
 class End(enum.Enum):
-    """The type of :py:data:`END`."""
+    """A ``from_offset`` after the newest Record, for new Records only. Use ``END``."""
 
     END = "END"
 
 
 END = End.END
-"""A ``from_offset`` that starts a read after the newest Record, for new Records only."""
 
 
 @dataclass(frozen=True)

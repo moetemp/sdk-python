@@ -91,14 +91,7 @@ class ActivityStream(StreamHandle[E]):
     def topic(
         self, topic: str | TopicDefinition[Any], *, type: Any = None
     ) -> ActivityTopic[Any]:
-        """A Topic of this Stream.
-
-        Args:
-            topic: A Topic of the Stream's definition, such as ``Events.turns``, or a name.
-                A name of the definition takes its type.
-            type: The type of a Topic outside the definition, or of a Stream with no
-                definition.
-        """
+        """A Topic of this Stream. See :py:meth:`ClientStream.topic`."""
         name, topic_type = self._topic_spec(topic, type)
         return ActivityTopic(self, name, topic_type)
 
@@ -110,21 +103,7 @@ class ActivityStream(StreamHandle[E]):
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
     ) -> AsyncGenerator[Item, None]:
-        """Read the Stream's items in order.
-
-        The read ends after a ``Closed`` item, or at the newest Record when
-        ``wait_new_records`` is False. A ``Superseded`` item withdraws earlier Records of a
-        failed attempt, and it passes every Topic filter.
-
-        Args:
-            topics: Read these Topics. With no Topics and no prefixes, read every Topic.
-            from_offset: Start at this offset, inclusive, or at ``streams.END`` for new
-                Records only. Defaults to the first Record.
-            wait_new_records: Wait for new Records at the end of the Stream.
-            prefixes: Also read the Topics whose names start with one of these.
-            create_wait: How long to wait for a Stream that nobody created yet. Defaults to
-                no wait.
-        """
+        """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
         names, types = read_spec(self, topics)
         return self._access().read(
             topics=names,
@@ -238,7 +217,7 @@ class SyncActivityStream(StreamHandle[E]):
     def topic(
         self, topic: str | TopicDefinition[Any], *, type: Any = None
     ) -> SyncActivityTopic[Any]:
-        """A Topic of this Stream. See :py:meth:`ActivityStream.topic`."""
+        """A Topic of this Stream. See :py:meth:`ClientStream.topic`."""
         name, topic_type = self._topic_spec(topic, type)
         return SyncActivityTopic(self, name, topic_type)
 
@@ -250,7 +229,7 @@ class SyncActivityStream(StreamHandle[E]):
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
     ) -> Iterator[Item]:
-        """Read the Stream's items in order. See :py:meth:`ActivityStream.subscribe`."""
+        """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
         names, types = read_spec(self, topics)
         items = self._access().read(
             topics=names,

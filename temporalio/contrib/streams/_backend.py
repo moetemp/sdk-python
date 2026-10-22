@@ -48,11 +48,6 @@ class StreamBackend:
         """Create a backend over an extension."""
         self._extension = extension
 
-    @property
-    def extension(self) -> temporalio.worker.WorkerExtension:
-        """The extension that the backend calls."""
-        return self._extension
-
     def service(self, namespace: str) -> service_client.StreamServiceClient:
         """A generated Stream service client for ``namespace``."""
         return service_client.StreamServiceClient(_ExtensionTransport(self, namespace))

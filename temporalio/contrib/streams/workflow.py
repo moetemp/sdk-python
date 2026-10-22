@@ -16,13 +16,13 @@ from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, Generic, TypeVar, overload
+from typing import Any, TypeVar, overload
 
 import temporalio.exceptions
 import temporalio.workflow
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams.system import create_stream as _create_stream
 from temporalio.contrib.streams.system import models
 from temporalio.contrib.streams.system._resources.stream import Stream as _Stream
@@ -47,7 +47,6 @@ class _RunStream:
     close_with_run: bool = False
     closed: bool = False
     # Set for a Stream that the run chain created, which continue-as-new passes on.
-    owned: bool = False
     backend: str | None = None
 
 
@@ -117,28 +116,12 @@ def _now(call: Coroutine[Any, Any, _R]) -> _R:
     )
 
 
-class WorkflowTopic(Generic[T]):
+class WorkflowTopic(TopicBase[T]):
     """One Topic of a :py:class:`WorkflowStream`. All Topics of a Stream share one order.
 
     .. warning::
         This API is experimental.
     """
-
-    def __init__(self, stream: WorkflowStream[Any], name: str, type: Any) -> None:
-        """Create a Topic. Use :py:meth:`WorkflowStream.topic` instead."""
-        self._stream = stream
-        self._name = name
-        self._type = type
-
-    @property
-    def name(self) -> str:
-        """Name of the Topic."""
-        return self._name
-
-    @property
-    def type(self) -> Any:
-        """Type of the Topic's values."""
-        return self._type
 
     async def publish(self, *values: T) -> None:
         """Add one Record for each value, in order.
@@ -378,7 +361,6 @@ def create_stream_nowait(
         _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close)
     )
     run_stream.close_with_run = close_with_run
-    run_stream.owned = True
     run_stream.backend = stream.backend
     return stream
 

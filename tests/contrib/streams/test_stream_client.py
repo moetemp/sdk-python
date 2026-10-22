@@ -238,6 +238,9 @@ async def test_handle_looks_in_each_backend_during_a_move(client: Client):
     moving = stream_client.get_handle(Events, id="moving", backend=("a", "b"))
     assert await moving.get_offset() > 0
     assert moving.backend == "b"
+    nowhere = stream_client.get_handle(Events, id="nowhere", backend=("a", "b"))
+    with pytest.raises(streams.StreamNotFoundError):
+        await nowhere.get_offset()
     # A handle with no backend name is ambiguous when the client has two backends.
     with pytest.raises(streams.StreamConfigError):
         stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))

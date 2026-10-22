@@ -523,11 +523,11 @@ def _take_owned_streams(
         return
     state = streams_workflow._state()
     converter = temporalio.converter.PayloadConverter.default
-    for entry in converter.from_payload(payload, list[dict[str, Any]]):
-        run_stream = state.stream(_owned_ref(entry["id"]))
-        run_stream.owned = True
-        run_stream.backend = entry.get("backend")
-        run_stream.close_with_run = bool(entry.get("closeWithRun"))
+    for stream_id, backend, close_with_run in converter.from_payload(
+        payload, list[Any]
+    ):
+        run_stream = state.stream(_owned_ref(stream_id))
+        run_stream.backend, run_stream.close_with_run = backend, close_with_run
 
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
@@ -573,16 +573,11 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         return _DoneHandle(result)
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
-        # The next run needs each owned Stream's backend for stream_handle, and whether it
-        # closes with the chain.
+        # The next run needs each owned Stream's backend for stream_handle.
         owned = [
-            {
-                "id": stream_id,
-                "backend": run_stream.backend,
-                "closeWithRun": run_stream.close_with_run,
-            }
+            [stream_id, run_stream.backend, run_stream.close_with_run]
             for stream_id, run_stream in streams_workflow._state().streams.items()
-            if run_stream.owned and not run_stream.closed
+            if run_stream.backend is not None and not run_stream.closed
         ]
         if owned:
             converter = temporalio.converter.PayloadConverter.default

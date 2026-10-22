@@ -78,12 +78,9 @@ class StreamUnsupportedError(StreamError):
 
 
 class StreamConfigError(RuntimeError):
-    """No Stream plugin, or no backend of the name that a Stream or a call gives.
+    """No Stream plugin, or no backend of a given name. It is config, not a Store error.
 
-    It comes from the Worker or client config, not from a Store, so it is not a
-    :py:class:`StreamError`, and ``except StreamError`` does not catch it. In Workflow code it
-    fails the Workflow Task, so a Worker with the right config can take the run on. In an
-    Activity the attempt is retried.
+    ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
     """
 
 

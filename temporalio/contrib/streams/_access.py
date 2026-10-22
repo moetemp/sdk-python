@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 from temporalio.contrib.streams import _convert, _reader
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
@@ -139,28 +139,15 @@ def read_spec(
     return names or None, types
 
 
-class _AsyncTopic(Generic[T]):
+class _AsyncTopic(TopicBase[T]):
     # A Topic of an Activity or client handle. Each publish writes before it returns.
-    def __init__(self, stream: Any, name: str, type: Any) -> None:
-        self._stream = stream
-        self._name = name
-        self._type = type
-
-    @property
-    def name(self) -> str:
-        """Name of the Topic."""
-        return self._name
-
-    @property
-    def type(self) -> Any:
-        """Type that a read decodes the Topic's values with."""
-        return self._type
 
     async def publish(self, *values: T) -> int:
         """Write one Record for each value, in order, and return the last Record's offset.
 
         A list is one value.
         """
+        await self._stream._ready()
         return await self._stream._access().publish(self._name, values)
 
     def subscribe(
@@ -179,21 +166,5 @@ class _AsyncTopic(Generic[T]):
         )
 
 
-class SyncTopicBase(Generic[T]):
+class SyncTopicBase(TopicBase[T]):
     """Base of a Topic whose calls block, for sync Activities."""
-
-    def __init__(self, stream: Any, name: str, type: Any) -> None:
-        """Create a Topic. Use the Stream's ``topic`` instead."""
-        self._stream = stream
-        self._name = name
-        self._type = type
-
-    @property
-    def name(self) -> str:
-        """Name of the Topic."""
-        return self._name
-
-    @property
-    def type(self) -> Any:
-        """Type that a read decodes the Topic's values with."""
-        return self._type

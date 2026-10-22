@@ -47,14 +47,6 @@ class ClientTopic(_AsyncTopic[T]):
         This API is experimental.
     """
 
-    async def publish(self, *values: T) -> int:
-        """Write one Record for each value, in order, and return the last Record's offset.
-
-        A list is one value.
-        """
-        await self._stream._ready()
-        return await super().publish(*values)
-
 
 class ClientStream(StreamHandle[E]):
     """A Stream that a client writes, reads and closes. Get one from :py:class:`StreamClient`.
@@ -92,7 +84,6 @@ class ClientStream(StreamHandle[E]):
         self._finding: asyncio.Future[str] | None = None
         # The backends to look in, in order, until one has the Stream.
         self._probe: list[tuple[str, StreamBackend]] = []
-        self._probing: asyncio.Future[None] | None = None
 
     def _bind(
         self,
@@ -109,42 +100,27 @@ class ClientStream(StreamHandle[E]):
 
     @property
     def backend(self) -> str | None:
-        """Name of the backend that keeps the Stream.
-
-        Raises:
-            RuntimeError: The handle looks in more than one backend, and no call has found the
-                Stream yet. Call :py:meth:`get_offset` first.
-        """
-        if self._probe:
-            raise RuntimeError(
-                "The Stream's backend is not known yet. Call get_offset() first."
-            )
-        return self._backend
+        """Name of the backend. A handle that looks in many backends knows it after a call."""
+        return None if self._probe else self._backend
 
     async def _ready(self) -> None:
-        if self._probe:
-            # Calls that start together share one search.
-            if self._probing is None:
-                self._probing = asyncio.ensure_future(self._find_backend())
-            await asyncio.shield(self._probing)
-
-    async def _find_backend(self) -> None:
-        client = self._client
-        assert client is not None
-        stream_id = await self._stream_id()
-        found = self._probe[0]
+        # The first backend that has the Stream keeps it. Two first calls may both look.
         for name, backend in self._probe:
+            assert self._client is not None
+            request = models.DescribeStreamRequest(
+                stream=models.StreamRef(id=await self._stream_id())
+            )
             try:
-                await backend.service(client.namespace).describe_stream(
-                    models.DescribeStreamRequest(stream=models.StreamRef(id=stream_id))
-                )
+                await backend.service(self._client.namespace).describe_stream(request)
             except _errors.StreamNotFoundError:
                 continue
-            found = (name, backend)
-            break
-        # With no backend that has the Stream, the first one waits for its create.
-        self._backend, self._stream_backend = found
-        self._probe = []
+            self._backend, self._stream_backend, self._probe = name, backend, []
+            return
+        if self._probe:
+            raise _errors.StreamNotFoundError(
+                f"No backend of {[name for name, _ in self._probe]} has the Stream {self._id}",
+                reason="stream_not_found",
+            )
 
     @property
     def id(self) -> str:
@@ -348,20 +324,6 @@ class StreamClient:
         )
         return stream._bind(self._client, stream_backend)
 
-    @overload
-    def get_handle(
-        self,
-        definition: type[E],
-        *,
-        id: str,
-        backend: str | tuple[str, ...] | None = None,
-    ) -> ClientStream[E]: ...
-
-    @overload
-    def get_handle(
-        self, definition: type[E], *, stream: StreamHandle[Any]
-    ) -> ClientStream[E]: ...
-
     def get_handle(
         self,
         definition: type[E],
@@ -375,25 +337,25 @@ class StreamClient:
         Args:
             definition: The Stream definition class.
             id: The Stream id.
-            stream: A handle of the Stream. Its id, owner and backend stay. A handle with no
-                backend name needs a client with one backend.
+            stream: A handle of the Stream, such as one in a Record. Its id, owner and
+                backend stay.
             backend: The name of the backend. Defaults to the client's default backend. A
                 tuple, such as ``("native", "redis")`` during a move, looks in each in order
                 on first use and keeps the first that has the Stream.
         """
         definition_of(definition)
         if stream is not None:
-            id = stream.id
+            # An empty name is of any backend, so it needs a client with one.
             backend_name, stream_backend = client_backend(
                 self._client, stream.backend, only=True
             )
             probe: list[tuple[str, StreamBackend]] = []
-        elif id is None:
-            raise TypeError("get_handle takes id= or stream=")
-        else:
+        elif id is not None:
             backend_name, stream_backend, probe = self._backends(backend)
+        else:
+            raise TypeError("get_handle takes id= or stream=")
         handle = ClientStream(
-            id=id,
+            id=stream.id if stream else id or "",
             workflow_id=stream.workflow_id if stream else None,
             first_execution_run_id=stream.first_execution_run_id if stream else None,
             backend=backend_name or None,
