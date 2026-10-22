@@ -2,8 +2,10 @@ import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 
+import google.protobuf.any_pb2
 import pytest
 
+import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.client import Client
 from temporalio.common import RawValue
@@ -13,7 +15,7 @@ from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
-from temporalio.service import RPCStatusCode
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
 
@@ -162,3 +164,19 @@ def test_unsupported_capability_maps_to_its_error():
     assert isinstance(err, streams.StreamUnsupportedError)
     assert err.non_retryable and err.code == RPCStatusCode.UNIMPLEMENTED
     assert err.message.endswith("replica_wait")
+
+
+def test_server_failure_maps_to_its_stream_error():
+    detail = google.protobuf.any_pb2.Any()
+    detail.Pack(ext_pb.StreamErrorDetails(reason="stream_closed"))
+    status = temporalio.api.common.v1.GrpcStatus(
+        code=9, message="closed", details=[detail]
+    )
+    err = _errors.from_rpc_error(
+        RPCError(
+            "closed", RPCStatusCode.FAILED_PRECONDITION, status.SerializeToString()
+        )
+    )
+    assert isinstance(err, streams.StreamClosedError)
+    plain = RPCError("down", RPCStatusCode.UNAVAILABLE, b"")
+    assert _errors.from_rpc_error(plain) is plain

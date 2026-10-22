@@ -184,7 +184,7 @@ class ClientStream(StreamHandle[E]):
     def _access(self) -> Access:
         client, backend = self._client, self._stream_backend
         if client is None or backend is None:
-            raise _errors.StreamTransportMissingError(
+            raise _errors.StreamConfigError(
                 "This ClientStream came from a payload, so it has no client. "
                 "Use StreamClient.get_handle."
             )
@@ -319,7 +319,7 @@ class StreamClient:
             backend: The name of the backend. Defaults to the client's first Stream plugin.
 
         Raises:
-            StreamUnsupportedError: The client has no backend of that name. No call is made.
+            StreamConfigError: The client has no backend of that name. No call is made.
             StreamClosedError: A Stream of that id was created and closed before.
             StreamError: The Stream exists with another Retention or ``auto_close``, with
                 the reason ``stream_already_exists``.

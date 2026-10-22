@@ -36,13 +36,13 @@ from temporalio.contrib.streams._defn import (
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
     StreamClosedError,
+    StreamConfigError,
     StreamError,
     StreamExpiredError,
     StreamFencedError,
     StreamNotFoundError,
     StreamOffsetError,
     StreamStorageError,
-    StreamTransportMissingError,
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
@@ -66,6 +66,7 @@ __all__ = [
     "StreamBackend",
     "StreamClient",
     "StreamClosedError",
+    "StreamConfigError",
     "StreamDefinition",
     "StreamError",
     "StreamExpiredError",
@@ -74,7 +75,6 @@ __all__ = [
     "StreamNotFoundError",
     "StreamOffsetError",
     "StreamStorageError",
-    "StreamTransportMissingError",
     "StreamUnsupportedError",
     "Superseded",
     "SyncActivityStream",

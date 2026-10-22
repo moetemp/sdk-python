@@ -94,11 +94,11 @@ def _check_backend(backend: str | None, action: str) -> str:
     # and a Worker with the right config retries it. An ApplicationError would fail the run.
     worker_backend = _backend_name()
     if worker_backend is None:
-        raise RuntimeError(
+        raise _errors.StreamConfigError(
             "No Stream plugin is on the Worker, such as RedisStreamPlugin"
         )
     if backend and backend != worker_backend:
-        raise RuntimeError(
+        raise _errors.StreamConfigError(
             f"Can't {action} a Stream of the backend {backend}. The Worker has only "
             f"{worker_backend}."
         )
@@ -112,7 +112,9 @@ def _now(call: Coroutine[Any, Any, _R]) -> _R:
     except StopIteration as done:
         return done.value
     call.close()
-    raise RuntimeError("No Stream plugin took the call, such as RedisStreamPlugin")
+    raise _errors.StreamConfigError(
+        "No Stream plugin took the call, such as RedisStreamPlugin"
+    )
 
 
 class WorkflowTopic(Generic[T]):
@@ -148,8 +150,8 @@ class WorkflowTopic(Generic[T]):
         Raises:
             StreamClosedError: This run closed the Stream.
             ReadOnlyContextError: The code must not change state, such as a query handler.
-            RuntimeError: No Stream plugin is on the Worker, or the Stream is of a backend
-                that the Worker does not have. It fails the Workflow Task, not the run.
+            StreamConfigError: No Stream plugin is on the Worker, or the Stream is of a
+                backend that the Worker does not have. It fails the Workflow Task, not the run.
         """
         self.publish_nowait(*values)
 
@@ -335,7 +337,7 @@ async def create_stream(
     Raises:
         StreamClosedError: This run closed the Stream.
         ReadOnlyContextError: The code must not change state, such as a query handler.
-        RuntimeError: No Stream plugin is on the Worker, or it has no backend of that name.
+        StreamConfigError: No Stream plugin is on the Worker, or it has no backend of that name.
             It fails the Workflow Task, not the run.
         ValueError: ``close_with_run=False`` for a Stream that already closes with the run
             chain.

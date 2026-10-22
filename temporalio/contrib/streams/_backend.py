@@ -171,8 +171,8 @@ def client_backend(
     backend, since a handle with no backend name may be of any of them.
 
     Raises:
-        StreamTransportMissingError: The client has no Stream plugin.
-        StreamUnsupportedError: The client has no Stream plugin of that name.
+        StreamConfigError: The client has no Stream plugin, none of that name, or more than
+            one where ``only`` needs one.
     """
     backends = [
         (
@@ -186,13 +186,12 @@ def client_backend(
         )
     ]
     if not backends:
-        raise _errors.StreamTransportMissingError(
+        raise _errors.StreamConfigError(
             "The client has no Stream plugin, such as RedisStreamPlugin"
         )
     if not name and only and len(backends) > 1:
-        raise _errors.StreamUnsupportedError(
-            "The handle names no backend, and the client has more than one",
-            reason="stream_unsupported",
+        raise _errors.StreamConfigError(
+            "The handle names no backend, and the client has more than one"
         )
     if not name:
         defaults = [entry for entry in backends if entry[2]] or backends
@@ -200,8 +199,7 @@ def client_backend(
     for backend_name, backend, _ in backends:
         if backend_name == name:
             return backend_name, backend
-    raise _errors.StreamUnsupportedError(
+    raise _errors.StreamConfigError(
         f"The client has no Stream backend {name}. It has "
-        f"{', '.join(entry[0] for entry in backends)}.",
-        reason="stream_unsupported",
+        f"{', '.join(entry[0] for entry in backends)}."
     )

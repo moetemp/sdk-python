@@ -43,9 +43,9 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
 async def test_unknown_backend_raises_before_any_call(client: Client):
     client, extension = fake_client(client)
     stream_client = streams.StreamClient(client)
-    with pytest.raises(streams.StreamUnsupportedError, match="It has fake"):
+    with pytest.raises(streams.StreamConfigError, match="It has fake"):
         await stream_client.create(Events, id="chat-1", backend="redis")
-    with pytest.raises(streams.StreamUnsupportedError):
+    with pytest.raises(streams.StreamConfigError):
         stream_client.get_handle(Events, id="chat-1", backend="redis")
     assert not extension.streams and not extension.namespaces
     stream = await stream_client.create(Events, id="chat-1")
@@ -53,7 +53,7 @@ async def test_unknown_backend_raises_before_any_call(client: Client):
 
 
 async def test_client_without_plugin_has_no_transport(client: Client):
-    with pytest.raises(streams.StreamTransportMissingError):
+    with pytest.raises(streams.StreamConfigError):
         streams.StreamClient(client).get_handle(Events, id="chat-1")
 
 
@@ -65,7 +65,7 @@ async def test_decoded_client_stream_has_no_client(client: Client):
         converter.to_payload(stream), streams.ClientStream[Events]
     )
     assert decoded == stream
-    with pytest.raises(streams.StreamTransportMissingError, match="get_handle"):
+    with pytest.raises(streams.StreamConfigError, match="get_handle"):
         await decoded.get_offset()
 
 
@@ -239,5 +239,5 @@ async def test_handle_looks_in_each_backend_during_a_move(client: Client):
     assert await moving.get_offset() > 0
     assert moving.backend == "b"
     # A handle with no backend name is ambiguous when the client has two backends.
-    with pytest.raises(streams.StreamUnsupportedError):
+    with pytest.raises(streams.StreamConfigError):
         stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))
