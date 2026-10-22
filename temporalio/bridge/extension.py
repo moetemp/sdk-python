@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import temporalio.bridge.client
 import temporalio.bridge.runtime
 import temporalio.bridge.temporal_sdk_bridge
 
@@ -34,6 +35,10 @@ class WorkerExtension:
             [part._ref for part in parts]
         )
         return combined
+
+    def attach(self, client: temporalio.bridge.client.Client) -> None:
+        """Give the extension the connection of a connected client."""
+        self._ref.attach(client._ref)
 
     @property
     def name(self) -> str:

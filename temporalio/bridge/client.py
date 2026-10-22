@@ -168,21 +168,3 @@ class Client:
         resp = resp_type()
         resp.ParseFromString(await resp_fut)
         return resp
-
-    async def call_unary(
-        self,
-        *,
-        method_path: str,
-        req: google.protobuf.message.Message,
-        resp_type: type[ProtoMessage],
-        metadata: Mapping[str, str | bytes],
-        timeout: timedelta | None,
-    ) -> ProtoMessage:
-        """Make a unary call by method path using SDK Core. It always retries."""
-        timeout_millis = round(timeout.total_seconds() * 1000) if timeout else None
-        call = RpcCall(
-            method_path, req.SerializeToString(), True, metadata, timeout_millis
-        )
-        resp = resp_type()
-        resp.ParseFromString(await self._ref.call_raw_unary(call))
-        return resp

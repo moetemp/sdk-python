@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
+use temporalio_client::Connection;
 use temporalio_sdk_core::{
     ExtensionError, WorkerExtension, WorkflowTaskCompletionInfo, WorkflowTaskFailedInfo,
     WorkflowTaskInterceptError, WorkflowTaskInterceptor,
@@ -40,6 +41,12 @@ impl WorkerExtensionRef {
             .map_err(call_error)
     }
 
+    /// Gives the extension a client's connection, as a Worker gives it at its start, so a
+    /// process with no Worker can call the server through it too.
+    fn attach(&self, client: &crate::client::ClientRef) {
+        self.extension.attach(client.connection.clone());
+    }
+
     fn call_async<'p>(
         &self,
         py: Python<'p>,
@@ -69,7 +76,10 @@ pub fn combine_worker_extensions(parts: Vec<WorkerExtensionRef>) -> PyResult<Wor
         parts.into_iter().map(|part| part.extension).collect();
     let interceptors: Vec<_> = parts
         .iter()
-        .filter_map(|part| part.workflow_task_interceptor())
+        .filter_map(|part| {
+            part.workflow_task_interceptor()
+                .map(|interceptor| (part.name().to_string(), interceptor))
+        })
         .collect();
     let name = parts
         .iter()
@@ -82,13 +92,18 @@ pub fn combine_worker_extensions(parts: Vec<WorkerExtensionRef>) -> PyResult<Wor
         Some(Arc::new(CombinedInterceptor(interceptors)))
     };
     Ok(WorkerExtensionRef {
-        extension: Arc::new(CombinedExtension { name, interceptor }),
+        extension: Arc::new(CombinedExtension {
+            name,
+            parts,
+            interceptor,
+        }),
         runtime,
     })
 }
 
 struct CombinedExtension {
     name: String,
+    parts: Vec<Arc<dyn WorkerExtension>>,
     // Core may ask for the interceptor more than once, so it is built once.
     interceptor: Option<Arc<dyn WorkflowTaskInterceptor>>,
 }
@@ -101,9 +116,15 @@ impl WorkerExtension for CombinedExtension {
     fn workflow_task_interceptor(&self) -> Option<Arc<dyn WorkflowTaskInterceptor>> {
         self.interceptor.clone()
     }
+
+    fn attach(&self, connection: Connection) {
+        for part in &self.parts {
+            part.attach(connection.clone());
+        }
+    }
 }
 
-struct CombinedInterceptor(Vec<Arc<dyn WorkflowTaskInterceptor>>);
+struct CombinedInterceptor(Vec<(String, Arc<dyn WorkflowTaskInterceptor>)>);
 
 #[async_trait::async_trait]
 impl WorkflowTaskInterceptor for CombinedInterceptor {
@@ -112,8 +133,10 @@ impl WorkflowTaskInterceptor for CombinedInterceptor {
         task: &WorkflowTaskCompletionInfo,
     ) -> Result<(), WorkflowTaskInterceptError> {
         // In order, so the first failure fails the task before a later part writes anything.
-        for part in &self.0 {
-            part.before_complete(task).await?;
+        for (name, part) in &self.0 {
+            part.before_complete(task).await.map_err(|err| {
+                WorkflowTaskInterceptError::new(format!("{name}: {}", err.message))
+            })?;
         }
         Ok(())
     }
@@ -123,19 +146,19 @@ impl WorkflowTaskInterceptor for CombinedInterceptor {
         futures::future::join_all(
             self.0
                 .iter()
-                .map(|part| part.after_complete(task, accepted)),
+                .map(|(_, part)| part.after_complete(task, accepted)),
         )
         .await;
     }
 
     fn on_task_failed(&self, task: &WorkflowTaskFailedInfo) {
-        for part in &self.0 {
+        for (_, part) in &self.0 {
             part.on_task_failed(task);
         }
     }
 
     fn on_evicted(&self, run_id: &str) {
-        for part in &self.0 {
+        for (_, part) in &self.0 {
             part.on_evicted(run_id);
         }
     }

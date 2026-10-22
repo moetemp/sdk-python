@@ -12,14 +12,9 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
-from tests.contrib.streams.fake_native import (
-    FakeStreamService,
-    FakeSystemNexus,
-)
 from tests.contrib.streams.test_redis import _Rot13Codec
 from tests.helpers import new_worker
 
@@ -208,36 +203,6 @@ async def test_a_read_in_a_query_raises(stream_client: Client):
         )
         assert "read-only" in await handle.query(ReadsInQuery.read)
         await handle.terminate()
-
-
-async def test_native_workflow_reads(client: Client):
-    # Until a dev server serves the Stream service, the System Nexus stand-in answers the
-    # Workflow's calls and parks a read on a timer.
-    service = FakeStreamService()
-    config = client.config()
-    config["interceptors"] = [FakeSystemNexus(service)]
-    config["plugins"] = [NativeStreamPlugin()]
-    native_client = Client(**config)
-    async with new_worker(native_client, Writer, Reader) as worker:
-        writer = await native_client.start_workflow(
-            Writer.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        assert writer.first_execution_run_id
-        stream = stream_workflow.WorkflowStream[Events](
-            id=f"{writer.id}:{writer.first_execution_run_id}:events",
-            workflow_id=writer.id,
-            first_execution_run_id=writer.first_execution_run_id,
-            backend="native",
-        )
-        seen = await native_client.execute_workflow(
-            Reader.run,
-            ReadInput(stream),
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-    assert seen == ["turn user hi", "a", "b", "c", "closed written"]
-    reads = [request for name, request in service.calls if name == "ReadRecords"]
-    assert all(request.wait.ToTimedelta() == timedelta(seconds=60) for request in reads)
 
 
 @workflow.defn

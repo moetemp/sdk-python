@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import temporalio.bridge.extension
+import temporalio.client
 import temporalio.exceptions
 import temporalio.runtime
 import temporalio.service
@@ -72,6 +73,20 @@ class WorkerExtension:
         )
         combined._parts = parts
         return combined
+
+    def attach(self, client: temporalio.client.Client) -> None:
+        """Give the extension the client's connection, as a Worker does when it starts.
+
+        A process with no Worker, such as a client that writes Streams, calls this so the
+        extension can call the server.
+
+        Raises:
+            RuntimeError: The client is lazy and has not connected yet.
+        """
+        bridge_client = client.service_client.worker_service_client._bridge_client
+        if bridge_client is None:
+            raise RuntimeError("The client has not connected yet")
+        self._bridge_extension.attach(bridge_client)
 
     @property
     def parts(self) -> tuple[WorkerExtension, ...]:
