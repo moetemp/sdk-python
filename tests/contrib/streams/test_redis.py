@@ -2,13 +2,11 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import gc
-import shutil
-import socket
-import subprocess
 import uuid
-from collections.abc import AsyncIterator, Generator, Iterator, Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -20,7 +18,6 @@ from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
-    RedisStreamPlugin,
     StreamPlugin,
     _WorkflowInbound,
 )
@@ -38,60 +35,6 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 from tests.helpers import assert_task_fail_eventually, new_worker
-
-# Ports that other local services own.
-_RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}
-
-
-def _free_port() -> int:
-    while True:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        if port not in _RESERVED:
-            return port
-
-
-@pytest.fixture(scope="module")
-def redis_url() -> Iterator[str]:
-    server = shutil.which("redis-server")
-    if server is None:
-        pytest.skip("redis-server is not installed")
-    port = _free_port()
-    process = subprocess.Popen(
-        [server, "--port", str(port), "--save", "", "--appendonly", "no"],
-        stdout=subprocess.DEVNULL,
-    )
-    try:
-        for _ in range(100):
-            try:
-                socket.create_connection(("127.0.0.1", port), timeout=0.1).close()
-                break
-            except OSError:
-                import time
-
-                time.sleep(0.05)
-        yield f"redis://127.0.0.1:{port}"
-    finally:
-        process.terminate()
-        process.wait()
-
-
-@pytest.fixture(params=["memory", "redis"])
-async def stream_client(
-    client: Client, request: pytest.FixtureRequest
-) -> AsyncIterator[Client]:
-    # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules.
-    plugin: StreamPlugin
-    if request.param == "memory":
-        plugin = MemoryStreamPlugin()
-    else:
-        redis_url = request.getfixturevalue("redis_url")
-        plugin = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
-    config = client.config()
-    config["plugins"] = [plugin]
-    yield Client(**config)
 
 
 @dataclass
@@ -729,7 +672,9 @@ def test_closing_an_evicted_run_touches_no_runtime():
     # Workflow's loop. The interceptor must let it pass with no call to the runtime, or
     # Python prints "Exception ignored".
     inbound = _WorkflowInbound(_NeverEnds())
-    run = inbound.execute_workflow(cast(ExecuteWorkflowInput, object()))
+    run = inbound.execute_workflow(
+        cast(ExecuteWorkflowInput, cast(object, SimpleNamespace(headers={})))
+    )
     run.send(None)
     run.close()
 

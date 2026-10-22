@@ -9,6 +9,7 @@ standalone Streams with :py:func:`create_stream`. A Stream plugin, such as
     This package is experimental.
 """
 
+from temporalio.contrib.streams import workflow
 from temporalio.contrib.streams._activity import activity_stream
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._client import (
@@ -77,5 +78,6 @@ __all__ = [
     "for_handle",
     "for_ref",
     "topic",
+    "workflow",
     "workflow_stream",
 ]
