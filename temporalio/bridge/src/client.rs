@@ -164,10 +164,49 @@ impl ClientRef {
     }
 }
 
+#[pymethods]
+impl ClientRef {
+    /// Calls a unary method by its gRPC path, such as
+    /// `/temporal.api.streamservice.v1.StreamService/AppendRecords`, with the request and the
+    /// answer as encoded protobuf. It keeps the connection's TLS, API key, headers and retry
+    /// policy, and it always retries by that policy.
+    fn call_raw_unary<'p>(&self, py: Python<'p>, mut call: RpcCall) -> PyResult<Bound<'p, PyAny>> {
+        self.runtime.assert_same_process("use client")?;
+        let connection = self.connection.clone();
+        let path = static_path(&call.rpc);
+        let message = tonic::codegen::Bytes::from(std::mem::take(&mut call.req));
+        let req = with_call_options(tonic::Request::new(message), call)?;
+        self.runtime.future_into_py(py, async move {
+            match connection.raw_unary(path, req).await {
+                Ok(resp) => Ok(resp.into_inner().to_vec()),
+                Err(err) => Err(rpc_error(err)),
+            }
+        })
+    }
+}
+
+/// The method paths that Python called by path, kept for the process, since the connection
+/// names each call by a static path. A program calls only a few methods.
+fn static_path(path: &str) -> &'static str {
+    static PATHS: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut paths = PATHS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(known) = paths.iter().find(|known| **known == path) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(path.to_owned().into_boxed_str());
+    paths.push(leaked);
+    leaked
+}
+
 pub(crate) fn rpc_req<P: prost::Message + Default>(call: RpcCall) -> PyResult<tonic::Request<P>> {
     let proto = P::decode(&*call.req)
         .map_err(|err| PyValueError::new_err(format!("Invalid proto: {err}")))?;
-    let mut req = tonic::Request::new(proto);
+    with_call_options(tonic::Request::new(proto), call)
+}
+
+fn with_call_options<T>(mut req: tonic::Request<T>, call: RpcCall) -> PyResult<tonic::Request<T>> {
     for (k, v) in call.metadata {
         if let Ok(binary_key) = BinaryMetadataKey::from_str(&k) {
             let RpcMetadataValue::Bytes(bytes) = v else {
@@ -209,16 +248,20 @@ where
 {
     match res {
         Ok(resp) => Ok(resp.get_ref().encode_to_vec()),
-        Err(err) => {
-            Python::attach(move |py| {
-                // Create tuple of "status", "message", and optional "details"
-                let code = err.code() as u32;
-                let message = err.message().to_owned();
-                let details = err.details().into_pyobject(py)?.unbind();
-                Err(RPCError::new_err((code, message, details)))
-            })
-        }
+        Err(err) => Err(rpc_error(err)),
     }
+}
+
+fn rpc_error(err: tonic::Status) -> PyErr {
+    Python::attach(move |py| {
+        // Create tuple of "status", "message", and optional "details"
+        let code = err.code() as u32;
+        let message = err.message().to_owned();
+        match err.details().into_pyobject(py) {
+            Ok(details) => RPCError::new_err((code, message, details.unbind())),
+            Err(err) => err,
+        }
+    })
 }
 
 fn partition_headers(

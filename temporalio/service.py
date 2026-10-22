@@ -389,6 +389,41 @@ class ServiceClient(ABC):
     ) -> ServiceResponse:
         raise NotImplementedError
 
+    async def call_unary(
+        self,
+        method_path: str,
+        req: google.protobuf.message.Message,
+        resp_type: type[ServiceResponse],
+        *,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> ServiceResponse:
+        """Call a unary gRPC method by its path, such as a method of a service that this
+        client does not list.
+
+        The call keeps the connection's TLS, API key, headers and retry policy, and it always
+        retries by that policy. Give the ``temporal-namespace`` metadata to route by namespace,
+        as the listed methods do.
+
+        Args:
+            method_path: The method path, such as
+                ``/temporal.api.streamservice.v1.StreamService/AppendRecords``.
+            req: The request message.
+            resp_type: The response message class.
+            metadata: The call's gRPC metadata.
+            timeout: How long the call takes at most.
+
+        Raises:
+            RPCError: The call failed.
+            NotImplementedError: This client makes no calls by path.
+
+        .. warning::
+            This API is experimental.
+        """
+        return await self.worker_service_client.call_unary(
+            method_path, req, resp_type, metadata=metadata, timeout=timeout
+        )
+
 
 class WorkflowService(temporalio.bridge.services_generated.WorkflowService):
     """Client to the Temporal server's workflow service."""
@@ -495,6 +530,29 @@ class _BridgeServiceClient(ServiceClient):
             return resp
         except BridgeRPCError as err:
             # Intentionally swallowing the cause instead of using "from"
+            status, message, details = err.args
+            raise RPCError(message, RPCStatusCode(status), details)
+
+    async def call_unary(
+        self,
+        method_path: str,
+        req: google.protobuf.message.Message,
+        resp_type: type[ServiceResponse],
+        *,
+        metadata: Mapping[str, str | bytes] = {},
+        timeout: timedelta | None = None,
+    ) -> ServiceResponse:
+        """See :py:meth:`ServiceClient.call_unary`."""
+        try:
+            client = await self._connected_client()
+            return await client.call_unary(
+                method_path=method_path,
+                req=req,
+                resp_type=resp_type,
+                metadata=metadata,
+                timeout=timeout,
+            )
+        except BridgeRPCError as err:
             status, message, details = err.args
             raise RPCError(message, RPCStatusCode(status), details)
 
