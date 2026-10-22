@@ -290,7 +290,7 @@ class StreamClient:
         )
         return stream._bind(self._client, stream_backend)
 
-    def get_workflow_stream(
+    def workflow_stream(
         self,
         handle: temporalio.client.WorkflowHandle[Any, Any],
         definition: type[E],
