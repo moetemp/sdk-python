@@ -48,9 +48,8 @@ class WorkerExtension:
     def combine(*extensions: WorkerExtension) -> WorkerExtension:
         """One extension for a Worker that needs more than one, such as two Stream plugins.
 
-        Core takes one extension per Worker. Core calls the hooks of each part in the given
-        order, and the first failure fails the Workflow Task. Each part keeps its own methods,
-        so call them on the part. A combined extension in ``extensions`` adds its parts.
+        Core takes one extension per Worker. Each part keeps its own methods, so call them on
+        the part. A combined extension in ``extensions`` adds its parts.
 
         Raises:
             ValueError: No extension is given, or the extensions use different runtimes.
