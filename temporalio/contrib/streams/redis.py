@@ -798,7 +798,7 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: StreamPlugin
+    input: temporalio.worker.ExecuteActivityInput, plugin: Any
 ) -> _activity.ActivityStreams:
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()

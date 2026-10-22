@@ -53,6 +53,15 @@ class StreamBackend:
         """The extension that the backend calls."""
         return self._extension
 
+    def for_client(
+        self,
+        client: temporalio.client.Client,  # pyright: ignore[reportUnusedParameter]
+    ) -> StreamBackend:
+        """The backend for the calls of one client. A backend that calls the server binds the
+        client's connection, and this one needs none.
+        """
+        return self
+
     def service(self, namespace: str) -> service_client.StreamServiceClient:
         """A generated Stream service client for ``namespace``."""
         return service_client.StreamServiceClient(_ExtensionTransport(self, namespace))
@@ -190,10 +199,10 @@ def client_backend(
         )
     if not name:
         defaults = [entry for entry in backends if entry[2]] or backends
-        return defaults[0][0], defaults[0][1]
+        return defaults[0][0], defaults[0][1].for_client(client)
     for backend_name, backend, _ in backends:
         if backend_name == name:
-            return backend_name, backend
+            return backend_name, backend.for_client(client)
     raise _errors.StreamUnsupportedError(
         f"The client has no Stream backend {name}. It has "
         f"{', '.join(entry[0] for entry in backends)}.",
