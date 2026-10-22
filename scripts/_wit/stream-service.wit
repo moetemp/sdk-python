@@ -26,9 +26,8 @@ interface stream-service {
     nanos: option<s32>,
   }
 
-  // The default Stream of a Workflow has the id <workflow id>:<first run id>. A Stream that
-  // the Workflow creates with a name has <workflow id>:<first run id>:<name>. Each part is
-  // percent-encoded. So a caller that knows the first run id builds the id with no call.
+  // A Stream that a Workflow creates has the id <workflow id>:<first run id>:<name>. Each part
+  // is percent-encoded. So a caller that knows the first run id builds the id with no call.
   /// @nexus.doc "Identifies one Stream. The id is opaque to callers."
   /// @nexus.proto "temporal.api.streamservice.v1.StreamRef"
   record stream-ref {
@@ -38,6 +37,8 @@ interface stream-service {
     workflow-id: option<string>,
     /// @nexus.doc "The first run id of the owning run chain. Empty when workflow-id is."
     first-execution-run-id: option<string>,
+    /// @nexus.doc "The name of the backend that holds the Stream, as the Worker and client config register it. Empty is the default backend. The Store never reads it."
+    backend: option<string>,
   }
 
   /// @nexus.proto "temporal.api.streamservice.v1.ProducerKind"
@@ -104,7 +105,6 @@ interface stream-service {
     stream-record-kind-data,
     stream-record-kind-superseded,
     stream-record-kind-close,
-    stream-record-kind-idle,
   }
 
   // For an Activity, Local Activity or client Producer: withdraw the Records of this
@@ -139,19 +139,19 @@ interface stream-service {
     /// @nexus.doc "The place of this Record in the Stream. Ordered and unique, with gaps."
     /// @nexus.offset "stream-offset"
     offset: option<s64>,
-    /// @nexus.doc "Empty on CLOSE, IDLE and SUPERSEDED Records."
+    /// @nexus.doc "Empty on CLOSE and SUPERSEDED Records."
     topic: option<string>,
     producer: option<producer>,
     /// @nexus.doc "Set on a data Record."
     body: option<payload>,
     /// @nexus.doc "Set on a SUPERSEDED Record. Lua flags the batch, and the read makes it."
     supersession: option<supersession>,
-    /// @nexus.doc "Set on a close Record with an outcome. An IDLE Record carries only the offset, the newest read + 1."
+    /// @nexus.doc "Set on a close Record with an outcome."
     close-result: option<payload>,
     close-failure: option<failure>,
   }
 
-  /// @nexus.doc "Create a Stream. Idempotent for one id and one Retention. ALREADY_EXISTS for another Retention."
+  /// @nexus.doc "Create a Stream. Idempotent for one id, one Retention and one auto-close. ALREADY_EXISTS for another Retention or another auto-close."
   /// @nexus.proto "temporal.api.streamservice.v1.CreateStreamRequest"
   record create-stream-request {
     /// @nexus.doc "Required from Workflow code. Empty elsewhere asks the service for an id."
@@ -160,6 +160,8 @@ interface stream-service {
     retention: option<duration>,
     /// @nexus.doc "Workflow only. A retry run's first batch or create: the previous run, whose Records it withdraws."
     withdraw-run: option<string>,
+    /// @nexus.doc "Close the Stream with no result when no Record was appended for this long. Empty never closes on its own. It is separate from Retention."
+    auto-close: option<duration>,
     /// @nexus.omit
     namespace: placeholder,
   }
@@ -255,8 +257,6 @@ interface stream-service {
     wait: option<duration>,
     /// @nexus.doc "How long to wait for an uncreated Stream. Empty fails at once. At most 60 s."
     create-wait: option<duration>,
-    /// @nexus.doc "End the read with an IDLE Record when no new Record comes for this long. Empty never ends on idle. The facade counts it across reads."
-    idle-timeout: option<duration>,
     /// @nexus.omit
     namespace: placeholder,
   }
@@ -285,18 +285,18 @@ interface stream-service {
     /// @nexus.offset "stream-offset"
     last-offset: option<s64>,
     retention: option<duration>,
+    /// @nexus.doc "The auto-close of the create. Empty when the Stream has none."
+    auto-close: option<duration>,
   }
 
   /// @nexus.operation name="CreateStream"
   create-stream: func(request: create-stream-request) -> create-stream-response;
 
-  /// @nexus.doc "In Workflow code, the Brook transport puts this call into a buffer."
+  /// @nexus.doc "In Workflow code, the Brook transport puts this call into the run's buffer, and the Workflow facade drops the response."
   /// @nexus.operation name="AppendRecords"
-  /// @nexus.one-way
   append-records: func(request: append-records-request) -> append-records-response;
 
   /// @nexus.operation name="CloseStream"
-  /// @nexus.one-way
   close-stream: func(request: close-stream-request) -> close-stream-response;
 
   /// @nexus.doc "Not for Workflow code in Brook. A long poll. NOT_FOUND for an uncreated Stream."
@@ -308,7 +308,6 @@ interface stream-service {
   ///   done-field="done"
   ///   offset-field="from-offset"
   ///   next-offset-field="next-offset"
-  ///   idle-timeout-field="idle-timeout"
   read-records: func(request: read-records-request) -> read-records-response;
 
   /// @nexus.operation name="DescribeStream"

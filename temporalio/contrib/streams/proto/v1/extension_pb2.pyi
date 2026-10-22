@@ -38,6 +38,7 @@ class RedisStreamConfig(google.protobuf.message.Message):
     DURABLE_TIMEOUT_FIELD_NUMBER: builtins.int
     BLOCKING_READS_PER_NODE_FIELD_NUMBER: builtins.int
     RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
+    BACKEND_FIELD_NUMBER: builtins.int
     @property
     def urls(
         self,
@@ -62,6 +63,10 @@ class RedisStreamConfig(google.protobuf.message.Message):
     @property
     def response_timeout(self) -> google.protobuf.duration_pb2.Duration:
         """Empty is 5 s."""
+    backend: builtins.str
+    """The backend name that lang registered this extension under. The crate puts it in each
+    StreamRef it builds, such as the one in a create answer.
+    """
     def __init__(
         self,
         *,
@@ -74,6 +79,7 @@ class RedisStreamConfig(google.protobuf.message.Message):
         durable_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         blocking_reads_per_node: builtins.int = ...,
         response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
+        backend: builtins.str = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -91,6 +97,8 @@ class RedisStreamConfig(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "backend",
+            b"backend",
             "blocking_reads_per_node",
             b"blocking_reads_per_node",
             "cluster",
@@ -239,6 +247,82 @@ class BufferWorkflowCallsResponse(google.protobuf.message.Message):
 
 global___BufferWorkflowCallsResponse = BufferWorkflowCallsResponse
 
+class FlushRunBufferRequest(google.protobuf.message.Message):
+    """Method `FlushRunBuffer`, asynchronous. Lang calls it before it runs a Local Activity, also
+    before each retry that Core runs in the same task. The crate writes the run's buffered
+    creates and appends in the epoch of the Workflow Task that dispatched the Local Activity, so
+    the run's Records come before the Local Activity's. Closes still wait for an accepted
+    completion. The task's completion writes only what came later, with the numbering going on,
+    and sends the task's withdrawal facts to each Stream this call wrote. A Local Activity of a
+    task that already completed, or of a task older than an earlier flush, writes nothing. When
+    the call fails, the run's next completion fails with the same error, so the retry withdraws
+    what was written. Lang then fails the Local Activity attempt.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    NAMESPACE_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    WORKFLOW_TASK_FIELD_NUMBER: builtins.int
+    TIMEOUT_FIELD_NUMBER: builtins.int
+    namespace: builtins.str
+    run_id: builtins.str
+    @property
+    def workflow_task(
+        self,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch:
+        """`ActivityTask.Start.workflow_task` (field 20) of the Local Activity."""
+    @property
+    def timeout(self) -> google.protobuf.duration_pb2.Duration:
+        """How long the write may take. Empty is 10 s."""
+    def __init__(
+        self,
+        *,
+        namespace: builtins.str = ...,
+        run_id: builtins.str = ...,
+        workflow_task: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
+        | None = ...,
+        timeout: google.protobuf.duration_pb2.Duration | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "timeout", b"timeout", "workflow_task", b"workflow_task"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "namespace",
+            b"namespace",
+            "run_id",
+            b"run_id",
+            "timeout",
+            b"timeout",
+            "workflow_task",
+            b"workflow_task",
+        ],
+    ) -> None: ...
+
+global___FlushRunBufferRequest = FlushRunBufferRequest
+
+class FlushRunBufferResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RECORDS_FIELD_NUMBER: builtins.int
+    records: builtins.int
+    """The Records the call wrote. Zero when the run had nothing buffered."""
+    def __init__(
+        self,
+        *,
+        records: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["records", b"records"]
+    ) -> None: ...
+
+global___FlushRunBufferResponse = FlushRunBufferResponse
+
 class OpenWriterRequest(google.protobuf.message.Message):
     """Method `OpenWriter`, asynchronous. A buffered writer for an Activity or a client Producer."""
 
@@ -383,6 +467,67 @@ class PublishResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___PublishResponse = PublishResponse
+
+class WriteRecordsRequest(google.protobuf.message.Message):
+    """Method `WriteRecords`, asynchronous. Appends Records at once for an open writer, after the
+    Records that `Publish` buffered, and answers when they are in the Store. It keeps the writer's
+    Producer epoch and `sequence` order, and a Store failure resends the same batch, so it goes in
+    once. Records past the Store's batch limit go as more batches, in order. An awaited publish of
+    an Activity or a client uses this call, so it needs no interval flush. A failure after the
+    Store retries fails the writer, as a failed flush does.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    WRITER_ID_FIELD_NUMBER: builtins.int
+    RECORDS_FIELD_NUMBER: builtins.int
+    writer_id: builtins.int
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.streamservice.v1.stream_service_pb2.AppendRecord
+    ]: ...
+    def __init__(
+        self,
+        *,
+        writer_id: builtins.int = ...,
+        records: collections.abc.Iterable[
+            temporalio.api.streamservice.v1.stream_service_pb2.AppendRecord
+        ]
+        | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "records", b"records", "writer_id", b"writer_id"
+        ],
+    ) -> None: ...
+
+global___WriteRecordsRequest = WriteRecordsRequest
+
+class WriteRecordsResponse(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    FIRST_OFFSET_FIELD_NUMBER: builtins.int
+    LAST_OFFSET_FIELD_NUMBER: builtins.int
+    first_offset: builtins.int
+    """The offsets of the first and the last Record. Zero when the request has no Record."""
+    last_offset: builtins.int
+    def __init__(
+        self,
+        *,
+        first_offset: builtins.int = ...,
+        last_offset: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "first_offset", b"first_offset", "last_offset", b"last_offset"
+        ],
+    ) -> None: ...
+
+global___WriteRecordsResponse = WriteRecordsResponse
 
 class FlushWriterRequest(google.protobuf.message.Message):
     """Method `FlushWriter`, asynchronous. Waits until the Records published so far are in the Store."""

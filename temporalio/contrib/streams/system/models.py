@@ -23,13 +23,14 @@ entries. Do not compute an offset. Pass back one that the service gave.
 
 @dataclasses.dataclass(slots=True)
 class CreateStreamRequest:
-    """Create a Stream. Idempotent for one id and one Retention. ALREADY_EXISTS for another
-    Retention.
+    """Create a Stream. Idempotent for one id, one Retention and one auto-close.
+    ALREADY_EXISTS for another Retention or another auto-close.
     """
 
     stream_id: str
     retention: datetime.timedelta | None = None
     withdraw_run: str | None = None
+    auto_close: datetime.timedelta | None = None
 
 
 class _CreateStreamRequestTransferTypeConverter(
@@ -58,6 +59,9 @@ class _CreateStreamRequestTransferTypeConverter(
             if value.HasField("retention")
             else None,
             withdraw_run=value.withdraw_run if bool(value.withdraw_run) else None,
+            auto_close=_support.duration_from_proto(value.auto_close)
+            if value.HasField("auto_close")
+            else None,
         )
 
     @typing_extensions.override
@@ -73,6 +77,8 @@ class _CreateStreamRequestTransferTypeConverter(
             message.retention.CopyFrom(_support.duration_to_proto(value.retention))
         if value.withdraw_run is not None:
             message.withdraw_run = value.withdraw_run
+        if value.auto_close is not None:
+            message.auto_close.CopyFrom(_support.duration_to_proto(value.auto_close))
         return message
 
 
@@ -154,6 +160,7 @@ class StreamRef:
     id: str
     workflow_id: str | None = None
     first_execution_run_id: str | None = None
+    backend: str | None = None
 
 
 class _StreamRefTransferTypeConverter(
@@ -180,6 +187,7 @@ class _StreamRefTransferTypeConverter(
             first_execution_run_id=value.first_execution_run_id
             if bool(value.first_execution_run_id)
             else None,
+            backend=value.backend if bool(value.backend) else None,
         )
 
     @typing_extensions.override
@@ -193,6 +201,8 @@ class _StreamRefTransferTypeConverter(
             message.workflow_id = value.workflow_id
         if value.first_execution_run_id is not None:
             message.first_execution_run_id = value.first_execution_run_id
+        if value.backend is not None:
+            message.backend = value.backend
         return message
 
 
@@ -792,7 +802,6 @@ class ReadRecordsRequest:
     max_records: int | None = None
     wait: datetime.timedelta | None = None
     create_wait: datetime.timedelta | None = None
-    idle_timeout: datetime.timedelta | None = None
 
 
 class _ReadRecordsRequestTransferTypeConverter(
@@ -833,9 +842,6 @@ class _ReadRecordsRequestTransferTypeConverter(
             create_wait=_support.duration_from_proto(value.create_wait)
             if value.HasField("create_wait")
             else None,
-            idle_timeout=_support.duration_from_proto(value.idle_timeout)
-            if value.HasField("idle_timeout")
-            else None,
         )
 
     @typing_extensions.override
@@ -868,10 +874,6 @@ class _ReadRecordsRequestTransferTypeConverter(
             message.wait.CopyFrom(_support.duration_to_proto(value.wait))
         if value.create_wait is not None:
             message.create_wait.CopyFrom(_support.duration_to_proto(value.create_wait))
-        if value.idle_timeout is not None:
-            message.idle_timeout.CopyFrom(
-                _support.duration_to_proto(value.idle_timeout)
-            )
         return message
 
 
@@ -1189,6 +1191,7 @@ class DescribeStreamResponse:
     ) = None
     last_offset: int | None = None
     retention: datetime.timedelta | None = None
+    auto_close: datetime.timedelta | None = None
 
 
 class _DescribeStreamResponseTransferTypeConverter(
@@ -1218,6 +1221,9 @@ class _DescribeStreamResponseTransferTypeConverter(
             retention=_support.duration_from_proto(value.retention)
             if value.HasField("retention")
             else None,
+            auto_close=_support.duration_from_proto(value.auto_close)
+            if value.HasField("auto_close")
+            else None,
         )
 
     @typing_extensions.override
@@ -1236,6 +1242,8 @@ class _DescribeStreamResponseTransferTypeConverter(
             message.last_offset = value.last_offset
         if value.retention is not None:
             message.retention.CopyFrom(_support.duration_to_proto(value.retention))
+        if value.auto_close is not None:
+            message.auto_close.CopyFrom(_support.duration_to_proto(value.auto_close))
         return message
 
 

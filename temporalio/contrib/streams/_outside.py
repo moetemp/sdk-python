@@ -110,13 +110,12 @@ class OutsideStream(_Readable):
         topic_prefixes: Sequence[str] = (),
         from_offset: int | None = None,
         wait_new_records: bool = True,
-        idle_timeout: timedelta | None = None,
         type: Any = None,
     ) -> AsyncGenerator[Item, None]:
         """Read the Stream's items in order.
 
-        The read ends after a ``Closed`` item, after an ``Idle`` item, or at the newest Record
-        when ``wait_new_records`` is False. A ``Superseded`` item withdraws earlier Records of
+        The read ends after a ``Closed`` item, or at the newest Record when
+        ``wait_new_records`` is False. A ``Superseded`` item withdraws earlier Records of
         a failed attempt, and it passes every Topic filter.
 
         Args:
@@ -125,7 +124,6 @@ class OutsideStream(_Readable):
                 ``topics`` and no prefixes, the read gives every Topic.
             from_offset: Start at this offset, inclusive. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
-            idle_timeout: End with an ``Idle`` item when no new Record comes for this long.
             type: Decode the values of Topics with no type as this type. A Topic from
                 :py:meth:`topic` with a type keeps its own.
         """
@@ -139,7 +137,6 @@ class OutsideStream(_Readable):
             default_type=type,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
-            idle_timeout=idle_timeout,
         )
 
     async def _read(
@@ -151,7 +148,6 @@ class OutsideStream(_Readable):
         default_type: Any,
         from_offset: int | None,
         wait_new_records: bool,
-        idle_timeout: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
         items = _reader.read(
             self._backend.service(self._namespace),
@@ -163,7 +159,6 @@ class OutsideStream(_Readable):
             default_type=default_type,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
-            idle_timeout=idle_timeout,
             wait_for_create=self._wait_for_create,
             run_ended=self._run_ended,
         )

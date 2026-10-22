@@ -94,7 +94,7 @@ url = "2.2"
 # crates, so the bridge sees one type of each.
 [dependencies.temporalio-streams]
 git = "https://github.com/moetemp/sdk-streams"
-rev = "3984189fa4d6c809e5489df952b234302e986f76"
+rev = "6254405544278746d98ac4bbb1f748ce174d1dc2"
 default-features = false
 optional = true
 
