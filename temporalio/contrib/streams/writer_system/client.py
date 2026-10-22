@@ -20,7 +20,6 @@ from .models import (
     CloseWritersRequest,
     CloseWritersResponse,
     OpenWriterRequest,
-    Producer,
     WriteRecordsRequest,
     WriteRecordsResponse,
     WriterResult,
