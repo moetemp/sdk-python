@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import ipaddress
+import json
 import logging
 import sys
 import traceback
@@ -459,6 +460,56 @@ def test_temporal_transfer_type_payload_converter_with_generic_value(
     payload = converter.to_payload(value)
 
     assert converter.from_payload(payload, type_hint) == value
+
+
+class NestedTransferTypeValueConverter(
+    TransferTypeConverter["NestedTransferTypeValue[Any]", dict[str, str]]
+):
+    transfer_type: type[dict[str, str]] | None = dict
+
+    def to_transfer_type(self, value: NestedTransferTypeValue[Any]) -> dict[str, str]:
+        return {"wireName": value.name}
+
+    def from_transfer_type(
+        self, value: dict[str, str], type_hint: type[NestedTransferTypeValue[Any]]
+    ) -> NestedTransferTypeValue[Any]:
+        args = typing.get_args(type_hint)
+        return NestedTransferTypeValue(value["wireName"], args[0] if args else None)
+
+
+class NestedTransferTypeValue(Generic[T]):
+    def __init__(self, name: str, kind: Any = None) -> None:
+        self.name = name
+        self.kind = kind
+
+
+transfer_type_convertible(NestedTransferTypeValueConverter)(NestedTransferTypeValue)
+
+
+@dataclass
+class HasNestedTransferTypeValues:
+    one: NestedTransferTypeValue[int]
+    many: list[NestedTransferTypeValue[str]]
+    proto: TemporalTransferTypeValueWithoutHint
+
+
+def test_transfer_type_values_nested_in_json():
+    converter = DataConverter.default.payload_converter
+    value = HasNestedTransferTypeValues(
+        one=NestedTransferTypeValue("a"),
+        many=[NestedTransferTypeValue("b")],
+        proto=TemporalTransferTypeValueWithoutHint("c"),
+    )
+    payload = converter.to_payload(value)
+    assert json.loads(payload.data) == {
+        "one": {"wireName": "a"},
+        "many": [{"wireName": "b"}],
+        "proto": {"value": "c"},
+    }
+    decoded = converter.from_payload(payload, HasNestedTransferTypeValues)
+    assert decoded.one.name == "a" and decoded.one.kind is int
+    assert decoded.many[0].name == "b" and decoded.many[0].kind is str
+    assert decoded.proto == TemporalTransferTypeValueWithoutHint("c")
 
 
 def test_transfer_type_convertible_rejects_existing_converter():

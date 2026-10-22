@@ -110,6 +110,10 @@ def transfer_type_convertible(
 ) -> _TransferTypeConvertibleDecorator[ValueT, TransferTypeT]:
     """Decorate a class with a transfer type converter class.
 
+    A value of the class takes its transfer type at the top level of a payload, and inside a
+    JSON value such as a list or a dataclass field. A dataclass is the exception inside a
+    JSON value: ``dataclasses.asdict`` writes it as its fields, and it decodes from them.
+
     .. warning::
         This API is experimental and subject to change.
     """
@@ -123,6 +127,17 @@ def _get_transfer_type_converter(
     if isinstance(converter, TransferTypeConverter):
         return converter
     return None
+
+
+def _nested_transfer_type_converter(
+    hint: object,
+) -> TransferTypeConverter[Any, Any] | None:
+    # A dataclass inside another value is written as its fields, so only other classes take
+    # their transfer type there.
+    origin = typing.get_origin(hint) or hint
+    if not inspect.isclass(origin) or dataclasses.is_dataclass(origin):
+        return None
+    return _get_transfer_type_converter(origin)
 
 
 class PayloadConverter(ABC):
@@ -674,6 +689,14 @@ class AdvancedJSONEncoder(json.JSONEncoder):
         # Datetime support
         if isinstance(o, datetime):
             return o.isoformat()
+        # A transfer type value inside another value. A dataclass never gets here, since
+        # dataclasses.asdict has already turned it into a dict.
+        converter = _get_transfer_type_converter(type(o))
+        if converter is not None:
+            value = converter.to_transfer_type(o)
+            if isinstance(value, google.protobuf.message.Message):
+                return google.protobuf.json_format.MessageToDict(value)
+            return value
         # Dataclass support
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
             return dataclasses.asdict(o)
@@ -842,6 +865,20 @@ def value_to_type(
         ret = conv.to_typed_value(hint, value)
         if ret is not JSONTypeConverter.Unhandled:
             return ret
+
+    # A transfer type value inside another value, as AdvancedJSONEncoder writes it
+    converter = _nested_transfer_type_converter(hint)
+    if converter is not None:
+        transfer_type = converter.transfer_type
+        if inspect.isclass(transfer_type) and issubclass(
+            transfer_type, google.protobuf.message.Message
+        ):
+            value = google.protobuf.json_format.ParseDict(
+                value, transfer_type(), ignore_unknown_fields=True
+            )
+        elif transfer_type is not None:
+            value = value_to_type(transfer_type, value, custom_converters)
+        return converter.from_transfer_type(value, hint)
 
     # Any or primitives
     if hint is Any:

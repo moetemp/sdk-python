@@ -17,6 +17,12 @@ from temporalio.contrib.streams._client import (
     for_handle,
     for_ref,
 )
+from temporalio.contrib.streams._defn import (
+    StreamDefinition,
+    TopicDefinition,
+    defn,
+    topic,
+)
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
     StreamBufferFullError,
@@ -30,6 +36,7 @@ from temporalio.contrib.streams._errors import (
     StreamTransportMissingError,
     StreamUnsupportedError,
 )
+from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import Closed, Record, Superseded
 from temporalio.contrib.streams._outside import OutsideStream
 from temporalio.contrib.streams._stream import StreamRef, Topic
@@ -47,10 +54,12 @@ __all__ = [
     "Record",
     "StreamBackend",
     "StreamBufferFullError",
+    "StreamDefinition",
     "StreamClosedError",
     "StreamError",
     "StreamExpiredError",
     "StreamFencedError",
+    "StreamHandle",
     "StreamNotFoundError",
     "StreamOffsetError",
     "StreamRef",
@@ -59,11 +68,14 @@ __all__ = [
     "StreamUnsupportedError",
     "Superseded",
     "Topic",
+    "TopicDefinition",
     "WorkflowStream",
     "activity_stream",
     "create_stream",
     "create_workflow_stream",
+    "defn",
     "for_handle",
     "for_ref",
+    "topic",
     "workflow_stream",
 ]
