@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 import google.protobuf.message
 
@@ -35,14 +35,49 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
 }
 
 
-class StreamBackend:
+class StreamBackend(Protocol):
+    """What a Stream plugin gives the handles. Not public. Each backend has its own class."""
+
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
+        """The Stream service for ``namespace``."""
+        ...
+
+    def for_client(self, client: temporalio.client.Client) -> StreamBackend:
+        """The backend for one client's calls. A backend that calls the server binds the
+        client's connection.
+        """
+        ...
+
+    async def open_writer(self, request: ext_pb.OpenWriterRequest) -> int:
+        """Open the writer of an Activity or client Producer, and return its id."""
+        ...
+
+    async def write_records(
+        self, writer_id: int, records: list[stream_pb.AppendRecord]
+    ) -> int:
+        """Write Records for a writer, and return the last Record's offset."""
+        ...
+
+    async def close_writer(self, writer_id: int) -> int:
+        """Drop a writer. The Stream stays open."""
+        ...
+
+    async def flush_run_buffer(
+        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
+    ) -> int:
+        """Write a run's buffered calls before a Local Activity of the run starts."""
+        ...
+
+
+class _ExtensionStreamBackend:
     """Carries Stream calls to a worker extension with the temporalio-streams methods.
 
-    A Stream plugin gives one to the facade. The five Stream service operations go through the
-    generated client, and the writer methods are the crate's own.
-
-    .. warning::
-        This API is experimental.
+    The five Stream service operations go through the generated client, and the writer
+    methods are the crate's own.
     """
 
     def __init__(self, extension: temporalio.worker.WorkerExtension) -> None:
@@ -151,7 +186,7 @@ class StreamBackend:
 class _ExtensionTransport:
     # The generated client takes a transport, so the five operations reach the extension as
     # they would reach a server later.
-    def __init__(self, backend: StreamBackend, namespace: str) -> None:
+    def __init__(self, backend: _ExtensionStreamBackend, namespace: str) -> None:
         self._backend = backend
         self._namespace = namespace
 
@@ -175,45 +210,3 @@ class _ExtensionTransport:
             },
             data=response.SerializeToString(),
         )
-
-
-def client_backend(
-    client: temporalio.client.Client, name: str | None, *, only: bool = False
-) -> tuple[str, StreamBackend]:
-    """The name and the backend of a client's Stream plugin. None picks the plugin marked
-    as the default, or else the first one. With ``only``, None needs a client with one
-    backend, since a handle with no backend name may be of any of them.
-
-    Raises:
-        StreamConfigError: The client has no Stream plugin, none of that name, or more than
-            one where ``only`` needs one.
-    """
-    backends = [
-        (
-            getattr(plugin, "backend_name", ""),
-            backend,
-            getattr(plugin, "default", False),
-        )
-        for plugin in client.config()["plugins"]
-        if isinstance(
-            backend := getattr(plugin, "_temporal_stream_backend", None), StreamBackend
-        )
-    ]
-    if not backends:
-        raise _errors.StreamConfigError(
-            "The client has no Stream plugin, such as RedisStreamPlugin"
-        )
-    if not name and only and len(backends) > 1:
-        raise _errors.StreamConfigError(
-            "The handle names no backend, and the client has more than one"
-        )
-    if not name:
-        defaults = [entry for entry in backends if entry[2]] or backends
-        return defaults[0][0], defaults[0][1].for_client(client)
-    for backend_name, backend, _ in backends:
-        if backend_name == name:
-            return backend_name, backend.for_client(client)
-    raise _errors.StreamConfigError(
-        f"The client has no Stream backend {name}. It has "
-        f"{', '.join(entry[0] for entry in backends)}."
-    )

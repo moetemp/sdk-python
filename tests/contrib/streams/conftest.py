@@ -9,8 +9,9 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 
 from temporalio.client import Client
+from temporalio.contrib.streams import StreamPlugin
 from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin, StreamPlugin
+from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 
 # Ports that other local services own.

@@ -26,7 +26,6 @@ from temporalio.contrib.streams._activity_stream import (
     SyncActivityStream,
     SyncActivityTopic,
 )
-from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._defn import (
     StreamDefinition,
@@ -48,6 +47,7 @@ from temporalio.contrib.streams._errors import (
 )
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import END, Closed, Record, Superseded
+from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams._stream_client import (
     ClientStream,
     ClientTopic,
@@ -65,7 +65,6 @@ __all__ = [
     "Closed",
     "ReadOnlyContextError",
     "Record",
-    "StreamBackend",
     "StreamClient",
     "StreamClosedError",
     "StreamConfigError",
@@ -76,6 +75,7 @@ __all__ = [
     "StreamHandle",
     "StreamNotFoundError",
     "StreamOffsetError",
+    "StreamPlugin",
     "StreamStorageError",
     "StreamUnsupportedError",
     "Superseded",

@@ -10,12 +10,12 @@ from datetime import timedelta
 
 import temporalio.runtime
 from temporalio.contrib.streams.proto import v1 as ext_pb
-from temporalio.contrib.streams.redis import StreamPlugin
+from temporalio.contrib.streams.redis import _ExtensionStreamPlugin
 
 MEMORY_EXTENSION_NAME = "temporalio-streams-memory"
 
 
-class MemoryStreamPlugin(StreamPlugin):
+class MemoryStreamPlugin(_ExtensionStreamPlugin):
     """Keeps Streams in this process, with the same rules as on Redis, for tests.
 
     Put it on the client, as with ``RedisStreamPlugin``. Every Worker and client that shares one
