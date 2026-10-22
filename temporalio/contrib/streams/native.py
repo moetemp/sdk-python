@@ -10,12 +10,8 @@ import asyncio
 import dataclasses
 import itertools
 import weakref
-<<<<<<< HEAD
-from collections.abc import Coroutine, Generator
-from datetime import timedelta
-=======
 from collections.abc import Callable, Coroutine, Generator
->>>>>>> moe/jetty/v2/j2-native-plugin
+from datetime import timedelta
 from typing import Any, NoReturn, TypeVar
 
 import google.protobuf.message
