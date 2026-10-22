@@ -48,7 +48,9 @@ _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
 class _ExtensionStreamPlugin(StreamPlugin):
-    # The Redis and memory plugins: the Stream calls go to a temporalio-streams extension.
+    # The Redis, memory and native plugins: the Stream calls go to a temporalio-streams
+    # extension.
+    _backend_class = _ExtensionStreamBackend
 
     def __init__(
         self,
@@ -68,7 +70,7 @@ class _ExtensionStreamPlugin(StreamPlugin):
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
         )
-        self._backend = _ExtensionStreamBackend(self._extension)
+        self._backend = self._backend_class(self._extension)
         self._converter = temporalio.converter.DataConverter.default
         super().__init__(
             name,
@@ -789,7 +791,7 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: Any
+    input: temporalio.worker.ExecuteActivityInput, plugin: _ExtensionStreamPlugin
 ) -> _activity.ActivityStreams:
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()
