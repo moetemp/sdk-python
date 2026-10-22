@@ -95,10 +95,16 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         ]
     # A read is direct, so the reader's History holds positions and no page of Records.
     history = await reader.fetch_history()
-    recorded = history.to_json()
-    assert base64.b64encode(POSITIONS_TYPE).decode() in recorded
-    page_type = stream_pb.ReadRecordsResponse.DESCRIPTOR.full_name.encode()
-    assert base64.b64encode(page_type).decode() not in recorded
+    assert base64.b64encode(POSITIONS_TYPE).decode() in history.to_json()
+    # The wake's answer is in History, and it holds offsets only.
+    wakes = [
+        stream_pb.ReadRecordsResponse.FromString(
+            event.nexus_operation_completed_event_attributes.result.data
+        )
+        for event in history.events
+        if event.HasField("nexus_operation_completed_event_attributes")
+    ]
+    assert wakes and not any(wake.records for wake in wakes)
     # The plugin of the client has the connection that a replay reads over. A replay reads
     # each page again once the cache is gone.
     [plugin] = native_client.config()["plugins"]
