@@ -174,3 +174,35 @@ def backend_of_client(client: temporalio.client.Client) -> StreamBackend:
     raise _errors.StreamTransportMissingError(
         "The client has no Stream plugin, such as RedisStreamPlugin"
     )
+
+
+def client_backend(
+    client: temporalio.client.Client, name: str | None
+) -> tuple[str, StreamBackend]:
+    """The name and the backend of a client's Stream plugin. None picks the first plugin.
+
+    Raises:
+        StreamTransportMissingError: The client has no Stream plugin.
+        StreamUnsupportedError: The client has no Stream plugin of that name.
+    """
+    backends = [
+        (getattr(plugin, "backend_name", ""), backend)
+        for plugin in client.config()["plugins"]
+        if isinstance(
+            backend := getattr(plugin, "_temporal_stream_backend", None), StreamBackend
+        )
+    ]
+    if not backends:
+        raise _errors.StreamTransportMissingError(
+            "The client has no Stream plugin, such as RedisStreamPlugin"
+        )
+    if not name:
+        return backends[0]
+    for backend_name, backend in backends:
+        if backend_name == name:
+            return backend_name, backend
+    raise _errors.StreamUnsupportedError(
+        f"The client has no Stream backend {name}. It has "
+        f"{', '.join(backend_name for backend_name, _ in backends)}.",
+        reason="stream_unsupported",
+    )

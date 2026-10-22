@@ -11,7 +11,6 @@ from temporalio.client import Client, WorkflowHandle
 from temporalio.common import RetryPolicy
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams._access import _AsyncTopic
 from tests.helpers import new_worker
 
 
@@ -227,7 +226,7 @@ async def test_activity_closes_and_checks_the_backend(stream_client: Client):
 
 
 @dataclass
-class _Batches(_AsyncTopic[int]):
+class _Batches(streams.ActivityTopic[int]):
     batches: list[tuple[int, ...]] = field(default_factory=list)
     fail: bool = False
 

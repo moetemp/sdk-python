@@ -7,7 +7,8 @@ from datetime import timedelta
 from types import TracebackType
 from typing import Any, Generic, TypeVar
 
-from temporalio.contrib.streams._access import _AsyncTopic
+from temporalio.contrib.streams._activity_stream import ActivityTopic
+from temporalio.contrib.streams._stream_client import ClientTopic
 
 T = TypeVar("T")
 
@@ -25,7 +26,7 @@ class BufferedPublisher(Generic[T]):
 
     def __init__(
         self,
-        topic: _AsyncTopic[T],
+        topic: ActivityTopic[T] | ClientTopic[T],
         *,
         max_delay: timedelta = timedelta(milliseconds=100),
     ) -> None:

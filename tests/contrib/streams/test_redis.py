@@ -64,7 +64,7 @@ class Agent:
         return reply
 
 
-async def read_all(stream: streams.ClientStream) -> list[streams.Record | object]:
+async def read_all(stream: streams.OutsideStream) -> list[streams.Record | object]:
     return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
 
 
