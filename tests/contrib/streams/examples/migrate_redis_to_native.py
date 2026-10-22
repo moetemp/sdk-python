@@ -36,29 +36,26 @@ class _Chat:
     def more(self, text: str) -> None:
         self._more.append(text)
 
-    async def chat(self, stream: stream_workflow.WorkflowStream[Events]) -> str | None:
+    async def chat(self, stream: stream_workflow.WorkflowStream[Events]) -> None:
         await stream.topic(Events.tokens).publish("hello")
         await workflow.wait_condition(lambda: bool(self._more))
         await stream.topic(Events.tokens).publish(*self._more)
-        return stream.backend
 
 
 @workflow.defn(name="Chat")
 class ChatBeforeTheMove(_Chat):
     @workflow.run
-    async def run(self) -> str | None:
-        return await self.chat(await stream_workflow.create_stream(Events))
+    async def run(self) -> None:
+        await self.chat(await stream_workflow.create_stream(Events))
 
 
 @workflow.defn(name="Chat")
 class Chat(_Chat):
     @workflow.run
-    async def run(self) -> str | None:
+    async def run(self) -> None:
         # A run from before the move has no patch marker, so it keeps its Redis Stream.
         backend = "native" if workflow.patched("streams-on-native") else None
-        return await self.chat(
-            await stream_workflow.create_stream(Events, backend=backend)
-        )
+        await self.chat(await stream_workflow.create_stream(Events, backend=backend))
 
 
 async def connect_before(target_host: str, redis_url: str) -> Client:
@@ -71,16 +68,18 @@ async def connect_during(target_host: str, redis_url: str) -> Client:
     )
 
 
-async def read(client: Client, handle: WorkflowHandle[Any, str | None]) -> list[str]:
-    backend = await handle.result()
+async def read(client: Client, handle: WorkflowHandle[Any, None]) -> list[str]:
+    await handle.result()
+    # A UI that reads chats from both sides of the move looks on native first, then Redis.
     stream = streams.StreamClient(client).workflow_stream(
-        handle, Events, backend=backend
+        handle, Events, backend=("native", "redis")
     )
-    return [
-        f"{backend}: {item.data}"
+    tokens = [
+        item.data
         async for item in stream.subscribe()
         if isinstance(item, streams.Record)
     ]
+    return [f"{stream.backend}: {token}" for token in tokens]
 
 
 async def main(before: Client, during: Client, task_queue: str) -> list[str]:

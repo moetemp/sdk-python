@@ -9,7 +9,6 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
-from temporalio.plugin import SimplePlugin
 from tests.contrib.streams.conftest import NATIVE_NAMESPACE, NATIVE_TARGET
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
@@ -109,7 +108,7 @@ LANES = ["memory", "redis", "native"]
 
 def lane_plugins(
     lane: str, request: pytest.FixtureRequest
-) -> tuple[SimplePlugin, SimplePlugin]:
+) -> tuple[streams.StreamPlugin, streams.StreamPlugin]:
     """The plugins of a lane: one named `redis` and one named `native`."""
     if lane == "memory":
         return MemoryStreamPlugin(name="redis"), MemoryStreamPlugin(name="native")
@@ -120,7 +119,9 @@ def lane_plugins(
     return redis, NativeStreamPlugin()
 
 
-async def lane_client(lane: str, client: Client, plugins: list[SimplePlugin]) -> Client:
+async def lane_client(
+    lane: str, client: Client, plugins: list[streams.StreamPlugin]
+) -> Client:
     if lane != "native":
         config = client.config()
         config["plugins"] = plugins
