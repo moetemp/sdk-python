@@ -2,16 +2,26 @@
 
 import uuid
 
+import pytest
+
 from temporalio.client import Client
 from temporalio.contrib import streams
+from temporalio.contrib.streams.native import NativeStreamPlugin
+from temporalio.contrib.streams.redis import RedisStreamPlugin
+from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.plugin import SimplePlugin
+from tests.contrib.streams.conftest import NATIVE_NAMESPACE, NATIVE_TARGET
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
     agent_publishes_turns,
     client_creates_stream,
+    migrate_redis_to_native,
     resume_from_offset,
     turn_scoped_stream,
+    two_backends,
     ui_backend_reads,
     worker_setup,
+    workflow_reader,
 )
 
 
@@ -89,3 +99,74 @@ async def test_worker_setup_on_redis(client: Client, redis_url: str):
     ]
     migrating = await worker_setup.connect_while_migrating(target, redis_url, redis_url)
     assert await worker_setup.create_on_second_backend(migrating) == "redis-b"
+
+
+# The Jetty v2 examples run with a native stand-in, a memory Store with the backend name
+# `native`, and on a server with the Stream service when TEMPORAL_STREAMS_NATIVE_TARGET is set.
+LANES = ["memory", "redis", "native"]
+
+
+def lane_plugins(
+    lane: str, request: pytest.FixtureRequest
+) -> tuple[SimplePlugin, SimplePlugin]:
+    """The plugins of a lane: one named `redis` and one named `native`."""
+    if lane == "memory":
+        return MemoryStreamPlugin(name="redis"), MemoryStreamPlugin(name="native")
+    redis_url = request.getfixturevalue("redis_url")
+    redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+    if lane == "redis":
+        return redis, MemoryStreamPlugin(name="native")
+    return redis, NativeStreamPlugin()
+
+
+async def lane_client(lane: str, client: Client, plugins: list[SimplePlugin]) -> Client:
+    if lane != "native":
+        config = client.config()
+        config["plugins"] = plugins
+        return Client(**config)
+    if not NATIVE_TARGET:
+        pytest.skip(
+            "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
+        )
+    return await Client.connect(
+        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=plugins
+    )
+
+
+@pytest.mark.parametrize("lane", LANES)
+async def test_two_backends(lane: str, client: Client, request: pytest.FixtureRequest):
+    two = await lane_client(lane, client, list(lane_plugins(lane, request)))
+    assert await two_backends.main(two, task_queue()) == {
+        "audit": ["started", "summarized"],
+        "live": ["hello", "there", "summary"],
+    }
+
+
+@pytest.mark.parametrize("lane", LANES)
+async def test_workflow_reader(
+    lane: str, client: Client, request: pytest.FixtureRequest
+):
+    # Each lane reads from one backend: the memory Store, Redis or the server.
+    plugin = {"memory": 0, "redis": 0, "native": 1}[lane]
+    one = await lane_client(lane, client, [lane_plugins(lane, request)[plugin]])
+    assert await workflow_reader.main(one, task_queue()) == [
+        "find",
+        "the",
+        "answer",
+        "agent said FIND THE ANSWER",
+    ]
+
+
+@pytest.mark.parametrize("lane", LANES)
+async def test_migrate_redis_to_native(
+    lane: str, client: Client, request: pytest.FixtureRequest
+):
+    redis, native = lane_plugins(lane, request)
+    before = await lane_client(lane, client, [redis])
+    during = await lane_client(lane, client, [redis, native])
+    assert await migrate_redis_to_native.main(before, during, task_queue()) == [
+        "redis: hello",
+        "redis: old chat goes on",
+        "native: hello",
+        "native: new chat",
+    ]
