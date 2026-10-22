@@ -620,7 +620,9 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     ]: ...
     @property
     def previous_completed_task(self) -> global___WorkflowTaskEpoch:
-        """Workflow only. The failed tasks are those since this run's last flush to this Stream."""
+        """Local Activity only. The run's last completed Workflow Task and its failed or timed out
+        Workflow Tasks, so the batch withdraws the run's orphaned Local Activity Records.
+        """
     @property
     def failed_tasks(
         self,

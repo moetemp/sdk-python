@@ -35,15 +35,40 @@ def _context(
 
 
 def _producer(streams: _activity.ActivityStreams) -> models.Producer:
-    # Every attempt writes as one Producer epoch with one sequence, so the backend drops the
-    # copy that a retry sends.
+    # Every attempt of one Workflow Task writes as one epoch with one sequence, so the backend
+    # drops the copy that a retry sends. A later task has a higher epoch, so its write
+    # withdraws what a failed task wrote under the same call key.
     producer = streams.producer
+    epoch = producer.epoch
+    started = epoch.task_started_time if epoch.HasField("task_started_time") else None
     return models.Producer(
         kind=producer.kind,
         id=producer.id,
         run_id=producer.run_id or None,
-        epoch=models.ProducerEpoch(attempt=1),
+        epoch=models.ProducerEpoch(
+            task_started_event_id=epoch.task_started_event_id or None,
+            task_attempt=epoch.task_attempt or None,
+            task_started_time=models.Timestamp(
+                seconds=started.seconds, nanos=started.nanos
+            )
+            if started is not None
+            else None,
+            attempt=1,
+        ),
     )
+
+
+def _history(streams: _activity.ActivityStreams) -> dict[str, Any]:
+    # The run's task history, so the write withdraws the run's orphaned Local Activity Records.
+    previous = streams.previous_completed_task
+    return {
+        "previous_completed_task": models.WorkflowTaskEpoch(
+            started_event_id=previous.started_event_id
+        )
+        if previous is not None
+        else None,
+        "failed_tasks": list(streams.failed_tasks),
+    }
 
 
 def _ref(ref: stream_pb.StreamRef) -> models.StreamRef:
@@ -100,6 +125,7 @@ async def append_records(request: stream_pb.AppendRecordsRequest) -> int:
                 for record in request.records
             ],
             withdraw_run=request.withdraw_run or None,
+            **_history(streams),
         )
     )
     return response.last_offset or 0
@@ -122,6 +148,7 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
             if request.HasField("result")
             else None,
             failure=failure,
+            **_history(streams),
         )
     )
     return 0

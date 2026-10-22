@@ -120,6 +120,8 @@ class OpenWriterRequest(google.protobuf.message.Message):
     PRODUCER_FIELD_NUMBER: builtins.int
     MAX_BATCH_SIZE_FIELD_NUMBER: builtins.int
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
+    PREVIOUS_COMPLETED_TASK_FIELD_NUMBER: builtins.int
+    FAILED_TASKS_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(
@@ -134,6 +136,19 @@ class OpenWriterRequest(google.protobuf.message.Message):
     @property
     def max_retry_duration(self) -> google.protobuf.duration_pb2.Duration:
         """How long a write retries a Store failure. Empty is 10 s."""
+    @property
+    def previous_completed_task(
+        self,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch:
+        """Local Activity only. The run's task facts, which each batch sends as AppendRecords does, so
+        the writes withdraw the run's orphaned Local Activity Records.
+        """
+    @property
+    def failed_tasks(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.int
+    ]: ...
     def __init__(
         self,
         *,
@@ -144,12 +159,17 @@ class OpenWriterRequest(google.protobuf.message.Message):
         | None = ...,
         max_batch_size: builtins.int = ...,
         max_retry_duration: google.protobuf.duration_pb2.Duration | None = ...,
+        previous_completed_task: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
+        | None = ...,
+        failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
             "max_retry_duration",
             b"max_retry_duration",
+            "previous_completed_task",
+            b"previous_completed_task",
             "producer",
             b"producer",
             "stream",
@@ -159,12 +179,16 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "failed_tasks",
+            b"failed_tasks",
             "max_batch_size",
             b"max_batch_size",
             "max_retry_duration",
             b"max_retry_duration",
             "namespace",
             b"namespace",
+            "previous_completed_task",
+            b"previous_completed_task",
             "producer",
             b"producer",
             "stream",

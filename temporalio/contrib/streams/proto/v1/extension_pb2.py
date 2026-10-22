@@ -21,7 +21,7 @@ from temporalio.api.streamservice.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"\xb7\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\x0e\x64urable_writesR\x0f\x64urable_timeout"\x9c\x02\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.DurationJ\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
+    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"\xb7\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\x0e\x64urable_writesR\x0f\x64urable_timeout"\x85\x03\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration\x12Q\n\x17previous_completed_task\x18\x08 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12\x14\n\x0c\x66\x61iled_tasks\x18\t \x03(\x03J\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
 )
 
 
@@ -150,21 +150,21 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _REDISSTREAMCONFIG._serialized_start = 153
     _REDISSTREAMCONFIG._serialized_end = 464
     _OPENWRITERREQUEST._serialized_start = 467
-    _OPENWRITERREQUEST._serialized_end = 751
-    _OPENWRITERRESPONSE._serialized_start = 753
-    _OPENWRITERRESPONSE._serialized_end = 792
-    _WRITERECORDSREQUEST._serialized_start = 794
-    _WRITERECORDSREQUEST._serialized_end = 896
-    _WRITERECORDSRESPONSE._serialized_start = 898
-    _WRITERECORDSRESPONSE._serialized_end = 963
-    _CLOSEWRITERREQUEST._serialized_start = 965
-    _CLOSEWRITERREQUEST._serialized_end = 1004
-    _CLOSEWRITERRESPONSE._serialized_start = 1006
-    _CLOSEWRITERRESPONSE._serialized_end = 1048
-    _CLOSEWRITERSREQUEST._serialized_start = 1050
-    _CLOSEWRITERSREQUEST._serialized_end = 1071
-    _CLOSEWRITERSRESPONSE._serialized_start = 1073
-    _CLOSEWRITERSRESPONSE._serialized_end = 1111
-    _STREAMERRORDETAILS._serialized_start = 1113
-    _STREAMERRORDETAILS._serialized_end = 1149
+    _OPENWRITERREQUEST._serialized_end = 856
+    _OPENWRITERRESPONSE._serialized_start = 858
+    _OPENWRITERRESPONSE._serialized_end = 897
+    _WRITERECORDSREQUEST._serialized_start = 899
+    _WRITERECORDSREQUEST._serialized_end = 1001
+    _WRITERECORDSRESPONSE._serialized_start = 1003
+    _WRITERECORDSRESPONSE._serialized_end = 1068
+    _CLOSEWRITERREQUEST._serialized_start = 1070
+    _CLOSEWRITERREQUEST._serialized_end = 1109
+    _CLOSEWRITERRESPONSE._serialized_start = 1111
+    _CLOSEWRITERRESPONSE._serialized_end = 1153
+    _CLOSEWRITERSREQUEST._serialized_start = 1155
+    _CLOSEWRITERSREQUEST._serialized_end = 1176
+    _CLOSEWRITERSRESPONSE._serialized_start = 1178
+    _CLOSEWRITERSRESPONSE._serialized_end = 1216
+    _STREAMERRORDETAILS._serialized_start = 1218
+    _STREAMERRORDETAILS._serialized_end = 1254
 # @@protoc_insertion_point(module_scope)

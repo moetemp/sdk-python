@@ -193,40 +193,21 @@ pub fn new_worker_extension(
 /// An extension for the SDK's own tests. Release builds leave it out.
 #[cfg(debug_assertions)]
 mod test_extension {
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    };
-
     use pyo3::exceptions::PyValueError;
     use pyo3::PyResult;
-    use temporalio_sdk_core::{
-        ExtensionError, WorkerExtension, WorkflowTaskCompletionInfo, WorkflowTaskInterceptError,
-        WorkflowTaskInterceptor,
-    };
+    use temporalio_sdk_core::{ExtensionError, WorkerExtension};
 
     pub(super) const NAME: &str = "temporalio-test";
 
-    pub(super) struct TestExtension {
-        interceptor: Arc<CountingInterceptor>,
-    }
+    pub(super) struct TestExtension;
 
     impl TestExtension {
-        /// The config is empty, or `fail_before_complete` to fail every workflow task.
+        /// The config must be empty.
         pub(super) fn new(config: &[u8]) -> PyResult<Self> {
-            let fail_before_complete = match config {
-                b"" => false,
-                b"fail_before_complete" => true,
-                _ => return Err(PyValueError::new_err("Unknown test extension config")),
-            };
-            Ok(Self {
-                interceptor: Arc::new(CountingInterceptor {
-                    fail_before_complete,
-                    before: AtomicU64::new(0),
-                    after: AtomicU64::new(0),
-                    accepted: AtomicU64::new(0),
-                }),
-            })
+            if !config.is_empty() {
+                return Err(PyValueError::new_err("Unknown test extension config"));
+            }
+            Ok(Self)
         }
     }
 
@@ -236,23 +217,11 @@ mod test_extension {
             NAME
         }
 
-        fn workflow_task_interceptor(&self) -> Option<Arc<dyn WorkflowTaskInterceptor>> {
-            Some(self.interceptor.clone())
-        }
-
         fn call(&self, method: &str, input: &[u8]) -> Result<Vec<u8>, ExtensionError> {
             match method {
                 "Echo" => Ok(input.to_vec()),
                 "Fail" => Err(ExtensionError::new(tonic::Code::NotFound, "test failure")
                     .with_details(input.to_vec())),
-                // Comma separated, so a test reads it with no proto.
-                "Counts" => Ok(format!(
-                    "{},{},{}",
-                    self.interceptor.before.load(Ordering::SeqCst),
-                    self.interceptor.after.load(Ordering::SeqCst),
-                    self.interceptor.accepted.load(Ordering::SeqCst)
-                )
-                .into_bytes()),
                 _ => Err(ExtensionError::unknown_method(method)),
             }
         }
@@ -264,36 +233,6 @@ mod test_extension {
         ) -> Result<Vec<u8>, ExtensionError> {
             tokio::task::yield_now().await;
             self.call(&method, &input)
-        }
-    }
-
-    struct CountingInterceptor {
-        fail_before_complete: bool,
-        before: AtomicU64,
-        after: AtomicU64,
-        accepted: AtomicU64,
-    }
-
-    #[async_trait::async_trait]
-    impl WorkflowTaskInterceptor for CountingInterceptor {
-        async fn before_complete(
-            &self,
-            _task: &WorkflowTaskCompletionInfo,
-        ) -> Result<(), WorkflowTaskInterceptError> {
-            self.before.fetch_add(1, Ordering::SeqCst);
-            if self.fail_before_complete {
-                return Err(WorkflowTaskInterceptError::new(
-                    "test extension refused the task",
-                ));
-            }
-            Ok(())
-        }
-
-        async fn after_complete(&self, _task: &WorkflowTaskCompletionInfo, accepted: bool) {
-            self.after.fetch_add(1, Ordering::SeqCst);
-            if accepted {
-                self.accepted.fetch_add(1, Ordering::SeqCst);
-            }
         }
     }
 }

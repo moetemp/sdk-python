@@ -543,9 +543,17 @@ def _activity_streams(
     key = input.headers.get(_KEY_HEADER)
     key_text = converter.from_payload(key, str) if key is not None else ""
     epoch = stream_pb.ProducerEpoch(attempt=info.attempt)
+    previous: stream_pb.WorkflowTaskEpoch | None = None
+    failed: tuple[int, ...] = ()
     if info.is_local:
         task = info.workflow_task
         if task is not None:
+            # Always set, with 0 for none completed. An unset one turns off the withdrawal of
+            # the run's orphaned Local Activity Records.
+            previous = stream_pb.WorkflowTaskEpoch(
+                started_event_id=task.previous_started_event_id
+            )
+            failed = tuple(task.failed_tasks)
             epoch.task_started_event_id = task.started_event_id
             epoch.task_attempt = task.attempt
             if task.started_time is not None:
@@ -580,4 +588,6 @@ def _activity_streams(
         producer=producer,
         loop=asyncio.get_running_loop(),
         backend_name=plugin.backend_name,
+        previous_completed_task=previous,
+        failed_tasks=failed,
     )
