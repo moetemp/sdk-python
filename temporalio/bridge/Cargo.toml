@@ -94,13 +94,14 @@ url = "2.2"
 # crates, so the bridge sees one type of each.
 [dependencies.temporalio-streams]
 git = "https://github.com/moetemp/sdk-streams"
-rev = "ef17adf7b4532ac652d53201f7e8703082e4bbb0"
+rev = "037df9fd030e878c34eca72072be6adc56b8bd3b"
 default-features = false
 optional = true
 
 # The key must match the sdk-rust URL in the sdk-streams manifest byte for byte, or Cargo
 # ignores the patch with only a warning.
 [patch."https://github.com/moetemp/sdk-rust"]
+temporalio-client = { path = "./sdk-core/crates/client" }
 temporalio-common = { path = "./sdk-core/crates/common" }
 temporalio-sdk-core = { path = "./sdk-core/crates/sdk-core" }
 
