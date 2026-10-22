@@ -1,5 +1,7 @@
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.client import Client
@@ -40,5 +42,39 @@ async def test_plugin_cleanup_awaits_after_worker_exit(client: Client):
     ):
         pass
     assert plugin.cleanup_result is not None
-    # The caller's own awaits after the block must not be cancelled.
+    # The caller can still await after the block.
     await client.count_workflows()
+
+
+class StuckCleanupPlugin(SimplePlugin):
+    def __init__(self) -> None:
+        super().__init__("test-stuck-cleanup")
+        self.cancelled = asyncio.Event()
+
+    async def run_worker(
+        self, worker: Worker, next: Callable[[Worker], Awaitable[None]]
+    ) -> None:
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+
+async def test_plugin_cleanup_is_cancelled_after_plugin_shutdown_timeout(
+    client: Client,
+):
+    plugin = StuckCleanupPlugin()
+    async with Worker(
+        client,
+        task_queue=f"tq-{uuid.uuid4()}",
+        workflows=[NothingWorkflow],
+        plugins=[plugin],
+        plugin_shutdown_timeout=timedelta(milliseconds=100),
+    ):
+        pass
+    # The cancel reaches the cleanup code on a later loop iteration, so wait for it.
+    await asyncio.wait_for(plugin.cancelled.wait(), timeout=10)
