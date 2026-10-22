@@ -13,10 +13,11 @@ import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._access import Access, _AsyncTopic, read_spec
-from temporalio.contrib.streams._backend import StreamBackend, client_backend
+from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import End
+from temporalio.contrib.streams._plugin import client_backend
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import models
