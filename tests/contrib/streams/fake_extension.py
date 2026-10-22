@@ -76,6 +76,25 @@ class FakeExtension(WorkerExtension):
             writer_id = len(self.writers) + 1
             self.writers[writer_id] = (open_writer.stream.id, open_writer.producer)
             return ext_pb.OpenWriterResponse(writer_id=writer_id).SerializeToString()
+        if method == "WriteRecords":
+            write = ext_pb.WriteRecordsRequest.FromString(input)
+            stream_id, producer = self.writers[write.writer_id]
+            offsets = [
+                self._append(
+                    stream_id,
+                    stream_pb.StreamRecord(
+                        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA,
+                        topic=record.topic,
+                        body=record.body,
+                        producer=producer,
+                    ),
+                )
+                for record in write.records
+            ]
+            return ext_pb.WriteRecordsResponse(
+                first_offset=offsets[0] if offsets else 0,
+                last_offset=offsets[-1] if offsets else 0,
+            ).SerializeToString()
         if method in ("FlushWriter", "CloseWriter"):
             return ext_pb.FlushWriterResponse(
                 last_offset=self.next_offset - 1
@@ -116,8 +135,7 @@ class FakeExtension(WorkerExtension):
         stream = self.streams[request.stream.id]
         offset = request.from_offset or 1
         wait = request.wait.ToTimedelta().total_seconds()
-        idle = request.idle_timeout.ToTimedelta().total_seconds()
-        until = loop.time() + (min(wait, idle) if idle else wait)
+        until = loop.time() + wait
         while True:
             found = [
                 record
@@ -140,14 +158,6 @@ class FakeExtension(WorkerExtension):
                 )
             left = until - loop.time()
             if left <= 0:
-                if idle and wait >= idle:
-                    idle_record = stream_pb.StreamRecord(
-                        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_IDLE,
-                        offset=offset,
-                    )
-                    return stream_pb.ReadRecordsResponse(
-                        records=[idle_record], next_offset=offset, done=True
-                    )
                 return stream_pb.ReadRecordsResponse(next_offset=offset)
             try:
                 await asyncio.wait_for(stream.changed.wait(), left)

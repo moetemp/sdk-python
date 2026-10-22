@@ -213,9 +213,14 @@ class WorkflowStream(StreamHandle[E]):
         if not values:
             raise TypeError("publish takes one or more values")
         self._check("write to")
-        _append_records.append_records(
-            stream=self._model_ref(),
-            records=[models.AppendRecord(topic=topic, body=value) for value in values],
+        # The backend's answer has no offsets that replay could give again, so it is dropped.
+        _now(
+            _append_records.append_records(
+                stream=self._model_ref(),
+                records=[
+                    models.AppendRecord(topic=topic, body=value) for value in values
+                ],
+            )
         )
 
     async def close(
@@ -228,8 +233,10 @@ class WorkflowStream(StreamHandle[E]):
         """
         run_stream = self._check("close")
         run_stream.closed = True
-        _close_stream.close_stream(
-            stream=self._model_ref(), result=result, failure=failure
+        _now(
+            _close_stream.close_stream(
+                stream=self._model_ref(), result=result, failure=failure
+            )
         )
 
     async def __aenter__(self) -> WorkflowStream[E]:
@@ -278,6 +285,7 @@ async def create_stream(
     *,
     name: str | None = None,
     retention: timedelta | None = None,
+    auto_close: timedelta | None = None,
     close_with_run: bool = True,
     backend: str | None = None,
 ) -> WorkflowStream[E]:
@@ -292,6 +300,8 @@ async def create_stream(
         name: The Stream name. Defaults to the definition's name. Give one Stream per turn,
             for example, its own name.
         retention: How long the Records stay after the close. Defaults to the backend's.
+        auto_close: Close the Stream with no result when no Record was appended for this
+            long, so a Stream that nobody closes does not stay open. Defaults to never.
         close_with_run: Close the Stream when the run chain closes, with the result or the
             failure of its last run. A run that continues as new passes it on.
         backend: The name of the backend. Defaults to the Worker's.
@@ -304,7 +314,11 @@ async def create_stream(
     """
     stream = _own_handle(definition, name, _check_backend(backend, "create"))
     run_stream = stream._check("create")
-    _now(_create_stream.create_stream(stream_id=stream.id, retention=retention))
+    _now(
+        _create_stream.create_stream(
+            stream_id=stream.id, retention=retention, auto_close=auto_close
+        )
+    )
     run_stream.close_with_run = run_stream.close_with_run or close_with_run
     return stream
 

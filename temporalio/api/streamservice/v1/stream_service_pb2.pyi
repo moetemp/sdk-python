@@ -72,10 +72,6 @@ class _StreamRecordKindEnumTypeWrapper(
     STREAM_RECORD_KIND_SUPERSEDED: _StreamRecordKind.ValueType  # 2
     """Lua flags the first batch of a new epoch. The read makes this Record from the flag."""
     STREAM_RECORD_KIND_CLOSE: _StreamRecordKind.ValueType  # 3
-    STREAM_RECORD_KIND_IDLE: _StreamRecordKind.ValueType  # 4
-    """The last Record of a read that saw no new Record for idle_timeout. Its offset is the
-    newest offset read + 1, the place to resume from.
-    """
 
 class StreamRecordKind(
     _StreamRecordKind, metaclass=_StreamRecordKindEnumTypeWrapper
@@ -86,10 +82,6 @@ STREAM_RECORD_KIND_DATA: StreamRecordKind.ValueType  # 1
 STREAM_RECORD_KIND_SUPERSEDED: StreamRecordKind.ValueType  # 2
 """Lua flags the first batch of a new epoch. The read makes this Record from the flag."""
 STREAM_RECORD_KIND_CLOSE: StreamRecordKind.ValueType  # 3
-STREAM_RECORD_KIND_IDLE: StreamRecordKind.ValueType  # 4
-"""The last Record of a read that saw no new Record for idle_timeout. Its offset is the
-newest offset read + 1, the place to resume from.
-"""
 global___StreamRecordKind = StreamRecordKind
 
 class _StreamStatus:
@@ -144,22 +136,31 @@ class StreamRef(google.protobuf.message.Message):
     ID_FIELD_NUMBER: builtins.int
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     FIRST_EXECUTION_RUN_ID_FIELD_NUMBER: builtins.int
+    BACKEND_FIELD_NUMBER: builtins.int
     id: builtins.str
     workflow_id: builtins.str
     """The Workflow that owns the Stream. Set on a Workflow's ref, empty on a standalone,
     client or Activity ref. The Store keys on id only and never reads these.
     """
     first_execution_run_id: builtins.str
+    backend: builtins.str
+    """The name of the backend that holds the Stream, as the Worker and client config register
+    it, so every process routes a ref it receives. Empty is the default backend. The Store
+    never reads it.
+    """
     def __init__(
         self,
         *,
         id: builtins.str = ...,
         workflow_id: builtins.str = ...,
         first_execution_run_id: builtins.str = ...,
+        backend: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "backend",
+            b"backend",
             "first_execution_run_id",
             b"first_execution_run_id",
             "id",
@@ -469,7 +470,9 @@ class StreamRecord(google.protobuf.message.Message):
 global___StreamRecord = StreamRecord
 
 class CreateStreamRequest(google.protobuf.message.Message):
-    """Idempotent for one id and one Retention. ALREADY_EXISTS for another Retention."""
+    """Idempotent for one id, one Retention and one auto_close. ALREADY_EXISTS for another
+    Retention or another auto_close.
+    """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -477,6 +480,7 @@ class CreateStreamRequest(google.protobuf.message.Message):
     STREAM_ID_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
     WITHDRAW_RUN_FIELD_NUMBER: builtins.int
+    AUTO_CLOSE_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     stream_id: builtins.str
     """Required from Workflow code."""
@@ -485,6 +489,13 @@ class CreateStreamRequest(google.protobuf.message.Message):
         """The age after which a Record is dropped. Empty is the Store default."""
     withdraw_run: builtins.str
     """Workflow only. A retry run's first create: the previous run, whose Records it withdraws."""
+    @property
+    def auto_close(self) -> google.protobuf.duration_pb2.Duration:
+        """Close the Stream with no result when no Record was appended for this long, counted from
+        the create. Empty never closes on its own. It is separate from Retention and the safety
+        TTL. The Store applies it on the next access, so no call sees the Stream open after the
+        period. UNIMPLEMENTED (detail stream_unsupported) on a Store that can't.
+        """
     def __init__(
         self,
         *,
@@ -492,13 +503,19 @@ class CreateStreamRequest(google.protobuf.message.Message):
         stream_id: builtins.str = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
         withdraw_run: builtins.str = ...,
+        auto_close: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["retention", b"retention"]
+        self,
+        field_name: typing_extensions.Literal[
+            "auto_close", b"auto_close", "retention", b"retention"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "auto_close",
+            b"auto_close",
             "namespace",
             b"namespace",
             "retention",
@@ -746,7 +763,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     WAIT_FIELD_NUMBER: builtins.int
     CREATE_WAIT_FIELD_NUMBER: builtins.int
-    IDLE_TIMEOUT_FIELD_NUMBER: builtins.int
     TOPIC_PREFIXES_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
@@ -768,11 +784,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         NOT_FOUND. At most 60 s.
         """
     @property
-    def idle_timeout(self) -> google.protobuf.duration_pb2.Duration:
-        """End the read with an IDLE Record when no new Record comes for this long. Empty never
-        ends on idle. The facade counts it across reads, since one read waits at most 60 s.
-        """
-    @property
     def topic_prefixes(
         self,
     ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
@@ -790,20 +801,12 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         max_records: builtins.int = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         create_wait: google.protobuf.duration_pb2.Duration | None = ...,
-        idle_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         topic_prefixes: collections.abc.Iterable[builtins.str] | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "create_wait",
-            b"create_wait",
-            "idle_timeout",
-            b"idle_timeout",
-            "stream",
-            b"stream",
-            "wait",
-            b"wait",
+            "create_wait", b"create_wait", "stream", b"stream", "wait", b"wait"
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -813,8 +816,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"create_wait",
             "from_offset",
             b"from_offset",
-            "idle_timeout",
-            b"idle_timeout",
             "max_records",
             b"max_records",
             "namespace",
@@ -897,24 +898,34 @@ class DescribeStreamResponse(google.protobuf.message.Message):
     STATUS_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
+    AUTO_CLOSE_FIELD_NUMBER: builtins.int
     status: global___StreamStatus.ValueType
     last_offset: builtins.int
     """Zero when the Stream has no Record."""
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration: ...
+    @property
+    def auto_close(self) -> google.protobuf.duration_pb2.Duration:
+        """The auto_close of the create. Empty when the Stream has none."""
     def __init__(
         self,
         *,
         status: global___StreamStatus.ValueType = ...,
         last_offset: builtins.int = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
+        auto_close: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["retention", b"retention"]
+        self,
+        field_name: typing_extensions.Literal[
+            "auto_close", b"auto_close", "retention", b"retention"
+        ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "auto_close",
+            b"auto_close",
             "last_offset",
             b"last_offset",
             "retention",

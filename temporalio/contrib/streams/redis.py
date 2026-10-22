@@ -68,6 +68,7 @@ class StreamPlugin(SimplePlugin):
         ``backend_name`` is the name that Stream handles carry for this backend.
         """
         self._backend_name = backend_name
+        config.backend = backend_name
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
         )
@@ -280,6 +281,8 @@ async def _encode_call(
         )
         if request.retention is not None:
             create.retention.FromTimedelta(request.retention)
+        if request.auto_close is not None:
+            create.auto_close.FromTimedelta(request.auto_close)
         return ext_pb.WorkflowCall(create=create)
     ref = request.stream or models.StreamRef(id="")
     stream = stream_pb.StreamRef(
@@ -595,6 +598,7 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         token = _activity.current.set(streams)
         try:
+            await _flush_run_before_local_activity(streams)
             if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
@@ -610,6 +614,24 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
             return result
         finally:
             _activity.current.reset(token)
+
+
+async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -> None:
+    # The run's buffered Records go before the Local Activity's, in the epoch of the Workflow
+    # Task that dispatched it. A failure fails the attempt, and the run's next completion
+    # fails too, so its retry withdraws what was written.
+    info = temporalio.activity.info()
+    task = info.workflow_task
+    if not info.is_local or task is None or not info.workflow_run_id:
+        return
+    epoch = stream_pb.WorkflowTaskEpoch(
+        started_event_id=task.started_event_id, attempt=task.attempt
+    )
+    if task.started_time is not None:
+        epoch.started_time.FromDatetime(task.started_time)
+    await streams.backend.flush_run_buffer(
+        streams.namespace, info.workflow_run_id, epoch
+    )
 
 
 def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:

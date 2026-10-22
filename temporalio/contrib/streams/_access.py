@@ -33,10 +33,7 @@ class Access:
         """Write the values as Records now, and return the offset of the last one."""
         if not values:
             raise TypeError("publish takes one or more values")
-        writer = self.writer()
-        for value in values:
-            writer.publish(topic, value, False)
-        return await writer.flush()
+        return await self.writer().write(topic, values)
 
     def read(
         self,
