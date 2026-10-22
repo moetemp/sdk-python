@@ -24,7 +24,7 @@ _MAX_WAIT = timedelta(seconds=60)
 async def read(
     service: service_client.StreamServiceClient,
     converter: temporalio.converter.DataConverter,
-    stream_id: str,
+    stream: models.StreamRef,
     *,
     topics: Sequence[str] | None,
     topic_prefixes: Sequence[str] = (),
@@ -47,7 +47,7 @@ async def read(
             else None
         )
         return models.ReadRecordsRequest(
-            stream=models.StreamRef(id=stream_id),
+            stream=stream,
             # END is only the first page's start. Each answer's next offset pins later pages.
             from_offset=offset if isinstance(offset, int) else None,
             start=ReadStart.READ_START_END
