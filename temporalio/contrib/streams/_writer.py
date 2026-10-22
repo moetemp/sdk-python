@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -163,6 +163,22 @@ class StreamWriter:
             self._writer_id,
             [stream_pb.AppendRecord(topic=topic, body=body.payload)],
             force_flush,
+        )
+
+    async def write(self, topic: str, values: Sequence[Any]) -> int:
+        """Write the values as Records now, after the ones published so far. Returns the last
+        Record's offset.
+        """
+        if self._closed:
+            raise _errors.StreamClosedError(
+                "The writer is closed", reason="stream_closed"
+            )
+        await self._settle()
+        writer_id = await self.open()
+        bodies = await self._converter.encode(list(values))
+        return await self._backend.write_records(
+            writer_id,
+            [stream_pb.AppendRecord(topic=topic, body=body) for body in bodies],
         )
 
     async def settle(self) -> None:

@@ -45,7 +45,7 @@ async def read(handle: WorkflowHandle[Any, Any]) -> list[object]:
     )
     stream.topic("turns", type=Turn)
     stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
+    return [item async for item in stream.subscribe()]
 
 
 def records(items: list[object]) -> list[streams.Record[Any]]:
@@ -261,3 +261,45 @@ async def test_buffered_publisher_raises_a_failed_batch():
             publisher.publish(1)
     with pytest.raises(TypeError):
         streams.BufferedPublisher(topic).publish()
+
+
+@activity.defn
+async def local_step(stream: streams.ActivityStream[Events]) -> list[Any]:
+    # The run's buffered create and Records are in the Store before a Local Activity starts.
+    seen = [
+        item.data
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+    await stream.topic(Events.tokens).publish("local")
+    return seen
+
+
+@workflow.defn
+class LocalOrder:
+    @workflow.run
+    async def run(self) -> list[Any]:
+        stream = await stream_workflow.create_stream(Events)
+        tokens = stream.topic(Events.tokens)
+        await tokens.publish("before")
+        seen = await workflow.execute_local_activity(
+            local_step,
+            streams.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        await tokens.publish("after")
+        return seen
+
+
+async def test_run_buffer_goes_out_before_a_local_activity(stream_client: Client):
+    async with new_worker(stream_client, LocalOrder, activities=[local_step]) as worker:
+        handle = await stream_client.start_workflow(
+            LocalOrder.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        assert await handle.result() == ["before"]
+        items = await read(handle)
+    written = records(items)
+    assert [record.data for record in written] == ["before", "local", "after"]
+    producer = written[1].producer
+    assert producer is not None and producer.id.startswith("la:")
+    assert isinstance(items[-1], streams.Closed)
