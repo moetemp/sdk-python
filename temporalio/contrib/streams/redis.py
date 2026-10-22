@@ -69,6 +69,7 @@ class StreamPlugin(SimplePlugin):
         ``backend_name`` is the name that Stream handles carry for this backend.
         """
         self._backend_name = backend_name
+        config.backend = backend_name
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
         )
@@ -279,6 +280,8 @@ async def _encode_call(
         )
         if request.retention is not None:
             create.retention.FromTimedelta(request.retention)
+        if request.auto_close is not None:
+            create.auto_close.FromTimedelta(request.auto_close)
         return ext_pb.WorkflowCall(create=create)
     ref = request.stream or models.StreamRef(id="")
     stream = stream_pb.StreamRef(

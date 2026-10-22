@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -31,7 +32,7 @@ async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[o
     )
     stream.topic("turns", type=Turn)
     stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
+    return [item async for item in stream.subscribe()]
 
 
 def data(items: list[object]) -> list[object]:
@@ -196,3 +197,27 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
+
+
+@workflow.defn
+class LeavesOpen:
+    @workflow.run
+    async def run(self) -> None:
+        stream = await stream_workflow.create_stream(
+            Events, auto_close=timedelta(seconds=1), close_with_run=False
+        )
+        await stream.topic(Events.tokens).publish("only")
+
+
+async def test_auto_close_closes_a_quiet_stream(stream_client: Client):
+    async with new_worker(stream_client, LeavesOpen) as worker:
+        handle = await stream_client.start_workflow(
+            LeavesOpen.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+        await asyncio.sleep(1.5)
+        stream = streams.for_handle(handle, name="events")
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert data(items) == ["only"]
+    assert isinstance(items[-1], streams.Closed)
+    assert items[-1].result is None and items[-1].failure is None
