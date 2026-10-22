@@ -332,6 +332,6 @@ async def test_sync_handlers_publish_and_close_with_no_await(stream_client: Clie
         await handle.signal(SyncHandlers.token, "a")
         assert await handle.execute_update(SyncHandlers.finish) == "stream_closed"
         await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["a", "p"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "finished"
