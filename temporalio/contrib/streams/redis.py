@@ -450,13 +450,13 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
             if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
-                stream_ids = [
-                    handle.id
+                handles = {
+                    handle.id: handle
                     for handle in _stream_arguments(input.args)
                     if attempt.get(handle.backend) is streams
-                ]
-                for stream_id in dict.fromkeys(stream_ids):
-                    await streams.writer(stream_id).withdraw_earlier_attempts()
+                }
+                for handle in handles.values():
+                    await streams.writer(handle).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
         except BaseException:
             await _close_quietly(streams)

@@ -28,7 +28,7 @@ class Access:
     backend: StreamBackend
     converter: temporalio.converter.DataConverter
     namespace: str
-    stream_id: Callable[[], Awaitable[str]]
+    ref: Callable[[], Awaitable[models.StreamRef]]
     writer: Callable[[], StreamWriter]
 
     async def publish(self, topic: str, values: Sequence[Any]) -> int:
@@ -70,7 +70,7 @@ class Access:
         items = _reader.read(
             self.backend.service(self.namespace, _convert.raw(self.converter)),
             self.converter,
-            await self.stream_id(),
+            await self.ref(),
             topics=topics,
             topic_prefixes=prefixes,
             types=types,
@@ -88,9 +88,7 @@ class Access:
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
         response = await self.backend.service(self.namespace).describe_stream(
-            models.DescribeStreamRequest(
-                stream=models.StreamRef(id=await self.stream_id())
-            )
+            models.DescribeStreamRequest(stream=await self.ref())
         )
         # Offsets start above zero, so zero means the Stream has no Record.
         return response.last_offset + 1 if response.last_offset else 0
@@ -101,7 +99,7 @@ class Access:
         await writer.close()
         stream = service_client.Stream(
             self.backend.service(self.namespace, self.converter),
-            models.StreamRef(id=await self.stream_id()),
+            await self.ref(),
         )
         producer = models._ProducerTransferTypeConverter().from_transfer_type(
             writer.producer, models.Producer
