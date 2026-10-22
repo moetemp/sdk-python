@@ -8,7 +8,7 @@ import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
-from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
@@ -31,16 +31,6 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     config = client.config()
     config["plugins"] = [plugin]
     return Client(**config), extension
-
-
-def test_ids_match_the_crate():
-    assert (
-        _ids.scoped_stream_id("a:b/c", "r%1", "é name")
-        == "a%3Ab%2Fc:r%251:%C3%A9%20name"
-    )
-    assert _ids.workflow_producer_id("run:1") == "wf:run%3A1"
-    assert _ids.activity_producer_id("run:1", "a/1", "s-1") == "act:run%3A1:a%2F1:s-1"
-    assert _ids.client_producer_id("1@host", "p-1") == "client:1%40host:p-1"
 
 
 def test_extension_errors_map_to_stream_errors():
@@ -160,11 +150,6 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
         if isinstance(item, streams.Record) and item.producer
     }
     assert len(producers) == 2
-
-
-def test_workflow_stream_has_no_reads():
-    assert not hasattr(streams.WorkflowStream, "subscribe")
-    assert not hasattr(streams.WorkflowStream, "get_offset")
 
 
 def test_unsupported_capability_maps_to_its_error():

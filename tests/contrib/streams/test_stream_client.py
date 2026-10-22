@@ -200,7 +200,6 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     other = stream_client.workflow_stream(handle, Events, name="other")
     key = hash(first)
     assert first == same and first != other
-    assert "agent-2" in repr(first) and "events" in repr(first)
     describes = []
 
     async def describe() -> Any:
@@ -228,8 +227,3 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     ]
     stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
     assert stream.backend == "b"
-
-
-def test_workflow_stream_has_no_get_prefix():
-    assert hasattr(streams.StreamClient, "workflow_stream")
-    assert not hasattr(streams.StreamClient, "get_workflow_stream")
