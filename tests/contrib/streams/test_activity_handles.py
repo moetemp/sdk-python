@@ -1,8 +1,12 @@
 import asyncio
+import contextvars
+import ctypes
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -10,8 +14,10 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import RetryPolicy
 from temporalio.contrib import streams
+from temporalio.contrib.streams import _activity
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams._access import _AsyncTopic
+from temporalio.exceptions import CancelledError
 from tests.helpers import new_worker
 
 
@@ -39,9 +45,9 @@ class SyncInput:
     stream: streams.SyncActivityStream[Events]
 
 
-async def read(handle: WorkflowHandle[Any, Any]) -> list[object]:
+async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[object]:
     stream = streams.for_handle(
-        handle, name="events", wait_for_create=timedelta(seconds=20)
+        handle, name=name, wait_for_create=timedelta(seconds=20)
     )
     stream.topic("turns", type=Turn)
     stream.topic("tokens", type=str)
@@ -303,3 +309,144 @@ async def test_run_buffer_goes_out_before_a_local_activity(stream_client: Client
     producer = written[1].producer
     assert producer is not None and producer.id.startswith("la:")
     assert isinstance(items[-1], streams.Closed)
+
+
+async def test_buffered_publisher_stays_failed():
+    topic = _Batches(fail=True)
+    publisher = streams.BufferedPublisher(topic)
+    publisher.publish(1, 2)
+    with pytest.raises(streams.StreamStorageError):
+        await publisher.flush()
+    topic.fail = False
+    # A later batch would leave a gap, so the publisher refuses it and keeps the error.
+    with pytest.raises(streams.StreamStorageError):
+        publisher.publish(3)
+    with pytest.raises(streams.StreamStorageError):
+        await publisher.flush()
+    assert topic.batches == [] and publisher.unwritten == 2
+
+
+@activity.defn
+async def never_flushes(input: CallModelInput) -> None:
+    publisher = streams.BufferedPublisher(
+        input.stream.topic(Events.tokens), max_delay=timedelta(minutes=10)
+    )
+    publisher.publish(*input.prompt.split())
+
+
+@dataclass
+class ManyStreams:
+    key: str
+    targets: list[streams.ActivityStream[Events]]
+    maybe: streams.ActivityStream[Events] | None = None
+
+
+@activity.defn
+async def flaky_many(input: ManyStreams) -> None:
+    attempts[input.key] = attempts.get(input.key, 0) + 1
+    assert input.maybe is not None
+    if attempts[input.key] == 1:
+        for stream in [*input.targets, input.maybe]:
+            await stream.topic(Events.tokens).publish("attempt-1")
+        raise RuntimeError("first attempt fails")
+
+
+@activity.defn
+def sync_read(stream: streams.SyncActivityStream[Events]) -> list[Any]:
+    return [
+        item.data
+        for item in stream.subscribe(Events.tokens, wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+
+
+@workflow.defn
+class Leftovers:
+    @workflow.run
+    async def run(self, key: str) -> list[Any]:
+        stream = await stream_workflow.create_stream(Events)
+        other = await stream_workflow.create_stream(Events, name="other")
+        await workflow.execute_activity(
+            never_flushes,
+            CallModelInput("a b", streams.ActivityStream.from_handle(stream)),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        await workflow.execute_activity(
+            flaky_many,
+            ManyStreams(
+                key,
+                [streams.ActivityStream.from_handle(stream)],
+                streams.ActivityStream.from_handle(other),
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+        return await workflow.execute_activity(
+            sync_read,
+            streams.SyncActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+
+async def test_attempt_end_flushes_and_retry_finds_nested_streams(
+    stream_client: Client,
+):
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client,
+        Leftovers,
+        activities=[never_flushes, flaky_many, sync_read],
+        activity_executor=_executor(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            Leftovers.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        # The publisher was never flushed, so the end of the attempt wrote its values.
+        assert await handle.result() == ["a", "b", "attempt-1"]
+        items = await read(handle)
+        other = await read(handle, "other")
+    for read_items in (items, other):
+        superseded = [i for i in read_items if isinstance(i, streams.Superseded)]
+        withdrawn = [r.data for r in records(read_items) if superseded[0].withdraws(r)]
+        assert withdrawn == ["attempt-1"]
+
+
+def test_sync_call_stops_when_the_thread_is_cancelled():
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    started = threading.Event()
+    stopped = threading.Event()
+
+    async def long_poll() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            stopped.set()
+
+    stream: streams.SyncActivityStream[Any] = streams.SyncActivityStream(id="s")
+    token = _activity.current.set(
+        cast(Any, SimpleNamespace(loop=loop, backend_name=""))
+    )
+    errors: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            stream._run(long_poll())
+        except BaseException as err:
+            errors.append(err)
+
+    caller = threading.Thread(target=contextvars.copy_context().run, args=(call,))
+    _activity.current.reset(token)
+    caller.start()
+    assert started.wait(5)
+    # The Worker cancels a sync Activity by raising in its thread.
+    assert caller.ident is not None
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(caller.ident), ctypes.py_object(CancelledError)
+    )
+    caller.join(5)
+    assert stopped.wait(5)
+    assert errors and isinstance(errors[0], CancelledError)
+    loop.call_soon_threadsafe(loop.stop)

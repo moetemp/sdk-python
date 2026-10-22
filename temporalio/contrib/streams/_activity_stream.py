@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from collections.abc import AsyncGenerator, Coroutine, Iterator, Sequence
 from datetime import timedelta
 from typing import Any, TypeVar, overload
@@ -21,6 +22,9 @@ from temporalio.contrib.streams._reader import Item
 E = TypeVar("E")
 T = TypeVar("T")
 _R = TypeVar("_R")
+
+# How long a blocked sync call waits at a time.
+_WAIT_STEP = 0.1
 
 
 def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
@@ -131,7 +135,11 @@ class ActivityStream(StreamHandle[E]):
         )
 
     async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one."""
+        """The next offset of the Stream, the newest offset plus one.
+
+        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        """
         return await self._access().get_offset()
 
     async def close(
@@ -202,7 +210,20 @@ class SyncActivityStream(StreamHandle[E]):
             raise RuntimeError(
                 "A SyncActivityStream blocks, so use ActivityStream in an async Activity"
             )
-        return asyncio.run_coroutine_threadsafe(call, loop).result()
+        future = asyncio.run_coroutine_threadsafe(call, loop)
+        try:
+            while True:
+                # Short waits let an exception that the Worker raises in this thread, such as
+                # a cancel, come in.
+                try:
+                    return future.result(timeout=_WAIT_STEP)
+                except concurrent.futures.TimeoutError:
+                    continue
+        except BaseException:
+            # A cancel of the Activity thread, such as from a heartbeat, stops the call too,
+            # so a long poll does not run on in the Worker's loop.
+            future.cancel()
+            raise
 
     @overload
     def topic(self, topic: TopicDefinition[T]) -> SyncActivityTopic[T]: ...
@@ -252,7 +273,11 @@ class SyncActivityStream(StreamHandle[E]):
             self._run(items.aclose())
 
     def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one."""
+        """The next offset of the Stream, the newest offset plus one.
+
+        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        """
         return self._run(self._access().get_offset())
 
     def close(

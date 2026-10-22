@@ -687,19 +687,42 @@ async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -
 
 
 def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:
-    # The Streams that an Activity received, as arguments or as fields of its one input
-    # object, which an earlier attempt may have written.
+    # The Streams that an Activity received, which an earlier attempt may have written. They
+    # may sit in fields of its input object, in slots, and in lists and dicts.
     handles: list[StreamHandle[Any]] = []
+    seen: set[int] = set()
+
+    def walk(value: Any, depth: int) -> None:
+        if depth > 4 or id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, StreamHandle):
+            handles.append(value)
+        elif isinstance(value, (str, bytes, int, float, bool)) or value is None:
+            return
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item, depth + 1)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                walk(item, depth + 1)
+        else:
+            for item in _fields_of(value):
+                walk(item, depth + 1)
+
     for arg in args:
-        if isinstance(arg, StreamHandle):
-            handles.append(arg)
-            continue
-        fields = getattr(arg, "__dict__", None)
-        if isinstance(fields, dict):
-            handles.extend(
-                value for value in fields.values() if isinstance(value, StreamHandle)
-            )
+        walk(arg, 0)
     return handles
+
+
+def _fields_of(value: Any) -> list[Any]:
+    fields = list(getattr(value, "__dict__", {}).values())
+    for klass in type(value).__mro__:
+        slots = getattr(klass, "__slots__", ())
+        for slot in (slots,) if isinstance(slots, str) else slots:
+            if hasattr(value, slot):
+                fields.append(getattr(value, slot))
+    return fields
 
 
 async def _close_quietly(streams: _activity.ActivityStreams) -> None:
