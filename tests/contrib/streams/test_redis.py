@@ -15,11 +15,12 @@ from temporalio.api.common.v1 import Payload
 from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
+from temporalio.contrib.streams import StreamPlugin
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
     RedisStreamPlugin,
-    StreamPlugin,
+    _ExtensionStreamPlugin,
     _WorkflowInbound,
 )
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
@@ -400,6 +401,23 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
     assert first.data.payload.metadata["encoding"] == b"json/plain"
 
 
+async def test_client_close_goes_through_the_payload_codec(stream_client: Client):
+    config = stream_client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, payload_codec=_Rot13Codec()
+    )
+    stream_client_ = streams.StreamClient(Client(**config))
+    done = await stream_client_.create(Events, id=f"done-{uuid.uuid4()}")
+    await done.close(result=Turn("done"))
+    failed = await stream_client_.create(Events, id=f"failed-{uuid.uuid4()}")
+    await failed.close(failure=ApplicationError("bad turn"))
+    [closed] = [item async for item in done.subscribe()]
+    assert isinstance(closed, streams.Closed)
+    assert closed.result == {"kind": "done", "text": ""}
+    [closed] = [item async for item in failed.subscribe()]
+    assert isinstance(closed, streams.Closed) and str(closed.failure) == "bad turn"
+
+
 @workflow.defn
 class WaitsForSignal:
     def __init__(self) -> None:
@@ -492,7 +510,9 @@ async def test_worker_shutdown_drains_closes(stream_client: Client):
 
 async def test_plugin_shutdown_after_client_writes(stream_client: Client):
     [plugin] = [
-        p for p in stream_client.config()["plugins"] if isinstance(p, StreamPlugin)
+        p
+        for p in stream_client.config()["plugins"]
+        if isinstance(p, _ExtensionStreamPlugin)
     ]
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"shutdown-{uuid.uuid4()}"
@@ -570,17 +590,19 @@ async def test_eviction_prints_nothing(
 
 async def test_workflow_calls_carry_the_owner(stream_client: Client):
     [plugin] = [
-        p for p in stream_client.config()["plugins"] if isinstance(p, StreamPlugin)
+        p
+        for p in stream_client.config()["plugins"]
+        if isinstance(p, _ExtensionStreamPlugin)
     ]
     sent: list[bytes] = []
-    call = plugin._temporal_stream_backend.call
+    call = plugin._backend.call
 
     def record(method: str, request: Any) -> bytes:
         if method == "BufferWorkflowCalls":
             sent.append(request.SerializeToString())
         return call(method, request)
 
-    plugin._temporal_stream_backend.call = record  # type: ignore[method-assign]
+    plugin._backend.call = record  # type: ignore[method-assign]
     async with new_worker(stream_client, QuickWriter) as worker:
         handle = await stream_client.start_workflow(
             QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue

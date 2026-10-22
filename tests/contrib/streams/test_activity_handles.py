@@ -186,8 +186,8 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
 async def wrong_backend(stream: streams.ActivityStream[Events]) -> str:
     try:
         await stream.topic(Events.tokens).publish("x")
-    except streams.StreamUnsupportedError as err:
-        return err.reason
+    except streams.StreamConfigError:
+        return "config"
     return "wrote"
 
 
@@ -222,7 +222,7 @@ async def test_activity_closes_and_checks_the_backend(stream_client: Client):
         handle = await stream_client.start_workflow(
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        assert await handle.result() == "stream_unsupported"
+        assert await handle.result() == "config"
         items = await read(stream_client, handle)
     assert [r.data for r in records(items)] == ["last"]
     assert isinstance(items[-1], streams.Closed)

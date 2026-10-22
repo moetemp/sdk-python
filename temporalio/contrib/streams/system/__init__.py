@@ -10,11 +10,13 @@ import nexusrpc
 import temporalio.converter
 
 from . import services as _services
-from .operations.append_records import append_records
-from .operations.close_stream import close_stream
+from ._resources.stream import (
+    append_records,
+    close_stream,
+    describe_stream,
+    read_records,
+)
 from .operations.create_stream import create_stream
-from .operations.describe_stream import describe_stream
-from .operations.read_records import read_records
 
 __all__ = [
     "append_records",

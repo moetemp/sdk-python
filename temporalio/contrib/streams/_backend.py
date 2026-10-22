@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 import google.protobuf.message
 
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
-import temporalio.client
+import temporalio.converter
 import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -34,28 +34,61 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
 }
 
 
-class StreamBackend:
+class StreamBackend(Protocol):
+    """What a Stream plugin gives the handles. Not public. Each backend has its own class."""
+
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
+        """The Stream service for ``namespace``."""
+        ...
+
+    async def open_writer(self, request: ext_pb.OpenWriterRequest) -> int:
+        """Open the writer of an Activity or client Producer, and return its id."""
+        ...
+
+    async def write_records(
+        self, writer_id: int, records: list[stream_pb.AppendRecord]
+    ) -> int:
+        """Write Records for a writer, and return the last Record's offset."""
+        ...
+
+    async def close_writer(self, writer_id: int) -> int:
+        """Drop a writer. The Stream stays open."""
+        ...
+
+    async def flush_run_buffer(
+        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
+    ) -> int:
+        """Write a run's buffered calls before a Local Activity of the run starts."""
+        ...
+
+
+class _ExtensionStreamBackend:
     """Carries Stream calls to a worker extension with the temporalio-streams methods.
 
-    A Stream plugin gives one to the facade. The five Stream service operations go through the
-    generated client, and the writer methods are the crate's own.
-
-    .. warning::
-        This API is experimental.
+    The five Stream service operations go through the generated client, and the writer
+    methods are the crate's own.
     """
 
     def __init__(self, extension: temporalio.worker.WorkerExtension) -> None:
         """Create a backend over an extension."""
         self._extension = extension
 
-    @property
-    def extension(self) -> temporalio.worker.WorkerExtension:
-        """The extension that the backend calls."""
-        return self._extension
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
+        """A generated Stream service client for ``namespace``.
 
-    def service(self, namespace: str) -> service_client.StreamServiceClient:
-        """A generated Stream service client for ``namespace``."""
-        return service_client.StreamServiceClient(_ExtensionTransport(self, namespace))
+        With a ``data_converter``, user values in the requests go through it and its codec.
+        """
+        return service_client.StreamServiceClient(
+            _ExtensionTransport(self, namespace), data_converter=data_converter
+        )
 
     def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
         """Call a synchronous extension method."""
@@ -137,7 +170,7 @@ class StreamBackend:
 class _ExtensionTransport:
     # The generated client takes a transport, so the five operations reach the extension as
     # they would reach a server later.
-    def __init__(self, backend: StreamBackend, namespace: str) -> None:
+    def __init__(self, backend: _ExtensionStreamBackend, namespace: str) -> None:
         self._backend = backend
         self._namespace = namespace
 
@@ -161,41 +194,3 @@ class _ExtensionTransport:
             },
             data=response.SerializeToString(),
         )
-
-
-def client_backend(
-    client: temporalio.client.Client, name: str | None
-) -> tuple[str, StreamBackend]:
-    """The name and the backend of a client's Stream plugin. None picks the plugin marked
-    as the default, or else the first one.
-
-    Raises:
-        StreamTransportMissingError: The client has no Stream plugin.
-        StreamUnsupportedError: The client has no Stream plugin of that name.
-    """
-    backends = [
-        (
-            getattr(plugin, "backend_name", ""),
-            backend,
-            getattr(plugin, "default", False),
-        )
-        for plugin in client.config()["plugins"]
-        if isinstance(
-            backend := getattr(plugin, "_temporal_stream_backend", None), StreamBackend
-        )
-    ]
-    if not backends:
-        raise _errors.StreamTransportMissingError(
-            "The client has no Stream plugin, such as RedisStreamPlugin"
-        )
-    if not name:
-        defaults = [entry for entry in backends if entry[2]] or backends
-        return defaults[0][0], defaults[0][1]
-    for backend_name, backend, _ in backends:
-        if backend_name == name:
-            return backend_name, backend
-    raise _errors.StreamUnsupportedError(
-        f"The client has no Stream backend {name}. It has "
-        f"{', '.join(entry[0] for entry in backends)}.",
-        reason="stream_unsupported",
-    )

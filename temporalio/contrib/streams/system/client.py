@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc
+import contextlib
 import dataclasses
 import datetime
 import typing
@@ -11,9 +13,12 @@ import google.protobuf.json_format
 import google.protobuf.message
 
 import temporalio.api.common.v1
+import temporalio.api.streamservice.v1.stream_service_pb2
 import temporalio.converter
+import temporalio.nexus.system
 
 from .models import (
+    AppendRecord,
     AppendRecordsRequest,
     AppendRecordsResponse,
     CloseStreamRequest,
@@ -22,8 +27,12 @@ from .models import (
     CreateStreamResponse,
     DescribeStreamRequest,
     DescribeStreamResponse,
+    Producer,
     ReadRecordsRequest,
     ReadRecordsResponse,
+    StreamRecord,
+    StreamRef,
+    WorkflowTaskEpoch,
     _AppendRecordsRequestTransferTypeConverter,
     _AppendRecordsResponseTransferTypeConverter,
     _CloseStreamRequestTransferTypeConverter,
@@ -113,6 +122,50 @@ def _proto_message(
     return message
 
 
+# The codec runs on the user payloads inside a proto-backed model, Record bodies and
+# failure details included, and never on the model's own payload, which the service reads.
+def _payloads_in(
+    message: google.protobuf.message.Message,
+) -> list[temporalio.api.common.v1.Payload]:
+    if isinstance(message, temporalio.api.common.v1.Payload):
+        return [message]
+    found: list[temporalio.api.common.v1.Payload] = []
+    for _, value in message.ListFields():
+        if isinstance(value, google.protobuf.message.Message):
+            found.extend(_payloads_in(value))
+        elif not isinstance(value, (str, bytes, int, float, bool)):
+            items = typing.cast(
+                "collections.abc.Iterable[object]",
+                value.values() if hasattr(value, "values") else value,
+            )
+            for item in items:
+                if isinstance(item, google.protobuf.message.Message):
+                    found.extend(_payloads_in(item))
+    return found
+
+
+async def _encode_payloads(
+    message: google.protobuf.message.Message,
+    codec: temporalio.converter.PayloadCodec | None,
+) -> None:
+    if codec is None:
+        return
+    for payload in _payloads_in(message):
+        [encoded] = await codec.encode([payload])
+        payload.CopyFrom(encoded)
+
+
+async def _decode_payloads(
+    message: google.protobuf.message.Message,
+    codec: temporalio.converter.PayloadCodec | None,
+) -> None:
+    if codec is None:
+        return
+    for payload in _payloads_in(message):
+        [decoded] = await codec.decode([payload])
+        payload.CopyFrom(decoded)
+
+
 class StreamServiceClient:
     """Calls the `temporal.api.streamservice.v1.StreamService` operations over a transport.
 
@@ -123,48 +176,53 @@ class StreamServiceClient:
         self,
         transport: Transport,
         *,
-        payload_converter: temporalio.converter.PayloadConverter | None = None,
-        payload_codec: temporalio.converter.PayloadCodec | None = None,
+        data_converter: temporalio.converter.DataConverter | None = None,
     ) -> None:
         """Create a caller.
 
         Args:
             transport: Carries each call to the service.
-            payload_converter: Converts the models that are not proto-backed.
-                Defaults to the SDK's default payload converter.
-            payload_codec: Encodes each request payload and decodes each answer.
+            data_converter: Converts and encodes the user values. A proto-backed
+                model travels as is, and each payload and failure inside it goes
+                through the converter and the codec, as in Workflow code. A model
+                that is not proto-backed is one user value. Defaults to the SDK's
+                default data converter.
         """
         self._transport = transport
-        self._payload_converter = (
-            payload_converter
-            or temporalio.converter.DataConverter.default.payload_converter
+        self._data_converter = (
+            data_converter or temporalio.converter.DataConverter.default
         )
-        self._payload_codec = payload_codec
+
+    def _converters(self) -> contextlib.AbstractContextManager[None]:
+        return temporalio.nexus.system._user_converter_context(
+            temporalio.nexus.system._SystemNexusUserConverters(
+                payload_converter=self._data_converter.payload_converter,
+                failure_converter=self._data_converter.failure_converter,
+            )
+        )
 
     async def _call(
         self, operation: str, payload: temporalio.api.common.v1.Payload
     ) -> temporalio.api.common.v1.Payload:
-        if self._payload_codec is not None:
-            [payload] = await self._payload_codec.encode([payload])
-        answer = await self._transport.call(
+        return await self._transport.call(
             service="temporal.api.streamservice.v1.StreamService",
             operation=operation,
             input=payload,
         )
-        if self._payload_codec is not None:
-            [answer] = await self._payload_codec.decode([answer])
-        return answer
 
     async def create_stream(self, request: CreateStreamRequest) -> CreateStreamResponse:
-        payload = _proto_payload(
-            _CreateStreamRequestTransferTypeConverter().to_transfer_type(request)
-        )
+        with self._converters():
+            message = _CreateStreamRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
         answer = await self._call("CreateStream", payload)
         converter = _CreateStreamResponseTransferTypeConverter()
-        return converter.from_transfer_type(
-            _proto_message(answer, converter.transfer_type),
-            CreateStreamResponse,
-        )
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, CreateStreamResponse)
 
     async def append_records(
         self, request: AppendRecordsRequest
@@ -172,38 +230,47 @@ class StreamServiceClient:
         """In Workflow code, Brook buffers this call in the run, and the facade drops the
         answer.
         """
-        payload = _proto_payload(
-            _AppendRecordsRequestTransferTypeConverter().to_transfer_type(request)
-        )
+        with self._converters():
+            message = _AppendRecordsRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
         answer = await self._call("AppendRecords", payload)
         converter = _AppendRecordsResponseTransferTypeConverter()
-        return converter.from_transfer_type(
-            _proto_message(answer, converter.transfer_type),
-            AppendRecordsResponse,
-        )
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, AppendRecordsResponse)
 
     async def close_stream(self, request: CloseStreamRequest) -> CloseStreamResponse:
-        payload = _proto_payload(
-            _CloseStreamRequestTransferTypeConverter().to_transfer_type(request)
-        )
+        with self._converters():
+            message = _CloseStreamRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
         answer = await self._call("CloseStream", payload)
         converter = _CloseStreamResponseTransferTypeConverter()
-        return converter.from_transfer_type(
-            _proto_message(answer, converter.transfer_type),
-            CloseStreamResponse,
-        )
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, CloseStreamResponse)
 
     async def read_records(self, request: ReadRecordsRequest) -> ReadRecordsResponse:
         """Not for Workflow code in Brook. A long poll. NOT_FOUND for an uncreated Stream."""
-        payload = _proto_payload(
-            _ReadRecordsRequestTransferTypeConverter().to_transfer_type(request)
-        )
+        with self._converters():
+            message = _ReadRecordsRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
         answer = await self._call("ReadRecords", payload)
         converter = _ReadRecordsResponseTransferTypeConverter()
-        return converter.from_transfer_type(
-            _proto_message(answer, converter.transfer_type),
-            ReadRecordsResponse,
-        )
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, ReadRecordsResponse)
 
     async def read_records_until_records(
         self,
@@ -255,15 +322,169 @@ class StreamServiceClient:
             else:
                 pause = _LONG_POLL_FIRST_PAUSE
 
+    async def iter_read_records(
+        self,
+        request: ReadRecordsRequest,
+        *,
+        deadline: datetime.timedelta | None = None,
+    ) -> collections.abc.AsyncIterator[StreamRecord]:
+        """Yield each item of ``records``, page after page, as one sequence.
+
+        Each page is one ``read_records_until_records`` call, which sets ``wait`` to
+        what is left of the deadline. The next page starts at the answer's
+        ``next_offset``.
+        The iterator ends after an answer with ``done`` set, or when the deadline
+        passes. With no deadline, it ends only on ``done``.
+        """
+        clock = asyncio.get_running_loop()
+        end = None if deadline is None else clock.time() + deadline.total_seconds()
+        attempt = request
+        while True:
+            left = 60.0 if end is None else end - clock.time()
+            if left <= 0:
+                return
+            answer = await self.read_records_until_records(
+                attempt, deadline=datetime.timedelta(seconds=left)
+            )
+            for item in answer.records or []:
+                yield item
+            if answer.done:
+                return
+            if answer.next_offset is not None:
+                attempt = dataclasses.replace(attempt, from_offset=answer.next_offset)
+
     async def describe_stream(
         self, request: DescribeStreamRequest
     ) -> DescribeStreamResponse:
-        payload = _proto_payload(
-            _DescribeStreamRequestTransferTypeConverter().to_transfer_type(request)
-        )
+        with self._converters():
+            message = _DescribeStreamRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
         answer = await self._call("DescribeStream", payload)
         converter = _DescribeStreamResponseTransferTypeConverter()
-        return converter.from_transfer_type(
-            _proto_message(answer, converter.transfer_type),
-            DescribeStreamResponse,
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, DescribeStreamResponse)
+
+
+class Stream:
+    """A handle on one Stream. Build it from a stream-ref, or get it from a create."""
+
+    def __init__(
+        self,
+        client: StreamServiceClient,
+        stream: StreamRef,
+    ) -> None:
+        """Bind the handle to a caller."""
+        self._client = client
+        self.stream = stream
+
+    async def append_records(
+        self,
+        producer: Producer | None = None,
+        sequence: int | None = None,
+        records: list[AppendRecord] | None = None,
+        previous_completed_task: WorkflowTaskEpoch | None = None,
+        failed_tasks: list[int] | None = None,
+        withdraw_run: str | None = None,
+    ) -> AppendRecordsResponse:
+        """Append Records. The answer has the first and the last offset."""
+        request = AppendRecordsRequest(
+            stream=self.stream,
+            producer=producer,
+            sequence=sequence,
+            records=records or [],
+            previous_completed_task=previous_completed_task,
+            failed_tasks=failed_tasks or [],
+            withdraw_run=withdraw_run,
         )
+        return await self._client.append_records(request)
+
+    async def close(
+        self,
+        producer: Producer | None = None,
+        result: typing.Any | None = None,
+        failure: BaseException | None = None,
+        previous_completed_task: WorkflowTaskEpoch | None = None,
+        failed_tasks: list[int] | None = None,
+    ) -> None:
+        """Close the Stream. Readers drain what is left, then end."""
+        request = CloseStreamRequest(
+            stream=self.stream,
+            producer=producer,
+            result=result,
+            failure=failure,
+            previous_completed_task=previous_completed_task,
+            failed_tasks=failed_tasks or [],
+        )
+        await self._client.close_stream(request)
+
+    async def read_records(
+        self,
+        from_offset: int | None = None,
+        start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
+        | None = None,
+        topics: list[str] | None = None,
+        topic_prefixes: list[str] | None = None,
+        max_records: int | None = None,
+        wait: datetime.timedelta | None = None,
+        create_wait: datetime.timedelta | None = None,
+    ) -> ReadRecordsResponse:
+        """Read one page of Records. The iterator of the same name reads them all."""
+        request = ReadRecordsRequest(
+            stream=self.stream,
+            from_offset=from_offset,
+            start=start,
+            topics=topics or [],
+            max_records=max_records,
+            wait=wait,
+            create_wait=create_wait,
+            topic_prefixes=topic_prefixes or [],
+        )
+        return await self._client.read_records(request)
+
+    async def iter_read_records(
+        self,
+        from_offset: int | None = None,
+        start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
+        | None = None,
+        topics: list[str] | None = None,
+        topic_prefixes: list[str] | None = None,
+        max_records: int | None = None,
+        wait: datetime.timedelta | None = None,
+        create_wait: datetime.timedelta | None = None,
+        *,
+        deadline: datetime.timedelta | None = None,
+    ) -> collections.abc.AsyncIterator[StreamRecord]:
+        """Yield each item of ``records``, page after page, as one sequence.
+
+        Each page is one ``read_records_until_records`` call, which sets ``wait`` to
+        what is left of the deadline. The next page starts at the answer's
+        ``next_offset``.
+        The iterator ends after an answer with ``done`` set, or when the deadline
+        passes. With no deadline, it ends only on ``done``.
+        """
+        request = ReadRecordsRequest(
+            stream=self.stream,
+            from_offset=from_offset,
+            start=start,
+            topics=topics or [],
+            max_records=max_records,
+            wait=wait,
+            create_wait=create_wait,
+            topic_prefixes=topic_prefixes or [],
+        )
+        async for item in self._client.iter_read_records(request, deadline=deadline):
+            yield item
+
+    async def describe(
+        self,
+    ) -> DescribeStreamResponse:
+        """Describe the Stream: its status, newest offset, Retention and auto-close."""
+        request = DescribeStreamRequest(
+            stream=self.stream,
+        )
+        return await self._client.describe_stream(request)

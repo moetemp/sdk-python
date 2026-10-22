@@ -77,8 +77,11 @@ class StreamUnsupportedError(StreamError):
     """The Store lacks a capability that the call needs. The message ends with its name."""
 
 
-class StreamTransportMissingError(StreamError):
-    """No plugin carries Stream calls, such as ``RedisStreamPlugin``."""
+class StreamConfigError(RuntimeError):
+    """No Stream plugin, or no backend of a given name. It is config, not a Store error.
+
+    ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
+    """
 
 
 class ReadOnlyContextError(StreamError):
@@ -96,6 +99,13 @@ _BY_REASON: dict[str, type[StreamError]] = {
 }
 
 
+# The details move to temporal.api.streamservice.v1. Both names carry the same message.
+_DETAILS_TYPES = (
+    "temporal.api.streamservice.v1.StreamErrorDetails",
+    StreamErrorDetails.DESCRIPTOR.full_name,
+)
+
+
 def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
     """Turn a failed extension call into the Stream error for its reason."""
     reason = ""
@@ -104,3 +114,14 @@ def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
     return _BY_REASON.get(reason, StreamError)(
         err.message, reason=reason, code=err.code
     )
+
+
+def from_rpc_error(err: temporalio.service.RPCError) -> Exception:
+    """The Stream error for a server failure with Stream error details, else ``err``."""
+    for detail in err.grpc_status.details:
+        if detail.type_url.rsplit("/", 1)[-1] in _DETAILS_TYPES:
+            reason = StreamErrorDetails.FromString(detail.value).reason
+            return _BY_REASON.get(reason, StreamError)(
+                err.message, reason=reason, code=err.status
+            )
+    return err

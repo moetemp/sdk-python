@@ -33,6 +33,7 @@ async def test_ui_backend_reads(stream_client: Client):
 async def test_resume_from_offset(stream_client: Client):
     assert await resume_from_offset.main(stream_client, task_queue()) == (
         ["a", "b"],
+        [],
         ["c", "d"],
     )
 

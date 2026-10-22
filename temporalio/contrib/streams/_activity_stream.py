@@ -17,6 +17,7 @@ from temporalio.contrib.streams._access import (
 )
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 
 E = TypeVar("E")
@@ -30,14 +31,13 @@ _WAIT_STEP = 0.1
 def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
     streams = _activity.current.get()
     if streams is None:
-        raise _errors.StreamTransportMissingError(
+        raise _errors.StreamConfigError(
             "No Stream plugin runs this Activity, such as RedisStreamPlugin"
         )
     if handle.backend and handle.backend != streams.backend_name:
-        raise _errors.StreamUnsupportedError(
+        raise _errors.StreamConfigError(
             f"The Stream {handle.id} is of the backend {handle.backend}. The Worker has only "
-            f"{streams.backend_name}.",
-            reason="stream_unsupported",
+            f"{streams.backend_name}."
         )
     return streams
 
@@ -91,39 +91,19 @@ class ActivityStream(StreamHandle[E]):
     def topic(
         self, topic: str | TopicDefinition[Any], *, type: Any = None
     ) -> ActivityTopic[Any]:
-        """A Topic of this Stream.
-
-        Args:
-            topic: A Topic of the Stream's definition, such as ``Events.turns``, or a name.
-                A name of the definition takes its type.
-            type: The type of a Topic outside the definition, or of a Stream with no
-                definition.
-        """
+        """A Topic of this Stream. See :py:meth:`ClientStream.topic`."""
         name, topic_type = self._topic_spec(topic, type)
         return ActivityTopic(self, name, topic_type)
 
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
     ) -> AsyncGenerator[Item, None]:
-        """Read the Stream's items in order.
-
-        The read ends after a ``Closed`` item, or at the newest Record when
-        ``wait_new_records`` is False. A ``Superseded`` item withdraws earlier Records of a
-        failed attempt, and it passes every Topic filter.
-
-        Args:
-            topics: Read these Topics. With no Topics and no prefixes, read every Topic.
-            from_offset: Start at this offset, inclusive. Defaults to the first Record.
-            wait_new_records: Wait for new Records at the end of the Stream.
-            prefixes: Also read the Topics whose names start with one of these.
-            create_wait: How long to wait for a Stream that nobody created yet. Defaults to
-                no wait.
-        """
+        """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
         names, types = read_spec(self, topics)
         return self._access().read(
             topics=names,
@@ -172,7 +152,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
     def subscribe(
         self,
         *,
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> Iterator[Item]:
@@ -237,19 +217,19 @@ class SyncActivityStream(StreamHandle[E]):
     def topic(
         self, topic: str | TopicDefinition[Any], *, type: Any = None
     ) -> SyncActivityTopic[Any]:
-        """A Topic of this Stream. See :py:meth:`ActivityStream.topic`."""
+        """A Topic of this Stream. See :py:meth:`ClientStream.topic`."""
         name, topic_type = self._topic_spec(topic, type)
         return SyncActivityTopic(self, name, topic_type)
 
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
     ) -> Iterator[Item]:
-        """Read the Stream's items in order. See :py:meth:`ActivityStream.subscribe`."""
+        """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
         names, types = read_spec(self, topics)
         items = self._access().read(
             topics=names,

@@ -25,7 +25,6 @@ from temporalio.contrib.streams._activity_stream import (
     SyncActivityStream,
     SyncActivityTopic,
 )
-from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._defn import (
     StreamDefinition,
@@ -36,17 +35,18 @@ from temporalio.contrib.streams._defn import (
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
     StreamClosedError,
+    StreamConfigError,
     StreamError,
     StreamExpiredError,
     StreamFencedError,
     StreamNotFoundError,
     StreamOffsetError,
     StreamStorageError,
-    StreamTransportMissingError,
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import Closed, Record, Superseded
+from temporalio.contrib.streams._items import END, Closed, Record, Superseded
+from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams._stream_client import (
     ClientStream,
     ClientTopic,
@@ -55,6 +55,7 @@ from temporalio.contrib.streams._stream_client import (
 from temporalio.contrib.streams.workflow import WorkflowStream, WorkflowTopic
 
 __all__ = [
+    "END",
     "ActivityStream",
     "ActivityTopic",
     "BufferedPublisher",
@@ -63,9 +64,9 @@ __all__ = [
     "Closed",
     "ReadOnlyContextError",
     "Record",
-    "StreamBackend",
     "StreamClient",
     "StreamClosedError",
+    "StreamConfigError",
     "StreamDefinition",
     "StreamError",
     "StreamExpiredError",
@@ -73,8 +74,8 @@ __all__ = [
     "StreamHandle",
     "StreamNotFoundError",
     "StreamOffsetError",
+    "StreamPlugin",
     "StreamStorageError",
-    "StreamTransportMissingError",
     "StreamUnsupportedError",
     "Superseded",
     "SyncActivityStream",

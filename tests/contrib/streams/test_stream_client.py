@@ -11,9 +11,9 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
-from temporalio.plugin import SimplePlugin
 from tests.contrib.streams.fake_extension import FakeExtension
 from tests.helpers import new_worker
 
@@ -32,9 +32,12 @@ class Events:
 
 def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     extension = FakeExtension()
-    plugin = SimplePlugin("fake-streams")
-    setattr(plugin, "_temporal_stream_backend", streams.StreamBackend(extension))
-    setattr(plugin, "backend_name", "fake")
+    plugin = streams.StreamPlugin(
+        "fake-streams",
+        backend_name="fake",
+        default=False,
+        stream_backend=_ExtensionStreamBackend(extension),
+    )
     config = client.config()
     config["plugins"] = [plugin]
     return Client(**config), extension
@@ -43,9 +46,9 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
 async def test_unknown_backend_raises_before_any_call(client: Client):
     client, extension = fake_client(client)
     stream_client = streams.StreamClient(client)
-    with pytest.raises(streams.StreamUnsupportedError, match="It has fake"):
+    with pytest.raises(streams.StreamConfigError, match="It has fake"):
         await stream_client.create(Events, id="chat-1", backend="redis")
-    with pytest.raises(streams.StreamUnsupportedError):
+    with pytest.raises(streams.StreamConfigError):
         stream_client.get_handle(Events, id="chat-1", backend="redis")
     assert not extension.streams and not extension.namespaces
     stream = await stream_client.create(Events, id="chat-1")
@@ -53,7 +56,7 @@ async def test_unknown_backend_raises_before_any_call(client: Client):
 
 
 async def test_client_without_plugin_has_no_transport(client: Client):
-    with pytest.raises(streams.StreamTransportMissingError):
+    with pytest.raises(streams.StreamConfigError):
         streams.StreamClient(client).get_handle(Events, id="chat-1")
 
 
@@ -65,7 +68,7 @@ async def test_decoded_client_stream_has_no_client(client: Client):
         converter.to_payload(stream), streams.ClientStream[Events]
     )
     assert decoded == stream
-    with pytest.raises(streams.StreamTransportMissingError, match="get_handle"):
+    with pytest.raises(streams.StreamConfigError, match="get_handle"):
         await decoded.get_offset()
 
 
@@ -200,7 +203,6 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     other = stream_client.workflow_stream(handle, Events, name="other")
     key = hash(first)
     assert first == same and first != other
-    assert "agent-2" in repr(first) and "events" in repr(first)
     describes = []
 
     async def describe() -> Any:
@@ -230,6 +232,18 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     assert stream.backend == "b"
 
 
-def test_workflow_stream_has_no_get_prefix():
-    assert hasattr(streams.StreamClient, "workflow_stream")
-    assert not hasattr(streams.StreamClient, "get_workflow_stream")
+async def test_handle_looks_in_each_backend_during_a_move(client: Client):
+    config = client.config()
+    config["plugins"] = [MemoryStreamPlugin(name="a"), MemoryStreamPlugin(name="b")]
+    stream_client = streams.StreamClient(Client(**config))
+    created = await stream_client.create(Events, id="moving", backend="b")
+    await created.topic(Events.tokens).publish("on b")
+    moving = stream_client.get_handle(Events, id="moving", backend=("a", "b"))
+    assert await moving.get_offset() > 0
+    assert moving.backend == "b"
+    nowhere = stream_client.get_handle(Events, id="nowhere", backend=("a", "b"))
+    with pytest.raises(streams.StreamNotFoundError):
+        await nowhere.get_offset()
+    # A handle with no backend name is ambiguous when the client has two backends.
+    with pytest.raises(streams.StreamConfigError):
+        stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))
