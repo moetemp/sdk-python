@@ -210,9 +210,9 @@ class WorkflowStream(StreamHandle[E]):
         return run_stream
 
     def _append(self, topic: str, values: tuple[Any, ...]) -> None:
-        self._check("write to")
         if not values:
-            return
+            raise TypeError("publish takes one or more values")
+        self._check("write to")
         _append_records.append_records(
             stream=self._model_ref(),
             records=[models.AppendRecord(topic=topic, body=value) for value in values],
