@@ -188,6 +188,7 @@ exclude = [
   'temporalio/nexus/system/workflow_service',
   'temporalio/contrib/streams/proto',
   'temporalio/contrib/streams/system',
+  'temporalio/contrib/streams/writer_system',
 ]
 
 [[tool.mypy.overrides]]
@@ -195,7 +196,11 @@ module = "temporalio.nexus.system.workflow_service.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["temporalio.contrib.streams.proto.*", "temporalio.contrib.streams.system.*"]
+module = [
+  "temporalio.contrib.streams.proto.*",
+  "temporalio.contrib.streams.system.*",
+  "temporalio.contrib.streams.writer_system.*",
+]
 ignore_errors = true
 
 [tool.pydocstyle]

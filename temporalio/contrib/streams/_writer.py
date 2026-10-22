@@ -4,34 +4,33 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import temporalio.api.streamservice.v1 as stream_pb
-import temporalio.converter
 from temporalio.contrib.streams import _errors
-from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams.proto import v1 as ext_pb
+
+if TYPE_CHECKING:
+    from temporalio.contrib.streams.writer_system import client as writer_client
 
 
 class StreamWriter:
-    """Writes the Records of one Producer on one Stream, through the crate's writer."""
+    """Writes the Records of one Producer on one Stream, through the generated Writer."""
 
     def __init__(
         self,
         *,
-        backend: StreamBackend,
-        converter: temporalio.converter.DataConverter,
-        namespace: str,
+        writers: writer_client.StreamWriterClient,
         stream_id: Callable[[], Awaitable[str]],
         producer: stream_pb.Producer,
     ) -> None:
-        """Create a writer. It opens on its first write."""
-        self._backend = backend
-        self._converter = converter
-        self._namespace = namespace
+        """Create a writer. It opens on its first write.
+
+        ``writers`` runs the values through the user's converter and codec.
+        """
+        self._writers = writers
         self._resolve_id = stream_id
         self._producer = producer
-        self._writer_id: int | None = None
+        self._writer: writer_client.Writer | None = None
         self._open_lock = asyncio.Lock()
         self._closed = False
 
@@ -50,38 +49,43 @@ class StreamWriter:
         except _errors.StreamNotFoundError:
             pass
 
-    async def open(self) -> int:
+    async def open(self) -> writer_client.Writer:
         """Open the crate's writer once. The open of a new attempt withdraws the earlier one's
         Records, even when it writes nothing.
         """
+        from temporalio.contrib.streams.writer_system import models
+
         async with self._open_lock:
-            if self._writer_id is None:
-                self._writer_id = await self._backend.open_writer(
-                    ext_pb.OpenWriterRequest(
-                        namespace=self._namespace,
-                        stream=stream_pb.StreamRef(id=await self._resolve_id()),
-                        producer=self._producer,
+            if self._writer is None:
+                producer = models._ProducerTransferTypeConverter().from_transfer_type(
+                    self._producer, models.Producer
+                )
+                self._writer = await self._writers.open_writer(
+                    models.OpenWriterRequest(
+                        stream=models.StreamRef(id=await self._resolve_id()),
+                        producer=producer,
                     )
                 )
-            return self._writer_id
+            return self._writer
 
     async def write(self, topic: str, values: Sequence[Any]) -> int:
         """Write the values as Records now. Returns the last Record's offset."""
+        from temporalio.contrib.streams.writer_system import models
+
         if self._closed:
             raise _errors.StreamClosedError(
                 "The writer is closed", reason="stream_closed"
             )
-        writer_id = await self.open()
-        bodies = await self._converter.encode(list(values))
-        return await self._backend.write_records(
-            writer_id,
-            [stream_pb.AppendRecord(topic=topic, body=body) for body in bodies],
+        writer = await self.open()
+        answer = await writer.write_records(
+            [models.AppendRecord(topic=topic, body=value) for value in values]
         )
+        return answer.last_offset or 0
 
     async def close(self) -> None:
         """Drop the writer. The Stream stays open."""
         if self._closed:
             return
         self._closed = True
-        if self._writer_id is not None:
-            await self._backend.close_writer(self._writer_id)
+        if self._writer is not None:
+            await self._writer.close()
