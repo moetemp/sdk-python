@@ -155,8 +155,8 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     assert [record.data for record in written] == ["before", "after", "after"]
-    assert len(superseded) == 1
-    assert [r for r in written if superseded[0].withdraws(r)] == [written[1]]
+    withdrawn = [r for r in written if any(i.withdraws(r) for i in superseded)]
+    assert withdrawn == [written[1]]
     assert isinstance(items[-1], streams.Closed)
 
 
@@ -351,8 +351,7 @@ async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Cli
         items = await read_all(workflow_stream(stream_client, handle))
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    assert len(superseded) == 1
-    visible = [r for r in written if not superseded[0].withdraws(r)]
+    visible = [r for r in written if not any(i.withdraws(r) for i in superseded)]
     assert [r.data for r in visible] == ["2", "3"]
     # The rerun keeps the Producer id and moves to the retry task's epoch.
     first, second = written[0].producer, visible[0].producer
@@ -377,10 +376,12 @@ class LocalOnlyInFailedTask:
                 start_to_close_timeout=timedelta(seconds=30),
             )
             raise RuntimeError("fail this Workflow Task once")
+        await stream.topic(Events.tokens).publish("other")
 
 
-async def test_retried_task_reuses_a_local_activity_key(stream_client: Client):
-    # The retried task skips the Local Activity, so its run-end close takes that call key.
+async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Client):
+    # The retry task skips the Local Activity, so only its own write can withdraw "0 1". The
+    # write also takes the skipped call's key.
     async with new_worker(
         stream_client,
         LocalOnlyInFailedTask,
@@ -395,6 +396,10 @@ async def test_retried_task_reuses_a_local_activity_key(stream_client: Client):
         )
         await handle.result()
         items = await read_all(workflow_stream(stream_client, handle))
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
+    assert [r.data for r in visible] == ["other"]
     assert isinstance(items[-1], streams.Closed)
 
 

@@ -49,9 +49,9 @@ class Superseded:
     It comes at the same point for every Reader. Use :py:meth:`withdraws` to find the earlier
     Records that it withdraws.
 
-    A Local Activity call of a failed Workflow Task is withdrawn only when the retry task runs
-    that call again. A call that the retry task skips, for example because a Signal changed
-    the path, keeps its Records.
+    The next write of a run to a Stream withdraws the Records that the run's Local Activities
+    wrote there in Workflow Tasks that never completed. A Stream that the run never writes
+    again keeps them.
 
     .. warning::
         This API is experimental.
