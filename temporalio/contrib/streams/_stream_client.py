@@ -170,9 +170,7 @@ class ClientStream(StreamHandle[E]):
         def writer() -> StreamWriter:
             if self._writer is None:
                 self._writer = StreamWriter(
-                    backend=backend,
-                    converter=client.data_converter,
-                    namespace=client.namespace,
+                    writers=backend.writers(client.namespace, client.data_converter),
                     stream_id=self._stream_id,
                     producer=_client_producer(client),
                 )
