@@ -95,6 +95,35 @@ class StreamBackend:
             ),
         )
 
+    async def write_records(
+        self, writer_id: int, records: list[stream_pb.AppendRecord]
+    ) -> int:
+        """Write Records at once for a writer, after its buffered ones. Returns the last
+        Record's offset.
+        """
+        response = await self.call_async(
+            "WriteRecords",
+            ext_pb.WriteRecordsRequest(writer_id=writer_id, records=records),
+            ext_pb.WriteRecordsResponse,
+        )
+        return response.last_offset
+
+    async def flush_run_buffer(
+        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
+    ) -> int:
+        """Write a run's buffered Workflow calls before a Local Activity of the run starts.
+
+        Returns how many Records it wrote.
+        """
+        response = await self.call_async(
+            "FlushRunBuffer",
+            ext_pb.FlushRunBufferRequest(
+                namespace=namespace, run_id=run_id, workflow_task=workflow_task
+            ),
+            ext_pb.FlushRunBufferResponse,
+        )
+        return response.records
+
     async def flush_writer(self, writer_id: int) -> int:
         """Wait until the writer's Records are in the Store."""
         response = await self.call_async(

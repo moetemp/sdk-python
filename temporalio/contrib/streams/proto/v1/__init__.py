@@ -7,6 +7,8 @@ from .extension_pb2 import (
     CloseWritersResponse,
     DrainClosesRequest,
     DrainClosesResponse,
+    FlushRunBufferRequest,
+    FlushRunBufferResponse,
     FlushWriterRequest,
     FlushWriterResponse,
     OpenWriterRequest,
@@ -16,6 +18,8 @@ from .extension_pb2 import (
     RedisStreamConfig,
     StreamErrorDetails,
     WorkflowCall,
+    WriteRecordsRequest,
+    WriteRecordsResponse,
 )
 
 __all__ = [
@@ -27,6 +31,8 @@ __all__ = [
     "CloseWritersResponse",
     "DrainClosesRequest",
     "DrainClosesResponse",
+    "FlushRunBufferRequest",
+    "FlushRunBufferResponse",
     "FlushWriterRequest",
     "FlushWriterResponse",
     "OpenWriterRequest",
@@ -36,4 +42,6 @@ __all__ = [
     "RedisStreamConfig",
     "StreamErrorDetails",
     "WorkflowCall",
+    "WriteRecordsRequest",
+    "WriteRecordsResponse",
 ]

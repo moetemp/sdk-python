@@ -17,6 +17,10 @@ message StreamRef {
     // client or Activity ref. The Store keys on id only and never reads these.
     string workflow_id = 2;
     string first_execution_run_id = 3;
+    // The name of the backend that holds the Stream, as the Worker and client config register
+    // it, so every process routes a ref it receives. Empty is the default backend. The Store
+    // never reads it.
+    string backend = 4;
 }
 
 enum ProducerKind {
@@ -69,9 +73,9 @@ enum StreamRecordKind {
     // Lua flags the first batch of a new epoch. The read makes this Record from the flag.
     STREAM_RECORD_KIND_SUPERSEDED = 2;
     STREAM_RECORD_KIND_CLOSE = 3;
-    // The last Record of a read that saw no new Record for idle_timeout. Its offset is the
-    // newest offset read + 1, the place to resume from.
-    STREAM_RECORD_KIND_IDLE = 4;
+    // A Reader that stops after a quiet period sets its own timer and resumes from next_offset.
+    reserved 4;
+    reserved "STREAM_RECORD_KIND_IDLE";
 }
 
 message Supersession {
@@ -101,7 +105,8 @@ message StreamRecord {
     temporal.api.failure.v1.Failure close_failure = 8;
 }
 
-// Idempotent for one id and one Retention. ALREADY_EXISTS for another Retention.
+// Idempotent for one id, one Retention and one auto_close. ALREADY_EXISTS for another
+// Retention or another auto_close.
 message CreateStreamRequest {
     string namespace = 1;
     // Required from Workflow code.
@@ -110,6 +115,11 @@ message CreateStreamRequest {
     google.protobuf.Duration retention = 3;
     // Workflow only. A retry run's first create: the previous run, whose Records it withdraws.
     string withdraw_run = 4;
+    // Close the Stream with no result when no Record was appended for this long, counted from
+    // the create. Empty never closes on its own. It is separate from Retention and the safety
+    // TTL. The Store applies it on the next access, so no call sees the Stream open after the
+    // period. UNIMPLEMENTED (detail stream_unsupported) on a Store that can't.
+    google.protobuf.Duration auto_close = 5;
 }
 
 enum StreamStatus {
@@ -180,9 +190,8 @@ message ReadRecordsRequest {
     // How long to wait for a Stream that nobody created yet. Empty fails at once with
     // NOT_FOUND. At most 60 s.
     google.protobuf.Duration create_wait = 8;
-    // End the read with an IDLE Record when no new Record comes for this long. Empty never
-    // ends on idle. The facade counts it across reads, since one read waits at most 60 s.
-    google.protobuf.Duration idle_timeout = 9;
+    reserved 9;
+    reserved "idle_timeout";
     // Also read the Topics that start with one of these. A Record passes when its Topic is in
     // topics or starts with a prefix. Both empty reads every Topic.
     repeated string topic_prefixes = 10;
@@ -205,4 +214,6 @@ message DescribeStreamResponse {
     // Zero when the Stream has no Record.
     int64 last_offset = 2;
     google.protobuf.Duration retention = 3;
+    // The auto_close of the create. Empty when the Stream has none.
+    google.protobuf.Duration auto_close = 4;
 }
