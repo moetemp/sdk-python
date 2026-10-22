@@ -69,7 +69,10 @@ pub fn combine_worker_extensions(parts: Vec<WorkerExtensionRef>) -> PyResult<Wor
         parts.into_iter().map(|part| part.extension).collect();
     let interceptors: Vec<_> = parts
         .iter()
-        .filter_map(|part| part.workflow_task_interceptor())
+        .filter_map(|part| {
+            part.workflow_task_interceptor()
+                .map(|interceptor| (part.name().to_string(), interceptor))
+        })
         .collect();
     let name = parts
         .iter()
@@ -103,7 +106,7 @@ impl WorkerExtension for CombinedExtension {
     }
 }
 
-struct CombinedInterceptor(Vec<Arc<dyn WorkflowTaskInterceptor>>);
+struct CombinedInterceptor(Vec<(String, Arc<dyn WorkflowTaskInterceptor>)>);
 
 #[async_trait::async_trait]
 impl WorkflowTaskInterceptor for CombinedInterceptor {
@@ -112,8 +115,10 @@ impl WorkflowTaskInterceptor for CombinedInterceptor {
         task: &WorkflowTaskCompletionInfo,
     ) -> Result<(), WorkflowTaskInterceptError> {
         // In order, so the first failure fails the task before a later part writes anything.
-        for part in &self.0 {
-            part.before_complete(task).await?;
+        for (name, part) in &self.0 {
+            part.before_complete(task).await.map_err(|err| {
+                WorkflowTaskInterceptError::new(format!("{name}: {}", err.message))
+            })?;
         }
         Ok(())
     }
@@ -123,19 +128,19 @@ impl WorkflowTaskInterceptor for CombinedInterceptor {
         futures::future::join_all(
             self.0
                 .iter()
-                .map(|part| part.after_complete(task, accepted)),
+                .map(|(_, part)| part.after_complete(task, accepted)),
         )
         .await;
     }
 
     fn on_task_failed(&self, task: &WorkflowTaskFailedInfo) {
-        for part in &self.0 {
+        for (_, part) in &self.0 {
             part.on_task_failed(task);
         }
     }
 
     fn on_evicted(&self, run_id: &str) {
-        for part in &self.0 {
+        for (_, part) in &self.0 {
             part.on_evicted(run_id);
         }
     }

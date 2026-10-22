@@ -665,7 +665,7 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         attempt, token = enter_attempt(self, streams)
         try:
-            await _flush_run_before_local_activity(streams)
+            await _flush_run_before_local_activity(self._plugin._backend, streams)
             if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
@@ -722,7 +722,9 @@ def _targets(backend: str) -> bool:
     return target == backend
 
 
-async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -> None:
+async def _flush_run_before_local_activity(
+    backend: _ExtensionStreamBackend, streams: _activity.ActivityStreams
+) -> None:
     # The run's buffered Records go before the Local Activity's, in the epoch of the Workflow
     # Task that dispatched it. A failure fails the attempt, and the run's next completion
     # fails too, so its retry withdraws what was written.
@@ -735,9 +737,7 @@ async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -
     )
     if task.started_time is not None:
         epoch.started_time.FromDatetime(task.started_time)
-    await streams.backend.flush_run_buffer(
-        streams.namespace, info.workflow_run_id, epoch
-    )
+    await backend.flush_run_buffer(streams.namespace, info.workflow_run_id, epoch)
 
 
 def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:

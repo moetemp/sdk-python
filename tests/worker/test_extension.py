@@ -96,3 +96,22 @@ async def test_extension_call_errors():
         await extension.call_async("Missing", b"")
     assert unknown_err.value.code == RPCStatusCode.UNIMPLEMENTED
     assert "Missing" in unknown_err.value.message
+
+
+async def test_combined_extension_stops_at_the_failing_part(client: Client):
+    # Core takes one extension, so the parts run in order, and a failure skips the rest.
+    first = load_test_extension()
+    failing = load_test_extension(b"fail_before_complete")
+    last = load_test_extension()
+    combined = WorkerExtension.combine(first, failing, last)
+    async with new_worker(client, SimpleWorkflow, extension=combined) as worker:
+        handle = await client.start_workflow(
+            SimpleWorkflow.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await assert_task_fail_eventually(
+            handle, message_contains="temporalio-test: test extension refused the task"
+        )
+    assert int(extension_counts(first)[0]) >= 1
+    assert int(extension_counts(last)[0]) == 0
