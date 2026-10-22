@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import temporalio.client
 import temporalio.runtime
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
@@ -44,7 +42,6 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
     def __init__(
         self,
         *,
-        retention: timedelta | None = None,
         runtime: temporalio.runtime.Runtime | None = None,
         name: str = "native",
         default: bool = False,
@@ -52,15 +49,12 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
         """Create the plugin. It makes no call.
 
         Args:
-            retention: The default Retention of a new Stream. Defaults to the server's.
             runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry.
             default: Make this the default backend when the client or Worker has more than
                 one Stream plugin. With none marked, the first one is the default.
         """
-        config = ext_pb.RedisStreamConfig()
-        if retention is not None:
-            config.retention.FromTimedelta(retention)
+        config = ext_pb.NativeStreamConfig()
         super().__init__(
             "temporalio.NativeStreamPlugin",
             NATIVE_EXTENSION_NAME,

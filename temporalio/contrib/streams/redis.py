@@ -58,7 +58,7 @@ class _ExtensionStreamPlugin(StreamPlugin):
         self,
         name: str,
         extension_name: str,
-        config: ext_pb.RedisStreamConfig,
+        config: ext_pb.RedisStreamConfig | ext_pb.NativeStreamConfig,
         runtime: temporalio.runtime.Runtime | None,
         backend_name: str,
         default: bool,
