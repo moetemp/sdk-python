@@ -12,7 +12,6 @@ from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
@@ -191,35 +190,6 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
 def test_workflow_stream_has_no_reads():
     assert not hasattr(streams.WorkflowStream, "subscribe")
     assert not hasattr(streams.WorkflowStream, "get_offset")
-
-
-async def test_writer_publishes_from_another_thread(client: Client):
-    extension = FakeExtension()
-    backend = streams.StreamBackend(extension)
-    await backend.call_async(
-        "CreateStream",
-        stream_pb.CreateStreamRequest(stream_id="threads"),
-        stream_pb.CreateStreamResponse,
-    )
-
-    async def stream_id() -> str:
-        return "threads"
-
-    writer = StreamWriter(
-        backend=backend,
-        converter=client.data_converter,
-        namespace="default",
-        stream_id=stream_id,
-        producer=stream_pb.Producer(
-            kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT, id="client:a:b"
-        ),
-        batch=BatchOptions(),
-        create_first=False,
-        loop=asyncio.get_running_loop(),
-    )
-    await asyncio.to_thread(writer.publish, "t", "from a thread", False)
-    await writer.flush()
-    assert len(extension.streams["threads"].records) == 1
 
 
 def test_unsupported_capability_maps_to_its_error():

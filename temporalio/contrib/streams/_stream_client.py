@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import itertools
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -17,7 +16,7 @@ from temporalio.contrib.streams._backend import StreamBackend, client_backend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._reader import Item
-from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
+from temporalio.contrib.streams._writer import StreamWriter
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -131,9 +130,6 @@ class ClientStream(StreamHandle[E]):
                     namespace=client.namespace,
                     stream_id=self._stream_id,
                     producer=_client_producer(client),
-                    batch=BatchOptions(),
-                    create_first=False,
-                    loop=asyncio.get_running_loop(),
                 )
             return self._writer
 

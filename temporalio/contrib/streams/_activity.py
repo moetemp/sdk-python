@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
+from temporalio.contrib.streams._writer import StreamWriter
 
 
 @dataclass
@@ -38,9 +38,6 @@ class ActivityStreams:
                 namespace=self.namespace,
                 stream_id=known_id,
                 producer=self.producer,
-                batch=BatchOptions(),
-                create_first=False,
-                loop=self.loop,
             )
             self.writers[stream_id] = writer
         return writer
