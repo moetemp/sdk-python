@@ -303,6 +303,8 @@ class SyncHandlers:
 
     @workflow.run
     async def run(self, prompt: str) -> None:
+        # The init made the handle before the create, since a handle makes no call.
+        assert prompt == self._prompt
         await stream_workflow.create_stream(Events, close_with_run=False)
         await workflow.wait_condition(lambda: self._done)
 
