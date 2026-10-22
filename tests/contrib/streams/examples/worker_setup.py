@@ -56,8 +56,13 @@ async def connect_while_migrating(target_host: str, url_a: str, url_b: str) -> C
     )
 
 
+def run_worker(client: Client, task_queue: str) -> Worker:
+    # The Worker takes the client's plugins, so it needs no Stream setup of its own.
+    return Worker(client, task_queue=task_queue, workflows=[Greeter])
+
+
 async def main(client: Client, task_queue: str) -> list[str]:
-    async with Worker(client, task_queue=task_queue, workflows=[Greeter]):
+    async with run_worker(client, task_queue):
         handle = await client.start_workflow(
             Greeter.run, "ada", id=f"greeter-{uuid.uuid4()}", task_queue=task_queue
         )

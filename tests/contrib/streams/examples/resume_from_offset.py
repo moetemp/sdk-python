@@ -10,7 +10,7 @@ import uuid
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.worker import Worker
@@ -54,10 +54,11 @@ class OffsetStore:
 
 
 async def read_some(
-    stream: streams.ClientStream[Events], store: OffsetStore, count: int
+    client: Client, handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
 ) -> list[str]:
+    turn3 = streams.StreamClient(client).workflow_stream(handle, Events, name="turn-3")
+    tokens = turn3.topic(Events.tokens)
     seen = []
-    tokens = stream.topic(Events.tokens)
     async for item in tokens.subscribe(
         from_offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
     ):
@@ -78,12 +79,9 @@ async def main(client: Client, task_queue: str) -> tuple[list[str], list[str]]:
         handle = await client.start_workflow(
             Turns.run, ["a", "b"], id=f"turns-{uuid.uuid4()}", task_queue=task_queue
         )
-        stream = streams.StreamClient(client).workflow_stream(
-            handle, Events, name="turn-3"
-        )
         store = OffsetStore()
-        before = await read_some(stream, store, 2)
+        before = await read_some(client, handle, store, 2)
         await handle.signal(Turns.add, ["c", "d"])
-        after = await read_some(stream, store, 2)
+        after = await read_some(client, handle, store, 2)
         await handle.result()
         return before, after
