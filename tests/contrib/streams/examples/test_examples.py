@@ -112,6 +112,8 @@ def lane_plugins(
     """The plugins of a lane: one named `redis` and one named `native`."""
     if lane == "memory":
         return MemoryStreamPlugin(name="redis"), MemoryStreamPlugin(name="native")
+    if lane == "native" and not NATIVE_TARGET:
+        pytest.skip("TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service")
     redis_url = request.getfixturevalue("redis_url")
     redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
     if lane == "redis":
