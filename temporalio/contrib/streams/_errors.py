@@ -125,12 +125,19 @@ def from_application_error(
 ) -> StreamError | None:
     """The Stream error that an application error of a failed call carries, if any.
 
-    A Stream error's type is its class name, and its first detail is its reason.
+    A Stream error's type is its class name, and its first detail is its reason. A server may
+    give the reason as the type, or at the start of the message, such as ``stream_closed: ...``.
     """
+    token = err.message.split(":", 1)[0].strip()
+    reason = err.details[0] if err.details and isinstance(err.details[0], str) else ""
     cls = _BY_NAME.get(err.type or "")
     if cls is None:
+        reason = next(
+            (name for name in (err.type or "", token) if name in _BY_REASON), ""
+        )
+        cls = _BY_REASON.get(reason)
+    if cls is None:
         return None
-    reason = err.details[0] if err.details and isinstance(err.details[0], str) else ""
     return cls(err.message, reason=reason)
 
 
