@@ -73,10 +73,6 @@ class StreamOffsetError(StreamError):
     """The offset is past the newest one plus one, or Retention removed it."""
 
 
-class StreamBufferFullError(StreamError):
-    """The writer's buffer is full. Flush, or publish less often."""
-
-
 class StreamUnsupportedError(StreamError):
     """The Store lacks a capability that the call needs. The message ends with its name."""
 
@@ -96,7 +92,6 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_fenced": StreamFencedError,
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
-    "stream_buffer_full": StreamBufferFullError,
     "stream_unsupported": StreamUnsupportedError,
 }
 

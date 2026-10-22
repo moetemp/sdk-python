@@ -324,17 +324,18 @@ class FlushRunBufferResponse(google.protobuf.message.Message):
 global___FlushRunBufferResponse = FlushRunBufferResponse
 
 class OpenWriterRequest(google.protobuf.message.Message):
-    """Method `OpenWriter`, asynchronous. A buffered writer for an Activity or a client Producer."""
+    """Method `OpenWriter`, asynchronous. A writer for an Activity or a client Producer, which keeps
+    its epoch and `sequence` order. A writer of an Activity attempt above 1 first sends an empty
+    batch, so the new epoch withdraws the earlier attempt's Records.
+    """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     NAMESPACE_FIELD_NUMBER: builtins.int
     STREAM_FIELD_NUMBER: builtins.int
     PRODUCER_FIELD_NUMBER: builtins.int
-    BATCH_INTERVAL_FIELD_NUMBER: builtins.int
     MAX_BATCH_SIZE_FIELD_NUMBER: builtins.int
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
-    MAX_BUFFERED_RECORDS_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(
@@ -344,16 +345,11 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def producer(
         self,
     ) -> temporalio.api.streamservice.v1.stream_service_pb2.Producer: ...
-    @property
-    def batch_interval(self) -> google.protobuf.duration_pb2.Duration:
-        """How often the writer flushes. Empty is 100 ms."""
     max_batch_size: builtins.int
-    """A flush sends at most this many Records in one batch. Zero is 1000."""
+    """A write sends at most this many Records in one batch. Zero is 1000."""
     @property
     def max_retry_duration(self) -> google.protobuf.duration_pb2.Duration:
-        """How long a flush retries a Store failure. Empty is 10 s."""
-    max_buffered_records: builtins.int
-    """A publish past this many buffered Records fails with `stream_buffer_full`. Zero is 10000."""
+        """How long a write retries a Store failure. Empty is 10 s."""
     def __init__(
         self,
         *,
@@ -362,16 +358,12 @@ class OpenWriterRequest(google.protobuf.message.Message):
         | None = ...,
         producer: temporalio.api.streamservice.v1.stream_service_pb2.Producer
         | None = ...,
-        batch_interval: google.protobuf.duration_pb2.Duration | None = ...,
         max_batch_size: builtins.int = ...,
         max_retry_duration: google.protobuf.duration_pb2.Duration | None = ...,
-        max_buffered_records: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "batch_interval",
-            b"batch_interval",
             "max_retry_duration",
             b"max_retry_duration",
             "producer",
@@ -383,12 +375,8 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "batch_interval",
-            b"batch_interval",
             "max_batch_size",
             b"max_batch_size",
-            "max_buffered_records",
-            b"max_buffered_records",
             "max_retry_duration",
             b"max_retry_duration",
             "namespace",
@@ -418,63 +406,12 @@ class OpenWriterResponse(google.protobuf.message.Message):
 
 global___OpenWriterResponse = OpenWriterResponse
 
-class PublishRequest(google.protobuf.message.Message):
-    """Method `Publish`, synchronous. Adds encoded Records to a writer's buffer."""
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_ID_FIELD_NUMBER: builtins.int
-    RECORDS_FIELD_NUMBER: builtins.int
-    FORCE_FLUSH_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
-    @property
-    def records(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
-        temporalio.api.streamservice.v1.stream_service_pb2.AppendRecord
-    ]: ...
-    force_flush: builtins.bool
-    """Start a flush at once."""
-    def __init__(
-        self,
-        *,
-        writer_id: builtins.int = ...,
-        records: collections.abc.Iterable[
-            temporalio.api.streamservice.v1.stream_service_pb2.AppendRecord
-        ]
-        | None = ...,
-        force_flush: builtins.bool = ...,
-    ) -> None: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "force_flush",
-            b"force_flush",
-            "records",
-            b"records",
-            "writer_id",
-            b"writer_id",
-        ],
-    ) -> None: ...
-
-global___PublishRequest = PublishRequest
-
-class PublishResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___PublishResponse = PublishResponse
-
 class WriteRecordsRequest(google.protobuf.message.Message):
-    """Method `WriteRecords`, asynchronous. Appends Records at once for an open writer, after the
-    Records that `Publish` buffered, and answers when they are in the Store. It keeps the writer's
-    Producer epoch and `sequence` order, and a Store failure resends the same batch, so it goes in
-    once. Records past the Store's batch limit go as more batches, in order. An awaited publish of
-    an Activity or a client uses this call, so it needs no interval flush. A failure after the
-    Store retries fails the writer, as a failed flush does.
+    """Method `WriteRecords`, asynchronous. Appends Records at once for an open writer and answers
+    when they are in the Store. It keeps the writer's Producer epoch and `sequence` order, and a
+    Store failure resends the same batch, so it goes in once. Records past the Store's batch limit
+    go as more batches, in order. An awaited publish of an Activity or a client uses this call. A
+    failure after the Store retries fails the writer, since the batch may be in the Store.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -529,44 +466,9 @@ class WriteRecordsResponse(google.protobuf.message.Message):
 
 global___WriteRecordsResponse = WriteRecordsResponse
 
-class FlushWriterRequest(google.protobuf.message.Message):
-    """Method `FlushWriter`, asynchronous. Waits until the Records published so far are in the Store."""
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_ID_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
-    def __init__(
-        self,
-        *,
-        writer_id: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["writer_id", b"writer_id"]
-    ) -> None: ...
-
-global___FlushWriterRequest = FlushWriterRequest
-
-class FlushWriterResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    LAST_OFFSET_FIELD_NUMBER: builtins.int
-    last_offset: builtins.int
-    """The offset of the newest Record the writer wrote. Zero if it wrote none."""
-    def __init__(
-        self,
-        *,
-        last_offset: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["last_offset", b"last_offset"]
-    ) -> None: ...
-
-global___FlushWriterResponse = FlushWriterResponse
-
 class CloseWriterRequest(google.protobuf.message.Message):
-    """Method `CloseWriter`, asynchronous. Flushes, then drops the writer. It doesn't close the
-    Stream.
+    """Method `CloseWriter`, asynchronous. Waits for a write in flight, then drops the writer. It
+    doesn't close the Stream. It fails with the writer's error if a write failed.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -589,6 +491,7 @@ class CloseWriterResponse(google.protobuf.message.Message):
 
     LAST_OFFSET_FIELD_NUMBER: builtins.int
     last_offset: builtins.int
+    """The offset of the newest Record the writer wrote. Zero if it wrote none."""
     def __init__(
         self,
         *,
@@ -601,8 +504,8 @@ class CloseWriterResponse(google.protobuf.message.Message):
 global___CloseWriterResponse = CloseWriterResponse
 
 class CloseWritersRequest(google.protobuf.message.Message):
-    """Method `CloseWriters`, asynchronous. Flushes and drops every open writer, for example when the
-    plugin's client or Worker shuts down, so no flusher task stays behind.
+    """Method `CloseWriters`, asynchronous. Drops every open writer, for example when the plugin's
+    client or Worker shuts down.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -618,7 +521,7 @@ class CloseWritersResponse(google.protobuf.message.Message):
 
     FAILED_FIELD_NUMBER: builtins.int
     failed: builtins.int
-    """The writers whose last flush failed."""
+    """The writers that had failed."""
     def __init__(
         self,
         *,

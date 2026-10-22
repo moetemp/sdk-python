@@ -38,8 +38,8 @@ async def append_records(
     failed_tasks: list[int] | None = None,
     withdraw_run: str | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[AppendRecordsResponse,]:
-    """In Workflow code, the Brook transport puts this call into the run's buffer, and the
-    Workflow facade drops the response.
+    """In Workflow code, Brook buffers this call in the run, and the facade drops the
+    answer.
 
     Args:
         producer: Required outside a Workflow. In a Workflow the transport sets it.
@@ -49,8 +49,7 @@ async def append_records(
             the run.
         failed_tasks: Workflow only. Failed or timed out tasks since this run's last
             flush here.
-        withdraw_run: Workflow only. A retry run's first batch or create: the previous
-            run, whose Records it withdraws.
+        withdraw_run: Retry run only. The previous run, whose Records this withdraws.
     """
     request = AppendRecordsRequest(
         stream=stream,

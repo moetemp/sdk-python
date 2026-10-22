@@ -1,8 +1,8 @@
-// Draft. The Stream service as a System Nexus service, for the Brook v2 API proposal.
-// The records are backed by the messages in stream_service.proto (same directory), which
-// is a draft of temporal/api/streamservice/v1/. For the draft, every message and enum
-// is in one package. The spec carries no per-language names. Each language gets its
-// idiomatic shape from a hand-written facade over the generated code.
+// Draft. The Stream service as a System Nexus service, for the Brook API proposal. The records
+// are backed by the messages in ../protos/temporal/api/streamservice/v1/stream_service.proto.
+// This file is the source. Each SDK copies it and generates its bindings with nexgen. The spec
+// carries no per-language names. Each language gets its idiomatic shape from a hand-written
+// facade over the generated code.
 package temporal:nexus@1.0.0;
 
 world system {
@@ -33,11 +33,11 @@ interface stream-service {
   record stream-ref {
     /// @nexus.doc "The Stream id. 1 to 4096 bytes after encoding."
     id: string,
-    /// @nexus.doc "The Workflow that owns the Stream. Empty on a standalone, client or Activity ref."
+    /// @nexus.doc "The owning Workflow. Empty on a standalone, client or Activity ref."
     workflow-id: option<string>,
     /// @nexus.doc "The first run id of the owning run chain. Empty when workflow-id is."
     first-execution-run-id: option<string>,
-    /// @nexus.doc "The name of the backend that holds the Stream, as the Worker and client config register it. Empty is the default backend. The Store never reads it."
+    /// @nexus.doc "Registered backend name, empty for the default. The Store never reads it."
     backend: option<string>,
   }
 
@@ -123,9 +123,9 @@ interface stream-service {
     previous-completed-task: option<workflow-task-epoch>,
     /// @nexus.doc "Workflow only. Started event ids of failed or timed out Workflow Tasks."
     failed-tasks: list<s64>,
-    /// @nexus.doc "Workflow retry only. The previous run. Every Record whose Producer carries it is withdrawn."
+    /// @nexus.doc "Workflow retry only. The previous run, all of whose Records are withdrawn."
     withdraw-run: option<string>,
-    /// @nexus.doc "The run of the withdrawing Producer, so a Reader applies the Workflow rule without parsing ids. Empty for a client."
+    /// @nexus.doc "The withdrawing Producer's run, so no Reader parses ids. Empty for a client."
     run-id: option<string>,
   }
 
@@ -151,16 +151,16 @@ interface stream-service {
     close-failure: option<failure>,
   }
 
-  /// @nexus.doc "Create a Stream. Idempotent for one id, one Retention and one auto-close. ALREADY_EXISTS for another Retention or another auto-close."
+  /// @nexus.doc "Create a Stream idempotently. ALREADY_EXISTS for another Retention or auto-close."
   /// @nexus.proto "temporal.api.streamservice.v1.CreateStreamRequest"
   record create-stream-request {
     /// @nexus.doc "Required from Workflow code. Empty elsewhere asks the service for an id."
     stream-id: string,
     /// @nexus.doc "The age after which a Record is dropped. Empty is the Store default."
     retention: option<duration>,
-    /// @nexus.doc "Workflow only. A retry run's first batch or create: the previous run, whose Records it withdraws."
+    /// @nexus.doc "Retry run only. The previous run, whose Records this withdraws."
     withdraw-run: option<string>,
-    /// @nexus.doc "Close the Stream with no result when no Record was appended for this long. Empty never closes on its own. It is separate from Retention."
+    /// @nexus.doc "Close with no result after this long with no append. Empty never auto-closes."
     auto-close: option<duration>,
     /// @nexus.omit
     namespace: placeholder,
@@ -185,7 +185,8 @@ interface stream-service {
 
   // The meta key of each Stream has a format version v. Lua refuses a write to a Stream with a
   // higher v with FAILED_PRECONDITION and the detail stream_format_too_new.
-  /// @nexus.doc "Append one batch. FAILED_PRECONDITION if closed, fenced or stream_format_too_new. NOT_FOUND if absent."
+  /// @nexus.doc
+  ///   "Append. FAILED_PRECONDITION if closed, fenced or format too new. NOT_FOUND if absent."
   /// @nexus.proto "temporal.api.streamservice.v1.AppendRecordsRequest"
   record append-records-request {
     %stream: option<stream-ref>,
@@ -198,7 +199,7 @@ interface stream-service {
     previous-completed-task: option<workflow-task-epoch>,
     /// @nexus.doc "Workflow only. Failed or timed out tasks since this run's last flush here."
     failed-tasks: list<s64>,
-    /// @nexus.doc "Workflow only. A retry run's first batch or create: the previous run, whose Records it withdraws."
+    /// @nexus.doc "Retry run only. The previous run, whose Records this withdraws."
     withdraw-run: option<string>,
     /// @nexus.omit
     namespace: placeholder,
@@ -242,7 +243,7 @@ interface stream-service {
   /// @nexus.proto "temporal.api.streamservice.v1.ReadRecordsRequest"
   record read-records-request {
     %stream: option<stream-ref>,
-    /// @nexus.doc "Start at this offset. Empty uses start. INVALID_ARGUMENT if past the newest offset + 1."
+    /// @nexus.doc "Start offset. Empty uses start. INVALID_ARGUMENT past the newest offset + 1."
     /// @nexus.offset "stream-offset"
     from-offset: option<s64>,
     /// @nexus.doc "Where to start when from-offset is empty. Unspecified is the beginning."
@@ -292,7 +293,8 @@ interface stream-service {
   /// @nexus.operation name="CreateStream"
   create-stream: func(request: create-stream-request) -> create-stream-response;
 
-  /// @nexus.doc "In Workflow code, the Brook transport puts this call into the run's buffer, and the Workflow facade drops the response."
+  /// @nexus.doc
+  ///   "In Workflow code, Brook buffers this call in the run, and the facade drops the answer."
   /// @nexus.operation name="AppendRecords"
   append-records: func(request: append-records-request) -> append-records-response;
 

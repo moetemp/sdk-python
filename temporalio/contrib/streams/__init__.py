@@ -35,7 +35,6 @@ from temporalio.contrib.streams._defn import (
 )
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
-    StreamBufferFullError,
     StreamClosedError,
     StreamError,
     StreamExpiredError,
@@ -65,7 +64,6 @@ __all__ = [
     "ReadOnlyContextError",
     "Record",
     "StreamBackend",
-    "StreamBufferFullError",
     "StreamClient",
     "StreamClosedError",
     "StreamDefinition",

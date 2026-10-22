@@ -23,9 +23,7 @@ entries. Do not compute an offset. Pass back one that the service gave.
 
 @dataclasses.dataclass(slots=True)
 class CreateStreamRequest:
-    """Create a Stream. Idempotent for one id, one Retention and one auto-close.
-    ALREADY_EXISTS for another Retention or another auto-close.
-    """
+    """Create a Stream idempotently. ALREADY_EXISTS for another Retention or auto-close."""
 
     stream_id: str
     retention: datetime.timedelta | None = None
@@ -213,8 +211,8 @@ temporalio.converter.transfer_type_convertible(_StreamRefTransferTypeConverter)(
 
 @dataclasses.dataclass(slots=True)
 class AppendRecordsRequest:
-    """Append one batch. FAILED_PRECONDITION if closed, fenced or stream_format_too_new.
-    NOT_FOUND if absent.
+    """Append. FAILED_PRECONDITION if closed, fenced or format too new. NOT_FOUND if
+    absent.
     """
 
     stream: StreamRef | None = None

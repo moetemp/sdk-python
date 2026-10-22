@@ -43,8 +43,8 @@ async def read_records(
     """Not for Workflow code in Brook. A long poll. NOT_FOUND for an uncreated Stream.
 
     Args:
-        from_offset: Start at this offset. Empty uses start. INVALID_ARGUMENT if past
-            the newest offset + 1.
+        from_offset: Start offset. Empty uses start. INVALID_ARGUMENT past the newest
+            offset + 1.
         start: Where to start when from-offset is empty. Unspecified is the beginning.
         topics: Topics to read, by exact match. With topic-prefixes, empty reads every
             Topic.
