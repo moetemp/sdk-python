@@ -10,6 +10,7 @@ import google.protobuf.message
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
+import temporalio.converter
 import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -48,10 +49,18 @@ class StreamBackend:
         """Create a backend over an extension."""
         self._extension = extension
 
-    @property
-    def extension(self) -> temporalio.worker.WorkerExtension:
-        """The extension that the backend calls."""
-        return self._extension
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
+        """A generated Stream service client for ``namespace``.
+
+        With a ``data_converter``, user values in the requests go through it and its codec.
+        """
+        return service_client.StreamServiceClient(
+            _ExtensionTransport(self, namespace), data_converter=data_converter
+        )
 
     def for_client(
         self,
@@ -61,10 +70,6 @@ class StreamBackend:
         client's connection, and this one needs none.
         """
         return self
-
-    def service(self, namespace: str) -> service_client.StreamServiceClient:
-        """A generated Stream service client for ``namespace``."""
-        return service_client.StreamServiceClient(_ExtensionTransport(self, namespace))
 
     def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
         """Call a synchronous extension method."""
@@ -173,14 +178,15 @@ class _ExtensionTransport:
 
 
 def client_backend(
-    client: temporalio.client.Client, name: str | None
+    client: temporalio.client.Client, name: str | None, *, only: bool = False
 ) -> tuple[str, StreamBackend]:
     """The name and the backend of a client's Stream plugin. None picks the plugin marked
-    as the default, or else the first one.
+    as the default, or else the first one. With ``only``, None needs a client with one
+    backend, since a handle with no backend name may be of any of them.
 
     Raises:
-        StreamTransportMissingError: The client has no Stream plugin.
-        StreamUnsupportedError: The client has no Stream plugin of that name.
+        StreamConfigError: The client has no Stream plugin, none of that name, or more than
+            one where ``only`` needs one.
     """
     backends = [
         (
@@ -194,8 +200,12 @@ def client_backend(
         )
     ]
     if not backends:
-        raise _errors.StreamTransportMissingError(
+        raise _errors.StreamConfigError(
             "The client has no Stream plugin, such as RedisStreamPlugin"
+        )
+    if not name and only and len(backends) > 1:
+        raise _errors.StreamConfigError(
+            "The handle names no backend, and the client has more than one"
         )
     if not name:
         defaults = [entry for entry in backends if entry[2]] or backends
@@ -203,8 +213,7 @@ def client_backend(
     for backend_name, backend, _ in backends:
         if backend_name == name:
             return backend_name, backend.for_client(client)
-    raise _errors.StreamUnsupportedError(
+    raise _errors.StreamConfigError(
         f"The client has no Stream backend {name}. It has "
-        f"{', '.join(entry[0] for entry in backends)}.",
-        reason="stream_unsupported",
+        f"{', '.join(entry[0] for entry in backends)}."
     )

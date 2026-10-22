@@ -29,19 +29,18 @@ from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import _REQUESTS, _RESPONSES, StreamBackend
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
-    _CLOSE_WITH_RUN_BACKENDS_HEADER,
-    _CLOSE_WITH_RUN_HEADER,
     _SERVICE,
     _activity_streams,
     _close_quietly,
     _DoneHandle,
     _fails_run,
     _owned_ref,
-    _take_close_with_run,
+    _take_owned_streams,
     _targets,
     chain_continues,
     check_worker_backends,
     enter_attempt,
+    pass_owned_streams,
 )
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
@@ -105,22 +104,21 @@ class NativeStreamBackend(StreamBackend):
         self._client = client
         self._writers: dict[int, _Writer] = {}
 
-    @property
-    def extension(self) -> temporalio.worker.WorkerExtension:
-        """Native Streams need no extension, so this raises."""
-        raise _errors.StreamUnsupportedError(
-            "Native Streams have no worker extension", reason="stream_unsupported"
-        )
-
     def for_client(self, client: temporalio.client.Client) -> NativeStreamBackend:
         """The backend over this client's connection."""
         if self._client is client:
             return self
         return NativeStreamBackend(client)
 
-    def service(self, namespace: str) -> service_client.StreamServiceClient:
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
         """A generated Stream service client for ``namespace``, over the frontend."""
-        return service_client.StreamServiceClient(_GrpcTransport(self, namespace))
+        return service_client.StreamServiceClient(
+            _GrpcTransport(self, namespace), data_converter=data_converter
+        )
 
     def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
         """Native Streams have no blocking calls, so this raises."""
@@ -139,7 +137,7 @@ class NativeStreamBackend(StreamBackend):
             )
         client = self._client
         if client is None:
-            raise _errors.StreamTransportMissingError(
+            raise _errors.StreamConfigError(
                 "This native backend has no client. Use the plugin on a client."
             )
         namespace = getattr(request, "namespace", "") or client.namespace
@@ -328,7 +326,7 @@ class _NativeWorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
-        _take_close_with_run(input.headers)
+        _take_owned_streams(input.headers)
         try:
             result = await super().execute_workflow(input)
         except temporalio.workflow.ContinueAsNewError:
@@ -436,7 +434,9 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             # A read's answer is in History, so Workflow code awaits it.
             return await super().start_system_nexus_operation(input)
         if operation == "CreateStream":
-            result: Any = models.StreamResult(stream=_owned_ref(input.input.stream_id))
+            result: Any = models.CreateStreamResponse(
+                stream=_owned_ref(input.input.stream_id)
+            )
         elif operation == "AppendRecords":
             result = models.AppendRecordsResponse()
         elif operation == "CloseStream":
@@ -465,18 +465,7 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             raise _workflow_reader.error_of(err) from None
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
-        open_streams = {
-            stream_id: run_stream.backend
-            for stream_id, run_stream in streams_workflow._state().streams.items()
-            if run_stream.close_with_run and not run_stream.closed
-        }
-        if open_streams and _CLOSE_WITH_RUN_HEADER not in input.headers:
-            converter = temporalio.converter.PayloadConverter.default
-            input.headers = {
-                **input.headers,
-                _CLOSE_WITH_RUN_HEADER: converter.to_payload(list(open_streams)),
-                _CLOSE_WITH_RUN_BACKENDS_HEADER: converter.to_payload(open_streams),
-            }
+        pass_owned_streams(input)
         super().continue_as_new(input)
 
 

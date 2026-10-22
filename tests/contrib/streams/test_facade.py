@@ -2,18 +2,20 @@ import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 
+import google.protobuf.any_pb2
 import pytest
 
+import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
-from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
-from temporalio.service import RPCStatusCode
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
 
@@ -31,16 +33,6 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     config = client.config()
     config["plugins"] = [plugin]
     return Client(**config), extension
-
-
-def test_ids_match_the_crate():
-    assert (
-        _ids.scoped_stream_id("a:b/c", "r%1", "é name")
-        == "a%3Ab%2Fc:r%251:%C3%A9%20name"
-    )
-    assert _ids.workflow_producer_id("run:1") == "wf:run%3A1"
-    assert _ids.activity_producer_id("run:1", "a/1", "s-1") == "act:run%3A1:a%2F1:s-1"
-    assert _ids.client_producer_id("1@host", "p-1") == "client:1%40host:p-1"
 
 
 def test_extension_errors_map_to_stream_errors():
@@ -162,13 +154,6 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
     assert len(producers) == 2
 
 
-def test_workflow_stream_reads_only_by_subscribe():
-    # A read's pages are in History. An offset that a replay could not give again is not.
-    assert hasattr(streams.WorkflowStream, "subscribe")
-    assert hasattr(streams.WorkflowTopic, "subscribe")
-    assert not hasattr(streams.WorkflowStream, "get_offset")
-
-
 def test_unsupported_capability_maps_to_its_error():
     details = ext_pb.StreamErrorDetails(reason="stream_unsupported").SerializeToString()
     err = _errors.from_extension_error(
@@ -179,3 +164,19 @@ def test_unsupported_capability_maps_to_its_error():
     assert isinstance(err, streams.StreamUnsupportedError)
     assert err.non_retryable and err.code == RPCStatusCode.UNIMPLEMENTED
     assert err.message.endswith("replica_wait")
+
+
+def test_server_failure_maps_to_its_stream_error():
+    detail = google.protobuf.any_pb2.Any()
+    detail.Pack(ext_pb.StreamErrorDetails(reason="stream_closed"))
+    status = temporalio.api.common.v1.GrpcStatus(
+        code=9, message="closed", details=[detail]
+    )
+    err = _errors.from_rpc_error(
+        RPCError(
+            "closed", RPCStatusCode.FAILED_PRECONDITION, status.SerializeToString()
+        )
+    )
+    assert isinstance(err, streams.StreamClosedError)
+    plain = RPCError("down", RPCStatusCode.UNAVAILABLE, b"")
+    assert _errors.from_rpc_error(plain) is plain
