@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, TypeVar
 
-import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 from temporalio.contrib.streams import _convert, _reader
 from temporalio.contrib.streams._backend import StreamBackend
@@ -16,6 +15,7 @@ from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
+from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
 T = TypeVar("T")
@@ -68,7 +68,7 @@ class Access:
         create_wait: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
         items = _reader.read(
-            self.backend.service(self.namespace),
+            self.backend.service(self.namespace, _convert.raw(self.converter)),
             self.converter,
             await self.stream_id(),
             topics=topics,
@@ -99,20 +99,14 @@ class Access:
         """Write this Producer's Records, then close the Stream."""
         writer = self.writer()
         await writer.close()
-        request = stream_pb.CloseStreamRequest(
-            namespace=self.namespace,
-            stream=stream_pb.StreamRef(id=await self.stream_id()),
-            producer=writer.producer,
+        stream = service_client.Stream(
+            self.backend.service(self.namespace, self.converter),
+            models.StreamRef(id=await self.stream_id()),
         )
-        if result is not None:
-            request.result.CopyFrom(
-                (await _convert.encode(self.converter, result)).payload
-            )
-        if failure is not None:
-            await self.converter.encode_failure(failure, request.failure)
-        await self.backend.call_async(
-            "CloseStream", request, stream_pb.CloseStreamResponse
+        producer = models._ProducerTransferTypeConverter().from_transfer_type(
+            writer.producer, models.Producer
         )
+        await stream.close(producer=producer, result=result, failure=failure)
 
 
 def read_spec(

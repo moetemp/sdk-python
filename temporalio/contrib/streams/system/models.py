@@ -13,6 +13,10 @@ import temporalio.api.streamservice.v1.stream_service_pb2
 import temporalio.converter
 import temporalio.nexus.system._support as _support
 
+if typing.TYPE_CHECKING:
+    from ._resources import Stream
+
+
 StreamOffset = typing.NewType("StreamOffset", int)
 """A position in an ordered log, as the service gives it.
 
@@ -86,13 +90,17 @@ temporalio.converter.transfer_type_convertible(
 
 
 @dataclasses.dataclass(slots=True)
-class StreamResult:
+class CreateStreamResponse:
     stream: StreamRef | None = None
+    created: bool | None = None
+    status: (
+        temporalio.api.streamservice.v1.stream_service_pb2.StreamStatus.ValueType | None
+    ) = None
 
 
-class _StreamResultTransferTypeConverter(
+class _CreateStreamResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
-        StreamResult,
+        CreateStreamResponse,
         temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse,
     ]
 ):
@@ -105,20 +113,26 @@ class _StreamResultTransferTypeConverter(
     def from_transfer_type(
         self,
         value: temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse,
-        type_hint: type[StreamResult],
-    ) -> StreamResult:
-        return StreamResult(
+        type_hint: type[CreateStreamResponse],
+    ) -> CreateStreamResponse:
+        return CreateStreamResponse(
             stream=_StreamRefTransferTypeConverter().from_transfer_type(
                 value.stream, StreamRef
             )
             if value.HasField("stream")
+            else None,
+            created=value.created if bool(value.created) else None,
+            status=temporalio.api.streamservice.v1.stream_service_pb2.StreamStatus.ValueType(
+                value.status
+            )
+            if value.status != 0
             else None,
         )
 
     @typing_extensions.override
     def to_transfer_type(
         self,
-        value: StreamResult,
+        value: CreateStreamResponse,
     ) -> temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse:
         message = (
             temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse()
@@ -127,12 +141,18 @@ class _StreamResultTransferTypeConverter(
             message.stream.CopyFrom(
                 _StreamRefTransferTypeConverter().to_transfer_type(value.stream)
             )
+        if value.created is not None:
+            message.created = value.created
+        if value.status is not None:
+            message.status = temporalio.api.streamservice.v1.stream_service_pb2.StreamStatus.ValueType(
+                value.status
+            )
         return message
 
 
-temporalio.converter.transfer_type_convertible(_StreamResultTransferTypeConverter)(
-    StreamResult
-)  # pyright: ignore[reportUnusedCallResult]
+temporalio.converter.transfer_type_convertible(
+    _CreateStreamResponseTransferTypeConverter
+)(CreateStreamResponse)  # pyright: ignore[reportUnusedCallResult]
 
 
 @dataclasses.dataclass(slots=True)
@@ -1232,3 +1252,12 @@ class _DescribeStreamResponseTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _DescribeStreamResponseTransferTypeConverter
 )(DescribeStreamResponse)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
+class CreateStreamResult:
+    stream: Stream
+    created: bool | None = None
+    status: (
+        temporalio.api.streamservice.v1.stream_service_pb2.StreamStatus.ValueType | None
+    ) = None

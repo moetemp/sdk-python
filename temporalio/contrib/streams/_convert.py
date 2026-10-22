@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import contextlib
-from collections.abc import Iterator, Sequence
+import dataclasses
+from collections.abc import Sequence
 from typing import Any
 
 import temporalio.api.common.v1
 import temporalio.common
 import temporalio.converter
-import temporalio.nexus.system
 
 
 class _RawPayloadConverter(temporalio.converter.PayloadConverter):
-    # The generated models carry Record bodies as RawValue, so the facade runs the user's
-    # converter and codec on the bodies only, never on the outer request.
+    # The generated client runs the codec on Record bodies and keeps them as RawValue, so the
+    # facade converts each body with its Topic's type.
     def to_payloads(
         self, values: Sequence[Any]
     ) -> list[temporalio.api.common.v1.Payload]:
@@ -33,33 +32,20 @@ class _RawPayloadConverter(temporalio.converter.PayloadConverter):
         return [temporalio.common.RawValue(payload) for payload in payloads]
 
 
-@contextlib.contextmanager
-def raw_bodies(
-    failure_converter: temporalio.converter.FailureConverter,
-) -> Iterator[None]:
-    """Convert generated models with Record bodies kept as RawValue."""
-    with temporalio.nexus.system._user_converter_context(
-        temporalio.nexus.system._SystemNexusUserConverters(
-            payload_converter=_RawPayloadConverter(),
-            failure_converter=failure_converter,
-        )
-    ):
-        yield
+def raw(
+    converter: temporalio.converter.DataConverter,
+) -> temporalio.converter.DataConverter:
+    """The converter with Record bodies kept as RawValue. Its codec still runs on them."""
+    return dataclasses.replace(converter, payload_converter_class=_RawPayloadConverter)
 
 
-async def encode(
-    converter: temporalio.converter.DataConverter, value: Any
-) -> temporalio.common.RawValue:
-    """Convert and encode one value for a Record body."""
-    [payload] = await converter.encode([value])
-    return temporalio.common.RawValue(payload)
-
-
-async def decode(
+def decode(
     converter: temporalio.converter.DataConverter, body: Any, type_hint: Any
 ) -> Any:
-    """Decode a Record body that a read gave as RawValue."""
+    """Convert a Record body that a read gave as RawValue, after the codec."""
     if not isinstance(body, temporalio.common.RawValue):
         return body
-    [value] = await converter.decode([body.payload], [type_hint] if type_hint else None)
+    [value] = converter.payload_converter.from_payloads(
+        [body.payload], [type_hint] if type_hint else None
+    )
     return value

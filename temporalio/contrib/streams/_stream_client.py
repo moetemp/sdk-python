@@ -304,15 +304,10 @@ class StreamClient:
         """
         definition_of(definition)
         backend_name, stream_backend = client_backend(self._client, backend)
-        request = stream_pb.CreateStreamRequest(
-            namespace=self._client.namespace, stream_id=id
-        )
-        if retention is not None:
-            request.retention.FromTimedelta(retention)
-        if auto_close is not None:
-            request.auto_close.FromTimedelta(auto_close)
-        response = await stream_backend.call_async(
-            "CreateStream", request, stream_pb.CreateStreamResponse
+        response = await stream_backend.service(self._client.namespace).create_stream(
+            models.CreateStreamRequest(
+                stream_id=id, retention=retention, auto_close=auto_close
+            )
         )
         if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
             raise _errors.StreamClosedError(

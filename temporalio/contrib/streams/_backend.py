@@ -10,6 +10,7 @@ import google.protobuf.message
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
+import temporalio.converter
 import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -48,9 +49,18 @@ class StreamBackend:
         """Create a backend over an extension."""
         self._extension = extension
 
-    def service(self, namespace: str) -> service_client.StreamServiceClient:
-        """A generated Stream service client for ``namespace``."""
-        return service_client.StreamServiceClient(_ExtensionTransport(self, namespace))
+    def service(
+        self,
+        namespace: str,
+        data_converter: temporalio.converter.DataConverter | None = None,
+    ) -> service_client.StreamServiceClient:
+        """A generated Stream service client for ``namespace``.
+
+        With a ``data_converter``, user values in the requests go through it and its codec.
+        """
+        return service_client.StreamServiceClient(
+            _ExtensionTransport(self, namespace), data_converter=data_converter
+        )
 
     def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
         """Call a synchronous extension method."""
