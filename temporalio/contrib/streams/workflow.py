@@ -86,16 +86,17 @@ def _backend_name() -> str | None:
 
 
 def _check_backend(backend: str | None, action: str) -> str:
+    # The Worker's config gives these errors, not the history, so they fail the Workflow Task
+    # and a Worker with the right config retries it. An ApplicationError would fail the run.
     worker_backend = _backend_name()
     if worker_backend is None:
-        raise _errors.StreamTransportMissingError(
+        raise RuntimeError(
             "No Stream plugin is on the Worker, such as RedisStreamPlugin"
         )
     if backend and backend != worker_backend:
-        raise _errors.StreamUnsupportedError(
+        raise RuntimeError(
             f"Can't {action} a Stream of the backend {backend}. The Worker has only "
-            f"{worker_backend}.",
-            reason="stream_unsupported",
+            f"{worker_backend}."
         )
     return worker_backend
 
@@ -107,9 +108,7 @@ def _now(call: Coroutine[Any, Any, _R]) -> _R:
     except StopIteration as done:
         return done.value
     call.close()
-    raise _errors.StreamTransportMissingError(
-        "No Stream plugin took the call, such as RedisStreamPlugin"
-    )
+    raise RuntimeError("No Stream plugin took the call, such as RedisStreamPlugin")
 
 
 class WorkflowTopic(Generic[T]):
@@ -145,8 +144,8 @@ class WorkflowTopic(Generic[T]):
         Raises:
             StreamClosedError: This run closed the Stream.
             ReadOnlyContextError: The code must not change state, such as a query handler.
-            StreamTransportMissingError: No Stream plugin is on the Worker.
-            StreamUnsupportedError: The Stream is of a backend that the Worker does not have.
+            RuntimeError: No Stream plugin is on the Worker, or the Stream is of a backend
+                that the Worker does not have. It fails the Workflow Task, not the run.
         """
         self._stream._append(self._name, values)
 
@@ -195,7 +194,7 @@ class WorkflowStream(StreamHandle[E]):
         name, topic_type = self._topic_spec(topic, type)
         return WorkflowTopic(self, name, topic_type)
 
-    def _check(self, action: str) -> _RunStream:
+    def _check(self, action: str, *, backend_checked: bool = False) -> _RunStream:
         if temporalio.workflow.unsafe.is_read_only():
             raise _errors.ReadOnlyContextError(
                 f"Can't {action} a Stream in read-only code"
@@ -206,7 +205,8 @@ class WorkflowStream(StreamHandle[E]):
                 f"Can't {action} the Stream {self.id}, since this run closed it",
                 reason="stream_closed",
             )
-        _check_backend(self.backend, action)
+        if not backend_checked:
+            _check_backend(self.backend, action)
         return run_stream
 
     def _append(self, topic: str, values: tuple[Any, ...]) -> None:
@@ -309,17 +309,24 @@ async def create_stream(
     Raises:
         StreamClosedError: This run closed the Stream.
         ReadOnlyContextError: The code must not change state, such as a query handler.
-        StreamTransportMissingError: No Stream plugin is on the Worker.
-        StreamUnsupportedError: The Worker has no backend of that name.
+        RuntimeError: No Stream plugin is on the Worker, or it has no backend of that name.
+            It fails the Workflow Task, not the run.
+        ValueError: ``close_with_run=False`` for a Stream that already closes with the run
+            chain.
     """
     stream = _own_handle(definition, name, _check_backend(backend, "create"))
-    run_stream = stream._check("create")
+    run_stream = stream._check("create", backend_checked=True)
+    if run_stream.close_with_run and not close_with_run:
+        raise ValueError(
+            f"The Stream {stream.id} already closes with the run chain, and "
+            "close_with_run=False can't turn that off"
+        )
     _now(
         _create_stream.create_stream(
             stream_id=stream.id, retention=retention, auto_close=auto_close
         )
     )
-    run_stream.close_with_run = run_stream.close_with_run or close_with_run
+    run_stream.close_with_run = close_with_run
     return stream
 
 

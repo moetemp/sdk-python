@@ -64,12 +64,15 @@ class StreamPlugin(SimplePlugin):
         config: ext_pb.RedisStreamConfig,
         runtime: temporalio.runtime.Runtime | None,
         backend_name: str,
+        default: bool,
     ) -> None:
         """Create the plugin over the bridge's extension with ``extension_name``.
 
-        ``backend_name`` is the name that Stream handles carry for this backend.
+        ``backend_name`` is the name that Stream handles carry for this backend. ``default``
+        makes it the client's default backend when the client has more than one.
         """
         self._backend_name = backend_name
+        self._default = default
         config.backend = backend_name
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
@@ -82,6 +85,11 @@ class StreamPlugin(SimplePlugin):
     def backend_name(self) -> str:
         """The name that Stream handles carry for this backend."""
         return self._backend_name
+
+    @property
+    def default(self) -> bool:
+        """Whether a client with more than one Stream plugin uses this one by default."""
+        return self._default
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
@@ -189,7 +197,8 @@ class RedisStreamPlugin(StreamPlugin):
         durable_timeout: timedelta | None = None,
         response_timeout: timedelta | None = None,
         runtime: temporalio.runtime.Runtime | None = None,
-        backend_name: str = "redis",
+        name: str = "redis",
+        default: bool = False,
     ) -> None:
         """Create the plugin. It connects to Redis on the first Stream call.
 
@@ -205,7 +214,10 @@ class RedisStreamPlugin(StreamPlugin):
             durable_timeout: How long that wait takes at most. Defaults to 1 s.
             response_timeout: How long one Redis call takes at most. Defaults to 5 s.
             runtime: The runtime of the client. Defaults to the default runtime.
-            backend_name: The name that Stream handles carry for this backend.
+            name: The backend name that Stream handles carry, so every process routes a
+                handle it receives.
+            default: Make this the client's default backend when the client has more than
+                one Stream plugin. With none marked, the first one is the default.
         """
         config = ext_pb.RedisStreamConfig(
             urls=[url] if isinstance(url, str) else list(url),
@@ -226,7 +238,8 @@ class RedisStreamPlugin(StreamPlugin):
             EXTENSION_NAME,
             config,
             runtime,
-            backend_name,
+            name,
+            default,
         )
 
 
@@ -428,7 +441,10 @@ def chain_continues(
         )
         if policy.maximum_interval is not None:
             backoff = min(backoff, policy.maximum_interval)
-        expiration = info.workflow_start_time + info.execution_timeout
+        # The execution timeout covers the whole chain, so this run's start is not its start.
+        expiration = info.execution_expiration_time or (
+            info.workflow_start_time + info.execution_timeout
+        )
         if now + backoff >= expiration:
             return False
     return True
