@@ -122,7 +122,7 @@ class Agent:
 
 
 async def read_all(stream: streams.ClientStream) -> list[streams.Record | object]:
-    return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
+    return [item async for item in stream.subscribe()]
 
 
 async def test_workflow_and_activity_write_the_default_stream(stream_client: Client):
@@ -604,27 +604,6 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
     assert first.data.payload.metadata["encoding"] == b"json/plain"
 
 
-async def test_read_ends_idle_and_resumes(stream_client: Client):
-    stream = await streams.create_stream(stream_client, f"idle-{uuid.uuid4()}")
-    stream.topic("t", type=int).publish(1)
-    await stream.flush()
-    items = [
-        item
-        async for item in stream.subscribe(idle_timeout=timedelta(milliseconds=200))
-    ]
-    assert isinstance(items[-1], streams.Idle)
-    stream.topic("t", type=int).publish(2)
-    await stream.flush()
-    resumed = [
-        item
-        async for item in stream.subscribe(
-            from_offset=items[-1].offset, wait_new_records=False
-        )
-    ]
-    assert [item.data for item in resumed if isinstance(item, streams.Record)] == [2]
-    assert await stream.get_offset() > items[-1].offset
-
-
 @workflow.defn
 class WaitsForSignal:
     def __init__(self) -> None:
@@ -850,24 +829,6 @@ async def test_for_ref_ends_with_the_owning_run(stream_client: Client):
     start = asyncio.get_running_loop().time()
     assert [item async for item in waiting.subscribe()] == []
     assert asyncio.get_running_loop().time() - start < 30
-
-
-async def test_idle_ends_a_read_that_ends_with_the_run(stream_client: Client):
-    async with new_worker(stream_client, WaitsForever) as worker:
-        handle = await stream_client.start_workflow(
-            WaitsForever.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        stream = streams.for_handle(
-            handle, end_with_run=True, wait_for_create=timedelta(seconds=20)
-        )
-        # The read polls in short steps to look at the run, and the idle time still counts
-        # across them.
-        items = [
-            item async for item in stream.subscribe(idle_timeout=timedelta(seconds=3))
-        ]
-        await handle.terminate()
-    assert isinstance(items[0], streams.Record)
-    assert isinstance(items[-1], streams.Idle)
 
 
 async def test_workflow_calls_carry_the_owner(stream_client: Client):

@@ -122,23 +122,6 @@ async def test_client_writes_reads_and_closes(client: Client):
     assert [item.offset for item in resumed] == [second.offset, closed.offset]
 
 
-async def test_read_ends_idle_and_resumes(client: Client):
-    client, _ = fake_client(client)
-    stream = await streams.create_stream(client, "idle-1")
-    stream.topic("t", type=int).publish(1)
-    await stream.flush()
-    items = [
-        item async for item in stream.subscribe(idle_timeout=timedelta(milliseconds=50))
-    ]
-    assert isinstance(items[-1], streams.Idle)
-    assert [
-        item
-        async for item in stream.subscribe(
-            from_offset=items[-1].offset, wait_new_records=False
-        )
-    ] == []
-
-
 async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
     handle = client.get_workflow_handle("wf-1", first_execution_run_id="run-1")

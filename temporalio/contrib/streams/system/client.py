@@ -169,7 +169,9 @@ class StreamServiceClient:
     async def append_records(
         self, request: AppendRecordsRequest
     ) -> AppendRecordsResponse:
-        """In Workflow code, the Brook transport puts this call into a buffer."""
+        """In Workflow code, the Brook transport puts this call into the run's buffer, and
+        the Workflow facade drops the response.
+        """
         payload = _proto_payload(
             _AppendRecordsRequestTransferTypeConverter().to_transfer_type(request)
         )
@@ -215,8 +217,6 @@ class StreamServiceClient:
         Each call sets ``wait`` to what is left of the deadline, at most 60 s.
         After an answer with nothing, the next call sets ``from_offset`` to the answer's
         ``next_offset``.
-        Each call sets ``idle_timeout`` to what is left of the request's, so the idle
-        time counts across calls.
         When the deadline passes, the last answer comes back, so the caller keeps its
         place.
         A ``TransportError`` with ``retryable`` set is tried again while the deadline
@@ -225,11 +225,6 @@ class StreamServiceClient:
         clock = asyncio.get_running_loop()
         started = clock.time()
         end = started + deadline.total_seconds()
-        idle_timeout = (
-            request.idle_timeout.total_seconds()
-            if request.idle_timeout is not None
-            else None
-        )
         attempt: ReadRecordsRequest = request
         pause = _LONG_POLL_FIRST_PAUSE
         while True:
@@ -238,11 +233,6 @@ class StreamServiceClient:
             attempt = dataclasses.replace(
                 attempt, wait=datetime.timedelta(seconds=wait)
             )
-            if idle_timeout is not None:
-                idle_left = max(idle_timeout - (clock.time() - started), 0.001)
-                attempt = dataclasses.replace(
-                    attempt, idle_timeout=datetime.timedelta(seconds=idle_left)
-                )
             asked = clock.time()
             try:
                 answer = await self.read_records(attempt)
