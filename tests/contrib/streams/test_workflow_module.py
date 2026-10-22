@@ -303,6 +303,8 @@ class SyncHandlers:
 
     @workflow.run
     async def run(self, prompt: str) -> None:
+        # The init made the handle before the create, since a handle makes no call.
+        assert prompt == self._prompt
         await stream_workflow.create_stream(Events, close_with_run=False)
         await workflow.wait_condition(lambda: self._done)
 
@@ -330,6 +332,6 @@ async def test_sync_handlers_publish_and_close_with_no_await(stream_client: Clie
         await handle.signal(SyncHandlers.token, "a")
         assert await handle.execute_update(SyncHandlers.finish) == "stream_closed"
         await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["a", "p"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "finished"
