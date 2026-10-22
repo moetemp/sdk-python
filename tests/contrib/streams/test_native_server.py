@@ -3,15 +3,17 @@
 Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 """
 
+import base64
 import concurrent.futures
 import uuid
 from datetime import timedelta
 
+import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.native import NativeStreamPlugin
+from temporalio.contrib.streams.native import POSITIONS_TYPE, NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.worker import Replayer
 from tests.contrib.streams.test_workflow_reads import (
@@ -91,9 +93,21 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
             "c",
             "closed written",
         ]
-    replayer = Replayer(workflows=[Writer, Reader], plugins=[NativeStreamPlugin()])
+    # A read is direct, so the reader's History holds positions and no page of Records.
+    history = await reader.fetch_history()
+    recorded = history.to_json()
+    assert base64.b64encode(POSITIONS_TYPE).decode() in recorded
+    page_type = stream_pb.ReadRecordsResponse.DESCRIPTOR.full_name.encode()
+    assert base64.b64encode(page_type).decode() not in recorded
+    # The plugin of the client has the connection that a replay reads over. A replay reads
+    # each page again once the cache is gone.
+    [plugin] = native_client.config()["plugins"]
+    assert isinstance(plugin, NativeStreamPlugin)
+    replayer = Replayer(workflows=[Writer, Reader], plugins=[plugin])
     await replayer.replay_workflow(await writer.fetch_history())
-    await replayer.replay_workflow(await reader.fetch_history())
+    await replayer.replay_workflow(history)
+    plugin._pages.clear()
+    await replayer.replay_workflow(history)
 
 
 async def test_redis_and_native_on_a_native_server(

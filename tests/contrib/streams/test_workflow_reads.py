@@ -7,14 +7,17 @@ from typing import Any, cast
 
 import pytest
 
+import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams.native import NativeStreamPlugin, _DirectReadCodec
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
+from temporalio.workflow import NondeterminismError
 from tests.contrib.streams.test_redis import _Rot13Codec
 from tests.helpers import new_worker
 
@@ -250,3 +253,33 @@ def test_a_server_failure_maps_by_its_reason():
     )
     assert isinstance(by_message, streams.StreamNotFoundError)
     assert _errors.from_application_error(ApplicationError("other")) is None
+
+
+async def test_a_native_replay_checks_the_range_it_reads_again():
+    # A replay reads a recorded range again. Other Records there mean other code ran.
+    plugin = NativeStreamPlugin()
+    codec = _DirectReadCodec(plugin, None)
+    record = stream_pb.StreamRecord(
+        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA,
+        offset=5,
+        topic="tokens",
+    )
+    request = stream_pb.ReadRecordsRequest(
+        namespace="ns", stream=stream_pb.StreamRef(id="s"), from_offset=5
+    )
+    live = stream_pb.ReadRecordsResponse(records=[record], next_offset=6)
+    positions = plugin._read_result(request, live).payload
+    plugin._pages.clear()
+    reads: list[stream_pb.ReadRecordsRequest] = []
+    answers = [live, stream_pb.ReadRecordsResponse(next_offset=6)]
+
+    async def call_async(_method: str, request: Any, _response: Any) -> Any:
+        reads.append(request)
+        return answers.pop(0)
+
+    setattr(plugin._backend, "call_async", call_async)
+    [page] = await codec.decode([positions])
+    assert stream_pb.ReadRecordsResponse.FromString(page.data) == live
+    assert reads[0].to_offset == 6 and reads[0].from_offset == 5
+    with pytest.raises(NondeterminismError):
+        await codec.decode([positions])
