@@ -32,6 +32,7 @@ class MemoryStreamPlugin(StreamPlugin):
         safety_ttl: timedelta | None = None,
         durable_writes: int = 0,
         runtime: temporalio.runtime.Runtime | None = None,
+        backend_name: str = "memory",
     ) -> None:
         """Create the plugin.
 
@@ -43,6 +44,7 @@ class MemoryStreamPlugin(StreamPlugin):
                 replicas. The memory Store has none, so each Workflow flush fails with the
                 missing ``replica_wait`` capability. It is for tests of that failure.
             runtime: The runtime of the client. Defaults to the default runtime.
+            backend_name: The name that Stream handles carry for this backend.
         """
         config = ext_pb.RedisStreamConfig(durable_writes=durable_writes)
         if retention is not None:
@@ -50,5 +52,9 @@ class MemoryStreamPlugin(StreamPlugin):
         if safety_ttl is not None:
             config.safety_ttl.FromTimedelta(safety_ttl)
         super().__init__(
-            "temporalio.MemoryStreamPlugin", MEMORY_EXTENSION_NAME, config, runtime
+            "temporalio.MemoryStreamPlugin",
+            MEMORY_EXTENSION_NAME,
+            config,
+            runtime,
+            backend_name,
         )
