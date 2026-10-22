@@ -544,9 +544,6 @@ class _Runtime(ABC):
     def workflow_set_current_details(self, details: str): ...
 
     @abstractmethod
-    def workflow_send_to_plugins(self, value: Any, during_replay: bool) -> None: ...
-
-    @abstractmethod
     def workflow_is_failure_exception(self, err: BaseException) -> bool: ...
 
     @abstractmethod
@@ -787,25 +784,6 @@ def set_current_details(description: str) -> None:
     This can be in Temporal markdown format and can span multiple lines.
     """
     _Runtime.current().workflow_set_current_details(description)
-
-
-def send_to_plugins(value: Any, *, during_replay: bool = False) -> None:
-    """Give a value to the Worker's plugins at the end of this Activation.
-
-    The Worker passes the values of an Activation to
-    :py:meth:`temporalio.worker.Plugin.on_workflow_activation_complete`, outside the sandbox. A
-    plugin's Workflow interceptor uses it to hand work to code that can't run in the sandbox. The
-    value is not serialized and nothing goes into History.
-
-    .. warning::
-        This API is experimental.
-
-    Args:
-        value: Any value that the plugin knows.
-        during_replay: If False, the default, a value given while the Workflow replays History is
-            dropped, as the plugin already got it when the Workflow first ran.
-    """
-    _Runtime.current().workflow_send_to_plugins(value, during_replay)
 
 
 def metric_meter() -> temporalio.common.MetricMeter:

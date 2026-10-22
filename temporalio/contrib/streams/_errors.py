@@ -30,8 +30,12 @@ class StreamError(temporalio.exceptions.ApplicationError):
         code: temporalio.service.RPCStatusCode | None = None,
     ) -> None:
         """Create a Stream error."""
+        # The reason goes in the details, so it comes back from a Local Activity.
         super().__init__(
-            message, type=type(self).__name__, non_retryable=not self._retryable
+            message,
+            *([reason] if reason else []),
+            type=type(self).__name__,
+            non_retryable=not self._retryable,
         )
         self._reason = reason
         self._code = code
@@ -139,6 +143,24 @@ def from_application_error(
     if cls is None:
         return None
     return cls(err.message, reason=reason)
+
+
+_BY_TYPE: dict[str, type[StreamError]] = {
+    "StreamError": StreamError,
+    **{cls.__name__: cls for cls in _BY_REASON.values()},
+}
+
+
+def from_activity_error(err: Exception) -> Exception:
+    """The Stream error that a write Local Activity raised, else ``err``."""
+    cause = err.cause if isinstance(err, temporalio.exceptions.ActivityError) else err
+    if (
+        isinstance(cause, temporalio.exceptions.ApplicationError)
+        and cause.type in _BY_TYPE
+    ):
+        reason = str(cause.details[0]) if cause.details else ""
+        return _BY_TYPE[cause.type](cause.message, reason=reason)
+    return err
 
 
 def from_rpc_error(err: temporalio.service.RPCError) -> Exception:

@@ -35,7 +35,7 @@ class ActivityStreams:
         if writer is None:
 
             async def ref() -> models.StreamRef:
-                return handle._ref()
+                return handle._owner_ref()
 
             writer = StreamWriter(
                 writers=self.backend.writers(self.namespace, self.converter),

@@ -48,7 +48,7 @@ def _access(handle: StreamHandle[Any]) -> Access:
     streams = _bound(handle)
 
     async def ref() -> models.StreamRef:
-        return handle._ref()
+        return handle._owner_ref()
 
     return Access(
         backend=streams.backend,

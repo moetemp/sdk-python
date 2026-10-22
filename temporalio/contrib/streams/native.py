@@ -23,17 +23,16 @@ import temporalio.worker
 import temporalio.workflow
 from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.contrib.streams import _errors, _workflow_reader
-from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
-    _SERVICE,
     _decode_page,
     _ExtensionStreamPlugin,
     _WorkflowOutbound,
 )
 
 NATIVE_EXTENSION_NAME = "temporalio-streams-native"
+_SERVICE = "temporal.api.streamservice.v1.StreamService"
 
 _WAIT_COMPLETED = temporalio.workflow.NexusOperationCancellationType.WAIT_COMPLETED
 
@@ -163,30 +162,25 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
         return await super()._temporal_stream_read_page(direct)
 
     async def _wake(self, request: stream_pb.ReadRecordsRequest) -> None:
-        # Its answer holds no Records, so History holds only offsets. Another Stream plugin
-        # further down the chain passes a call of this backend on.
+        # Its answer holds no Records, so History holds only offsets.
         wake = stream_pb.ReadRecordsRequest()
         wake.CopyFrom(request)
         wake.wake_only = True
-        token = streams_workflow._target.set(self._temporal_stream_backend_name)
-        try:
-            handle = await self.next.start_system_nexus_operation(
-                temporalio.worker.StartNexusOperationInput(
-                    endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
-                    service=_SERVICE,
-                    operation="ReadRecords",
-                    input=wake,
-                    output_type=stream_pb.ReadRecordsResponse,
-                    schedule_to_close_timeout=None,
-                    schedule_to_start_timeout=None,
-                    start_to_close_timeout=None,
-                    cancellation_type=_WAIT_COMPLETED,
-                    headers=None,
-                    summary=None,
-                )
+        handle = await self.next.start_system_nexus_operation(
+            temporalio.worker.StartNexusOperationInput(
+                endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
+                service=_SERVICE,
+                operation="ReadRecords",
+                input=wake,
+                output_type=stream_pb.ReadRecordsResponse,
+                schedule_to_close_timeout=None,
+                schedule_to_start_timeout=None,
+                start_to_close_timeout=None,
+                cancellation_type=_WAIT_COMPLETED,
+                headers=None,
+                summary=None,
             )
-        finally:
-            streams_workflow._target.reset(token)
+        )
         try:
             await handle
         except temporalio.exceptions.NexusOperationError as err:

@@ -160,7 +160,7 @@ class ClientStream(StreamHandle[E]):
     async def _resolved_ref(self) -> models.StreamRef:
         # The first call finds the first run id of a Workflow's Stream, which the ref carries.
         await self._stream_id()
-        return self._ref()
+        return self._owner_ref()
 
     def _access(self) -> Access:
         client, backend = self._client, self._stream_backend

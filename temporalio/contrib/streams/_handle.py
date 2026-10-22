@@ -202,7 +202,7 @@ class StreamHandle(Generic[E]):
                 )
         return topic, type
 
-    def _ref(self) -> models.StreamRef:
+    def _owner_ref(self) -> models.StreamRef:
         # A Workflow's Stream carries its owner on every call, so a server that nests it in the
         # Workflow finds it.
         return models.StreamRef(

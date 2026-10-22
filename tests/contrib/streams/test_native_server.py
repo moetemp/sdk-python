@@ -150,3 +150,35 @@ async def test_redis_and_native_on_a_native_server(
     ]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == ["redis", "native"]
+
+
+@workflow.defn
+class WritesByBareId:
+    @workflow.run
+    async def run(self, stream_id: str) -> str:
+        stream = stream_workflow.WorkflowStream[Events](id=stream_id, backend="native")
+        try:
+            await stream.topic(Events.tokens).publish("lost")
+        except streams.StreamNotFoundError as err:
+            return err.reason
+        return "written"
+
+
+async def test_a_write_without_the_owner_fields_raises(native_client: Client):
+    # A Workflow's Stream nests in its Workflow, so a handle without the owner fields finds
+    # nothing, and the write's Local Activity raises at the await.
+    async with new_worker(native_client, Writer, WritesByBareId) as worker:
+        writer = await native_client.start_workflow(
+            Writer.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await writer.result()
+        stream_id = f"{writer.id}:{writer.first_execution_run_id}:events"
+        assert (
+            await native_client.execute_workflow(
+                WritesByBareId.run,
+                stream_id,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_found"
+        )
