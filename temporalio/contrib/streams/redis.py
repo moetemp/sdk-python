@@ -43,9 +43,8 @@ _DRAIN_TIMEOUT = timedelta(seconds=10)
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
-# Continue-as-new passes the ids of the open Streams that close with the run chain to the next
-# run, in this header.
-_CLOSE_WITH_RUN_HEADER = "__temporal_stream_close_with_run"
+# Continue-as-new passes the run chain's open Streams to the next run in this header.
+_OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
 class StreamPlugin(SimplePlugin):
@@ -375,7 +374,7 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
-        _take_close_with_run(input.headers)
+        _take_owned_streams(input.headers)
         try:
             result = await super().execute_workflow(input)
         except temporalio.workflow.ContinueAsNewError:
@@ -516,16 +515,19 @@ def _owned_ref(stream_id: str) -> models.StreamRef:
     )
 
 
-def _take_close_with_run(
+def _take_owned_streams(
     headers: Mapping[str, temporalio.api.common.v1.Payload],
 ) -> None:
-    payload = headers.get(_CLOSE_WITH_RUN_HEADER)
+    payload = headers.get(_OWNED_STREAMS_HEADER)
     if payload is None:
         return
     state = streams_workflow._state()
     converter = temporalio.converter.PayloadConverter.default
-    for stream_id in converter.from_payload(payload, list[str]):
-        state.stream(_owned_ref(stream_id)).close_with_run = True
+    for entry in converter.from_payload(payload, list[dict[str, Any]]):
+        run_stream = state.stream(_owned_ref(entry["id"]))
+        run_stream.owned = True
+        run_stream.backend = entry.get("backend")
+        run_stream.close_with_run = bool(entry.get("closeWithRun"))
 
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
@@ -571,16 +573,22 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         return _DoneHandle(result)
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
-        open_ids = [
-            stream_id
+        # The next run needs each owned Stream's backend for stream_handle, and whether it
+        # closes with the chain.
+        owned = [
+            {
+                "id": stream_id,
+                "backend": run_stream.backend,
+                "closeWithRun": run_stream.close_with_run,
+            }
             for stream_id, run_stream in streams_workflow._state().streams.items()
-            if run_stream.close_with_run and not run_stream.closed
+            if run_stream.owned and not run_stream.closed
         ]
-        if open_ids:
+        if owned:
             converter = temporalio.converter.PayloadConverter.default
             input.headers = {
                 **input.headers,
-                _CLOSE_WITH_RUN_HEADER: converter.to_payload(open_ids),
+                _OWNED_STREAMS_HEADER: converter.to_payload(owned),
             }
         super().continue_as_new(input)
 

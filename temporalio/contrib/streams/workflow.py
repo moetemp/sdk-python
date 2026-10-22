@@ -46,6 +46,9 @@ class _RunStream:
     ref: models.StreamRef
     close_with_run: bool = False
     closed: bool = False
+    # Set for a Stream that the run chain created, which continue-as-new passes on.
+    owned: bool = False
+    backend: str | None = None
 
 
 @dataclass
@@ -324,7 +327,10 @@ async def create_stream(
             long, so a Stream that nobody closes does not stay open. Defaults to never.
         close_with_run: Close the Stream when the run chain closes, with the result or the
             failure of its last run. A run that continues as new passes it on.
-        backend: The name of the backend. Defaults to the Worker's.
+        backend: The name of the backend. Defaults to the Worker's. The default is part of
+            the Workflow's code, since a replay must create on the same backend. To move a
+            Workflow to another backend, gate it with a patch, for example
+            ``backend="native" if workflow.patched("streams-native") else "redis"``.
 
     Raises:
         StreamClosedError: This run closed the Stream.
@@ -370,10 +376,14 @@ def create_stream_nowait(
         _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close)
     )
     run_stream.close_with_run = close_with_run
+    run_stream.owned = True
+    run_stream.backend = stream.backend
     return stream
 
 
-def stream_handle(definition: type[E], *, name: str | None = None) -> WorkflowStream[E]:
+def stream_handle(
+    definition: type[E], *, name: str | None = None, backend: str | None = None
+) -> WorkflowStream[E]:
     """A Stream that this run chain created, by its definition and name. It makes no call.
 
     A later run of the chain, such as one after continue-as-new, uses it to write the Stream
@@ -382,5 +392,11 @@ def stream_handle(definition: type[E], *, name: str | None = None) -> WorkflowSt
     Args:
         definition: The Stream definition class.
         name: The Stream name. Defaults to the definition's name.
+        backend: The backend of the Stream. Defaults to the one that the run chain created it
+            on, and else to the Worker's.
     """
-    return _own_handle(definition, name, _backend_name() or None)
+    stream = _own_handle(definition, name, backend)
+    if backend is None:
+        known = _state().streams.get(stream.id)
+        stream._backend = (known.backend if known else None) or _backend_name() or None
+    return stream
