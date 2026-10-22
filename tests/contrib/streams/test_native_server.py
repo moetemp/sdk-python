@@ -15,7 +15,8 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import POSITIONS_TYPE, NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from tests.contrib.streams import test_redis
 from tests.contrib.streams.test_workflow_reads import (
     Events,
     Reader,
@@ -182,3 +183,30 @@ async def test_a_write_without_the_owner_fields_raises(native_client: Client):
             )
             == "stream_not_found"
         )
+
+
+async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: Client):
+    # The retry task sends the failed task, so the server withdraws its Local Activity Records.
+    async with new_worker(
+        native_client,
+        test_redis.LocalThenFailTask,
+        activities=[test_redis.local_tokens],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await native_client.start_workflow(
+            test_redis.LocalThenFailTask.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await test_redis.read_all(
+            test_redis.workflow_stream(native_client, handle)
+        )
+    withdrawn = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [
+        item.data
+        for item in test_redis.records(items)
+        if not any(w.withdraws(item) for w in withdrawn)
+    ]
+    assert visible == ["2", "3"]
