@@ -291,3 +291,45 @@ def test_plugins_take_their_backend_name():
     assert (redis.backend_name, redis.default) == ("redis", True)
     assert RedisStreamPlugin("redis://127.0.0.1:1", name="old").backend_name == "old"
     assert MemoryStreamPlugin().backend_name == "memory"
+
+
+@workflow.defn
+class SyncHandlers:
+    @workflow.init
+    def __init__(self, prompt: str) -> None:
+        self._stream = stream_workflow.stream_handle(Events)
+        self._prompt = prompt
+        self._done = False
+
+    @workflow.run
+    async def run(self, prompt: str) -> None:
+        await stream_workflow.create_stream(Events, close_with_run=False)
+        await workflow.wait_condition(lambda: self._done)
+
+    @workflow.signal
+    def token(self, text: str) -> None:
+        self._stream.topic(Events.tokens).publish_nowait(text, self._prompt)
+
+    @workflow.update
+    def finish(self) -> str:
+        self._stream.close_nowait(result="finished")
+        try:
+            self._stream.topic(Events.tokens).publish_nowait("late")
+        except streams.StreamClosedError as err:
+            return err.reason
+        finally:
+            self._done = True
+        return "wrote"
+
+
+async def test_sync_handlers_publish_and_close_with_no_await(stream_client: Client):
+    async with new_worker(stream_client, SyncHandlers) as worker:
+        handle = await stream_client.start_workflow(
+            SyncHandlers.run, "p", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.signal(SyncHandlers.token, "a")
+        assert await handle.execute_update(SyncHandlers.finish) == "stream_closed"
+        await handle.result()
+        items = await read(handle)
+    assert data(items) == ["a", "p"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "finished"
