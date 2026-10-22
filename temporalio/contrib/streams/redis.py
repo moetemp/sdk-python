@@ -427,7 +427,10 @@ def chain_continues(
         )
         if policy.maximum_interval is not None:
             backoff = min(backoff, policy.maximum_interval)
-        expiration = info.workflow_start_time + info.execution_timeout
+        # The execution timeout covers the whole chain, so this run's start is not its start.
+        expiration = info.execution_expiration_time or (
+            info.workflow_start_time + info.execution_timeout
+        )
         if now + backoff >= expiration:
             return False
     return True
