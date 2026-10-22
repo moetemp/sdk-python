@@ -286,22 +286,46 @@ class StreamClient:
         )
         return stream._bind(self._client, stream_backend)
 
+    @overload
     def get_handle(
         self, definition: type[E], *, id: str, backend: str | None = None
+    ) -> ClientStream[E]: ...
+
+    @overload
+    def get_handle(
+        self, definition: type[E], *, stream: StreamHandle[Any]
+    ) -> ClientStream[E]: ...
+
+    def get_handle(
+        self,
+        definition: type[E],
+        *,
+        id: str | None = None,
+        stream: StreamHandle[Any] | None = None,
+        backend: str | None = None,
     ) -> ClientStream[E]:
-        """A Stream by its id, such as one that this or another client created. No call.
+        """A Stream by its id, or a handle that came as data, such as in a Record. No call.
 
         Args:
             definition: The Stream definition class.
             id: The Stream id.
-            backend: The name of the backend. Defaults to the client's first Stream plugin.
+            stream: A handle of the Stream. Its id, owner and backend stay.
+            backend: The name of the backend. Defaults to the client's default backend.
         """
         definition_of(definition)
+        if stream is not None:
+            id, backend = stream.id, stream.backend
+        if id is None:
+            raise TypeError("get_handle takes id= or stream=")
         backend_name, stream_backend = client_backend(self._client, backend)
-        stream = ClientStream(
-            id=id, backend=backend_name or None, definition=definition
+        handle = ClientStream(
+            id=id,
+            workflow_id=stream.workflow_id if stream else None,
+            first_execution_run_id=stream.first_execution_run_id if stream else None,
+            backend=backend_name or None,
+            definition=definition,
         )
-        return stream._bind(self._client, stream_backend)
+        return handle._bind(self._client, stream_backend)
 
     def workflow_stream(
         self,
