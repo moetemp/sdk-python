@@ -15,6 +15,7 @@ from temporalio.client import (
 )
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams._defn import definition_of
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
@@ -36,7 +37,9 @@ class Events:
 async def read(
     client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
 ) -> list[object]:
-    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    stream = streams.StreamClient(client).workflow_stream(
+        handle, streams.with_name(Events, name)
+    )
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
@@ -74,7 +77,7 @@ class Turns:
         for n in range(2):
             try:
                 async with await stream_workflow.create_stream(
-                    Events, name=f"turn-{n}", close_with_run=False
+                    streams.with_name(Events, f"turn-{n}"), close_with_run=False
                 ) as turn:
                     await turn.topic(Events.tokens).publish(f"token-{n}")
                     if n == fail_at:
@@ -111,6 +114,41 @@ class Continuing:
         assert stream == stream_workflow.stream_handle(Events)
         await stream.topic(Events.tokens).publish("run 2")
         return "done"
+
+
+@workflow.defn
+class RenamedAcrossRuns:
+    @workflow.run
+    async def run(self, first: bool) -> list[str]:
+        renamed = streams.with_name(Events, "turn-1")
+        if first:
+            turn = await stream_workflow.create_stream(renamed)
+            await turn.topic(Events.tokens).publish("run 1")
+            workflow.continue_as_new(False)
+        turn = stream_workflow.stream_handle(renamed)
+        await turn.topic(Events.tokens).publish("run 2")
+        return [stream_workflow.stream_handle(Events).id, turn.id]
+
+
+async def test_renamed_definition_is_another_stream(stream_client: Client):
+    async with new_worker(stream_client, RenamedAcrossRuns) as worker:
+        handle = await stream_client.start_workflow(
+            RenamedAcrossRuns.run,
+            True,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        plain_id, turn_id = await handle.result()
+        turn = await read(stream_client, handle, "turn-1")
+    assert plain_id.endswith(":events") and turn_id.endswith(":turn-1")
+    assert data(turn) == ["run 1", "run 2"]
+
+
+def test_with_name_leaves_the_definition_unchanged():
+    renamed = streams.with_name(Events, "turn-1")
+    assert definition_of(Events).name == "events"
+    assert definition_of(renamed).name == "turn-1"
+    assert definition_of(renamed).topics == definition_of(Events).topics
 
 
 async def test_continue_as_new_passes_the_stream(stream_client: Client):
