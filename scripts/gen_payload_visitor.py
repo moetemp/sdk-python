@@ -63,7 +63,7 @@ def stream_service_roots() -> list[Descriptor]:
     import temporalio.api.streamservice.v1.stream_service_pb2 as stream_pb
 
     return [
-        message.DESCRIPTOR
+        cast(Descriptor, message.DESCRIPTOR)
         for name, message in sorted(vars(stream_pb).items())
         if isinstance(message, type)
         and issubclass(message, google.protobuf.message.Message)
@@ -455,11 +455,15 @@ def write_bridge_visitors() -> None:
 
     # Build root descriptors: WorkflowActivation, WorkflowActivationCompletion,
     # NexusTaskCompletion, and the system Nexus operation roots.
-    roots: list[Descriptor] = [
-        WorkflowActivation.DESCRIPTOR,
-        WorkflowActivationCompletion.DESCRIPTOR,
-        NexusTaskCompletion.DESCRIPTOR,
-    ] + discover_system_nexus_roots() + stream_service_roots()
+    roots: list[Descriptor] = (
+        [
+            WorkflowActivation.DESCRIPTOR,
+            WorkflowActivationCompletion.DESCRIPTOR,
+            NexusTaskCompletion.DESCRIPTOR,
+        ]
+        + discover_system_nexus_roots()
+        + stream_service_roots()
+    )
 
     code = VisitorGenerator().generate(roots)
     out_path.write_text(code)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import itertools
+import weakref
 from collections.abc import Coroutine, Generator
 from datetime import timedelta
 from typing import Any, NoReturn, TypeVar
@@ -328,6 +329,8 @@ class _NativeWorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
         try:
             result = await super().execute_workflow(input)
         except temporalio.workflow.ContinueAsNewError:
+            # The next run goes on with the Streams, after this run's calls went out.
+            await _drain()
             raise
         except BaseException as err:
             if not isinstance(err, (Exception, asyncio.CancelledError)):
@@ -339,24 +342,26 @@ class _NativeWorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 self._close_with_run(
                     failure=temporalio.exceptions.CancelledError("Workflow cancelled")
                 )
-            elif _fails_run(err) and not chain_continues(
+            elif not _fails_run(err):
+                # The Workflow Task fails and the run goes on, so nothing is sent.
+                raise
+            elif not chain_continues(
                 temporalio.workflow.info(), temporalio.workflow.now(), err
             ):
                 self._close_with_run(failure=err)
+            await _drain()
             raise
         if not chain_continues(
             temporalio.workflow.info(), temporalio.workflow.now(), None
         ):
             self._close_with_run(result=result)
+        await _drain()
         return result
 
     def _close_with_run(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        # The close commands go in the same completion as the run's close, so the server
-        # takes both or neither.
         assert self._next_outbound is not None
-        next_outbound = self._next_outbound
         default = streams_workflow._backend_name()
         for run_stream in streams_workflow._state().streams.values():
             if not run_stream.close_with_run or run_stream.closed:
@@ -364,23 +369,110 @@ class _NativeWorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
             if (run_stream.backend or default) != self._backend_name:
                 continue
             run_stream.closed = True
-            # Another Stream plugin further down the chain passes a call of this backend on.
-            token = streams_workflow._target.set(self._backend_name)
-            try:
-                _schedule_now(
-                    _call_and_drop(
-                        next_outbound.start_system_nexus_operation,
-                        _operation_input(
-                            "CloseStream",
-                            models.CloseStreamRequest(
-                                stream=run_stream.ref, result=result, failure=failure
-                            ),
-                            models.CloseStreamResponse,
-                        ),
-                    )
-                )
-            finally:
-                streams_workflow._target.reset(token)
+            _enqueue(
+                self._next_outbound,
+                self._backend_name,
+                run_stream.ref.id,
+                _operation_input(
+                    "CloseStream",
+                    models.CloseStreamRequest(
+                        stream=run_stream.ref, result=result, failure=failure
+                    ),
+                    models.CloseStreamResponse,
+                ),
+            )
+
+
+@dataclasses.dataclass
+class _Queue:
+    # One Stream's calls of a run. The server runs each operation on its own, so one at a
+    # time keeps the run's order.
+    waiting: list[temporalio.worker.StartNexusOperationInput[Any, Any]] = (
+        dataclasses.field(default_factory=list)
+    )
+    busy: bool = False
+
+
+# One set of queues per Workflow instance, as the facade keeps its run state.
+_queues: weakref.WeakKeyDictionary[Any, dict[str, _Queue]] = weakref.WeakKeyDictionary()
+
+
+def _run_queues() -> dict[str, _Queue]:
+    runtime = temporalio.workflow._Runtime.current()
+    queues = _queues.get(runtime)
+    if queues is None:
+        queues = {}
+        _queues[runtime] = queues
+    return queues
+
+
+def _enqueue(
+    next_outbound: temporalio.worker.WorkflowOutboundInterceptor,
+    backend: str,
+    stream_id: str,
+    input: temporalio.worker.StartNexusOperationInput[Any, Any],
+) -> None:
+    queue = _run_queues().setdefault(stream_id, _Queue())
+    queue.waiting.append(input)
+    if not queue.busy:
+        _send_next(next_outbound, backend, queue)
+
+
+def _send_next(
+    next_outbound: temporalio.worker.WorkflowOutboundInterceptor,
+    backend: str,
+    queue: _Queue,
+) -> None:
+    if not queue.waiting:
+        return
+    input = _merged(queue.waiting)
+    queue.busy = True
+
+    async def call() -> None:
+        try:
+            handle = await next_outbound.start_system_nexus_operation(input)
+            await handle
+        except Exception:
+            # A live run and its replay get the same answer from History, so a failed
+            # write is dropped in both, as the Redis backend drops a write to a Stream
+            # closed elsewhere.
+            temporalio.workflow.logger.warning(
+                "A native Stream call of the Workflow failed", exc_info=True
+            )
+        queue.busy = False
+        _send_next(next_outbound, backend, queue)
+
+    # Another Stream plugin further down the chain passes a call of this backend on.
+    token = streams_workflow._target.set(backend)
+    try:
+        _schedule_now(call())
+    finally:
+        streams_workflow._target.reset(token)
+
+
+def _merged(
+    waiting: list[temporalio.worker.StartNexusOperationInput[Any, Any]],
+) -> temporalio.worker.StartNexusOperationInput[Any, Any]:
+    # The appends that waited behind a call go as one, in order.
+    first = waiting.pop(0)
+    if first.operation_name != "AppendRecords":
+        return first
+    records = list(first.input.records or [])
+    while waiting and waiting[0].operation_name == "AppendRecords":
+        records.extend(waiting.pop(0).input.records or [])
+    return dataclasses.replace(
+        first, input=dataclasses.replace(first.input, records=records)
+    )
+
+
+async def _drain() -> None:
+    # The run's close goes out only after its Stream calls completed, so none is lost.
+    def idle() -> bool:
+        return all(
+            not queue.busy and not queue.waiting for queue in _run_queues().values()
+        )
+
+    await temporalio.workflow.wait_condition(idle)
 
 
 def _operation_input(
@@ -441,9 +533,14 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             result = models.CloseStreamResponse()
         else:
             raise _errors.StreamError(f"Workflow code can't call {operation}")
-        # The facade answers at once, as on Redis, and the command goes out in this step. Its
-        # answer has nothing that Workflow code needs.
-        _schedule_now(_call_and_drop(super().start_system_nexus_operation, input))
+        # The facade answers at once, as on Redis. The call goes out now, or after the
+        # Stream's call in flight. Its answer has nothing that Workflow code needs.
+        stream_id = (
+            input.input.stream_id
+            if operation == "CreateStream"
+            else input.input.stream.id
+        )
+        _enqueue(self.next, self._temporal_stream_backend_name, stream_id, input)
         return _DoneHandle(result)
 
     async def _temporal_stream_read_page(
@@ -465,20 +562,6 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         pass_owned_streams(input)
         super().continue_as_new(input)
-
-
-async def _call_and_drop(start: Any, input: Any) -> None:
-    try:
-        handle = await start(input)
-        await handle
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        # A live run and its replay get the same answer from History, so a failed write is
-        # dropped in both, as the Redis backend drops a write to a Stream closed elsewhere.
-        temporalio.workflow.logger.warning(
-            "A native Stream call of the Workflow failed", exc_info=True
-        )
 
 
 def _schedule_now(call: Coroutine[Any, Any, None]) -> None:
