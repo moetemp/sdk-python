@@ -36,7 +36,13 @@ E = TypeVar("E")
 T = TypeVar("T")
 _R = TypeVar("_R")
 
-__all__ = ["WorkflowStream", "WorkflowTopic", "create_stream", "stream_handle"]
+__all__ = [
+    "WorkflowStream",
+    "WorkflowTopic",
+    "create_stream",
+    "create_stream_nowait",
+    "stream_handle",
+]
 
 
 @dataclass
@@ -332,6 +338,31 @@ async def create_stream(
             It fails the Workflow Task, not the run.
         ValueError: ``close_with_run=False`` for a Stream that already closes with the run
             chain.
+    """
+    return create_stream_nowait(
+        definition,
+        name=name,
+        retention=retention,
+        auto_close=auto_close,
+        close_with_run=close_with_run,
+        backend=backend,
+    )
+
+
+def create_stream_nowait(
+    definition: type[E],
+    *,
+    name: str | None = None,
+    retention: timedelta | None = None,
+    auto_close: timedelta | None = None,
+    close_with_run: bool = True,
+    backend: str | None = None,
+) -> WorkflowStream[E]:
+    """Create a Stream that this run chain owns, with no await.
+
+    It is for sync Workflow code, such as ``@workflow.init``, as ``asyncio.Queue.put_nowait``
+    is for code that can't await ``put``. It takes the options of :py:func:`create_stream`
+    and has the same buffer and errors.
     """
     stream = _own_handle(definition, name, _check_backend(backend, "create"))
     run_stream = stream._check("create", backend_checked=True)
