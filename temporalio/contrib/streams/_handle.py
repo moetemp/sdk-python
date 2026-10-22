@@ -182,20 +182,32 @@ class StreamHandle(Generic[E]):
         topics = definition_of(self._definition).topics
         return {name: topic.type for name, topic in topics.items()}
 
+    def _fields(self) -> dict[str, str]:
+        # The fields that name the Stream. They need no call, so a handle whose id is not known
+        # yet still compares, hashes and prints.
+        fields = {"id": self._id}
+        if self._workflow_id:
+            fields["workflowId"] = self._workflow_id
+        if self._first_execution_run_id:
+            fields["firstExecutionRunId"] = self._first_execution_run_id
+        if self._backend:
+            fields["backend"] = self._backend
+        return fields
+
     def __eq__(self, other: object) -> bool:
         """Handles of one class are equal when they name the same Stream."""
         if type(other) is not type(self):
             return NotImplemented
         assert isinstance(other, StreamHandle)
-        return _to_json(self) == _to_json(other)
+        return self._fields() == other._fields()
 
     def __hash__(self) -> int:
-        """Hash of the Stream fields."""
-        return hash((type(self), tuple(sorted(_to_json(self).items()))))
+        """Hash of the fields that never change, so it stays when a client learns the id."""
+        return hash((type(self), self._backend, self._workflow_id or self._id))
 
     def __repr__(self) -> str:
         """Show the Stream fields."""
-        fields = ", ".join(f"{key}={value!r}" for key, value in _to_json(self).items())
+        fields = ", ".join(f"{key}={value!r}" for key, value in self._fields().items())
         return f"{type(self).__name__}({fields})"
 
     def __copy__(self) -> Self:

@@ -80,7 +80,11 @@ class Access:
             yield item
 
     async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one."""
+        """The next offset of the Stream, the newest offset plus one.
+
+        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        """
         response = await self.backend.call_async(
             "DescribeStream",
             stream_pb.DescribeStreamRequest(
