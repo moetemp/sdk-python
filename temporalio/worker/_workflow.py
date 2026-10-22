@@ -39,7 +39,6 @@ from ._interceptor import (
     WorkflowInboundInterceptor,
     WorkflowInterceptorClassInput,
 )
-from ._plugin import Plugin, WorkflowActivationCompleteInput
 from ._workflow_instance import (
     _DEFAULT_ENABLED_WORKFLOW_LOGIC_FLAGS,
     PatchActivationInput,
@@ -105,14 +104,12 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         encode_headers: bool,
         max_workflow_task_external_storage_concurrency: int,
         default_workflow_logic_flags: frozenset[_WorkflowLogicFlag] | None = None,
-        activation_complete_plugins: Sequence[Plugin] = (),
     ) -> None:
         # Debug mode is enabled if specified or if the TEMPORAL_DEBUG env var is truthy
         debug_mode = debug_mode or bool(os.environ.get("TEMPORAL_DEBUG"))
 
         self._bridge_worker = bridge_worker
         self._namespace = namespace
-        self._activation_complete_plugins = activation_complete_plugins
         self._task_queue = task_queue
         self._default_workflow_logic_flags = set(
             _DEFAULT_ENABLED_WORKFLOW_LOGIC_FLAGS
@@ -513,15 +510,6 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             completion.failed.Clear()
             completion.failed.failure.message = f"Failed encoding completion: {err}"
 
-        if (
-            workflow
-            and self._activation_complete_plugins
-            and completion.HasField("successful")
-        ):
-            await self._run_activation_complete_plugins(
-                workflow, act, completion, data_converter
-            )
-
         # Reported on the completion so core can include them in its workflow-task duration
         # log; core measures the duration itself.
         if download_metrics.payload_count > 0:
@@ -543,31 +531,6 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             logger.exception(
                 "Failed completing activation on workflow with run ID %s", act.run_id
             )
-
-    async def _run_activation_complete_plugins(
-        self,
-        workflow: _RunningWorkflow,
-        act: temporalio.bridge.proto.workflow_activation.WorkflowActivation,
-        completion: temporalio.bridge.proto.workflow_completion.WorkflowActivationCompletion,
-        data_converter: temporalio.converter.DataConverter,
-    ) -> None:
-        input = WorkflowActivationCompleteInput(
-            run_id=act.run_id,
-            info=workflow.instance.get_info(),
-            is_replaying=act.is_replaying,
-            items=workflow.instance.take_plugin_items(),
-            data_converter=data_converter,
-        )
-        try:
-            for plugin in self._activation_complete_plugins:
-                await plugin.on_workflow_activation_complete(input)
-        # A cancel too must fail the task, or the Activation never completes.
-        except BaseException as err:
-            logger.exception(
-                "Failed plugin activation hook on workflow with run ID %s", act.run_id
-            )
-            completion.failed.Clear()
-            completion.failed.failure.message = f"Failed plugin activation hook: {err}"
 
     async def _handle_cache_eviction(
         self,

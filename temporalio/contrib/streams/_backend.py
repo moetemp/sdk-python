@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import google.protobuf.message
@@ -96,13 +95,6 @@ class _ExtensionStreamBackend:
             _ExtensionTransport(self, namespace), data_converter=data_converter
         )
 
-    def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
-        """Call a synchronous extension method."""
-        try:
-            return self._extension.call(method, request.SerializeToString())
-        except temporalio.worker.ExtensionError as err:
-            raise _errors.from_extension_error(err) from None
-
     async def call_async(
         self, method: str, request: google.protobuf.message.Message, response: type[_M]
     ) -> _M:
@@ -113,37 +105,12 @@ class _ExtensionStreamBackend:
             raise _errors.from_extension_error(err) from None
         return response.FromString(data)
 
-    async def flush_run_buffer(
-        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
-    ) -> int:
-        """Write a run's buffered Workflow calls before a Local Activity of the run starts.
-
-        Returns how many Records it wrote.
-        """
-        response = await self.call_async(
-            "FlushRunBuffer",
-            ext_pb.FlushRunBufferRequest(
-                namespace=namespace, run_id=run_id, workflow_task=workflow_task
-            ),
-            ext_pb.FlushRunBufferResponse,
-        )
-        return response.records
-
     async def close_writers(self) -> int:
         """Drop every open writer of the extension, and return how many failed."""
         response = await self.call_async(
             "CloseWriters", ext_pb.CloseWritersRequest(), ext_pb.CloseWritersResponse
         )
         return response.failed
-
-    async def drain_closes(self, timeout: timedelta) -> int:
-        """Wait for the Workflow closes in flight, and return how many are left."""
-        request = ext_pb.DrainClosesRequest()
-        request.timeout.FromTimedelta(timeout)
-        response = await self.call_async(
-            "DrainCloses", request, ext_pb.DrainClosesResponse
-        )
-        return response.pending
 
 
 class _ExtensionTransport:

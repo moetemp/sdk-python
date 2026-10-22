@@ -64,8 +64,7 @@ class AgentTurns:
         )
         turns = stream.topic(Events.turns)
         while True:
-            # The publish goes in the run's buffer, so it and the model call start in one
-            # Workflow Task.
+            # The publish is one Local Activity. History keeps its offset, not the Turn.
             await turns.publish(Turn("model"))
             reply = await workflow.execute_activity(
                 call_model,
