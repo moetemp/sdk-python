@@ -27,6 +27,8 @@ from temporalio.contrib.streams.redis import (
 
 NATIVE_EXTENSION_NAME = "temporalio-streams-native"
 
+_WAIT_COMPLETED = temporalio.workflow.NexusOperationCancellationType.WAIT_COMPLETED
+
 
 class _NativeBackend(_ExtensionStreamBackend):
     def for_client(self, client: temporalio.client.Client) -> _NativeBackend:
@@ -59,7 +61,7 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
                     schedule_to_close_timeout=None,
                     schedule_to_start_timeout=None,
                     start_to_close_timeout=None,
-                    cancellation_type=temporalio.workflow.NexusOperationCancellationType.WAIT_COMPLETED,
+                    cancellation_type=_WAIT_COMPLETED,
                     headers=None,
                     summary=None,
                 )
