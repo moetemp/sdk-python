@@ -144,7 +144,7 @@ async def test_default_marks_the_worker_default(client: Client, redis_url: str):
 async def write_elsewhere(stream: streams.ActivityStream[Events]) -> str:
     try:
         await stream.topic(Events.tokens).publish("lost")
-    except streams.StreamUnsupportedError as err:
+    except streams.StreamConfigError as err:
         return str(err)
     return "written"
 
@@ -169,7 +169,7 @@ class CreatesElsewhere:
 
 async def test_a_backend_that_nobody_registered(client: Client, redis_url: str):
     two = two_backend_client(client, redis_url)
-    with pytest.raises(streams.StreamUnsupportedError):
+    with pytest.raises(streams.StreamConfigError):
         streams.StreamClient(two).get_handle(Events, id="s", backend="elsewhere")
     async with new_worker(
         two, PassesElsewhere, CreatesElsewhere, activities=[write_elsewhere]

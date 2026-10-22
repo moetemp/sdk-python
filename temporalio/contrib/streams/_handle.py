@@ -12,6 +12,29 @@ from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 
 E = TypeVar("E")
+T = TypeVar("T")
+
+
+class TopicBase(Generic[T]):
+    """Base of the Topic of each handle class. All Topics of a Stream share one order."""
+
+    def __init__(self, stream: Any, name: str, type: Any) -> None:
+        """Create a Topic. Use the Stream's ``topic`` instead."""
+        self._stream = stream
+        self._name = name
+        self._type = type
+
+    @property
+    def name(self) -> str:
+        """Name of the Topic."""
+        return self._name
+
+    @property
+    def type(self) -> Any:
+        """Type that a read decodes the Topic's values with."""
+        return self._type
+
+
 H = TypeVar("H", bound="StreamHandle[Any]")
 
 
@@ -184,6 +207,10 @@ class StreamHandle(Generic[E]):
             return {}
         topics = definition_of(self._definition).topics
         return {name: topic.type for name, topic in topics.items()}
+
+    async def _ready(self) -> None:
+        # A handle that must look up its backend first does it here.
+        pass
 
     def _fields(self) -> dict[str, str]:
         # The fields that name the Stream. They need no call, so a handle whose id is not known

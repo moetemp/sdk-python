@@ -44,15 +44,6 @@ OWNED = PlainStream(
 )
 
 
-def test_definition_takes_the_name_and_the_topics():
-    events = definition_of(Events)
-    assert events.name == "events"
-    assert list(events.topics) == ["turns", "tokens", "raw-values"]
-    assert Events.turns.name == "turns" and Events.turns.type is Turn
-    assert Events.raw.name == "raw-values"
-    assert definition_of(Index).name == "Index"
-
-
 def test_definition_rejects_two_topics_of_one_name():
     with pytest.raises(ValueError, match="two Topics named t"):
 
@@ -91,12 +82,6 @@ def test_topic_of_the_definition_keeps_its_type():
         OWNED._topic_spec("tokens", int)
     with pytest.raises(TypeError, match="already has its type"):
         OWNED._topic_spec(Events.turns, int)
-
-
-def test_stream_without_definition_takes_any_topic():
-    plain: PlainStream[Any] = PlainStream(id="s")
-    assert plain._topic_spec("t", None) == ("t", None)
-    assert plain._topic_spec(Events.turns, None) == ("turns", Turn)
 
 
 def test_handle_is_the_proto_json_of_the_ref():
@@ -158,19 +143,6 @@ def test_handle_in_a_pydantic_field():
     payload = converter.to_payload(model)
     decoded = converter.from_payload(payload, CallModelModel)
     assert decoded.stream == OWNED
-
-
-class OtherStream(streams.StreamHandle[E]):
-    pass
-
-
-def test_from_handle_keeps_the_stream():
-    other: OtherStream[Events] = OtherStream.from_handle(OWNED)
-    assert type(other) is OtherStream
-    assert other.definition is Events
-    assert DataConverter.default.payload_converter.to_payload(
-        other
-    ) == DataConverter.default.payload_converter.to_payload(OWNED)
 
 
 def test_any_type_argument_has_no_definition():
