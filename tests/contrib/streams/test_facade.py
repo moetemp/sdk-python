@@ -1,17 +1,14 @@
 import asyncio
-import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
 import pytest
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors, _ids
-from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
@@ -19,7 +16,6 @@ from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCStatusCode
 from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
-from tests.helpers import new_worker
 
 
 @dataclass
@@ -136,27 +132,6 @@ async def test_read_waits_for_create(client: Client):
     await task
     assert isinstance(items[0], streams.Record) and items[0].data == "five"
     assert isinstance(items[-1], streams.Closed)
-
-
-@workflow.defn
-class PublishWithoutPlugin:
-    @workflow.run
-    async def run(self) -> str:
-        try:
-            await stream_workflow.create_stream(Events)
-        except streams.StreamTransportMissingError as err:
-            return type(err).__name__
-        return "created"
-
-
-async def test_workflow_without_plugin_has_no_transport(client: Client):
-    async with new_worker(client, PublishWithoutPlugin) as worker:
-        result = await client.execute_workflow(
-            PublishWithoutPlugin.run,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-    assert result == "StreamTransportMissingError"
 
 
 def test_stream_errors_fail_the_workflow_not_the_task():

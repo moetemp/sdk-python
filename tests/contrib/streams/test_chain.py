@@ -18,6 +18,7 @@ def info(**fields: Any) -> Any:
         "attempt": 1,
         "execution_timeout": None,
         "workflow_start_time": START,
+        "execution_expiration_time": None,
     }
     return SimpleNamespace(**{**base, **fields})
 
@@ -57,6 +58,17 @@ RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), maximum_attempts=3)
         (
             "no time left",
             info(retry_policy=RETRY, execution_timeout=timedelta(seconds=10)),
+            RuntimeError("x"),
+            False,
+        ),
+        (
+            "no time left in a later run of the chain",
+            info(
+                retry_policy=RETRY,
+                execution_timeout=timedelta(seconds=10),
+                workflow_start_time=START + timedelta(seconds=9),
+                execution_expiration_time=START + timedelta(seconds=10),
+            ),
             RuntimeError("x"),
             False,
         ),

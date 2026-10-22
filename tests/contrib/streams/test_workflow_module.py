@@ -8,11 +8,15 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
-from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
+from temporalio.client import (
+    Client,
+    WorkflowFailureError,
+    WorkflowHandle,
+)
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.exceptions import ApplicationError
-from tests.helpers import new_worker
+from tests.helpers import assert_task_fail_eventually, new_worker
 
 
 @dataclass
@@ -133,10 +137,6 @@ class Mistakes:
             stream.topic("unknown")
         except streams.StreamError as err:
             errors.append(err.reason)
-        try:
-            await stream_workflow.create_stream(Events, name="b", backend="elsewhere")
-        except streams.StreamUnsupportedError as err:
-            errors.append(err.reason)
         await stream.close(result="early")
         try:
             await stream.topic(Events.tokens).publish("late")
@@ -167,7 +167,6 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
         )
         assert await handle.result() == [
             "unknown_topic",
-            "stream_unsupported",
             "stream_closed",
             "stream_closed",
         ]
@@ -220,3 +219,64 @@ async def test_auto_close_closes_a_quiet_stream(stream_client: Client):
     assert data(items) == ["only"]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result is None and items[-1].failure is None
+
+
+@workflow.defn
+class CreatesOn:
+    @workflow.run
+    async def run(self, backend: str | None, again_without_close: bool) -> None:
+        await stream_workflow.create_stream(Events, backend=backend)
+        if again_without_close:
+            await stream_workflow.create_stream(Events, close_with_run=False)
+
+
+async def test_worker_config_errors_fail_the_task(
+    client: Client, stream_client: Client
+):
+    # A Worker with no plugin, or with another backend, fails the Workflow Task, so a Worker
+    # with the right config can take the run on.
+    for task_client, args, message in (
+        (client, [None, False], "No Stream plugin"),
+        (stream_client, ["elsewhere", False], "backend elsewhere"),
+        (stream_client, [None, True], "close_with_run=False"),
+    ):
+        async with new_worker(task_client, CreatesOn) as worker:
+            handle = await task_client.start_workflow(
+                CreatesOn.run,
+                args=args,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            await assert_task_fail_eventually(handle, message_contains=message)
+            await handle.terminate()
+
+
+@workflow.defn
+class CronTurn:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await stream_workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("turn")
+        return "done"
+
+
+async def test_cron_runs_share_an_open_stream(stream_client: Client):
+    # A cron chain goes on after each run, so no run closes the chain's Stream, and each run
+    # writes to it again.
+    async with new_worker(stream_client, CronTurn) as worker:
+        handle = await stream_client.start_workflow(
+            CronTurn.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+            cron_schedule="@every 1s",
+        )
+        stream = streams.StreamClient(stream_client).get_workflow_stream(handle, Events)
+        reader = stream.subscribe(create_wait=timedelta(seconds=20))
+        first = await reader.__anext__()
+        second = await reader.__anext__()
+        await reader.aclose()
+        await handle.terminate()
+    assert isinstance(first, streams.Record) and first.data == "turn"
+    assert isinstance(second, streams.Record) and second.data == "turn"
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert not any(isinstance(item, streams.Closed) for item in items)
