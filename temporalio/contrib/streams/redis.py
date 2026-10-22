@@ -423,8 +423,8 @@ def chain_continues(
     """Whether the server starts another run of the chain after this run ends.
 
     Then the next run goes on with the run chain's Streams, so the runtime skips this run's
-    closes. A cron run always continues. A failed run continues when its retry policy has attempts and
-    time left for the failure.
+    closes. A cron run always continues. A failed run continues when its retry policy has
+    attempts and time left for the failure.
     """
     if info.cron_schedule:
         return True
