@@ -10,7 +10,7 @@ import asyncio
 import dataclasses
 import itertools
 import weakref
-from collections.abc import Coroutine, Generator
+from collections.abc import Callable, Coroutine, Generator
 from datetime import timedelta
 from typing import Any, NoReturn, TypeVar
 
@@ -465,14 +465,14 @@ def _merged(
     )
 
 
-async def _drain() -> None:
-    # The run's close goes out only after its Stream calls completed, so none is lost.
-    def idle() -> bool:
-        return all(
-            not queue.busy and not queue.waiting for queue in _run_queues().values()
-        )
+def _idle() -> bool:
+    return all(not queue.busy and not queue.waiting for queue in _run_queues().values())
 
-    await temporalio.workflow.wait_condition(idle)
+
+async def _drain() -> None:
+    # Waits until the run's Stream calls completed, so a later step does not pass them.
+    if not _idle():
+        await temporalio.workflow.wait_condition(_idle)
 
 
 def _operation_input(
@@ -546,6 +546,8 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     async def _temporal_stream_read_page(
         self, request: stream_pb.ReadRecordsRequest
     ) -> stream_pb.ReadRecordsResponse:
+        # The read sees the run's own writes, since it starts after they completed.
+        await _drain()
         # Another Stream plugin further down the chain passes a call of this backend on.
         token = streams_workflow._target.set(self._temporal_stream_backend_name)
         try:
@@ -562,6 +564,54 @@ class _NativeWorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         pass_owned_streams(input)
         super().continue_as_new(input)
+
+    # The server runs each Stream operation on its own, after the Workflow Task. So an
+    # Activity, a child or a Nexus operation that the run starts next waits until the run's
+    # Stream calls completed. It then sees the Stream that the run created, and the Records
+    # before its own, as on Redis.
+
+    def start_activity(
+        self, input: temporalio.worker.StartActivityInput
+    ) -> temporalio.workflow.ActivityHandle[Any]:
+        if _idle():
+            return super().start_activity(input)
+        return _AfterStreamCalls(
+            lambda: super(_NativeWorkflowOutbound, self).start_activity(input)
+        )
+
+    def start_local_activity(
+        self, input: temporalio.worker.StartLocalActivityInput
+    ) -> temporalio.workflow.ActivityHandle[Any]:
+        if _idle():
+            return super().start_local_activity(input)
+        return _AfterStreamCalls(
+            lambda: super(_NativeWorkflowOutbound, self).start_local_activity(input)
+        )
+
+    async def start_child_workflow(
+        self, input: temporalio.worker.StartChildWorkflowInput
+    ) -> temporalio.workflow.ChildWorkflowHandle[Any, Any]:
+        await _drain()
+        return await super().start_child_workflow(input)
+
+    async def start_nexus_operation(
+        self, input: temporalio.worker.StartNexusOperationInput[Any, Any]
+    ) -> temporalio.workflow.NexusOperationHandle[Any]:
+        await _drain()
+        return await super().start_nexus_operation(input)
+
+
+class _AfterStreamCalls(temporalio.workflow.ActivityHandle[Any]):
+    # Starts the Activity once the run's Stream calls completed. A cancel before then cancels
+    # the wait, and after it the Activity.
+    def __init__(
+        self, start: Callable[[], temporalio.workflow.ActivityHandle[Any]]
+    ) -> None:
+        async def run() -> Any:
+            await _drain()
+            return await start()
+
+        super().__init__(run())
 
 
 def _schedule_now(call: Coroutine[Any, Any, None]) -> None:
