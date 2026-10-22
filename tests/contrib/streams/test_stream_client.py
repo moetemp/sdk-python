@@ -11,9 +11,9 @@ from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
-from temporalio.plugin import SimplePlugin
 from tests.contrib.streams.fake_extension import FakeExtension
 from tests.helpers import new_worker
 
@@ -32,9 +32,12 @@ class Events:
 
 def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     extension = FakeExtension()
-    plugin = SimplePlugin("fake-streams")
-    setattr(plugin, "_temporal_stream_backend", streams.StreamBackend(extension))
-    setattr(plugin, "backend_name", "fake")
+    plugin = streams.StreamPlugin(
+        "fake-streams",
+        backend_name="fake",
+        default=False,
+        stream_backend=_ExtensionStreamBackend(extension),
+    )
     config = client.config()
     config["plugins"] = [plugin]
     return Client(**config), extension
