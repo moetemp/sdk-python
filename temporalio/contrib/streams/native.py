@@ -60,16 +60,12 @@ _BY_CODE: dict[temporalio.service.RPCStatusCode, str] = {
 
 
 def _from_rpc_error(err: temporalio.service.RPCError) -> _errors.StreamError:
-    # The server puts a StreamErrorDetails in the status details, as the crate puts it in the
-    # extension error. With none, the code gives the reason.
-    reason = ""
-    for detail in err.grpc_status.details:
-        if detail.Is(ext_pb.StreamErrorDetails.DESCRIPTOR):
-            details = ext_pb.StreamErrorDetails()
-            detail.Unpack(details)
-            reason = details.reason
-            break
-    reason = reason or _BY_CODE.get(err.status, "")
+    # The server puts a StreamErrorDetails in the status details. With none, the code gives
+    # the reason.
+    mapped = _errors.from_rpc_error(err)
+    if isinstance(mapped, _errors.StreamError):
+        return mapped
+    reason = _BY_CODE.get(err.status, "")
     return _errors._BY_REASON.get(reason, _errors.StreamError)(
         err.message, reason=reason, code=err.status
     )
