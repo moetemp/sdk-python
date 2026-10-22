@@ -89,17 +89,18 @@ class Agent:
         stream = await stream_workflow.create_stream(Events)
         offsets = await workflow.execute_activity(
             call_model,
-            CallModelInput(prompt, streams.ActivityStream(id=stream.id)),
+            CallModelInput(prompt, streams.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
         last = await workflow.execute_activity(
             call_model_sync,
-            # The handle passes as data, so any handle class fits the parameter.
-            SyncInput("sync words", stream),  # type: ignore[arg-type]
+            SyncInput("sync words", streams.SyncActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
         read = await workflow.execute_activity(
-            read_back, stream, start_to_close_timeout=timedelta(seconds=30)
+            read_back,
+            streams.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
         )
         return [offsets, last, read]
 
@@ -157,7 +158,7 @@ class Retrying:
         await stream.topic(Events.tokens).publish("start")
         await workflow.execute_activity(
             flaky,
-            CallModelInput(key, streams.ActivityStream(id=stream.id)),
+            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
@@ -204,7 +205,9 @@ class Closing:
             start_to_close_timeout=timedelta(seconds=30),
         )
         await workflow.execute_activity(
-            close_it, stream, start_to_close_timeout=timedelta(seconds=30)
+            close_it,
+            streams.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
         )
         return reason
 
