@@ -2,7 +2,7 @@
 
 The WIT and the protos are copies of the temporalio-streams crate's, in scripts/_wit and
 scripts/_proto. Run scripts/gen_protos.py first for the proto modules. No nexgen release has the
-offset, one-way, long-poll and client features yet, so the script installs nexgen at
+offset, long-poll and client features yet, so the script installs nexgen at
 NEX_GEN_REVISION from moetemp/nexgen. NEX_GEN_STREAMS_BIN may name a build of that revision
 instead.
 """
@@ -33,7 +33,7 @@ output_dir = base_dir / "temporalio" / "contrib" / "streams" / "system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
 # The head of moe/brook/v3/n7-long-poll-loop. A branch moves, so the pin is the commit.
-NEX_GEN_REVISION = "64ee48a79abe18077d727f5067a6302c45c25c9d"
+NEX_GEN_REVISION = "25b9c1be8f51245618297415aa51df6928c58504"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 
