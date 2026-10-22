@@ -692,9 +692,22 @@ class WritesToStream:
     async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
         try:
             await stream.topic(Events.tokens).publish("from workflow")
-        except streams.StreamClosedError as err:
+        except streams.StreamError as err:
             return err.reason
         return "wrote"
+
+
+async def test_write_to_a_missing_stream_raises_at_the_await(stream_client: Client):
+    async with new_worker(stream_client, WritesToStream) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                WritesToStream.run,
+                stream_workflow.WorkflowStream(id=f"missing-{uuid.uuid4()}"),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_found"
+        )
 
 
 async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Client):

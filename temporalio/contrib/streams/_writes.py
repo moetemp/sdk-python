@@ -88,6 +88,7 @@ async def append_records(request: stream_pb.AppendRecordsRequest) -> int:
                 )
                 for record in request.records
             ],
+            withdraw_run=request.withdraw_run or None,
         )
     )
     return response.last_offset or 0

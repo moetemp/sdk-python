@@ -61,6 +61,8 @@ class _RunState:
     streams: dict[str, _RunStream] = field(default_factory=dict)
     # The last write of each Stream. Each write waits for it, so writes keep their order.
     tails: dict[str, asyncio.Task[int]] = field(default_factory=dict)
+    # The Streams that a retry run's first write has withdrawn the previous run on.
+    withdrawn: set[str] = field(default_factory=set)
 
     def stream(self, ref: models.StreamRef) -> _RunStream:
         known = self.streams.get(ref.id)
@@ -113,6 +115,18 @@ def _write(
 ) -> asyncio.Task[int]:
     state = _state()
     previous = state.tails.get(stream_id)
+    info = temporalio.workflow.info()
+    if (
+        info.attempt > 1
+        and info.continued_run_id
+        and stream_id not in state.withdrawn
+        and isinstance(
+            request, (stream_pb.CreateStreamRequest, stream_pb.AppendRecordsRequest)
+        )
+    ):
+        # A retry run's first write to a Stream withdraws the Records of the run it retries.
+        setattr(request, "withdraw_run", info.continued_run_id)
+        state.withdrawn.add(stream_id)
 
     async def run() -> int:
         if previous is not None:
@@ -433,10 +447,6 @@ def _create(
         request.retention.FromTimedelta(retention)
     if auto_close is not None:
         request.auto_close.FromTimedelta(auto_close)
-    info = temporalio.workflow.info()
-    if info.attempt > 1 and info.continued_run_id:
-        # A retry run withdraws the Records of the run it retries.
-        request.withdraw_run = info.continued_run_id
     run_stream.close_with_run = close_with_run
     run_stream.backend = stream.backend
     return stream, _write(stream.id, CREATE_ACTIVITY, request)
