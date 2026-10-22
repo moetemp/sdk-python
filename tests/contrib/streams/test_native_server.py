@@ -37,13 +37,13 @@ def write_native_sync(stream: streams.SyncActivityStream[Events]) -> None:
 class WritesNativeAndRedis:
     @workflow.run
     async def run(self) -> list[str | None]:
-        on_redis = await stream_workflow.create_stream(Events, name="old")
+        on_redis = await stream_workflow.create_stream(streams.with_name(Events, "old"))
         on_native = await stream_workflow.create_stream(
-            Events, name="new", backend="native"
+            streams.with_name(Events, "new"), backend="native"
         )
         await on_redis.topic(Events.tokens).publish("redis")
         await on_native.topic(Events.tokens).publish("workflow 1", "workflow 2")
-        # The Activities write after the run's buffer went out, as on Redis.
+        # The Activities write after the run's own writes, as on Redis.
         await workflow.execute_activity(
             write_native,
             streams.ActivityStream.from_handle(on_native),
@@ -118,7 +118,7 @@ async def test_redis_and_native_on_a_native_server(
         )
         assert await handle.result() == ["redis", "native"]
     new = streams.StreamClient(two).workflow_stream(
-        handle, Events, name="new", backend="native"
+        handle, streams.with_name(Events, "new"), backend="native"
     )
     items = [item async for item in new.subscribe()]
     assert [item.data for item in items if isinstance(item, streams.Record)] == [

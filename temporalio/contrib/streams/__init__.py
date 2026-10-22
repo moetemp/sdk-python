@@ -32,6 +32,7 @@ from temporalio.contrib.streams._defn import (
     TopicDefinition,
     defn,
     topic,
+    with_name,
 )
 from temporalio.contrib.streams._errors import (
     ReadOnlyContextError,
@@ -86,5 +87,6 @@ __all__ = [
     "WorkflowTopic",
     "defn",
     "topic",
+    "with_name",
     "workflow",
 ]

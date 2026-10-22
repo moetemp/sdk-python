@@ -47,7 +47,9 @@ class SyncInput:
 async def read(
     client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
 ) -> list[object]:
-    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    stream = streams.StreamClient(client).workflow_stream(
+        handle, streams.with_name(Events, name)
+    )
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
@@ -362,7 +364,7 @@ class Leftovers:
     @workflow.run
     async def run(self, key: str) -> list[Any]:
         stream = await stream_workflow.create_stream(Events)
-        other = await stream_workflow.create_stream(Events, name="other")
+        other = await stream_workflow.create_stream(streams.with_name(Events, "other"))
         await workflow.execute_activity(
             never_flushes,
             CallModelInput("a b", streams.ActivityStream.from_handle(stream)),
