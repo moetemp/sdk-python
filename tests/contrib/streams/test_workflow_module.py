@@ -36,7 +36,7 @@ class Events:
 async def read(
     client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
 ) -> list[object]:
-    stream = streams.StreamClient(client).get_workflow_stream(handle, Events, name=name)
+    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
@@ -216,7 +216,7 @@ async def test_auto_close_closes_a_quiet_stream(stream_client: Client):
         )
         await handle.result()
         await asyncio.sleep(1.5)
-        stream = streams.StreamClient(stream_client).get_workflow_stream(handle, Events)
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
         items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert data(items) == ["only"]
     assert isinstance(items[-1], streams.Closed)
@@ -272,7 +272,7 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
             task_queue=worker.task_queue,
             cron_schedule="@every 1s",
         )
-        stream = streams.StreamClient(stream_client).get_workflow_stream(handle, Events)
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
         reader = stream.subscribe(create_wait=timedelta(seconds=20))
         first = await reader.__anext__()
         second = await reader.__anext__()

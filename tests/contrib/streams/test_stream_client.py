@@ -91,7 +91,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     setattr(handle, "describe", describe)
     stream_client = streams.StreamClient(client)
     await stream_client.create(Events, id="agent-1:first:n")
-    stream = stream_client.get_workflow_stream(handle, Events, name="n")
+    stream = stream_client.workflow_stream(handle, Events, name="n")
     with pytest.raises(RuntimeError, match="not known yet"):
         stream.id
     assert await stream.get_offset() == 0
@@ -165,7 +165,7 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
         handle = await stream_client.start_workflow(
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        stream = streams.StreamClient(stream_client).get_workflow_stream(handle, Events)
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
         # The Workflow creates its Stream later, so the read waits for the create.
         items = [
             item async for item in stream.subscribe(create_wait=timedelta(seconds=20))
@@ -195,9 +195,9 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     client, _ = fake_client(client)
     stream_client = streams.StreamClient(client)
     handle = client.get_workflow_handle("agent-2")
-    first = stream_client.get_workflow_stream(handle, Events)
-    same = stream_client.get_workflow_stream(handle, Events)
-    other = stream_client.get_workflow_stream(handle, Events, name="other")
+    first = stream_client.workflow_stream(handle, Events)
+    same = stream_client.workflow_stream(handle, Events)
+    other = stream_client.workflow_stream(handle, Events, name="other")
     key = hash(first)
     assert first == same and first != other
     assert "agent-2" in repr(first) and "events" in repr(first)
@@ -228,3 +228,8 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     ]
     stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
     assert stream.backend == "b"
+
+
+def test_workflow_stream_has_no_get_prefix():
+    assert hasattr(streams.StreamClient, "workflow_stream")
+    assert not hasattr(streams.StreamClient, "get_workflow_stream")

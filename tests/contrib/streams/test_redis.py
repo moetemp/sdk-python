@@ -59,7 +59,7 @@ class CallModelInput:
 def workflow_stream(
     client: Client, handle: WorkflowHandle[Any, Any], name: str | None = None
 ) -> streams.ClientStream[Events]:
-    return streams.StreamClient(client).get_workflow_stream(handle, Events, name=name)
+    return streams.StreamClient(client).workflow_stream(handle, Events, name=name)
 
 
 async def read_all(stream: streams.ClientStream[Any]) -> list[Any]:
@@ -272,8 +272,8 @@ async def test_temporal_only_passthrough_keeps_records(stream_client: Client):
         )
         await handle.result()
         plain = streams.StreamClient(stream_client)
-        items = await read_all(plain.get_workflow_stream(handle, Plain))
-        scoped = await read_all(plain.get_workflow_stream(handle, Plain, name="scoped"))
+        items = await read_all(plain.workflow_stream(handle, Plain))
+        scoped = await read_all(plain.workflow_stream(handle, Plain, name="scoped"))
     assert [i.data for i in records(items)] == ["plain"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
     assert [i.data for i in records(scoped)] == ["scoped"]

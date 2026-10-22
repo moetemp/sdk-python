@@ -117,7 +117,7 @@ async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
     stream_client = streams.StreamClient(client)
     handle = client.get_workflow_handle("wf-1", first_execution_run_id="run-1")
-    stream = stream_client.get_workflow_stream(handle, Events)
+    stream = stream_client.workflow_stream(handle, Events)
     with pytest.raises(streams.StreamNotFoundError):
         async for _ in stream.subscribe():
             pass
