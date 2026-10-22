@@ -10,6 +10,7 @@ import pytest
 from temporalio import workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.contrib import streams
+from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import StreamPlugin
@@ -273,3 +274,15 @@ async def test_workflow_reads_go_through_the_codec(stream_client: Client):
     coded = Client(**config)
     seen, _ = await write_and_read(coded, None)
     assert seen == ["turn user hi", "a", "b", "c", "closed written"]
+
+
+def test_a_server_failure_maps_by_its_reason():
+    by_type = _errors.from_application_error(
+        ApplicationError("closed", type="stream_closed")
+    )
+    assert isinstance(by_type, streams.StreamClosedError)
+    by_message = _errors.from_application_error(
+        ApplicationError("stream_not_found: Nobody created the Stream")
+    )
+    assert isinstance(by_message, streams.StreamNotFoundError)
+    assert _errors.from_application_error(ApplicationError("other")) is None
