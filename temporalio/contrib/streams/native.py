@@ -26,7 +26,8 @@ import temporalio.worker
 import temporalio.workflow
 from temporalio.contrib.streams import _activity, _errors
 from temporalio.contrib.streams import workflow as streams_workflow
-from temporalio.contrib.streams._backend import _REQUESTS, _RESPONSES, StreamBackend
+from temporalio.contrib.streams._backend import _REQUESTS, _RESPONSES
+from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
     _SERVICE,
@@ -44,7 +45,6 @@ from temporalio.contrib.streams.redis import (
 )
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
-from temporalio.plugin import SimplePlugin
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
@@ -82,7 +82,7 @@ class _Writer:
     sequence: int = 0
 
 
-class NativeStreamBackend(StreamBackend):
+class NativeStreamBackend:
     """Carries the Stream calls of Activities and clients to the server's Stream service.
 
     It calls ``temporal.api.streamservice.v1.StreamService`` on the frontend over the client's
@@ -92,9 +92,7 @@ class NativeStreamBackend(StreamBackend):
         This API is experimental.
     """
 
-    def __init__(  # pyright: ignore[reportMissingSuperCall]
-        self, client: temporalio.client.Client | None = None
-    ) -> None:
+    def __init__(self, client: temporalio.client.Client | None = None) -> None:
         """Create a backend over a client's connection."""
         self._client = client
         self._writers: dict[int, _Writer] = {}
@@ -113,13 +111,6 @@ class NativeStreamBackend(StreamBackend):
         """A generated Stream service client for ``namespace``, over the frontend."""
         return service_client.StreamServiceClient(
             _GrpcTransport(self, namespace), data_converter=data_converter
-        )
-
-    def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
-        """Native Streams have no blocking calls, so this raises."""
-        raise _errors.StreamUnsupportedError(
-            f"Native Streams have no blocking call {method}",
-            reason="stream_unsupported",
         )
 
     async def call_async(
@@ -175,7 +166,10 @@ class NativeStreamBackend(StreamBackend):
         return response.last_offset
 
     async def flush_run_buffer(
-        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
+        self,
+        namespace: str,  # pyright: ignore[reportUnusedParameter]
+        run_id: str,  # pyright: ignore[reportUnusedParameter]
+        workflow_task: stream_pb.WorkflowTaskEpoch,  # pyright: ignore[reportUnusedParameter]
     ) -> int:
         """Workflow calls go to the server as commands, so a run has no buffer."""
         return 0
@@ -220,7 +214,7 @@ class _GrpcTransport:
         )
 
 
-class NativeStreamPlugin(SimplePlugin):
+class NativeStreamPlugin(StreamPlugin):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
 
     Workflow code sends each call to the server as a System Nexus command, with no Worker
@@ -241,24 +235,16 @@ class NativeStreamPlugin(SimplePlugin):
             default: Make this the default backend when the client or Worker has more than
                 one Stream plugin. With none marked, the first one is the default.
         """
-        self._backend_name = name
-        self._default = default
-        self._temporal_stream_backend = NativeStreamBackend()
+        self._native_backend = NativeStreamBackend()
         self._worker_client: temporalio.client.Client | None = None
         self._converter = temporalio.converter.DataConverter.default
         super().__init__(
-            "temporalio.NativeStreamPlugin", interceptors=[_NativeInterceptor(self)]
+            "temporalio.NativeStreamPlugin",
+            backend_name=name,
+            default=default,
+            stream_backend=self._native_backend,
+            interceptors=[_NativeInterceptor(self)],
         )
-
-    @property
-    def backend_name(self) -> str:
-        """The name that Stream handles carry for this backend."""
-        return self._backend_name
-
-    @property
-    def default(self) -> bool:
-        """Whether this is the default backend when there is more than one."""
-        return self._default
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
@@ -287,16 +273,19 @@ class _NativeInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
     def __init__(self, plugin: NativeStreamPlugin) -> None:
         super().__init__()
         self._plugin = plugin
-        self._inbound_class = type(
-            "_NativeWorkflowInbound",
-            (_NativeWorkflowInbound,),
-            {"_backend_name": plugin.backend_name, "_default": plugin.default},
-        )
 
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
-        return self._inbound_class
+        # Workflow code learns the Worker's backend names from the interceptor classes.
+        return type(
+            "_NativeWorkflowInbound",
+            (_NativeWorkflowInbound,),
+            {
+                "_backend_name": self._plugin.backend_name,
+                "_default": self._plugin.default,
+            },
+        )
 
     def intercept_activity(
         self, next: temporalio.worker.ActivityInboundInterceptor
@@ -638,7 +627,7 @@ class _NativeActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         client = _activity_client() or self._plugin._worker_client
         if client is not None:
-            streams.backend = self._plugin._temporal_stream_backend.for_client(client)
+            streams.backend = self._plugin._native_backend.for_client(client)
         _attempt, token = enter_attempt(self, streams)
         try:
             result = await super().execute_activity(input)
