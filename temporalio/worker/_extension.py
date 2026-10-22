@@ -42,6 +42,41 @@ class WorkerExtension:
         self._bridge_extension = temporalio.bridge.extension.WorkerExtension(
             self._runtime._core_runtime, name, config
         )
+        self._parts: tuple[WorkerExtension, ...] = (self,)
+
+    @staticmethod
+    def combine(*extensions: WorkerExtension) -> WorkerExtension:
+        """One extension for a Worker that needs more than one, such as two Stream plugins.
+
+        Core takes one extension per Worker. Core calls the hooks of each part in the given
+        order, and the first failure fails the Workflow Task. Each part keeps its own methods,
+        so call them on the part. A combined extension in ``extensions`` adds its parts.
+
+        Raises:
+            ValueError: No extension is given, or the extensions use different runtimes.
+        """
+        parts = tuple(part for extension in extensions for part in extension._parts)
+        if not parts:
+            raise ValueError("No worker extension to combine")
+        if len(parts) == 1:
+            return parts[0]
+        runtime = parts[0].runtime
+        if any(part.runtime is not runtime for part in parts):
+            raise ValueError("Worker extensions must use the same runtime to combine")
+        combined = WorkerExtension.__new__(WorkerExtension)
+        combined._runtime = runtime
+        combined._bridge_extension = (
+            temporalio.bridge.extension.WorkerExtension.combine(
+                [part._bridge_extension for part in parts]
+            )
+        )
+        combined._parts = parts
+        return combined
+
+    @property
+    def parts(self) -> tuple[WorkerExtension, ...]:
+        """The extensions that this one combines, or only itself."""
+        return self._parts
 
     @property
     def name(self) -> str:

@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use temporalio_sdk_core::{ExtensionError, WorkerExtension};
+use temporalio_sdk_core::{
+    ExtensionError, WorkerExtension, WorkflowTaskCompletionInfo, WorkflowTaskFailedInfo,
+    WorkflowTaskInterceptError, WorkflowTaskInterceptor,
+};
 
 use crate::runtime;
 
@@ -52,6 +55,89 @@ impl WorkerExtensionRef {
                 .await
                 .map_err(call_error)
         })
+    }
+}
+
+/// Joins extensions into one, since Core takes one extension per Worker. Core calls the hooks of
+/// each part in the given order. Python keeps each part to call its methods.
+pub fn combine_worker_extensions(parts: Vec<WorkerExtensionRef>) -> PyResult<WorkerExtensionRef> {
+    let Some(first) = parts.first() else {
+        return Err(PyValueError::new_err("No worker extension to combine"));
+    };
+    let runtime = first.runtime.clone();
+    let parts: Vec<Arc<dyn WorkerExtension>> =
+        parts.into_iter().map(|part| part.extension).collect();
+    let interceptors: Vec<_> = parts
+        .iter()
+        .filter_map(|part| part.workflow_task_interceptor())
+        .collect();
+    let name = parts
+        .iter()
+        .map(|part| part.name())
+        .collect::<Vec<_>>()
+        .join("+");
+    let interceptor: Option<Arc<dyn WorkflowTaskInterceptor>> = if interceptors.is_empty() {
+        None
+    } else {
+        Some(Arc::new(CombinedInterceptor(interceptors)))
+    };
+    Ok(WorkerExtensionRef {
+        extension: Arc::new(CombinedExtension { name, interceptor }),
+        runtime,
+    })
+}
+
+struct CombinedExtension {
+    name: String,
+    // Core may ask for the interceptor more than once, so it is built once.
+    interceptor: Option<Arc<dyn WorkflowTaskInterceptor>>,
+}
+
+impl WorkerExtension for CombinedExtension {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn workflow_task_interceptor(&self) -> Option<Arc<dyn WorkflowTaskInterceptor>> {
+        self.interceptor.clone()
+    }
+}
+
+struct CombinedInterceptor(Vec<Arc<dyn WorkflowTaskInterceptor>>);
+
+#[async_trait::async_trait]
+impl WorkflowTaskInterceptor for CombinedInterceptor {
+    async fn before_complete(
+        &self,
+        task: &WorkflowTaskCompletionInfo,
+    ) -> Result<(), WorkflowTaskInterceptError> {
+        // In order, so the first failure fails the task before a later part writes anything.
+        for part in &self.0 {
+            part.before_complete(task).await?;
+        }
+        Ok(())
+    }
+
+    async fn after_complete(&self, task: &WorkflowTaskCompletionInfo, accepted: bool) {
+        // Together, since Core waits on all of them within one bound.
+        futures::future::join_all(
+            self.0
+                .iter()
+                .map(|part| part.after_complete(task, accepted)),
+        )
+        .await;
+    }
+
+    fn on_task_failed(&self, task: &WorkflowTaskFailedInfo) {
+        for part in &self.0 {
+            part.on_task_failed(task);
+        }
+    }
+
+    fn on_evicted(&self, run_id: &str) {
+        for part in &self.0 {
+            part.on_evicted(run_id);
+        }
     }
 }
 

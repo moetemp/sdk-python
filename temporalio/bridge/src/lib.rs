@@ -76,6 +76,7 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add_class::<extension::WorkerExtensionRef>()?;
     m.add_function(wrap_pyfunction!(new_worker_extension, m)?)?;
+    m.add_function(wrap_pyfunction!(combine_worker_extensions, m)?)?;
 
     // envconfig
     let envconfig_module = PyModule::new(py, "envconfig")?;
@@ -136,6 +137,13 @@ fn new_worker(
     config: worker::WorkerConfig,
 ) -> PyResult<worker::WorkerRef> {
     worker::new_worker(runtime_ref, client, config)
+}
+
+#[pyfunction]
+fn combine_worker_extensions(
+    parts: Vec<extension::WorkerExtensionRef>,
+) -> PyResult<extension::WorkerExtensionRef> {
+    extension::combine_worker_extensions(parts)
 }
 
 #[pyfunction]

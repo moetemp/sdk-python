@@ -26,6 +26,15 @@ class WorkerExtension:
             runtime._ref, name, config
         )
 
+    @staticmethod
+    def combine(parts: list[WorkerExtension]) -> WorkerExtension:
+        """One extension whose hooks run the hooks of each part, in order."""
+        combined = WorkerExtension.__new__(WorkerExtension)
+        combined._ref = temporalio.bridge.temporal_sdk_bridge.combine_worker_extensions(
+            [part._ref for part in parts]
+        )
+        return combined
+
     @property
     def name(self) -> str:
         """Name the extension gives itself."""
