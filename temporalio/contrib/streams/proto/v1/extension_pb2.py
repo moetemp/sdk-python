@@ -21,20 +21,11 @@ from temporalio.api.streamservice.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"\xd6\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x16\n\x0e\x64urable_writes\x18\x06 \x01(\x05\x12\x32\n\x0f\x64urable_timeout\x18\x07 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t"\x91\x01\n\x1a\x42ufferWorkflowCallsRequest\x12\x0e\n\x06run_id\x18\x01 \x01(\t\x12\x14\n\x0cwithdraw_run\x18\x02 \x01(\t\x12\x34\n\x05\x63\x61lls\x18\x03 \x03(\x0b\x32%.temporal.sdk.streams.v1.WorkflowCall\x12\x17\n\x0f\x63hain_continues\x18\x04 \x01(\x08"\x80\x02\n\x0cWorkflowCall\x12\x44\n\x06\x63reate\x18\x01 \x01(\x0b\x32\x32.temporal.api.streamservice.v1.CreateStreamRequestH\x00\x12\x45\n\x06\x61ppend\x18\x02 \x01(\x0b\x32\x33.temporal.api.streamservice.v1.AppendRecordsRequestH\x00\x12\x42\n\x05\x63lose\x18\x03 \x01(\x0b\x32\x31.temporal.api.streamservice.v1.CloseStreamRequestH\x00\x12\x17\n\x0fwhen_run_closes\x18\x04 \x01(\x08\x42\x06\n\x04\x63\x61ll"\x1d\n\x1b\x42ufferWorkflowCallsResponse"\xaf\x01\n\x15\x46lushRunBufferRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x0e\n\x06run_id\x18\x02 \x01(\t\x12G\n\rworkflow_task\x18\x03 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12*\n\x07timeout\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration")\n\x16\x46lushRunBufferResponse\x12\x0f\n\x07records\x18\x01 \x01(\x05"\x9c\x02\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.DurationJ\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"@\n\x12\x44rainClosesRequest\x12*\n\x07timeout\x18\x01 \x01(\x0b\x32\x19.google.protobuf.Duration"&\n\x13\x44rainClosesResponse\x12\x0f\n\x07pending\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
+    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"\xb7\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\x0e\x64urable_writesR\x0f\x64urable_timeout"\x85\x03\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration\x12Q\n\x17previous_completed_task\x18\x08 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12\x14\n\x0c\x66\x61iled_tasks\x18\t \x03(\x03J\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
 )
 
 
 _REDISSTREAMCONFIG = DESCRIPTOR.message_types_by_name["RedisStreamConfig"]
-_BUFFERWORKFLOWCALLSREQUEST = DESCRIPTOR.message_types_by_name[
-    "BufferWorkflowCallsRequest"
-]
-_WORKFLOWCALL = DESCRIPTOR.message_types_by_name["WorkflowCall"]
-_BUFFERWORKFLOWCALLSRESPONSE = DESCRIPTOR.message_types_by_name[
-    "BufferWorkflowCallsResponse"
-]
-_FLUSHRUNBUFFERREQUEST = DESCRIPTOR.message_types_by_name["FlushRunBufferRequest"]
-_FLUSHRUNBUFFERRESPONSE = DESCRIPTOR.message_types_by_name["FlushRunBufferResponse"]
 _OPENWRITERREQUEST = DESCRIPTOR.message_types_by_name["OpenWriterRequest"]
 _OPENWRITERRESPONSE = DESCRIPTOR.message_types_by_name["OpenWriterResponse"]
 _WRITERECORDSREQUEST = DESCRIPTOR.message_types_by_name["WriteRecordsRequest"]
@@ -43,8 +34,6 @@ _CLOSEWRITERREQUEST = DESCRIPTOR.message_types_by_name["CloseWriterRequest"]
 _CLOSEWRITERRESPONSE = DESCRIPTOR.message_types_by_name["CloseWriterResponse"]
 _CLOSEWRITERSREQUEST = DESCRIPTOR.message_types_by_name["CloseWritersRequest"]
 _CLOSEWRITERSRESPONSE = DESCRIPTOR.message_types_by_name["CloseWritersResponse"]
-_DRAINCLOSESREQUEST = DESCRIPTOR.message_types_by_name["DrainClosesRequest"]
-_DRAINCLOSESRESPONSE = DESCRIPTOR.message_types_by_name["DrainClosesResponse"]
 _STREAMERRORDETAILS = DESCRIPTOR.message_types_by_name["StreamErrorDetails"]
 RedisStreamConfig = _reflection.GeneratedProtocolMessageType(
     "RedisStreamConfig",
@@ -56,61 +45,6 @@ RedisStreamConfig = _reflection.GeneratedProtocolMessageType(
     },
 )
 _sym_db.RegisterMessage(RedisStreamConfig)
-
-BufferWorkflowCallsRequest = _reflection.GeneratedProtocolMessageType(
-    "BufferWorkflowCallsRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _BUFFERWORKFLOWCALLSREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.BufferWorkflowCallsRequest)
-    },
-)
-_sym_db.RegisterMessage(BufferWorkflowCallsRequest)
-
-WorkflowCall = _reflection.GeneratedProtocolMessageType(
-    "WorkflowCall",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _WORKFLOWCALL,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.WorkflowCall)
-    },
-)
-_sym_db.RegisterMessage(WorkflowCall)
-
-BufferWorkflowCallsResponse = _reflection.GeneratedProtocolMessageType(
-    "BufferWorkflowCallsResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _BUFFERWORKFLOWCALLSRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.BufferWorkflowCallsResponse)
-    },
-)
-_sym_db.RegisterMessage(BufferWorkflowCallsResponse)
-
-FlushRunBufferRequest = _reflection.GeneratedProtocolMessageType(
-    "FlushRunBufferRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _FLUSHRUNBUFFERREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.FlushRunBufferRequest)
-    },
-)
-_sym_db.RegisterMessage(FlushRunBufferRequest)
-
-FlushRunBufferResponse = _reflection.GeneratedProtocolMessageType(
-    "FlushRunBufferResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _FLUSHRUNBUFFERRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.FlushRunBufferResponse)
-    },
-)
-_sym_db.RegisterMessage(FlushRunBufferResponse)
 
 OpenWriterRequest = _reflection.GeneratedProtocolMessageType(
     "OpenWriterRequest",
@@ -200,28 +134,6 @@ CloseWritersResponse = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(CloseWritersResponse)
 
-DrainClosesRequest = _reflection.GeneratedProtocolMessageType(
-    "DrainClosesRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _DRAINCLOSESREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.DrainClosesRequest)
-    },
-)
-_sym_db.RegisterMessage(DrainClosesRequest)
-
-DrainClosesResponse = _reflection.GeneratedProtocolMessageType(
-    "DrainClosesResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _DRAINCLOSESRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
-        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.DrainClosesResponse)
-    },
-)
-_sym_db.RegisterMessage(DrainClosesResponse)
-
 StreamErrorDetails = _reflection.GeneratedProtocolMessageType(
     "StreamErrorDetails",
     (_message.Message,),
@@ -236,37 +148,23 @@ _sym_db.RegisterMessage(StreamErrorDetails)
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     _REDISSTREAMCONFIG._serialized_start = 153
-    _REDISSTREAMCONFIG._serialized_end = 495
-    _BUFFERWORKFLOWCALLSREQUEST._serialized_start = 498
-    _BUFFERWORKFLOWCALLSREQUEST._serialized_end = 643
-    _WORKFLOWCALL._serialized_start = 646
-    _WORKFLOWCALL._serialized_end = 902
-    _BUFFERWORKFLOWCALLSRESPONSE._serialized_start = 904
-    _BUFFERWORKFLOWCALLSRESPONSE._serialized_end = 933
-    _FLUSHRUNBUFFERREQUEST._serialized_start = 936
-    _FLUSHRUNBUFFERREQUEST._serialized_end = 1111
-    _FLUSHRUNBUFFERRESPONSE._serialized_start = 1113
-    _FLUSHRUNBUFFERRESPONSE._serialized_end = 1154
-    _OPENWRITERREQUEST._serialized_start = 1157
-    _OPENWRITERREQUEST._serialized_end = 1441
-    _OPENWRITERRESPONSE._serialized_start = 1443
-    _OPENWRITERRESPONSE._serialized_end = 1482
-    _WRITERECORDSREQUEST._serialized_start = 1484
-    _WRITERECORDSREQUEST._serialized_end = 1586
-    _WRITERECORDSRESPONSE._serialized_start = 1588
-    _WRITERECORDSRESPONSE._serialized_end = 1653
-    _CLOSEWRITERREQUEST._serialized_start = 1655
-    _CLOSEWRITERREQUEST._serialized_end = 1694
-    _CLOSEWRITERRESPONSE._serialized_start = 1696
-    _CLOSEWRITERRESPONSE._serialized_end = 1738
-    _CLOSEWRITERSREQUEST._serialized_start = 1740
-    _CLOSEWRITERSREQUEST._serialized_end = 1761
-    _CLOSEWRITERSRESPONSE._serialized_start = 1763
-    _CLOSEWRITERSRESPONSE._serialized_end = 1801
-    _DRAINCLOSESREQUEST._serialized_start = 1803
-    _DRAINCLOSESREQUEST._serialized_end = 1867
-    _DRAINCLOSESRESPONSE._serialized_start = 1869
-    _DRAINCLOSESRESPONSE._serialized_end = 1907
-    _STREAMERRORDETAILS._serialized_start = 1909
-    _STREAMERRORDETAILS._serialized_end = 1945
+    _REDISSTREAMCONFIG._serialized_end = 464
+    _OPENWRITERREQUEST._serialized_start = 467
+    _OPENWRITERREQUEST._serialized_end = 856
+    _OPENWRITERRESPONSE._serialized_start = 858
+    _OPENWRITERRESPONSE._serialized_end = 897
+    _WRITERECORDSREQUEST._serialized_start = 899
+    _WRITERECORDSREQUEST._serialized_end = 1001
+    _WRITERECORDSRESPONSE._serialized_start = 1003
+    _WRITERECORDSRESPONSE._serialized_end = 1068
+    _CLOSEWRITERREQUEST._serialized_start = 1070
+    _CLOSEWRITERREQUEST._serialized_end = 1109
+    _CLOSEWRITERRESPONSE._serialized_start = 1111
+    _CLOSEWRITERRESPONSE._serialized_end = 1153
+    _CLOSEWRITERSREQUEST._serialized_start = 1155
+    _CLOSEWRITERSREQUEST._serialized_end = 1176
+    _CLOSEWRITERSRESPONSE._serialized_start = 1178
+    _CLOSEWRITERSRESPONSE._serialized_end = 1216
+    _STREAMERRORDETAILS._serialized_start = 1218
+    _STREAMERRORDETAILS._serialized_end = 1254
 # @@protoc_insertion_point(module_scope)

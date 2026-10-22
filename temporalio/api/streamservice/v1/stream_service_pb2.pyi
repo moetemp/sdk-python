@@ -481,6 +481,9 @@ class CreateStreamRequest(google.protobuf.message.Message):
     RETENTION_FIELD_NUMBER: builtins.int
     WITHDRAW_RUN_FIELD_NUMBER: builtins.int
     AUTO_CLOSE_FIELD_NUMBER: builtins.int
+    OWNER_FIELD_NUMBER: builtins.int
+    CLOSE_WITH_RUN_FIELD_NUMBER: builtins.int
+    REF_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     stream_id: builtins.str
     """Required from Workflow code."""
@@ -496,6 +499,18 @@ class CreateStreamRequest(google.protobuf.message.Message):
         TTL. The Store applies it on the next access, so no call sees the Stream open after the
         period. UNIMPLEMENTED (detail stream_unsupported) on a Store that can't.
         """
+    @property
+    def owner(self) -> global___Producer:
+        """The Workflow run that owns the Stream. Workflow kind, with its run_id and epoch."""
+    close_with_run: builtins.bool
+    """Close the Stream with the result or the failure of the owner's run chain when the chain
+    closes, terminate and timeout included. Needs owner, and ref with the owner fields.
+    """
+    @property
+    def ref(self) -> global___StreamRef:
+        """The ref of the Stream. A Workflow-owned Stream sets workflow_id and
+        first_execution_run_id, which name the owner's run chain.
+        """
     def __init__(
         self,
         *,
@@ -504,11 +519,21 @@ class CreateStreamRequest(google.protobuf.message.Message):
         retention: google.protobuf.duration_pb2.Duration | None = ...,
         withdraw_run: builtins.str = ...,
         auto_close: google.protobuf.duration_pb2.Duration | None = ...,
+        owner: global___Producer | None = ...,
+        close_with_run: builtins.bool = ...,
+        ref: global___StreamRef | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "auto_close", b"auto_close", "retention", b"retention"
+            "auto_close",
+            b"auto_close",
+            "owner",
+            b"owner",
+            "ref",
+            b"ref",
+            "retention",
+            b"retention",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -516,8 +541,14 @@ class CreateStreamRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "auto_close",
             b"auto_close",
+            "close_with_run",
+            b"close_with_run",
             "namespace",
             b"namespace",
+            "owner",
+            b"owner",
+            "ref",
+            b"ref",
             "retention",
             b"retention",
             "stream_id",
@@ -589,7 +620,9 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     ]: ...
     @property
     def previous_completed_task(self) -> global___WorkflowTaskEpoch:
-        """Workflow only. The failed tasks are those since this run's last flush to this Stream."""
+        """Local Activity only. The run's last completed Workflow Task and its failed or timed out
+        Workflow Tasks, so the batch withdraws the run's orphaned Local Activity Records.
+        """
     @property
     def failed_tasks(
         self,

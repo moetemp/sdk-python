@@ -127,6 +127,14 @@ message CreateStreamRequest {
     // TTL. The Store applies it on the next access, so no call sees the Stream open after the
     // period. UNIMPLEMENTED (detail stream_unsupported) on a Store that can't.
     google.protobuf.Duration auto_close = 5;
+    // The Workflow run that owns the Stream. Workflow kind, with its run_id and epoch.
+    Producer owner = 6;
+    // Close the Stream with the result or the failure of the owner's run chain when the chain
+    // closes, terminate and timeout included. Needs owner, and ref with the owner fields.
+    bool close_with_run = 7;
+    // The ref of the Stream. A Workflow-owned Stream sets workflow_id and
+    // first_execution_run_id, which name the owner's run chain.
+    StreamRef ref = 8;
 }
 
 enum StreamStatus {
@@ -152,7 +160,8 @@ message AppendRecordsRequest {
     // The batch number in this epoch. With the Producer and epoch it is the dedupe key.
     int64 sequence = 4;
     repeated AppendRecord records = 5;
-    // Workflow only. The failed tasks are those since this run's last flush to this Stream.
+    // Local Activity only. The run's last completed Workflow Task and its failed or timed out
+    // Workflow Tasks, so the batch withdraws the run's orphaned Local Activity Records.
     WorkflowTaskEpoch previous_completed_task = 6;
     repeated int64 failed_tasks = 7;
     // Workflow only. A retry run's first batch: the previous run, whose Records it withdraws.

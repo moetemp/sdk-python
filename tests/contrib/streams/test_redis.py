@@ -17,7 +17,6 @@ from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
 from temporalio.contrib.streams import StreamPlugin
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
     RedisStreamPlugin,
     _ExtensionStreamPlugin,
@@ -36,7 +35,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.helpers import assert_task_fail_eventually, new_worker
+from tests.helpers import new_worker
 
 
 @dataclass
@@ -152,9 +151,12 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
         )
         await handle.result()
         items = await read_all(workflow_stream(stream_client, handle))
-    # The failed task wrote nothing, so the reader gets each Record once.
-    assert [record.data for record in records(items)] == ["before", "after"]
-    assert not any(isinstance(item, streams.Superseded) for item in items)
+    # The retried task writes "after" again, and withdraws the copy of the failed task.
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    assert [record.data for record in written] == ["before", "after", "after"]
+    withdrawn = [r for r in written if any(i.withdraws(r) for i in superseded)]
+    assert withdrawn == [written[1]]
     assert isinstance(items[-1], streams.Closed)
 
 
@@ -312,6 +314,93 @@ async def test_local_activity_writes_with_the_task_epoch(stream_client: Client):
     assert (
         producer.epoch is not None and (producer.epoch.task_started_event_id or 0) > 0
     )
+
+
+@workflow.defn
+class LocalThenFailTask:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        stream = await stream_workflow.create_stream(Events)
+        first = attempts.setdefault(key, 0) == 0
+        await workflow.execute_local_activity(
+            local_tokens,
+            CallModelInput(
+                "0 1" if first else "2 3", streams.ActivityStream.from_handle(stream)
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        if first:
+            attempts[key] = 1
+            raise RuntimeError("fail this Workflow Task once")
+
+
+async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Client):
+    async with new_worker(
+        stream_client,
+        LocalThenFailTask,
+        activities=[local_tokens],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            LocalThenFailTask.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await read_all(workflow_stream(stream_client, handle))
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [r for r in written if not any(i.withdraws(r) for i in superseded)]
+    assert [r.data for r in visible] == ["2", "3"]
+    # The rerun keeps the Producer id and moves to the retry task's epoch.
+    first, second = written[0].producer, visible[0].producer
+    assert first is not None and second is not None and first.id == second.id
+    assert first.epoch is not None and second.epoch is not None
+    assert (first.epoch.task_attempt, first.epoch.task_started_event_id) < (
+        second.epoch.task_attempt,
+        second.epoch.task_started_event_id,
+    )
+
+
+@workflow.defn
+class LocalOnlyInFailedTask:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        stream = await stream_workflow.create_stream(Events)
+        if attempts.setdefault(key, 0) == 0:
+            attempts[key] = 1
+            await workflow.execute_local_activity(
+                local_tokens,
+                CallModelInput("0 1", streams.ActivityStream.from_handle(stream)),
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            raise RuntimeError("fail this Workflow Task once")
+        await stream.topic(Events.tokens).publish("other")
+
+
+async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Client):
+    # The retry task skips the Local Activity, so only its own write can withdraw "0 1". The
+    # write also takes the skipped call's key.
+    async with new_worker(
+        stream_client,
+        LocalOnlyInFailedTask,
+        activities=[local_tokens],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            LocalOnlyInFailedTask.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await read_all(workflow_stream(stream_client, handle))
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
+    assert [r.data for r in visible] == ["other"]
+    assert isinstance(items[-1], streams.Closed)
 
 
 @workflow.defn
@@ -588,40 +677,6 @@ async def test_eviction_prints_nothing(
     assert "Exception ignored" not in captured.err + captured.out
 
 
-async def test_workflow_calls_carry_the_owner(stream_client: Client):
-    [plugin] = [
-        p
-        for p in stream_client.config()["plugins"]
-        if isinstance(p, _ExtensionStreamPlugin)
-    ]
-    sent: list[bytes] = []
-    call = plugin._backend.call
-
-    def record(method: str, request: Any) -> bytes:
-        if method == "BufferWorkflowCalls":
-            sent.append(request.SerializeToString())
-        return call(method, request)
-
-    plugin._backend.call = record  # type: ignore[method-assign]
-    async with new_worker(stream_client, QuickWriter) as worker:
-        handle = await stream_client.start_workflow(
-            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        await handle.result()
-    refs = []
-    for data in sent:
-        request = ext_pb.BufferWorkflowCallsRequest.FromString(data)
-        for workflow_call in request.calls:
-            if workflow_call.HasField("append"):
-                refs.append(workflow_call.append.stream)
-            if workflow_call.HasField("close"):
-                refs.append(workflow_call.close.stream)
-    assert refs
-    for ref in refs:
-        assert ref.workflow_id == handle.id
-        assert ref.first_execution_run_id == handle.first_execution_run_id
-
-
 @workflow.defn
 class AlwaysFails:
     @workflow.run
@@ -667,20 +722,6 @@ async def test_final_failure_under_a_retry_policy(
     assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
     assert [r.data for r in written if superseded[1].withdraws(r)] == ["run-2"]
     assert not any(s.withdraws(written[-1]) for s in superseded)
-
-
-async def test_missing_capability_fails_the_workflow_task(client: Client):
-    # The Workflow flush runs in Core's before_complete, so a Store that lacks a capability
-    # fails the Workflow Task with the capability's name, not a call in Workflow code.
-    config = client.config()
-    config["plugins"] = [MemoryStreamPlugin(durable_writes=1)]
-    memory_client = Client(**config)
-    async with new_worker(memory_client, QuickWriter) as worker:
-        handle = await memory_client.start_workflow(
-            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        await assert_task_fail_eventually(handle, message_contains="replica_wait")
-        await handle.terminate()
 
 
 async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
@@ -739,17 +780,31 @@ async def test_two_backends_on_one_client(client: Client, redis_url: str):
 class WritesToStream:
     @workflow.run
     async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
-        await stream.topic(Events.tokens).publish("from workflow")
-        return "done"
+        try:
+            await stream.topic(Events.tokens).publish("from workflow")
+        except streams.StreamError as err:
+            return err.reason
+        return "wrote"
 
 
-async def test_write_to_a_stream_closed_elsewhere_is_dropped(stream_client: Client):
+async def test_write_to_a_missing_stream_raises_at_the_await(stream_client: Client):
+    async with new_worker(stream_client, WritesToStream) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                WritesToStream.run,
+                stream_workflow.WorkflowStream(id=f"missing-{uuid.uuid4()}"),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_found"
+        )
+
+
+async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"closed-{uuid.uuid4()}"
     )
     await stream.close()
-    # This run did not close the Stream, so replay can't raise it in Workflow code. A live
-    # run and its replay must act the same, so the backend drops the Records.
     async with new_worker(stream_client, WritesToStream) as worker:
         assert (
             await stream_client.execute_workflow(
@@ -758,28 +813,10 @@ async def test_write_to_a_stream_closed_elsewhere_is_dropped(stream_client: Clie
                 id=f"wf-{uuid.uuid4()}",
                 task_queue=worker.task_queue,
             )
-            == "done"
+            == "stream_closed"
         )
     items = [item async for item in stream.subscribe()]
     assert len(items) == 1 and isinstance(items[0], streams.Closed)
-
-
-async def test_store_error_fails_the_task_with_the_stream_id(client: Client):
-    config = client.config()
-    config["plugins"] = [MemoryStreamPlugin(durable_writes=1)]
-    memory_client = Client(**config)
-    stream = await streams.StreamClient(memory_client).create(
-        Events, id=f"open-{uuid.uuid4()}"
-    )
-    async with new_worker(memory_client, WritesToStream) as worker:
-        handle = await memory_client.start_workflow(
-            WritesToStream.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-        await assert_task_fail_eventually(handle, message_contains=stream.id)
-        await handle.terminate()
 
 
 @activity.defn

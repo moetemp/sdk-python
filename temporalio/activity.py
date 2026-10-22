@@ -108,6 +108,12 @@ class WorkflowTaskAttempt:
     started_time: datetime | None
     """When the server started the task. None if the server did not send it."""
 
+    previous_started_event_id: int = 0
+    """ID of the ``WorkflowTaskStarted`` event of the run's last completed task. 0 if none."""
+
+    failed_tasks: Sequence[int] = ()
+    """``WorkflowTaskStarted`` event IDs of the run's failed and timed out tasks, the last 100."""
+
 
 @dataclass(frozen=True)
 class Info:
