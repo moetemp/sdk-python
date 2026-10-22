@@ -359,6 +359,6 @@ async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
             task_queue=worker.task_queue,
         )
         assert await handle.result() == "done"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["hi", "HI"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
