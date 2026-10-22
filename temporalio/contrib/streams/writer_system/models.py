@@ -23,6 +23,8 @@ class OpenWriterRequest:
     producer: Producer | None = None
     max_batch_size: int | None = None
     max_retry_duration: datetime.timedelta | None = None
+    previous_completed_task: WorkflowTaskEpoch | None = None
+    failed_tasks: list[int] | None = dataclasses.field(default_factory=list)
 
 
 class _OpenWriterRequestTransferTypeConverter(
@@ -56,6 +58,12 @@ class _OpenWriterRequestTransferTypeConverter(
             max_retry_duration=_support.duration_from_proto(value.max_retry_duration)
             if value.HasField("max_retry_duration")
             else None,
+            previous_completed_task=_WorkflowTaskEpochTransferTypeConverter().from_transfer_type(
+                value.previous_completed_task, WorkflowTaskEpoch
+            )
+            if value.HasField("previous_completed_task")
+            else None,
+            failed_tasks=list(value.failed_tasks),
         )
 
     @typing_extensions.override
@@ -78,6 +86,14 @@ class _OpenWriterRequestTransferTypeConverter(
             message.max_retry_duration.CopyFrom(
                 _support.duration_to_proto(value.max_retry_duration)
             )
+        if value.previous_completed_task is not None:
+            message.previous_completed_task.CopyFrom(
+                _WorkflowTaskEpochTransferTypeConverter().to_transfer_type(
+                    value.previous_completed_task
+                )
+            )
+        if value.failed_tasks:
+            message.failed_tasks.extend(value.failed_tasks)
         return message
 
 
@@ -329,6 +345,66 @@ class _TimestampTransferTypeConverter(
 
 temporalio.converter.transfer_type_convertible(_TimestampTransferTypeConverter)(
     Timestamp
+)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
+class WorkflowTaskEpoch:
+    """A Workflow Task attempt of the run."""
+
+    started_event_id: int | None = None
+    attempt: int | None = None
+    started_time: Timestamp | None = None
+
+
+class _WorkflowTaskEpochTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        WorkflowTaskEpoch,
+        temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch,
+    ]
+):
+    transfer_type: (
+        type[temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch]
+        | None
+    ) = temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch,
+        type_hint: type[WorkflowTaskEpoch],
+    ) -> WorkflowTaskEpoch:
+        return WorkflowTaskEpoch(
+            started_event_id=value.started_event_id
+            if value.started_event_id != 0
+            else None,
+            attempt=value.attempt if value.attempt != 0 else None,
+            started_time=_TimestampTransferTypeConverter().from_transfer_type(
+                value.started_time, Timestamp
+            )
+            if value.HasField("started_time")
+            else None,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: WorkflowTaskEpoch,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch:
+        message = temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch()
+        if value.started_event_id is not None:
+            message.started_event_id = value.started_event_id
+        if value.attempt is not None:
+            message.attempt = value.attempt
+        if value.started_time is not None:
+            message.started_time.CopyFrom(
+                _TimestampTransferTypeConverter().to_transfer_type(value.started_time)
+            )
+        return message
+
+
+temporalio.converter.transfer_type_convertible(_WorkflowTaskEpochTransferTypeConverter)(
+    WorkflowTaskEpoch
 )  # pyright: ignore[reportUnusedCallResult]
 
 

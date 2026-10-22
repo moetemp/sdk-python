@@ -49,6 +49,10 @@ class Superseded:
     It comes at the same point for every Reader. Use :py:meth:`withdraws` to find the earlier
     Records that it withdraws.
 
+    The next write of a run to a Stream withdraws the Records that the run's Local Activities
+    wrote there in Workflow Tasks that never completed. A Stream that the run never writes
+    again keeps them.
+
     .. warning::
         This API is experimental.
     """

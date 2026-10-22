@@ -68,8 +68,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
     KEY_PREFIX_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
     SAFETY_TTL_FIELD_NUMBER: builtins.int
-    DURABLE_WRITES_FIELD_NUMBER: builtins.int
-    DURABLE_TIMEOUT_FIELD_NUMBER: builtins.int
     BLOCKING_READS_PER_NODE_FIELD_NUMBER: builtins.int
     RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
     BACKEND_FIELD_NUMBER: builtins.int
@@ -87,11 +85,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
     @property
     def safety_ttl(self) -> google.protobuf.duration_pb2.Duration:
         """How long an open Workflow-owned Stream stays after its last write. Empty is 90 days."""
-    durable_writes: builtins.int
-    """When above zero, each Workflow flush runs `WAIT durable_writes <durable_timeout>`."""
-    @property
-    def durable_timeout(self) -> google.protobuf.duration_pb2.Duration:
-        """Empty is 1 s."""
     blocking_reads_per_node: builtins.int
     """Zero is 256."""
     @property
@@ -109,8 +102,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
         key_prefix: builtins.str = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
         safety_ttl: google.protobuf.duration_pb2.Duration | None = ...,
-        durable_writes: builtins.int = ...,
-        durable_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         blocking_reads_per_node: builtins.int = ...,
         response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         backend: builtins.str = ...,
@@ -118,8 +109,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "durable_timeout",
-            b"durable_timeout",
             "response_timeout",
             b"response_timeout",
             "retention",
@@ -137,10 +126,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
             b"blocking_reads_per_node",
             "cluster",
             b"cluster",
-            "durable_timeout",
-            b"durable_timeout",
-            "durable_writes",
-            b"durable_writes",
             "key_prefix",
             b"key_prefix",
             "response_timeout",
@@ -155,131 +140,6 @@ class RedisStreamConfig(google.protobuf.message.Message):
     ) -> None: ...
 
 global___RedisStreamConfig = RedisStreamConfig
-
-class BufferWorkflowCallsRequest(google.protobuf.message.Message):
-    """Method `BufferWorkflowCalls`, synchronous. Lang calls it at the end of each Activation of a
-    run, with the calls that Workflow code made in that Activation, in order. On replay, lang
-    sends only the creates and the closes. The crate writes the buffer in `before_complete` and
-    sends the closes in `after_complete`.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    RUN_ID_FIELD_NUMBER: builtins.int
-    WITHDRAW_RUN_FIELD_NUMBER: builtins.int
-    CALLS_FIELD_NUMBER: builtins.int
-    CHAIN_CONTINUES_FIELD_NUMBER: builtins.int
-    run_id: builtins.str
-    withdraw_run: builtins.str
-    """A retry run only: the previous run. The crate puts it on each create and append of the
-    run, so the first one on each Stream withdraws the previous run's Records.
-    """
-    @property
-    def calls(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
-        global___WorkflowCall
-    ]: ...
-    chain_continues: builtins.bool
-    """Set on the run's last call when the server goes on with the Run Chain, which is a failure
-    that the retry policy retries, or any cron run. The crate then skips the closes that have
-    `when_run_closes`.
-    """
-    def __init__(
-        self,
-        *,
-        run_id: builtins.str = ...,
-        withdraw_run: builtins.str = ...,
-        calls: collections.abc.Iterable[global___WorkflowCall] | None = ...,
-        chain_continues: builtins.bool = ...,
-    ) -> None: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "calls",
-            b"calls",
-            "chain_continues",
-            b"chain_continues",
-            "run_id",
-            b"run_id",
-            "withdraw_run",
-            b"withdraw_run",
-        ],
-    ) -> None: ...
-
-global___BufferWorkflowCallsRequest = BufferWorkflowCallsRequest
-
-class WorkflowCall(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    CREATE_FIELD_NUMBER: builtins.int
-    APPEND_FIELD_NUMBER: builtins.int
-    CLOSE_FIELD_NUMBER: builtins.int
-    WHEN_RUN_CLOSES_FIELD_NUMBER: builtins.int
-    @property
-    def create(
-        self,
-    ) -> temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamRequest: ...
-    @property
-    def append(
-        self,
-    ) -> temporalio.api.streamservice.v1.stream_service_pb2.AppendRecordsRequest:
-        """The crate sets the Producer, the sequence and the History facts."""
-    @property
-    def close(
-        self,
-    ) -> temporalio.api.streamservice.v1.stream_service_pb2.CloseStreamRequest:
-        """The crate sets the Producer and the History facts."""
-    when_run_closes: builtins.bool
-    """For a close only: send it only when the server accepts a completion that closes the run.
-    `auto_close` sets it.
-    """
-    def __init__(
-        self,
-        *,
-        create: temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamRequest
-        | None = ...,
-        append: temporalio.api.streamservice.v1.stream_service_pb2.AppendRecordsRequest
-        | None = ...,
-        close: temporalio.api.streamservice.v1.stream_service_pb2.CloseStreamRequest
-        | None = ...,
-        when_run_closes: builtins.bool = ...,
-    ) -> None: ...
-    def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "append", b"append", "call", b"call", "close", b"close", "create", b"create"
-        ],
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "append",
-            b"append",
-            "call",
-            b"call",
-            "close",
-            b"close",
-            "create",
-            b"create",
-            "when_run_closes",
-            b"when_run_closes",
-        ],
-    ) -> None: ...
-    def WhichOneof(
-        self, oneof_group: typing_extensions.Literal["call", b"call"]
-    ) -> typing_extensions.Literal["create", "append", "close"] | None: ...
-
-global___WorkflowCall = WorkflowCall
-
-class BufferWorkflowCallsResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___BufferWorkflowCallsResponse = BufferWorkflowCallsResponse
 
 class WorkflowReadRecordsRequest(google.protobuf.message.Message):
     """Method `WorkflowReadRecords`, asynchronous. A `ReadRecords` that a Workflow run makes, for
@@ -320,82 +180,6 @@ class WorkflowReadRecordsRequest(google.protobuf.message.Message):
 
 global___WorkflowReadRecordsRequest = WorkflowReadRecordsRequest
 
-class FlushRunBufferRequest(google.protobuf.message.Message):
-    """Method `FlushRunBuffer`, asynchronous. Lang calls it before it runs a Local Activity, also
-    before each retry that Core runs in the same task. The crate writes the run's buffered
-    creates and appends in the epoch of the Workflow Task that dispatched the Local Activity, so
-    the run's Records come before the Local Activity's. Closes still wait for an accepted
-    completion. The task's completion writes only what came later, with the numbering going on,
-    and sends the task's withdrawal facts to each Stream this call wrote. A Local Activity of a
-    task that already completed, or of a task older than an earlier flush, writes nothing. When
-    the call fails, the run's next completion fails with the same error, so the retry withdraws
-    what was written. Lang then fails the Local Activity attempt.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    NAMESPACE_FIELD_NUMBER: builtins.int
-    RUN_ID_FIELD_NUMBER: builtins.int
-    WORKFLOW_TASK_FIELD_NUMBER: builtins.int
-    TIMEOUT_FIELD_NUMBER: builtins.int
-    namespace: builtins.str
-    run_id: builtins.str
-    @property
-    def workflow_task(
-        self,
-    ) -> temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch:
-        """`ActivityTask.Start.workflow_task` (field 20) of the Local Activity."""
-    @property
-    def timeout(self) -> google.protobuf.duration_pb2.Duration:
-        """How long the write may take. Empty is 10 s."""
-    def __init__(
-        self,
-        *,
-        namespace: builtins.str = ...,
-        run_id: builtins.str = ...,
-        workflow_task: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
-        | None = ...,
-        timeout: google.protobuf.duration_pb2.Duration | None = ...,
-    ) -> None: ...
-    def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "timeout", b"timeout", "workflow_task", b"workflow_task"
-        ],
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "namespace",
-            b"namespace",
-            "run_id",
-            b"run_id",
-            "timeout",
-            b"timeout",
-            "workflow_task",
-            b"workflow_task",
-        ],
-    ) -> None: ...
-
-global___FlushRunBufferRequest = FlushRunBufferRequest
-
-class FlushRunBufferResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    RECORDS_FIELD_NUMBER: builtins.int
-    records: builtins.int
-    """The Records the call wrote. Zero when the run had nothing buffered."""
-    def __init__(
-        self,
-        *,
-        records: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["records", b"records"]
-    ) -> None: ...
-
-global___FlushRunBufferResponse = FlushRunBufferResponse
-
 class OpenWriterRequest(google.protobuf.message.Message):
     """Method `OpenWriter`, asynchronous. A writer for an Activity or a client Producer, which keeps
     its epoch and `sequence` order. A writer of an Activity attempt above 1 first sends an empty
@@ -409,6 +193,8 @@ class OpenWriterRequest(google.protobuf.message.Message):
     PRODUCER_FIELD_NUMBER: builtins.int
     MAX_BATCH_SIZE_FIELD_NUMBER: builtins.int
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
+    PREVIOUS_COMPLETED_TASK_FIELD_NUMBER: builtins.int
+    FAILED_TASKS_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(
@@ -423,6 +209,19 @@ class OpenWriterRequest(google.protobuf.message.Message):
     @property
     def max_retry_duration(self) -> google.protobuf.duration_pb2.Duration:
         """How long a write retries a Store failure. Empty is 10 s."""
+    @property
+    def previous_completed_task(
+        self,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch:
+        """Local Activity only. The run's task facts, which each batch sends as AppendRecords does, so
+        the writes withdraw the run's orphaned Local Activity Records.
+        """
+    @property
+    def failed_tasks(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.int
+    ]: ...
     def __init__(
         self,
         *,
@@ -433,12 +232,17 @@ class OpenWriterRequest(google.protobuf.message.Message):
         | None = ...,
         max_batch_size: builtins.int = ...,
         max_retry_duration: google.protobuf.duration_pb2.Duration | None = ...,
+        previous_completed_task: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
+        | None = ...,
+        failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
             "max_retry_duration",
             b"max_retry_duration",
+            "previous_completed_task",
+            b"previous_completed_task",
             "producer",
             b"producer",
             "stream",
@@ -448,12 +252,16 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "failed_tasks",
+            b"failed_tasks",
             "max_batch_size",
             b"max_batch_size",
             "max_retry_duration",
             b"max_retry_duration",
             "namespace",
             b"namespace",
+            "previous_completed_task",
+            b"previous_completed_task",
             "producer",
             b"producer",
             "stream",
@@ -605,48 +413,6 @@ class CloseWritersResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___CloseWritersResponse = CloseWritersResponse
-
-class DrainClosesRequest(google.protobuf.message.Message):
-    """Method `DrainCloses`, asynchronous. Waits for the closes that `after_complete` started, for
-    example at Worker shutdown.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    TIMEOUT_FIELD_NUMBER: builtins.int
-    @property
-    def timeout(self) -> google.protobuf.duration_pb2.Duration:
-        """Empty is 10 s."""
-    def __init__(
-        self,
-        *,
-        timeout: google.protobuf.duration_pb2.Duration | None = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["timeout", b"timeout"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["timeout", b"timeout"]
-    ) -> None: ...
-
-global___DrainClosesRequest = DrainClosesRequest
-
-class DrainClosesResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    PENDING_FIELD_NUMBER: builtins.int
-    pending: builtins.int
-    """The closes still running when the timeout passed."""
-    def __init__(
-        self,
-        *,
-        pending: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["pending", b"pending"]
-    ) -> None: ...
-
-global___DrainClosesResponse = DrainClosesResponse
 
 class StreamErrorDetails(google.protobuf.message.Message):
     """The details of a failed call, in the error's details bytes."""

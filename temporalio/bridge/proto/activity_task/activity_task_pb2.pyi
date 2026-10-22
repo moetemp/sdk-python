@@ -347,18 +347,33 @@ class WorkflowTaskAttempt(google.protobuf.message.Message):
     STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
     ATTEMPT_FIELD_NUMBER: builtins.int
     STARTED_TIME_FIELD_NUMBER: builtins.int
+    PREVIOUS_STARTED_EVENT_ID_FIELD_NUMBER: builtins.int
+    FAILED_TASKS_FIELD_NUMBER: builtins.int
     started_event_id: builtins.int
     """The id of the task's WorkflowTaskStarted event."""
     attempt: builtins.int
     @property
     def started_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
         """When the server started the task."""
+    previous_started_event_id: builtins.int
+    """The started event id of the run's last completed workflow task, from the poll response.
+    0 when no task of the run has completed.
+    """
+    @property
+    def failed_tasks(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """The started event ids of the run's failed and timed out workflow tasks in history, in event
+        order. It holds the last 100 only, to keep each start small.
+        """
     def __init__(
         self,
         *,
         started_event_id: builtins.int = ...,
         attempt: builtins.int = ...,
         started_time: google.protobuf.timestamp_pb2.Timestamp | None = ...,
+        previous_started_event_id: builtins.int = ...,
+        failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["started_time", b"started_time"]
@@ -368,6 +383,10 @@ class WorkflowTaskAttempt(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "attempt",
             b"attempt",
+            "failed_tasks",
+            b"failed_tasks",
+            "previous_started_event_id",
+            b"previous_started_event_id",
             "started_event_id",
             b"started_event_id",
             "started_time",
