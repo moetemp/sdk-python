@@ -11,7 +11,14 @@ standalone Streams with :py:func:`create_stream`. A Stream plugin, such as
 
 from temporalio.contrib.streams import workflow
 from temporalio.contrib.streams._activity import activity_stream
+from temporalio.contrib.streams._activity_stream import (
+    ActivityStream,
+    ActivityTopic,
+    SyncActivityStream,
+    SyncActivityTopic,
+)
 from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._client import (
     ClientStream,
     create_stream,
@@ -48,6 +55,9 @@ from temporalio.contrib.streams._workflow import (
 )
 
 __all__ = [
+    "ActivityStream",
+    "ActivityTopic",
+    "BufferedPublisher",
     "ClientStream",
     "Closed",
     "Idle",
@@ -69,6 +79,8 @@ __all__ = [
     "StreamTransportMissingError",
     "StreamUnsupportedError",
     "Superseded",
+    "SyncActivityStream",
+    "SyncActivityTopic",
     "Topic",
     "TopicDefinition",
     "WorkflowStream",

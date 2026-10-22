@@ -27,6 +27,7 @@ import temporalio.workflow
 from temporalio.contrib.streams import _activity, _errors, _ids, _workflow
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._stream import StreamRef
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
@@ -628,13 +629,14 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         token = _activity.current.set(streams)
         try:
-            if (
-                streams.default_ref is not None
-                and temporalio.activity.info().attempt > 1
-            ):
+            if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
-                await streams.writer(streams.default_ref.id).withdraw_earlier_attempts()
+                stream_ids = [handle.id for handle in _stream_arguments(input.args)]
+                if streams.default_ref is not None:
+                    stream_ids.append(streams.default_ref.id)
+                for stream_id in dict.fromkeys(stream_ids):
+                    await streams.writer(stream_id).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
         except BaseException:
             await _close_quietly(streams)
@@ -644,6 +646,22 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
             return result
         finally:
             _activity.current.reset(token)
+
+
+def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:
+    # The Streams that an Activity received, as arguments or as fields of its one input
+    # object, which an earlier attempt may have written.
+    handles: list[StreamHandle[Any]] = []
+    for arg in args:
+        if isinstance(arg, StreamHandle):
+            handles.append(arg)
+            continue
+        fields = getattr(arg, "__dict__", None)
+        if isinstance(fields, dict):
+            handles.extend(
+                value for value in fields.values() if isinstance(value, StreamHandle)
+            )
+    return handles
 
 
 async def _close_quietly(streams: _activity.ActivityStreams) -> None:
@@ -704,4 +722,5 @@ def _activity_streams(
         if ref is not None
         else None,
         loop=asyncio.get_running_loop(),
+        backend_name=plugin.backend_name,
     )

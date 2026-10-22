@@ -31,6 +31,7 @@ class ActivityStreams:
     producer: stream_pb.Producer
     default_ref: StreamRef | None
     loop: asyncio.AbstractEventLoop
+    backend_name: str = ""
     batch: BatchOptions = BatchOptions()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
 
