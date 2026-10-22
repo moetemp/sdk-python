@@ -13,6 +13,8 @@ from .._resources import (
 from ..models import (
     CreateStreamRequest,
     CreateStreamResponse,
+    Producer,
+    StreamRef,
 )
 
 
@@ -46,6 +48,9 @@ async def create_stream(
     retention: datetime.timedelta | None = None,
     withdraw_run: str | None = None,
     auto_close: datetime.timedelta | None = None,
+    owner: Producer | None = None,
+    close_with_run: bool | None = None,
+    ref: StreamRef | None = None,
 ) -> CreateStreamResult:
     """
     Args:
@@ -55,11 +60,18 @@ async def create_stream(
         withdraw_run: Retry run only. The previous run, whose Records this withdraws.
         auto_close: Close with no result after this long with no append. Empty never
             auto-closes.
+        owner: The Workflow run that owns the Stream. The Workflow transport sets it.
+        close_with_run: Close with the owner run chain's result when it closes. Native
+            only.
+        ref: The Stream's ref, with the owner fields.
     """
     request = CreateStreamRequest(
         stream_id=stream_id,
         retention=retention,
         withdraw_run=withdraw_run,
         auto_close=auto_close,
+        owner=owner,
+        close_with_run=close_with_run,
+        ref=ref,
     )
     return await _create_stream(request)
