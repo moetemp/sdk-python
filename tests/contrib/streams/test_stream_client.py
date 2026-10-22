@@ -227,3 +227,17 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     ]
     stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
     assert stream.backend == "b"
+
+
+async def test_handle_looks_in_each_backend_during_a_move(client: Client):
+    config = client.config()
+    config["plugins"] = [MemoryStreamPlugin(name="a"), MemoryStreamPlugin(name="b")]
+    stream_client = streams.StreamClient(Client(**config))
+    created = await stream_client.create(Events, id="moving", backend="b")
+    await created.topic(Events.tokens).publish("on b")
+    moving = stream_client.get_handle(Events, id="moving", backend=("a", "b"))
+    assert await moving.get_offset() > 0
+    assert moving.backend == "b"
+    # A handle with no backend name is ambiguous when the client has two backends.
+    with pytest.raises(streams.StreamUnsupportedError):
+        stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))

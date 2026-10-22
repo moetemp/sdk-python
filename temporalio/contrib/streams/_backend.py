@@ -164,10 +164,11 @@ class _ExtensionTransport:
 
 
 def client_backend(
-    client: temporalio.client.Client, name: str | None
+    client: temporalio.client.Client, name: str | None, *, only: bool = False
 ) -> tuple[str, StreamBackend]:
     """The name and the backend of a client's Stream plugin. None picks the plugin marked
-    as the default, or else the first one.
+    as the default, or else the first one. With ``only``, None needs a client with one
+    backend, since a handle with no backend name may be of any of them.
 
     Raises:
         StreamTransportMissingError: The client has no Stream plugin.
@@ -187,6 +188,11 @@ def client_backend(
     if not backends:
         raise _errors.StreamTransportMissingError(
             "The client has no Stream plugin, such as RedisStreamPlugin"
+        )
+    if not name and only and len(backends) > 1:
+        raise _errors.StreamUnsupportedError(
+            "The handle names no backend, and the client has more than one",
+            reason="stream_unsupported",
         )
     if not name:
         defaults = [entry for entry in backends if entry[2]] or backends
