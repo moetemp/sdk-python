@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
+use temporalio_client::Connection;
 use temporalio_sdk_core::{
     ExtensionError, WorkerExtension, WorkflowTaskCompletionInfo, WorkflowTaskFailedInfo,
     WorkflowTaskInterceptError, WorkflowTaskInterceptor,
@@ -38,6 +39,12 @@ impl WorkerExtensionRef {
         let extension = self.extension.clone();
         py.detach(|| extension.call(method, &input))
             .map_err(call_error)
+    }
+
+    /// Gives the extension a client's connection, as a Worker gives it at its start, so a
+    /// process with no Worker can call the server through it too.
+    fn attach(&self, client: &crate::client::ClientRef) {
+        self.extension.attach(client.connection.clone());
     }
 
     fn call_async<'p>(
@@ -85,13 +92,18 @@ pub fn combine_worker_extensions(parts: Vec<WorkerExtensionRef>) -> PyResult<Wor
         Some(Arc::new(CombinedInterceptor(interceptors)))
     };
     Ok(WorkerExtensionRef {
-        extension: Arc::new(CombinedExtension { name, interceptor }),
+        extension: Arc::new(CombinedExtension {
+            name,
+            parts,
+            interceptor,
+        }),
         runtime,
     })
 }
 
 struct CombinedExtension {
     name: String,
+    parts: Vec<Arc<dyn WorkerExtension>>,
     // Core may ask for the interceptor more than once, so it is built once.
     interceptor: Option<Arc<dyn WorkflowTaskInterceptor>>,
 }
@@ -103,6 +115,12 @@ impl WorkerExtension for CombinedExtension {
 
     fn workflow_task_interceptor(&self) -> Option<Arc<dyn WorkflowTaskInterceptor>> {
         self.interceptor.clone()
+    }
+
+    fn attach(&self, connection: Connection) {
+        for part in &self.parts {
+            part.attach(connection.clone());
+        }
     }
 }
 
