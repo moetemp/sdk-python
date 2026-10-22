@@ -47,20 +47,6 @@ class FakeExtension(WorkerExtension):
         return record.offset
 
     def call(self, method: str, input: bytes) -> bytes:
-        if method == "Publish":
-            request = ext_pb.PublishRequest.FromString(input)
-            stream_id, producer = self.writers[request.writer_id]
-            for record in request.records:
-                self._append(
-                    stream_id,
-                    stream_pb.StreamRecord(
-                        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA,
-                        topic=record.topic,
-                        body=record.body,
-                        producer=producer,
-                    ),
-                )
-            return b""
         raise _error(RPCStatusCode.UNIMPLEMENTED, method)
 
     async def call_async(self, method: str, input: bytes) -> bytes:
@@ -95,8 +81,8 @@ class FakeExtension(WorkerExtension):
                 first_offset=offsets[0] if offsets else 0,
                 last_offset=offsets[-1] if offsets else 0,
             ).SerializeToString()
-        if method in ("FlushWriter", "CloseWriter"):
-            return ext_pb.FlushWriterResponse(
+        if method == "CloseWriter":
+            return ext_pb.CloseWriterResponse(
                 last_offset=self.next_offset - 1
             ).SerializeToString()
         if method == "CloseStream":

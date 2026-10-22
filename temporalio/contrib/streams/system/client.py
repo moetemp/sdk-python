@@ -169,8 +169,8 @@ class StreamServiceClient:
     async def append_records(
         self, request: AppendRecordsRequest
     ) -> AppendRecordsResponse:
-        """In Workflow code, the Brook transport puts this call into the run's buffer, and
-        the Workflow facade drops the response.
+        """In Workflow code, Brook buffers this call in the run, and the facade drops the
+        answer.
         """
         payload = _proto_payload(
             _AppendRecordsRequestTransferTypeConverter().to_transfer_type(request)

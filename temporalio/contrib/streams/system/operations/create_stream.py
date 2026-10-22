@@ -38,10 +38,9 @@ async def create_stream(
         stream_id: Required from Workflow code. Empty elsewhere asks the service for an
             id.
         retention: The age after which a Record is dropped. Empty is the Store default.
-        withdraw_run: Workflow only. A retry run's first batch or create: the previous
-            run, whose Records it withdraws.
-        auto_close: Close the Stream with no result when no Record was appended for this
-            long. Empty never closes on its own. It is separate from Retention.
+        withdraw_run: Retry run only. The previous run, whose Records this withdraws.
+        auto_close: Close with no result after this long with no append. Empty never
+            auto-closes.
     """
     request = CreateStreamRequest(
         stream_id=stream_id,
