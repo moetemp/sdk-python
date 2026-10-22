@@ -19,6 +19,7 @@ from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
+from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -45,17 +46,16 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
 
 def _access(handle: StreamHandle[Any]) -> Access:
     streams = _bound(handle)
-    stream_id = handle.id
 
-    async def known_id() -> str:
-        return stream_id
+    async def ref() -> models.StreamRef:
+        return handle._owner_ref()
 
     return Access(
         backend=streams.backend,
         converter=streams.converter,
         namespace=streams.namespace,
-        stream_id=known_id,
-        writer=lambda: streams.writer(stream_id),
+        ref=ref,
+        writer=lambda: streams.writer(handle),
     )
 
 

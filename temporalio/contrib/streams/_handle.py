@@ -10,6 +10,7 @@ from typing_extensions import Self
 import temporalio.converter
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
+from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -200,6 +201,15 @@ class StreamHandle(Generic[E]):
                     reason="unknown_topic",
                 )
         return topic, type
+
+    def _owner_ref(self) -> models.StreamRef:
+        # A Workflow's Stream carries its owner on every call, so a server that nests it in the
+        # Workflow finds it.
+        return models.StreamRef(
+            id=self._id,
+            workflow_id=self._workflow_id or None,
+            first_execution_run_id=self._first_execution_run_id or None,
+        )
 
     def _known_types(self) -> dict[str, Any]:
         # A read of every Topic still decodes each Topic of the definition with its type.
