@@ -15,7 +15,9 @@ from temporalio.client import (
 )
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams.system import client as service_client
 from temporalio.exceptions import ApplicationError
+from temporalio.worker import Replayer
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -286,15 +288,16 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
 class SyncHandlers:
     @workflow.init
     def __init__(self, prompt: str) -> None:
-        self._stream = stream_workflow.stream_handle(Events)
+        # The create goes first, so the signal's writes find the Stream.
+        self._stream = stream_workflow.create_stream_nowait(
+            Events, close_with_run=False
+        )
         self._prompt = prompt
         self._done = False
 
     @workflow.run
     async def run(self, prompt: str) -> None:
-        # The init made the handle before the create, since a handle makes no call.
         assert prompt == self._prompt
-        await stream_workflow.create_stream(Events, close_with_run=False)
         await workflow.wait_condition(lambda: self._done)
 
     @workflow.signal
@@ -351,3 +354,58 @@ async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
         items = await read(stream_client, handle)
     assert data(items) == ["hi", "HI"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+
+
+@workflow.defn
+class Gathers:
+    @workflow.run
+    async def run(self) -> list[int]:
+        tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        return list(await asyncio.gather(*(tokens.publish(str(n)) for n in range(5))))
+
+
+async def test_concurrent_publishes_keep_their_order(stream_client: Client):
+    async with new_worker(stream_client, Gathers) as worker:
+        handle = await stream_client.start_workflow(
+            Gathers.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        offsets = await handle.result()
+        items = await read(stream_client, handle)
+    assert data(items) == ["0", "1", "2", "3", "4"]
+    assert offsets == sorted(offsets)
+    history = await handle.fetch_history()
+    # Replay answers from the markers and writes nothing.
+    plugins = [
+        p
+        for p in stream_client.config()["plugins"]
+        if isinstance(p, streams.StreamPlugin)
+    ]
+    await Replayer(workflows=[Gathers], plugins=plugins).replay_workflow(history)
+    assert data(await read(stream_client, handle)) == ["0", "1", "2", "3", "4"]
+
+
+async def test_retried_write_goes_in_once(
+    stream_client: Client, monkeypatch: pytest.MonkeyPatch
+):
+    original = service_client.StreamServiceClient.append_records
+    calls = []
+
+    async def fails_after_the_first_write(self: Any, request: Any) -> Any:
+        answer = await original(self, request)
+        calls.append(answer)
+        if len(calls) == 1:
+            raise RuntimeError("the answer is lost")
+        return answer
+
+    monkeypatch.setattr(
+        service_client.StreamServiceClient,
+        "append_records",
+        fails_after_the_first_write,
+    )
+    async with new_worker(stream_client, Gathers) as worker:
+        handle = await stream_client.start_workflow(
+            Gathers.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+        items = await read(stream_client, handle)
+    assert data(items) == ["0", "1", "2", "3", "4"]
