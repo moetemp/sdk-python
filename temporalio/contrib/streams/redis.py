@@ -88,6 +88,14 @@ class _ExtensionStreamPlugin(StreamPlugin):
         # The read activity's name has the backend name, which the base keeps.
         self._read_activity = _read_activity(self)
 
+    def _read_result(
+        self,
+        request: stream_pb.ReadRecordsRequest,  # pyright: ignore[reportUnusedParameter]
+        page: stream_pb.ReadRecordsResponse,
+    ) -> Any:
+        # The result of a Workflow read's Local Activity, which its marker holds.
+        return page
+
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
     ) -> temporalio.worker.WorkerConfig:
@@ -106,9 +114,8 @@ class _ExtensionStreamPlugin(StreamPlugin):
         client = config.get("client")
         if client is not None:
             self._converter = client.data_converter
-        if not self._outbound_class._temporal_stream_parks_reads:
-            # Workflow reads run as this Local Activity, so the Worker must have it.
-            config["activities"] = [*config.get("activities", []), self._read_activity]
+        # Workflow reads run as this Local Activity, so the Worker must have it.
+        config["activities"] = [*config.get("activities", []), self._read_activity]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -189,9 +196,7 @@ def read_activity_name(backend: str) -> str:
 
 def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
     @temporalio.activity.defn(name=read_activity_name(plugin.backend_name))
-    async def read_page(
-        request: stream_pb.ReadRecordsRequest,
-    ) -> stream_pb.ReadRecordsResponse:
+    async def read_page(request: stream_pb.ReadRecordsRequest) -> Any:
         request.namespace = temporalio.activity.info().namespace
         try:
             page = await plugin._backend.call_async(
@@ -208,7 +213,7 @@ def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
         # Workflow code can't run the codec, so the page's bodies go to it decoded. The page
         # as a whole goes through the codec as the Local Activity's result.
         await _decode_page(plugin._converter, page)
-        return page
+        return plugin._read_result(request, page)
 
     return read_page
 
