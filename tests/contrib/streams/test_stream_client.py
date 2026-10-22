@@ -94,7 +94,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     setattr(handle, "describe", describe)
     stream_client = streams.StreamClient(client)
     await stream_client.create(Events, id="agent-1:first:n")
-    stream = stream_client.workflow_stream(handle, Events, name="n")
+    stream = stream_client.workflow_stream(handle, streams.with_name(Events, "n"))
     with pytest.raises(RuntimeError, match="not known yet"):
         stream.id
     assert await stream.get_offset() == 0
@@ -200,7 +200,7 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     handle = client.get_workflow_handle("agent-2")
     first = stream_client.workflow_stream(handle, Events)
     same = stream_client.workflow_stream(handle, Events)
-    other = stream_client.workflow_stream(handle, Events, name="other")
+    other = stream_client.workflow_stream(handle, streams.with_name(Events, "other"))
     key = hash(first)
     assert first == same and first != other
     describes = []

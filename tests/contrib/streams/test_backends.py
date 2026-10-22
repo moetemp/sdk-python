@@ -61,9 +61,9 @@ async def write_memory_locally(stream: streams.ActivityStream[Events]) -> None:
 class WritesBoth:
     @workflow.run
     async def run(self) -> list[str | None]:
-        on_redis = await stream_workflow.create_stream(Events, name="a")
+        on_redis = await stream_workflow.create_stream(streams.with_name(Events, "a"))
         on_memory = await stream_workflow.create_stream(
-            Events, name="b", backend="memory"
+            streams.with_name(Events, "b"), backend="memory"
         )
         await on_redis.topic(Events.tokens).publish("redis workflow")
         await on_memory.topic(Events.tokens).publish("memory workflow")
@@ -88,7 +88,7 @@ async def read_all(
     client: Client, handle: WorkflowHandle[Any, Any], name: str, backend: str
 ) -> list[object]:
     stream = streams.StreamClient(client).workflow_stream(
-        handle, Events, name=name, backend=backend
+        handle, streams.with_name(Events, name), backend=backend
     )
     return [item async for item in stream.subscribe(wait_new_records=False)]
 
@@ -192,8 +192,10 @@ class ContinuesOnBoth:
     @workflow.run
     async def run(self, again: bool) -> str:
         if again:
-            await stream_workflow.create_stream(Events, name="a")
-            await stream_workflow.create_stream(Events, name="b", backend="memory")
+            await stream_workflow.create_stream(streams.with_name(Events, "a"))
+            await stream_workflow.create_stream(
+                streams.with_name(Events, "b"), backend="memory"
+            )
             workflow.continue_as_new(False)
         return "last run"
 

@@ -373,7 +373,6 @@ class StreamClient:
         handle: temporalio.client.WorkflowHandle[Any, Any],
         definition: type[E],
         *,
-        name: str | None = None,
         backend: str | tuple[str, ...] | None = None,
     ) -> ClientStream[E]:
         """A Stream that a Workflow created, by the Workflow handle and the definition.
@@ -383,12 +382,11 @@ class StreamClient:
 
         Args:
             handle: A handle of the Workflow, best the one that ``start_workflow`` returned.
-            definition: The Stream definition class.
-            name: The Stream name that the Workflow gave. Defaults to the definition's name.
+            definition: The Stream definition class, renamed as the Workflow's create.
             backend: The name of the backend, or a tuple of names to look in, as for
                 :py:meth:`get_handle`. Defaults to the client's default backend.
         """
-        stream_name = name or definition_of(definition).name
+        stream_name = definition_of(definition).name
         backend_name, stream_backend, probe = self._backends(backend)
         first_run = handle.first_execution_run_id
         stream = ClientStream(

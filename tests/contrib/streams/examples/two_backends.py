@@ -26,6 +26,11 @@ class Events:
     tokens = streams.topic(str)
 
 
+# Two Streams of one definition, under their own names.
+Audit = streams.with_name(Events, "audit")
+Live = streams.with_name(Events, "live")
+
+
 @dataclass
 class SummarizeInput:
     audit: streams.ActivityStream[Events]
@@ -45,10 +50,8 @@ class TwoStreams:
     @workflow.run
     async def run(self) -> str:
         # The audit log stays on the default backend, Redis. The live view is on the server.
-        audit = await stream_workflow.create_stream(Events, name="audit")
-        live = await stream_workflow.create_stream(
-            Events, name="live", backend="native"
-        )
+        audit = await stream_workflow.create_stream(Audit)
+        live = await stream_workflow.create_stream(Live, backend="native")
         await audit.topic(Events.tokens).publish("started")
         await live.topic(Events.tokens).publish("hello", "there")
         return await workflow.execute_activity(
@@ -77,10 +80,11 @@ async def main(client: Client, task_queue: str) -> dict[str, list[str]]:
         await handle.result()
     stream_client = streams.StreamClient(client)
     read: dict[str, list[str]] = {}
-    for name, backend in (("audit", "redis"), ("live", "native")):
-        stream = stream_client.workflow_stream(
-            handle, Events, name=name, backend=backend
-        )
+    for name, definition, backend in (
+        ("audit", Audit, "redis"),
+        ("live", Live, "native"),
+    ):
+        stream = stream_client.workflow_stream(handle, definition, backend=backend)
         read[name] = [
             item.data
             async for item in stream.subscribe()

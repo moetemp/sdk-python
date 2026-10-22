@@ -190,9 +190,9 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
 class NativeStreamPlugin(_ExtensionStreamPlugin):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
 
-    Workflow writes go through the Core extension's buffer, as on Redis, and the extension
-    writes them to the server's ``temporal.api.streamservice.v1.StreamService`` on the Worker's
-    connection. Activity and client calls go to the same service through the extension. It
+    Workflow writes run as Local Activities, as on Redis, and the extension writes them to the
+    server's ``temporal.api.streamservice.v1.StreamService`` on the Worker's connection.
+    Activity and client calls go to the same service through the extension. It
     registers the backend name ``native``. Put it on the client next to ``RedisStreamPlugin``
     to keep old Streams on Redis and create new ones on the server.
 
