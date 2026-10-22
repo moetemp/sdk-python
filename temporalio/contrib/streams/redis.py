@@ -51,7 +51,10 @@ _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
 class _ExtensionStreamPlugin(StreamPlugin):
-    # The Redis and memory plugins: the Stream calls go to a temporalio-streams extension.
+    # The Redis, memory and native plugins: the Stream calls go to a temporalio-streams
+    # extension.
+    _backend_class = _ExtensionStreamBackend
+    _outbound_class: type[_WorkflowOutbound]
 
     def __init__(
         self,
@@ -71,7 +74,7 @@ class _ExtensionStreamPlugin(StreamPlugin):
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
         )
-        self._backend = _ExtensionStreamBackend(self._extension)
+        self._backend = self._backend_class(self._extension)
         self._converter = temporalio.converter.DataConverter.default
         super().__init__(
             name,
@@ -101,8 +104,9 @@ class _ExtensionStreamPlugin(StreamPlugin):
         client = config.get("client")
         if client is not None:
             self._converter = client.data_converter
-        # Workflow reads run as this Local Activity, so the Worker must have it.
-        config["activities"] = [*config.get("activities", []), self._read_activity]
+        if not self._outbound_class._temporal_stream_parks_reads:
+            # Workflow reads run as this Local Activity, so the Worker must have it.
+            config["activities"] = [*config.get("activities", []), self._read_activity]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -432,6 +436,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
             {
                 "_backend_name": self._plugin.backend_name,
                 "_default": self._plugin.default,
+                "_outbound_class": self._plugin._outbound_class,
             },
         )
 
@@ -444,9 +449,11 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend_name = ""
     _default = False
+    # Each plugin's interceptor sets it on its own class.
+    _outbound_class: type[_WorkflowOutbound]  # pyright: ignore[reportUninitializedInstanceVariable]
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
-        super().init(_WorkflowOutbound(outbound, self._backend_name, self._default))
+        super().init(self._outbound_class(outbound, self._backend_name, self._default))
 
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
@@ -743,7 +750,7 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         attempt, token = enter_attempt(self, streams)
         try:
-            await _flush_run_before_local_activity(streams)
+            await _flush_run_before_local_activity(self._plugin._backend, streams)
             if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
@@ -800,7 +807,9 @@ def _targets(backend: str) -> bool:
     return target == backend
 
 
-async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -> None:
+async def _flush_run_before_local_activity(
+    backend: _ExtensionStreamBackend, streams: _activity.ActivityStreams
+) -> None:
     # The run's buffered Records go before the Local Activity's, in the epoch of the Workflow
     # Task that dispatched it. A failure fails the attempt, and the run's next completion
     # fails too, so its retry withdraws what was written.
@@ -813,9 +822,7 @@ async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -
     )
     if task.started_time is not None:
         epoch.started_time.FromDatetime(task.started_time)
-    await streams.backend.flush_run_buffer(
-        streams.namespace, info.workflow_run_id, epoch
-    )
+    await backend.flush_run_buffer(streams.namespace, info.workflow_run_id, epoch)
 
 
 def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:
@@ -867,7 +874,7 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: Any
+    input: temporalio.worker.ExecuteActivityInput, plugin: _ExtensionStreamPlugin
 ) -> _activity.ActivityStreams:
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()
@@ -913,3 +920,6 @@ def _activity_streams(
         loop=asyncio.get_running_loop(),
         backend_name=plugin.backend_name,
     )
+
+
+_ExtensionStreamPlugin._outbound_class = _WorkflowOutbound

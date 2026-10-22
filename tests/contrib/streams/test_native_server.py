@@ -7,24 +7,55 @@ import concurrent.futures
 import uuid
 from datetime import timedelta
 
+from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.worker import Replayer
-from tests.contrib.streams.test_native import (
-    Events,
-    WritesNativeAndRedis,
-    write_native,
-    write_native_sync,
-)
 from tests.contrib.streams.test_workflow_reads import (
+    Events,
     Reader,
     ReadInput,
     Writer,
 )
 from tests.helpers import new_worker
+
+
+@activity.defn
+async def write_native(stream: streams.ActivityStream[Events]) -> None:
+    await stream.topic(Events.tokens).publish("activity")
+
+
+@activity.defn
+def write_native_sync(stream: streams.SyncActivityStream[Events]) -> None:
+    stream.topic(Events.tokens).publish("sync activity")
+
+
+@workflow.defn
+class WritesNativeAndRedis:
+    @workflow.run
+    async def run(self) -> list[str | None]:
+        on_redis = await stream_workflow.create_stream(Events, name="old")
+        on_native = await stream_workflow.create_stream(
+            Events, name="new", backend="native"
+        )
+        await on_redis.topic(Events.tokens).publish("redis")
+        await on_native.topic(Events.tokens).publish("workflow 1", "workflow 2")
+        # The Activities write after the run's buffer went out, as on Redis.
+        await workflow.execute_activity(
+            write_native,
+            streams.ActivityStream.from_handle(on_native),
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        await workflow.execute_activity(
+            write_native_sync,
+            streams.SyncActivityStream.from_handle(on_native),
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        await on_native.topic(Events.tokens).publish("last")
+        return [on_redis.backend, on_native.backend]
 
 
 async def test_native_client_round_trip(native_client: Client):

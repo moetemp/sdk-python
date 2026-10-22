@@ -13,7 +13,7 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
-from temporalio.worker import Worker, WorkerExtension
+from temporalio.worker import Worker
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -220,14 +220,3 @@ def test_two_plugins_with_one_backend_name(client: Client):
     config["plugins"] = [MemoryStreamPlugin(), MemoryStreamPlugin()]
     with pytest.raises(ValueError, match="backend memory"):
         Worker(Client(**config), task_queue="q", workflows=[CreatesDefault])
-
-
-def test_combined_extension_keeps_its_parts():
-    first = MemoryStreamPlugin()._extension
-    second = MemoryStreamPlugin()._extension
-    combined = WorkerExtension.combine(first, second)
-    assert combined.parts == (first, second)
-    assert WorkerExtension.combine(combined, first).parts == (first, second, first)
-    assert WorkerExtension.combine(first) is first
-    with pytest.raises(ValueError):
-        WorkerExtension.combine()

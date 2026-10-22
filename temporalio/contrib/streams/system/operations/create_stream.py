@@ -6,11 +6,13 @@ import datetime
 
 import temporalio.workflow
 
-from .._resources import Stream
+from .._resources import (
+    CreateStreamResult,
+    Stream,
+)
 from ..models import (
     CreateStreamRequest,
     CreateStreamResponse,
-    CreateStreamResult,
 )
 
 

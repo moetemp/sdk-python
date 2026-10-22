@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import google.protobuf.message
 
@@ -16,6 +16,10 @@ from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import client as service_client
 
+if TYPE_CHECKING:
+    # The writer bindings import this package's protos, so they load after it.
+    from temporalio.contrib.streams.writer_system import client as writer_client
+
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
 
 _REQUESTS: dict[str, type[google.protobuf.message.Message]] = {
@@ -24,6 +28,9 @@ _REQUESTS: dict[str, type[google.protobuf.message.Message]] = {
     "CloseStream": stream_pb.CloseStreamRequest,
     "ReadRecords": stream_pb.ReadRecordsRequest,
     "DescribeStream": stream_pb.DescribeStreamRequest,
+    "OpenWriter": ext_pb.OpenWriterRequest,
+    "WriteRecords": ext_pb.WriteRecordsRequest,
+    "CloseWriter": ext_pb.CloseWriterRequest,
 }
 
 _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
@@ -32,6 +39,9 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
     "CloseStream": stream_pb.CloseStreamResponse,
     "ReadRecords": stream_pb.ReadRecordsResponse,
     "DescribeStream": stream_pb.DescribeStreamResponse,
+    "OpenWriter": ext_pb.OpenWriterResponse,
+    "WriteRecords": ext_pb.WriteRecordsResponse,
+    "CloseWriter": ext_pb.CloseWriterResponse,
 }
 
 
@@ -52,24 +62,10 @@ class StreamBackend(Protocol):
         """
         ...
 
-    async def open_writer(self, request: ext_pb.OpenWriterRequest) -> int:
-        """Open the writer of an Activity or client Producer, and return its id."""
-        ...
-
-    async def write_records(
-        self, writer_id: int, records: list[stream_pb.AppendRecord]
-    ) -> int:
-        """Write Records for a writer, and return the last Record's offset."""
-        ...
-
-    async def close_writer(self, writer_id: int) -> int:
-        """Drop a writer. The Stream stays open."""
-        ...
-
-    async def flush_run_buffer(
-        self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
-    ) -> int:
-        """Write a run's buffered calls before a Local Activity of the run starts."""
+    def writers(
+        self, namespace: str, data_converter: temporalio.converter.DataConverter
+    ) -> writer_client.StreamWriterClient:
+        """The writers of Activity and client Producers for ``namespace``."""
         ...
 
 
@@ -106,6 +102,16 @@ class _ExtensionStreamBackend:
         """
         return self
 
+    def writers(
+        self, namespace: str, data_converter: temporalio.converter.DataConverter
+    ) -> writer_client.StreamWriterClient:
+        """The generated writer client over the extension."""
+        from temporalio.contrib.streams.writer_system import client
+
+        return client.StreamWriterClient(
+            _ExtensionTransport(self, namespace), data_converter=data_converter
+        )
+
     def call(self, method: str, request: google.protobuf.message.Message) -> bytes:
         """Call a synchronous extension method."""
         try:
@@ -123,24 +129,6 @@ class _ExtensionStreamBackend:
             raise _errors.from_extension_error(err) from None
         return response.FromString(data)
 
-    async def open_writer(self, request: ext_pb.OpenWriterRequest) -> int:
-        """Open a buffered writer and return its id."""
-        response = await self.call_async(
-            "OpenWriter", request, ext_pb.OpenWriterResponse
-        )
-        return response.writer_id
-
-    async def write_records(
-        self, writer_id: int, records: list[stream_pb.AppendRecord]
-    ) -> int:
-        """Write Records at once for a writer. Returns the last Record's offset."""
-        response = await self.call_async(
-            "WriteRecords",
-            ext_pb.WriteRecordsRequest(writer_id=writer_id, records=records),
-            ext_pb.WriteRecordsResponse,
-        )
-        return response.last_offset
-
     async def flush_run_buffer(
         self, namespace: str, run_id: str, workflow_task: stream_pb.WorkflowTaskEpoch
     ) -> int:
@@ -156,15 +144,6 @@ class _ExtensionStreamBackend:
             ext_pb.FlushRunBufferResponse,
         )
         return response.records
-
-    async def close_writer(self, writer_id: int) -> int:
-        """Flush and drop a writer. The Stream stays open."""
-        response = await self.call_async(
-            "CloseWriter",
-            ext_pb.CloseWriterRequest(writer_id=writer_id),
-            ext_pb.CloseWriterResponse,
-        )
-        return response.last_offset
 
     async def close_writers(self) -> int:
         """Drop every open writer of the extension, and return how many failed."""
@@ -199,7 +178,8 @@ class _ExtensionTransport:
     ) -> temporalio.api.common.v1.Payload:
         request = _REQUESTS[operation].FromString(input.data)
         # The IDL leaves the namespace out, since the server knows it.
-        setattr(request, "namespace", self._namespace)
+        if "namespace" in request.DESCRIPTOR.fields_by_name:
+            setattr(request, "namespace", self._namespace)
         response = await self._backend.call_async(
             operation, request, _RESPONSES[operation]
         )

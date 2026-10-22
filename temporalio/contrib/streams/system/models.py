@@ -13,10 +13,6 @@ import temporalio.api.streamservice.v1.stream_service_pb2
 import temporalio.converter
 import temporalio.nexus.system._support as _support
 
-if typing.TYPE_CHECKING:
-    from ._resources import Stream
-
-
 StreamOffset = typing.NewType("StreamOffset", int)
 """A position in an ordered log, as the service gives it.
 
@@ -1252,12 +1248,3 @@ class _DescribeStreamResponseTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _DescribeStreamResponseTransferTypeConverter
 )(DescribeStreamResponse)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class CreateStreamResult:
-    stream: Stream
-    created: bool | None = None
-    status: (
-        temporalio.api.streamservice.v1.stream_service_pb2.StreamStatus.ValueType | None
-    ) = None
