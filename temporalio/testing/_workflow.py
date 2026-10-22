@@ -804,12 +804,12 @@ class _V1WorkflowEnvironment(_HasAServer):
         if not self._auto_time_skipping:
             yield None
             return
-        # The test server holds one time-skipping lock per in-flight task and
-        # counts one unlock per request, and it skips as soon as the count is
-        # zero. Concurrent waiters therefore share a single unlock; a second
-        # one would let the clock jump while another workflow still has a task
-        # in flight. The waiter is counted before the await so a second waiter
-        # cannot slip in and unlock again.
+        # Time moves only when nothing is in flight. The server counts one lock per
+        # in-flight task and one unlock per request, and it skips once the count is zero.
+        # So concurrent waiters share one unlock. A second unlock would let time jump
+        # past a task that another Workflow still runs, and that task would time out.
+        # The waiter is counted before the await, so a second waiter can't unlock again.
+        # Only V1 needs this. V2 keeps a separate clock for each Workflow.
         self._time_skipping_waiters += 1
         if self._time_skipping_waiters == 1:
             try:
