@@ -11,10 +11,10 @@ from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
 from temporalio.contrib.streams import _errors
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
-from temporalio.plugin import SimplePlugin
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
@@ -28,8 +28,12 @@ class Turn:
 
 def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     extension = FakeExtension()
-    plugin = SimplePlugin("fake-streams")
-    setattr(plugin, "_temporal_stream_backend", streams.StreamBackend(extension))
+    plugin = streams.StreamPlugin(
+        "fake-streams",
+        backend_name="fake",
+        default=False,
+        stream_backend=_ExtensionStreamBackend(extension),
+    )
     config = client.config()
     config["plugins"] = [plugin]
     return Client(**config), extension

@@ -26,11 +26,11 @@ import temporalio.worker
 import temporalio.workflow
 from temporalio.contrib.streams import _activity, _errors, _ids
 from temporalio.contrib.streams import workflow as streams_workflow
-from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
-from temporalio.plugin import SimplePlugin
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
@@ -47,12 +47,8 @@ _KEY_HEADER = "__temporal_stream_key"
 _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
-class StreamPlugin(SimplePlugin):
-    """Base of the plugins that carry Stream calls to a temporalio-streams extension.
-
-    .. warning::
-        This API is experimental.
-    """
+class _ExtensionStreamPlugin(StreamPlugin):
+    # The Redis and memory plugins: the Stream calls go to a temporalio-streams extension.
 
     def __init__(
         self,
@@ -68,25 +64,19 @@ class StreamPlugin(SimplePlugin):
         ``backend_name`` is the name that Stream handles carry for this backend. ``default``
         makes it the client's default backend when the client has more than one.
         """
-        self._backend_name = backend_name
-        self._default = default
         config.backend = backend_name
         self._extension = temporalio.worker.WorkerExtension(
             extension_name, config.SerializeToString(), runtime=runtime
         )
-        self._temporal_stream_backend = StreamBackend(self._extension)
+        self._backend = _ExtensionStreamBackend(self._extension)
         self._converter = temporalio.converter.DataConverter.default
-        super().__init__(name, interceptors=[_StreamInterceptor(self)])
-
-    @property
-    def backend_name(self) -> str:
-        """The name that Stream handles carry for this backend."""
-        return self._backend_name
-
-    @property
-    def default(self) -> bool:
-        """Whether a client with more than one Stream plugin uses this one by default."""
-        return self._default
+        super().__init__(
+            name,
+            backend_name=backend_name,
+            default=default,
+            stream_backend=self._backend,
+            interceptors=[_StreamInterceptor(self)],
+        )
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
@@ -126,7 +116,7 @@ class StreamPlugin(SimplePlugin):
         try:
             await super().run_worker(worker, next)
         finally:
-            pending = await self._temporal_stream_backend.drain_closes(_DRAIN_TIMEOUT)
+            pending = await self._backend.drain_closes(_DRAIN_TIMEOUT)
             if pending:
                 logger.warning(
                     "Worker shutdown left %d Stream closes in flight", pending
@@ -136,7 +126,7 @@ class StreamPlugin(SimplePlugin):
         """Flush and drop every open writer, including the client's, and wait for the closes
         in flight. Call it once the process no longer writes Streams.
         """
-        backend = self._temporal_stream_backend
+        backend = self._backend
         failed = await backend.close_writers()
         pending = await backend.drain_closes(_DRAIN_TIMEOUT)
         if failed or pending:
@@ -169,10 +159,10 @@ class StreamPlugin(SimplePlugin):
             )
         # The call only adds to the run's buffer under a short lock, so it doesn't block the
         # event loop.
-        self._temporal_stream_backend.call("BufferWorkflowCalls", request)
+        self._backend.call("BufferWorkflowCalls", request)
 
 
-class RedisStreamPlugin(StreamPlugin):
+class RedisStreamPlugin(_ExtensionStreamPlugin):
     """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
 
     Put it on the client. A Worker takes its client's plugins, so one plugin serves Workflow
@@ -344,20 +334,19 @@ class _DoneHandle(temporalio.workflow.NexusOperationHandle[Any]):
 
 
 class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interceptor):
-    def __init__(self, plugin: StreamPlugin) -> None:
+    def __init__(self, plugin: _ExtensionStreamPlugin) -> None:
         super().__init__()
         self._plugin = plugin
-        # Workflow code learns the Worker's backend name from the interceptor class.
-        self._inbound_class = type(
-            "_WorkflowInbound",
-            (_WorkflowInbound,),
-            {"_backend_name": plugin.backend_name},
-        )
 
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
-        return self._inbound_class
+        # Workflow code learns the Worker's backend name from the interceptor class.
+        return type(
+            "_WorkflowInbound",
+            (_WorkflowInbound,),
+            {"_backend_name": self._plugin.backend_name},
+        )
 
     def intercept_activity(
         self, next: temporalio.worker.ActivityInboundInterceptor
@@ -606,7 +595,7 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
     def __init__(
         self,
         next: temporalio.worker.ActivityInboundInterceptor,
-        plugin: StreamPlugin,
+        plugin: _ExtensionStreamPlugin,
     ) -> None:
         super().__init__(next)
         self._plugin = plugin
@@ -702,7 +691,7 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: StreamPlugin
+    input: temporalio.worker.ExecuteActivityInput, plugin: _ExtensionStreamPlugin
 ) -> _activity.ActivityStreams:
     # A sync Activity has no client, so the plugin gives the backend and the converter.
     info = temporalio.activity.info()
@@ -741,7 +730,7 @@ def _activity_streams(
             )
     producer.epoch.CopyFrom(epoch)
     return _activity.ActivityStreams(
-        backend=plugin._temporal_stream_backend,
+        backend=plugin._backend,
         converter=plugin._converter,
         namespace=info.namespace,
         producer=producer,
