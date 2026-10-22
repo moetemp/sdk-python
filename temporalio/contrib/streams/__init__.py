@@ -38,7 +38,7 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import Closed, Idle, Record, Superseded
+from temporalio.contrib.streams._items import Closed, Record, Superseded
 from temporalio.contrib.streams._outside import OutsideStream
 from temporalio.contrib.streams._stream import StreamRef, Topic
 from temporalio.contrib.streams._workflow import (
@@ -50,7 +50,6 @@ from temporalio.contrib.streams._workflow import (
 __all__ = [
     "ClientStream",
     "Closed",
-    "Idle",
     "OutsideStream",
     "ReadOnlyContextError",
     "Record",

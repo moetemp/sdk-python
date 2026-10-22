@@ -116,8 +116,7 @@ class FakeExtension(WorkerExtension):
         stream = self.streams[request.stream.id]
         offset = request.from_offset or 1
         wait = request.wait.ToTimedelta().total_seconds()
-        idle = request.idle_timeout.ToTimedelta().total_seconds()
-        until = loop.time() + (min(wait, idle) if idle else wait)
+        until = loop.time() + wait
         while True:
             found = [
                 record
@@ -140,14 +139,6 @@ class FakeExtension(WorkerExtension):
                 )
             left = until - loop.time()
             if left <= 0:
-                if idle and wait >= idle:
-                    idle_record = stream_pb.StreamRecord(
-                        kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_IDLE,
-                        offset=offset,
-                    )
-                    return stream_pb.ReadRecordsResponse(
-                        records=[idle_record], next_offset=offset, done=True
-                    )
                 return stream_pb.ReadRecordsResponse(next_offset=offset)
             try:
                 await asyncio.wait_for(stream.changed.wait(), left)

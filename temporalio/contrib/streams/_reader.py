@@ -10,19 +10,17 @@ from typing import Any
 import temporalio.converter
 from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
 from temporalio.contrib.streams import _convert, _errors
-from temporalio.contrib.streams._items import Closed, Idle, Record, Superseded
+from temporalio.contrib.streams._items import Closed, Record, Superseded
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
-Item = Record[Any] | Superseded | Closed | Idle
+Item = Record[Any] | Superseded | Closed
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
 # How often a reader that ends with the run checks the run, while it waits for the create
 # or for new Records.
 _RUN_CHECK = timedelta(seconds=2)
-# The shortest idle time a read asks for, so a read never asks for none.
-_MIN_IDLE = timedelta(milliseconds=1)
 # How long one loop of the generated long poll may run before the facade looks again.
 _POLL_DEADLINE = timedelta(minutes=5)
 
@@ -38,12 +36,11 @@ async def read(
     default_type: Any = None,
     from_offset: int | None,
     wait_new_records: bool,
-    idle_timeout: timedelta | None,
     wait_for_create: timedelta | None,
     run_ended: Callable[[], Awaitable[bool]] | None = None,
 ) -> AsyncGenerator[Item, None]:
-    """Give the items of a Stream in order, until a close, an idle end, or the newest Record
-    when ``wait_new_records`` is False.
+    """Give the items of a Stream in order, until a close, or the newest Record when
+    ``wait_new_records`` is False.
     """
     loop = asyncio.get_running_loop()
     create_until = (
@@ -54,15 +51,7 @@ async def read(
     # A reader that ends with the run waits for the create in short steps, so it sees the
     # run end soon.
     create_step = _RUN_CHECK if run_ended is not None else _MAX_WAIT
-    # The idle time counts from the last Record across reads, since a read that ends with the
-    # run polls in short steps.
-    idle_since = loop.time()
     while True:
-        idle_left = (
-            max(idle_timeout - timedelta(seconds=loop.time() - idle_since), _MIN_IDLE)
-            if idle_timeout is not None
-            else None
-        )
         create_left = (
             timedelta(seconds=max(create_until - loop.time(), 0))
             if create_until is not None
@@ -74,7 +63,6 @@ async def read(
             start=None if offset is not None else ReadStart.READ_START_BEGINNING,
             topics=names,
             topic_prefixes=list(topic_prefixes),
-            idle_timeout=idle_left,
             create_wait=min(create_left, create_step) if create_left else None,
         )
         try:
@@ -100,12 +88,11 @@ async def read(
             if item is None:
                 continue
             yield item
-            if isinstance(item, (Closed, Idle)):
+            if isinstance(item, Closed):
                 return
         if answer.next_offset is not None:
             offset = answer.next_offset
         if answer.records:
-            idle_since = loop.time()
             continue
         if answer.done or not wait_new_records:
             return
@@ -132,6 +119,4 @@ async def _item(
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
         result = await _convert.decode(converter, record.close_result, None)
         return Closed(offset=offset, result=result, failure=record.close_failure)
-    if record.kind == StreamRecordKind.STREAM_RECORD_KIND_IDLE:
-        return Idle(offset=offset)
     return None

@@ -72,18 +72,6 @@ class Closed:
     """Failure that the close carries. None if it has none."""
 
 
-@dataclass(frozen=True)
-class Idle:
-    """The last item of a read that got no new Record for its ``idle_timeout``.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    offset: int
-    """The offset to resume from, with ``from_offset``."""
-
-
 # Fields compare in the order of the proto. An empty or negative field compares as zero, as in
 # the crate's epoch keys.
 def _n(value: int | None) -> int:

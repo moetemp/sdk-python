@@ -112,8 +112,8 @@ def test_extension_protos_reference_the_service_protos():
     assert parsed.calls[0].append.stream.id == "wf:run"
 
 
-def test_one_way_stub_needs_an_interceptor():
+async def test_append_stub_runs_only_in_a_workflow():
     from temporalio.contrib.streams.system import append_records
 
     with pytest.raises(Exception):
-        append_records(stream=models.StreamRef(id="wf:run"))
+        await append_records(stream=models.StreamRef(id="wf:run"))
