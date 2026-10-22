@@ -27,6 +27,7 @@ import temporalio.workflow
 from temporalio.contrib.streams import _activity, _errors, _ids, _workflow
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._stream import StreamRef
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
@@ -647,13 +648,15 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._plugin)
         token = _activity.current.set(streams)
         try:
-            if (
-                streams.default_ref is not None
-                and temporalio.activity.info().attempt > 1
-            ):
+            await _flush_run_before_local_activity(streams)
+            if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
-                await streams.writer(streams.default_ref.id).withdraw_earlier_attempts()
+                stream_ids = [handle.id for handle in _stream_arguments(input.args)]
+                if streams.default_ref is not None:
+                    stream_ids.append(streams.default_ref.id)
+                for stream_id in dict.fromkeys(stream_ids):
+                    await streams.writer(stream_id).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
         except BaseException:
             await _close_quietly(streams)
@@ -663,6 +666,63 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
             return result
         finally:
             _activity.current.reset(token)
+
+
+async def _flush_run_before_local_activity(streams: _activity.ActivityStreams) -> None:
+    # The run's buffered Records go before the Local Activity's, in the epoch of the Workflow
+    # Task that dispatched it. A failure fails the attempt, and the run's next completion
+    # fails too, so its retry withdraws what was written.
+    info = temporalio.activity.info()
+    task = info.workflow_task
+    if not info.is_local or task is None or not info.workflow_run_id:
+        return
+    epoch = stream_pb.WorkflowTaskEpoch(
+        started_event_id=task.started_event_id, attempt=task.attempt
+    )
+    if task.started_time is not None:
+        epoch.started_time.FromDatetime(task.started_time)
+    await streams.backend.flush_run_buffer(
+        streams.namespace, info.workflow_run_id, epoch
+    )
+
+
+def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:
+    # The Streams that an Activity received, which an earlier attempt may have written. They
+    # may sit in fields of its input object, in slots, and in lists and dicts.
+    handles: list[StreamHandle[Any]] = []
+    seen: set[int] = set()
+
+    def walk(value: Any, depth: int) -> None:
+        if depth > 4 or id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, StreamHandle):
+            handles.append(value)
+        elif isinstance(value, (str, bytes, int, float, bool)) or value is None:
+            return
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item, depth + 1)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                walk(item, depth + 1)
+        else:
+            for item in _fields_of(value):
+                walk(item, depth + 1)
+
+    for arg in args:
+        walk(arg, 0)
+    return handles
+
+
+def _fields_of(value: Any) -> list[Any]:
+    fields = list(getattr(value, "__dict__", {}).values())
+    for klass in type(value).__mro__:
+        slots = getattr(klass, "__slots__", ())
+        for slot in (slots,) if isinstance(slots, str) else slots:
+            if hasattr(value, slot):
+                fields.append(getattr(value, slot))
+    return fields
 
 
 async def _close_quietly(streams: _activity.ActivityStreams) -> None:
@@ -723,4 +783,5 @@ def _activity_streams(
         if ref is not None
         else None,
         loop=asyncio.get_running_loop(),
+        backend_name=plugin.backend_name,
     )
