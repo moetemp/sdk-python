@@ -36,6 +36,8 @@ _LONG_POLL_LAST_PAUSE = 2.0
 
 @dataclasses.dataclass
 class Stream:
+    """A handle on one Stream. Build it from a stream-ref, or get it from a create."""
+
     stream: StreamRef
 
     async def append_records(
@@ -47,6 +49,7 @@ class Stream:
         failed_tasks: list[int] | None = None,
         withdraw_run: str | None = None,
     ) -> AppendRecordsResponse:
+        """Append Records. The answer has the first and the last offset."""
         request = AppendRecordsRequest(
             stream=self.stream,
             producer=producer,
@@ -67,6 +70,7 @@ class Stream:
         previous_completed_task: WorkflowTaskEpoch | None = None,
         failed_tasks: list[int] | None = None,
     ) -> None:
+        """Close the Stream. Readers drain what is left, then end."""
         request = CloseStreamRequest(
             stream=self.stream,
             producer=producer,
@@ -89,6 +93,7 @@ class Stream:
         wait: datetime.timedelta | None = None,
         create_wait: datetime.timedelta | None = None,
     ) -> ReadRecordsResponse:
+        """Read one page of Records. The iterator of the same name reads them all."""
         request = ReadRecordsRequest(
             stream=self.stream,
             from_offset=from_offset,
@@ -161,6 +166,7 @@ class Stream:
     async def describe(
         self,
     ) -> DescribeStreamResponse:
+        """Describe the Stream: its status, newest offset, Retention and auto-close."""
         request = DescribeStreamRequest(
             stream=self.stream,
         )

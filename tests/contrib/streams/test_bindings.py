@@ -1,10 +1,7 @@
 from datetime import timedelta
 
-import pytest
-
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
-import temporalio.contrib.streams.proto.v1 as extension_pb
 import temporalio.converter
 import temporalio.nexus.system as nexus_system
 from temporalio.contrib.streams.system import client, models
@@ -98,22 +95,3 @@ def test_models_round_trip_through_the_proto():
     assert message.records[0].body.metadata["encoding"] == b"json/plain"
     assert back.stream == request.stream
     assert back.records and back.records[0].body == {"n": 1}
-
-
-def test_extension_protos_reference_the_service_protos():
-    call = extension_pb.WorkflowCall(
-        append=stream_pb.AppendRecordsRequest(stream=stream_pb.StreamRef(id="wf:run")),
-        when_run_closes=False,
-    )
-    request = extension_pb.BufferWorkflowCallsRequest(run_id="run", calls=[call])
-    parsed = extension_pb.BufferWorkflowCallsRequest.FromString(
-        request.SerializeToString()
-    )
-    assert parsed.calls[0].append.stream.id == "wf:run"
-
-
-async def test_append_stub_runs_only_in_a_workflow():
-    from temporalio.contrib.streams.system import append_records
-
-    with pytest.raises(Exception):
-        await append_records(stream=models.StreamRef(id="wf:run"))

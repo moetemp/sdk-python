@@ -5,16 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
-import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 from temporalio.contrib.streams import _convert, _reader
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import StreamHandle, TopicBase
+from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
+from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
 T = TypeVar("T")
@@ -42,7 +43,7 @@ class Access:
         topics: list[str] | None,
         prefixes: Sequence[str],
         types: dict[str, Any],
-        from_offset: int | None,
+        from_offset: int | End | None,
         wait_new_records: bool,
         create_wait: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
@@ -62,12 +63,12 @@ class Access:
         topics: list[str] | None,
         prefixes: Sequence[str],
         types: dict[str, Any],
-        from_offset: int | None,
+        from_offset: int | End | None,
         wait_new_records: bool,
         create_wait: timedelta | None,
     ) -> AsyncGenerator[Item, None]:
         items = _reader.read(
-            self.backend.service(self.namespace),
+            self.backend.service(self.namespace, _convert.raw(self.converter)),
             self.converter,
             await self.stream_id(),
             topics=topics,
@@ -98,20 +99,14 @@ class Access:
         """Write this Producer's Records, then close the Stream."""
         writer = self.writer()
         await writer.close()
-        request = stream_pb.CloseStreamRequest(
-            namespace=self.namespace,
-            stream=stream_pb.StreamRef(id=await self.stream_id()),
-            producer=writer.producer,
+        stream = service_client.Stream(
+            self.backend.service(self.namespace, self.converter),
+            models.StreamRef(id=await self.stream_id()),
         )
-        if result is not None:
-            request.result.CopyFrom(
-                (await _convert.encode(self.converter, result)).payload
-            )
-        if failure is not None:
-            await self.converter.encode_failure(failure, request.failure)
-        await self.backend.call_async(
-            "CloseStream", request, stream_pb.CloseStreamResponse
+        producer = models._ProducerTransferTypeConverter().from_transfer_type(
+            writer.producer, models.Producer
         )
+        await stream.close(producer=producer, result=result, failure=failure)
 
 
 def read_spec(
@@ -138,34 +133,21 @@ def read_spec(
     return names or None, types
 
 
-class _AsyncTopic(Generic[T]):
+class _AsyncTopic(TopicBase[T]):
     # A Topic of an Activity or client handle. Each publish writes before it returns.
-    def __init__(self, stream: Any, name: str, type: Any) -> None:
-        self._stream = stream
-        self._name = name
-        self._type = type
-
-    @property
-    def name(self) -> str:
-        """Name of the Topic."""
-        return self._name
-
-    @property
-    def type(self) -> Any:
-        """Type that a read decodes the Topic's values with."""
-        return self._type
 
     async def publish(self, *values: T) -> int:
         """Write one Record for each value, in order, and return the last Record's offset.
 
         A list is one value.
         """
+        await self._stream._ready()
         return await self._stream._access().publish(self._name, values)
 
     def subscribe(
         self,
         *,
-        from_offset: int | None = None,
+        from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> AsyncGenerator[Item, None]:
@@ -178,21 +160,5 @@ class _AsyncTopic(Generic[T]):
         )
 
 
-class SyncTopicBase(Generic[T]):
+class SyncTopicBase(TopicBase[T]):
     """Base of a Topic whose calls block, for sync Activities."""
-
-    def __init__(self, stream: Any, name: str, type: Any) -> None:
-        """Create a Topic. Use the Stream's ``topic`` instead."""
-        self._stream = stream
-        self._name = name
-        self._type = type
-
-    @property
-    def name(self) -> str:
-        """Name of the Topic."""
-        return self._name
-
-    @property
-    def type(self) -> Any:
-        """Type that a read decodes the Topic's values with."""
-        return self._type

@@ -43,12 +43,8 @@ _DRAIN_TIMEOUT = timedelta(seconds=10)
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
-# Continue-as-new passes the ids of the open Streams that close with the run chain to the next
-# run, in this header.
-_CLOSE_WITH_RUN_HEADER = "__temporal_stream_close_with_run"
-# And their backend names in this one, so each plugin of the next run closes its own. A run of
-# a Worker with one backend left it out.
-_CLOSE_WITH_RUN_BACKENDS_HEADER = "__temporal_stream_close_with_run_backends"
+# Continue-as-new passes the run chain's open Streams to the next run in this header.
+_OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
 class StreamPlugin(SimplePlugin):
@@ -407,7 +403,7 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
-        _take_close_with_run(input.headers)
+        _take_owned_streams(input.headers)
         try:
             result = await super().execute_workflow(input)
         except temporalio.workflow.ContinueAsNewError:
@@ -557,24 +553,19 @@ def _owned_ref(stream_id: str) -> models.StreamRef:
     )
 
 
-def _take_close_with_run(
+def _take_owned_streams(
     headers: Mapping[str, temporalio.api.common.v1.Payload],
 ) -> None:
-    payload = headers.get(_CLOSE_WITH_RUN_HEADER)
+    payload = headers.get(_OWNED_STREAMS_HEADER)
     if payload is None:
         return
     state = streams_workflow._state()
     converter = temporalio.converter.PayloadConverter.default
-    backends_payload = headers.get(_CLOSE_WITH_RUN_BACKENDS_HEADER)
-    backends = (
-        converter.from_payload(backends_payload, dict[str, str])
-        if backends_payload is not None
-        else {}
-    )
-    for stream_id in converter.from_payload(payload, list[str]):
+    for stream_id, backend, close_with_run in converter.from_payload(
+        payload, list[Any]
+    ):
         run_stream = state.stream(_owned_ref(stream_id))
-        run_stream.close_with_run = True
-        run_stream.backend = run_stream.backend or backends.get(stream_id, "")
+        run_stream.backend, run_stream.close_with_run = backend, close_with_run
 
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
@@ -610,7 +601,9 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             return await super().start_system_nexus_operation(input)
         operation = input.operation_name
         if operation == "CreateStream":
-            result: Any = models.StreamResult(stream=_owned_ref(input.input.stream_id))
+            result: Any = models.CreateStreamResponse(
+                stream=_owned_ref(input.input.stream_id)
+            )
         elif operation == "AppendRecords":
             result = models.AppendRecordsResponse()
         elif operation == "CloseStream":
@@ -630,17 +623,18 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         return _DoneHandle(result)
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
-        open_streams = {
-            stream_id: run_stream.backend
+        # The next run needs each owned Stream's backend for stream_handle.
+        owned = [
+            [stream_id, run_stream.backend, run_stream.close_with_run]
             for stream_id, run_stream in streams_workflow._state().streams.items()
-            if run_stream.close_with_run and not run_stream.closed
-        }
-        if open_streams and _CLOSE_WITH_RUN_HEADER not in input.headers:
+            if run_stream.backend is not None and not run_stream.closed
+        ]
+        # Each Stream plugin's interceptor sees the call, and the first one writes the header.
+        if owned and _OWNED_STREAMS_HEADER not in input.headers:
             converter = temporalio.converter.PayloadConverter.default
             input.headers = {
                 **input.headers,
-                _CLOSE_WITH_RUN_HEADER: converter.to_payload(list(open_streams)),
-                _CLOSE_WITH_RUN_BACKENDS_HEADER: converter.to_payload(open_streams),
+                _OWNED_STREAMS_HEADER: converter.to_payload(owned),
             }
         super().continue_as_new(input)
 
