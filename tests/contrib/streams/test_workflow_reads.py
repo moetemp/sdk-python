@@ -182,7 +182,8 @@ class ReadsInQuery:
 
     @workflow.run
     async def run(self) -> None:
-        self._stream = await stream_workflow.create_stream(Events)
+        # Set in the first task, since a query may come before a create's Local Activity ends.
+        self._stream = stream_workflow.create_stream_nowait(Events)
         await workflow.wait_condition(lambda: False)
 
     @workflow.query
