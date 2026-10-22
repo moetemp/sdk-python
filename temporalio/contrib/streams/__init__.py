@@ -1,16 +1,23 @@
 """Streams of Records that Workflows, Activities and clients write and read.
 
-Workflow code writes with :py:func:`workflow_stream` and :py:func:`create_workflow_stream`.
-Activities use :py:func:`activity_stream`. Clients read with :py:func:`for_handle` or :py:func:`for_ref` and create
-standalone Streams with :py:func:`create_stream`. A Stream plugin, such as
-:py:class:`temporalio.contrib.streams.redis.RedisStreamPlugin`, carries the calls.
+A Stream definition, a class with ``@streams.defn``, gives the Stream name and the type of each
+Topic. Workflow code creates a Stream with
+:py:func:`temporalio.contrib.streams.workflow.create_stream`. A client creates and gets Streams
+with :py:class:`StreamClient`. A Stream is data: a Workflow passes it to an Activity, a child
+Workflow or the next run as an argument, and the parameter's type gives the handle class of
+that context, such as :py:class:`ActivityStream`.
+
+A Stream plugin carries the calls and registers its backend name, such as
+:py:class:`temporalio.contrib.streams.redis.RedisStreamPlugin` (``redis``) and
+:py:class:`temporalio.contrib.streams.testing.MemoryStreamPlugin` (``memory``). A handle
+carries the name of its backend. For now a Worker has one Stream plugin, so it serves one
+backend.
 
 .. warning::
     This package is experimental.
 """
 
 from temporalio.contrib.streams import workflow
-from temporalio.contrib.streams._activity import activity_stream
 from temporalio.contrib.streams._activity_stream import (
     ActivityStream,
     ActivityTopic,
@@ -19,11 +26,6 @@ from temporalio.contrib.streams._activity_stream import (
 )
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._buffered import BufferedPublisher
-from temporalio.contrib.streams._client import (
-    create_stream,
-    for_handle,
-    for_ref,
-)
 from temporalio.contrib.streams._defn import (
     StreamDefinition,
     TopicDefinition,
@@ -44,19 +46,13 @@ from temporalio.contrib.streams._errors import (
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import Closed, Idle, Record, Superseded
-from temporalio.contrib.streams._outside import OutsideStream
-from temporalio.contrib.streams._stream import StreamRef, Topic
+from temporalio.contrib.streams._items import Closed, Record, Superseded
 from temporalio.contrib.streams._stream_client import (
     ClientStream,
     ClientTopic,
     StreamClient,
 )
-from temporalio.contrib.streams._workflow import (
-    WorkflowStream,
-    create_workflow_stream,
-    workflow_stream,
-)
+from temporalio.contrib.streams.workflow import WorkflowStream, WorkflowTopic
 
 __all__ = [
     "ActivityStream",
@@ -65,38 +61,29 @@ __all__ = [
     "ClientStream",
     "ClientTopic",
     "Closed",
-    "Idle",
-    "OutsideStream",
     "ReadOnlyContextError",
     "Record",
     "StreamBackend",
     "StreamBufferFullError",
     "StreamClient",
-    "StreamDefinition",
     "StreamClosedError",
+    "StreamDefinition",
     "StreamError",
     "StreamExpiredError",
     "StreamFencedError",
     "StreamHandle",
     "StreamNotFoundError",
     "StreamOffsetError",
-    "StreamRef",
     "StreamStorageError",
     "StreamTransportMissingError",
     "StreamUnsupportedError",
     "Superseded",
     "SyncActivityStream",
     "SyncActivityTopic",
-    "Topic",
     "TopicDefinition",
     "WorkflowStream",
-    "activity_stream",
-    "create_stream",
-    "create_workflow_stream",
+    "WorkflowTopic",
     "defn",
-    "for_handle",
-    "for_ref",
     "topic",
     "workflow",
-    "workflow_stream",
 ]

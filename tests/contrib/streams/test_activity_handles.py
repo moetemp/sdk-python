@@ -38,13 +38,11 @@ class SyncInput:
     stream: streams.SyncActivityStream[Events]
 
 
-async def read(handle: WorkflowHandle[Any, Any]) -> list[object]:
-    stream = streams.for_handle(
-        handle, name="events", wait_for_create=timedelta(seconds=20)
-    )
-    stream.topic("turns", type=Turn)
-    stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
+async def read(
+    client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
+) -> list[object]:
+    stream = streams.StreamClient(client).get_workflow_stream(handle, Events, name=name)
+    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
 def records(items: list[object]) -> list[streams.Record[Any]]:
@@ -115,7 +113,7 @@ async def test_activity_publishes_and_returns_offsets(stream_client: Client):
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         offsets, last, read_tokens = await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     data = records(items)
     assert [record.data for record in data] == [
         "hi",
@@ -170,7 +168,7 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
             Retrying.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     # The second attempt writes nothing, and its start still withdraws the first one's Record.
     assert len(superseded) == 1
@@ -219,7 +217,7 @@ async def test_activity_closes_and_checks_the_backend(stream_client: Client):
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "stream_unsupported"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert [r.data for r in records(items)] == ["last"]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == "closed by activity"

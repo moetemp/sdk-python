@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import Any, TypeVar, overload
@@ -12,7 +14,6 @@ import temporalio.client
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._access import Access, _AsyncTopic, read_spec
 from temporalio.contrib.streams._backend import StreamBackend, client_backend
-from temporalio.contrib.streams._client import _client_producer
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._reader import Item
@@ -20,6 +21,21 @@ from temporalio.contrib.streams._writer import BatchOptions, StreamWriter
 
 E = TypeVar("E")
 T = TypeVar("T")
+
+# A client's Producer id has a key per process and handle, so two handles never share a fence
+# or a sequence. The crate takes two parts after `client:`, so the handle number goes into the
+# key.
+_PROCESS_KEY = str(uuid.uuid4())
+_WRITERS = itertools.count(1)
+
+
+def _client_producer(client: temporalio.client.Client) -> stream_pb.Producer:
+    key = f"{_PROCESS_KEY}-{next(_WRITERS)}"
+    return stream_pb.Producer(
+        kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT,
+        id=_ids.client_producer_id(client.identity, key),
+        epoch=stream_pb.ProducerEpoch(attempt=1),
+    )
 
 
 class ClientTopic(_AsyncTopic[T]):

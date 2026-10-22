@@ -34,12 +34,12 @@ def test_vendored_protos_match_the_crate(relative: str):
 def test_stream_ids_match_the_crate():
     data: Any = vectors("ids.json")
     for case in data["streams"]:
+        # Every Stream has a name, so the crate's cases with no name don't apply.
         if case["name"] is None:
-            built = _ids.default_stream_id(case["workflow_id"], case["first_run_id"])
-        else:
-            built = _ids.scoped_stream_id(
-                case["workflow_id"], case["first_run_id"], case["name"]
-            )
+            continue
+        built = _ids.scoped_stream_id(
+            case["workflow_id"], case["first_run_id"], case["name"]
+        )
         assert built == case["stream_id"]
 
 

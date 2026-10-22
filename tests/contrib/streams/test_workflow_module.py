@@ -25,13 +25,11 @@ class Events:
     tokens = streams.topic(str)
 
 
-async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[object]:
-    stream = streams.for_handle(
-        handle, name=name, wait_for_create=timedelta(seconds=20)
-    )
-    stream.topic("turns", type=Turn)
-    stream.topic("tokens", type=str)
-    return [item async for item in stream.subscribe(idle_timeout=timedelta(seconds=20))]
+async def read(
+    client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
+) -> list[object]:
+    stream = streams.StreamClient(client).get_workflow_stream(handle, Events, name=name)
+    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
 def data(items: list[object]) -> list[object]:
@@ -55,7 +53,7 @@ async def test_create_publish_and_close_with_run(stream_client: Client):
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "HI THERE"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == [Turn("user", "hi there"), Turn("model"), "hi", "there"]
     closed = items[-1]
     assert isinstance(closed, streams.Closed) and closed.result == "HI THERE"
@@ -84,8 +82,8 @@ async def test_async_with_closes_the_stream(stream_client: Client):
             Turns.run, 1, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        first = await read(handle, "turn-0")
-        second = await read(handle, "turn-1")
+        first = await read(stream_client, handle, "turn-0")
+        second = await read(stream_client, handle, "turn-1")
     assert data(first) == ["token-0"]
     assert isinstance(first[-1], streams.Closed) and first[-1].failure is None
     assert data(second) == ["token-1"]
@@ -113,7 +111,7 @@ async def test_continue_as_new_passes_the_stream(stream_client: Client):
             Continuing.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "done"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["run 1", "run 2"]
     closed = [item for item in items if isinstance(item, streams.Closed)]
     assert len(closed) == 1 and closed[0].result == "done"
@@ -172,7 +170,7 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
             "stream_closed",
         ]
         assert await handle.query(Mistakes.publish_in_query) == "ReadOnlyContextError"
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "early"
 
 
@@ -192,7 +190,7 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
         )
         with pytest.raises(WorkflowFailureError):
             await handle.result()
-        items = await read(handle)
+        items = await read(stream_client, handle)
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
