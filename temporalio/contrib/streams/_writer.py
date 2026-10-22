@@ -10,6 +10,7 @@ import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.contrib.streams import _errors
 
 if TYPE_CHECKING:
+    from temporalio.contrib.streams.system import models as system_models
     from temporalio.contrib.streams.writer_system import client as writer_client
 
 
@@ -20,7 +21,7 @@ class StreamWriter:
         self,
         *,
         writers: writer_client.StreamWriterClient,
-        stream_id: Callable[[], Awaitable[str]],
+        ref: Callable[[], Awaitable[system_models.StreamRef]],
         producer: stream_pb.Producer,
     ) -> None:
         """Create a writer. It opens on its first write.
@@ -28,7 +29,7 @@ class StreamWriter:
         ``writers`` runs the values through the user's converter and codec.
         """
         self._writers = writers
-        self._resolve_id = stream_id
+        self._resolve_ref = ref
         self._producer = producer
         self._writer: writer_client.Writer | None = None
         self._open_lock = asyncio.Lock()
@@ -60,9 +61,14 @@ class StreamWriter:
                 producer = models._ProducerTransferTypeConverter().from_transfer_type(
                     self._producer, models.Producer
                 )
+                ref = await self._resolve_ref()
                 self._writer = await self._writers.open_writer(
                     models.OpenWriterRequest(
-                        stream=models.StreamRef(id=await self._resolve_id()),
+                        stream=models.StreamRef(
+                            id=ref.id,
+                            workflow_id=ref.workflow_id,
+                            first_execution_run_id=ref.first_execution_run_id,
+                        ),
                         producer=producer,
                     )
                 )

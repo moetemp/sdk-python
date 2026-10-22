@@ -325,8 +325,9 @@ class _WorkflowCall:
     when_run_closes: bool = False
     chain_continues: bool = False
     backend: str = ""
-    # A create's ref with the owner fields, when the Stream closes with the run chain.
-    close_with_run_ref: models.StreamRef | None = None
+    # A create's ref with the owner fields, and whether the Stream closes with the run chain.
+    owner_ref: models.StreamRef | None = None
+    close_with_run: bool = False
 
 
 def check_worker_backends(config: temporalio.worker.WorkerConfig) -> None:
@@ -378,9 +379,9 @@ async def _encode_call(
         create = stream_pb.CreateStreamRequest(
             namespace=namespace, stream_id=request.stream_id
         )
-        owner = call.close_with_run_ref
+        owner = call.owner_ref
         if owner is not None:
-            create.close_with_run = True
+            create.close_with_run = call.close_with_run
             create.ref.CopyFrom(
                 stream_pb.StreamRef(
                     id=owner.id,
@@ -621,15 +622,13 @@ def _convert_in_sandbox(request: Any) -> Any:
     return request
 
 
-def _close_with_run_ref(
+def _closes_with_run(
     input: temporalio.worker.StartNexusOperationInput[Any, Any],
-) -> models.StreamRef | None:
+) -> bool:
     if input.operation_name != "CreateStream":
-        return None
+        return False
     run_stream = streams_workflow._state().streams.get(input.input.stream_id)
-    if run_stream is None or not run_stream.close_with_run:
-        return None
-    return _owned_ref(input.input.stream_id)
+    return run_stream is not None and run_stream.close_with_run
 
 
 def _owned_ref(stream_id: str) -> models.StreamRef:
@@ -724,7 +723,10 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
                 operation,
                 _convert_in_sandbox(input.input),
                 backend=self._temporal_stream_backend_name,
-                close_with_run_ref=_close_with_run_ref(input),
+                owner_ref=_owned_ref(input.input.stream_id)
+                if operation == "CreateStream"
+                else None,
+                close_with_run=_closes_with_run(input),
             ),
             # The runtime already has the Records of a replayed task. A create or a close is
             # idempotent, so it goes again, for a run whose buffer an eviction dropped.
@@ -789,13 +791,13 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
             if temporalio.activity.info().attempt > 1:
                 # The open of a new attempt withdraws the Records of the earlier ones, also
                 # when this attempt publishes nothing. It creates no Stream.
-                stream_ids = [
-                    handle.id
+                handles = {
+                    handle.id: handle
                     for handle in _stream_arguments(input.args)
                     if attempt.get(handle.backend) is streams
-                ]
-                for stream_id in dict.fromkeys(stream_ids):
-                    await streams.writer(stream_id).withdraw_earlier_attempts()
+                }
+                for handle in handles.values():
+                    await streams.writer(handle).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
         except BaseException:
             await _close_quietly(streams)
