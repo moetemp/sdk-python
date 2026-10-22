@@ -2879,15 +2879,17 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
-source = "git+https://github.com/moetemp/sdk-streams?rev=ef17adf7b4532ac652d53201f7e8703082e4bbb0#ef17adf7b4532ac652d53201f7e8703082e4bbb0"
+source = "git+https://github.com/moetemp/sdk-streams?rev=037df9fd030e878c34eca72072be6adc56b8bd3b#037df9fd030e878c34eca72072be6adc56b8bd3b"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
+ "bytes",
  "crc16",
  "parking_lot",
  "prost",
  "prost-wkt-types",
  "redis",
+ "temporalio-client",
  "temporalio-common",
  "temporalio-sdk-core",
  "thiserror",
