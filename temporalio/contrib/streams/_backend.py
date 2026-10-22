@@ -163,28 +163,22 @@ class _ExtensionTransport:
         )
 
 
-def backend_of_client(client: temporalio.client.Client) -> StreamBackend:
-    """The backend that a client's Stream plugin gives."""
-    for plugin in client.config()["plugins"]:
-        backend = getattr(plugin, "_temporal_stream_backend", None)
-        if isinstance(backend, StreamBackend):
-            return backend
-    raise _errors.StreamTransportMissingError(
-        "The client has no Stream plugin, such as RedisStreamPlugin"
-    )
-
-
 def client_backend(
     client: temporalio.client.Client, name: str | None
 ) -> tuple[str, StreamBackend]:
-    """The name and the backend of a client's Stream plugin. None picks the first plugin.
+    """The name and the backend of a client's Stream plugin. None picks the plugin marked
+    as the default, or else the first one.
 
     Raises:
         StreamTransportMissingError: The client has no Stream plugin.
         StreamUnsupportedError: The client has no Stream plugin of that name.
     """
     backends = [
-        (getattr(plugin, "backend_name", ""), backend)
+        (
+            getattr(plugin, "backend_name", ""),
+            backend,
+            getattr(plugin, "default", False),
+        )
         for plugin in client.config()["plugins"]
         if isinstance(
             backend := getattr(plugin, "_temporal_stream_backend", None), StreamBackend
@@ -195,12 +189,13 @@ def client_backend(
             "The client has no Stream plugin, such as RedisStreamPlugin"
         )
     if not name:
-        return backends[0]
-    for backend_name, backend in backends:
+        defaults = [entry for entry in backends if entry[2]] or backends
+        return defaults[0][0], defaults[0][1]
+    for backend_name, backend, _ in backends:
         if backend_name == name:
             return backend_name, backend
     raise _errors.StreamUnsupportedError(
         f"The client has no Stream backend {name}. It has "
-        f"{', '.join(backend_name for backend_name, _ in backends)}.",
+        f"{', '.join(entry[0] for entry in backends)}.",
         reason="stream_unsupported",
     )

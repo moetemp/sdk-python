@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -78,6 +79,7 @@ class ClientStream(StreamHandle[E]):
         self._writer: StreamWriter | None = None
         # The Stream name of a Workflow's Stream whose first run id is not known yet.
         self._stream_name = ""
+        self._finding: asyncio.Future[str] | None = None
 
     def _bind(
         self,
@@ -106,13 +108,25 @@ class ClientStream(StreamHandle[E]):
 
     async def _stream_id(self) -> str:
         if not self._id:
-            assert self._find_first_run is not None and self._workflow_id is not None
-            self._first_execution_run_id = await self._find_first_run()
-            self._find_first_run = None
-            self._id = _ids.scoped_stream_id(
-                self._workflow_id, self._first_execution_run_id, self._stream_name
-            )
+            # Calls that start together share one Describe call.
+            if self._finding is None:
+                assert self._find_first_run is not None
+                self._finding = asyncio.ensure_future(self._find_first_run())
+            first_run = await asyncio.shield(self._finding)
+            if not self._id:
+                assert self._workflow_id is not None
+                self._first_execution_run_id = first_run
+                self._id = _ids.scoped_stream_id(
+                    self._workflow_id, first_run, self._stream_name
+                )
         return self._id
+
+    def _fields(self) -> dict[str, str]:
+        fields = super()._fields()
+        if not self._id:
+            # The Stream name tells apart the Streams of one Workflow before the id is known.
+            fields["name"] = self._stream_name
+        return fields
 
     def _access(self) -> Access:
         client, backend = self._client, self._stream_backend
