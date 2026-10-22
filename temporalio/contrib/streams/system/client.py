@@ -19,7 +19,7 @@ from .models import (
     CloseStreamRequest,
     CloseStreamResponse,
     CreateStreamRequest,
-    CreateStreamResponse,
+    CreateStreamResult,
     DescribeStreamRequest,
     DescribeStreamResponse,
     ReadRecordsRequest,
@@ -29,7 +29,7 @@ from .models import (
     _CloseStreamRequestTransferTypeConverter,
     _CloseStreamResponseTransferTypeConverter,
     _CreateStreamRequestTransferTypeConverter,
-    _CreateStreamResponseTransferTypeConverter,
+    _CreateStreamResultTransferTypeConverter,
     _DescribeStreamRequestTransferTypeConverter,
     _DescribeStreamResponseTransferTypeConverter,
     _ReadRecordsRequestTransferTypeConverter,
@@ -155,15 +155,15 @@ class StreamServiceClient:
             [answer] = await self._payload_codec.decode([answer])
         return answer
 
-    async def create_stream(self, request: CreateStreamRequest) -> CreateStreamResponse:
+    async def create_stream(self, request: CreateStreamRequest) -> CreateStreamResult:
         payload = _proto_payload(
             _CreateStreamRequestTransferTypeConverter().to_transfer_type(request)
         )
         answer = await self._call("CreateStream", payload)
-        converter = _CreateStreamResponseTransferTypeConverter()
+        converter = _CreateStreamResultTransferTypeConverter()
         return converter.from_transfer_type(
             _proto_message(answer, converter.transfer_type),
-            CreateStreamResponse,
+            CreateStreamResult,
         )
 
     async def append_records(

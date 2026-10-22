@@ -15,6 +15,7 @@ from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._reader import Item
 from temporalio.contrib.streams._writer import StreamWriter
+from temporalio.contrib.streams.system import models
 
 T = TypeVar("T")
 
@@ -85,13 +86,10 @@ class Access:
         It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
-        response = await self.backend.call_async(
-            "DescribeStream",
-            stream_pb.DescribeStreamRequest(
-                namespace=self.namespace,
-                stream=stream_pb.StreamRef(id=await self.stream_id()),
-            ),
-            stream_pb.DescribeStreamResponse,
+        response = await self.backend.service(self.namespace).describe_stream(
+            models.DescribeStreamRequest(
+                stream=models.StreamRef(id=await self.stream_id())
+            )
         )
         # Offsets start above zero, so zero means the Stream has no Record.
         return response.last_offset + 1 if response.last_offset else 0

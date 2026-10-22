@@ -32,8 +32,8 @@ proto_path = (
 output_dir = base_dir / "temporalio" / "contrib" / "streams" / "system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-# The head of moe/brook/v3/n7-long-poll-loop. A branch moves, so the pin is the commit.
-NEX_GEN_REVISION = "25b9c1be8f51245618297415aa51df6928c58504"
+# The head of moe/brook/v3/n8-stream-resource. A branch moves, so the pin is the commit.
+NEX_GEN_REVISION = "de0c7edd5e36552391cb4f37c96aeb065270035e"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 

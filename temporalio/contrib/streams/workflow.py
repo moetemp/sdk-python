@@ -23,14 +23,9 @@ import temporalio.workflow
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams.system import create_stream as _create_stream
 from temporalio.contrib.streams.system import models
-from temporalio.contrib.streams.system.operations import (
-    append_records as _append_records,
-)
-from temporalio.contrib.streams.system.operations import close_stream as _close_stream
-from temporalio.contrib.streams.system.operations import (
-    create_stream as _create_stream,
-)
+from temporalio.contrib.streams.system._resources.stream import Stream as _Stream
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -182,6 +177,11 @@ class WorkflowStream(StreamHandle[E]):
             first_execution_run_id=self.first_execution_run_id,
         )
 
+    def _resource(self) -> _Stream:
+        # The generated Stream resource makes the System Nexus calls. This class adds the
+        # definition's typed Topics and the run's replay rules.
+        return _Stream(stream=self._model_ref())
+
     @overload
     def topic(self, topic: TopicDefinition[T]) -> WorkflowTopic[T]: ...
 
@@ -230,11 +230,10 @@ class WorkflowStream(StreamHandle[E]):
         self._check("write to")
         # The backend's answer has no offsets that replay could give again, so it is dropped.
         _now(
-            _append_records.append_records(
-                stream=self._model_ref(),
+            self._resource().append_records(
                 records=[
                     models.AppendRecord(topic=topic, body=value) for value in values
-                ],
+                ]
             )
         )
 
@@ -258,11 +257,7 @@ class WorkflowStream(StreamHandle[E]):
         """
         run_stream = self._check("close")
         run_stream.closed = True
-        _now(
-            _close_stream.close_stream(
-                stream=self._model_ref(), result=result, failure=failure
-            )
-        )
+        _now(self._resource().close(result=result, failure=failure))
 
     async def __aenter__(self) -> WorkflowStream[E]:
         """Use the Stream in ``async with``, which closes it at the end."""
@@ -372,9 +367,7 @@ def create_stream_nowait(
             "close_with_run=False can't turn that off"
         )
     _now(
-        _create_stream.create_stream(
-            stream_id=stream.id, retention=retention, auto_close=auto_close
-        )
+        _create_stream(stream_id=stream.id, retention=retention, auto_close=auto_close)
     )
     run_stream.close_with_run = close_with_run
     return stream

@@ -555,7 +555,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             return await super().start_system_nexus_operation(input)
         operation = input.operation_name
         if operation == "CreateStream":
-            result: Any = models.CreateStreamResponse(
+            result: Any = models.CreateStreamResult(
                 stream=_owned_ref(input.input.stream_id)
             )
         elif operation == "AppendRecords":
