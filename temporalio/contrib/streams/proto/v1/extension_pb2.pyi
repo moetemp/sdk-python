@@ -281,6 +281,45 @@ class BufferWorkflowCallsResponse(google.protobuf.message.Message):
 
 global___BufferWorkflowCallsResponse = BufferWorkflowCallsResponse
 
+class WorkflowReadRecordsRequest(google.protobuf.message.Message):
+    """Method `WorkflowReadRecords`, asynchronous. A `ReadRecords` that a Workflow run makes, for
+    example from its read Local Activity. It answers a `ReadRecordsResponse`. On native the server
+    gets the reading run as a link, and Retention never trims a nested Workflow Stream past the
+    lowest offset that the open run read. The other backends read as `ReadRecords` does.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    READ_FIELD_NUMBER: builtins.int
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    @property
+    def read(
+        self,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.ReadRecordsRequest: ...
+    workflow_id: builtins.str
+    """The reading run."""
+    run_id: builtins.str
+    def __init__(
+        self,
+        *,
+        read: temporalio.api.streamservice.v1.stream_service_pb2.ReadRecordsRequest
+        | None = ...,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["read", b"read"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "read", b"read", "run_id", b"run_id", "workflow_id", b"workflow_id"
+        ],
+    ) -> None: ...
+
+global___WorkflowReadRecordsRequest = WorkflowReadRecordsRequest
+
 class FlushRunBufferRequest(google.protobuf.message.Message):
     """Method `FlushRunBuffer`, asynchronous. Lang calls it before it runs a Local Activity, also
     before each retry that Core runs in the same task. The crate writes the run's buffered
