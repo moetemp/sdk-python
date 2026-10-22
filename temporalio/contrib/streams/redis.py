@@ -197,10 +197,19 @@ def read_activity_name(backend: str) -> str:
 def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
     @temporalio.activity.defn(name=read_activity_name(plugin.backend_name))
     async def read_page(request: stream_pb.ReadRecordsRequest) -> Any:
-        request.namespace = temporalio.activity.info().namespace
+        info = temporalio.activity.info()
+        request.namespace = info.namespace
         try:
+            # The reading run goes with the read, so a native server keeps the Records that
+            # the open run may read again on replay.
             page = await plugin._backend.call_async(
-                "ReadRecords", request, stream_pb.ReadRecordsResponse
+                "WorkflowReadRecords",
+                ext_pb.WorkflowReadRecordsRequest(
+                    read=request,
+                    workflow_id=info.workflow_id or "",
+                    run_id=info.workflow_run_id or "",
+                ),
+                stream_pb.ReadRecordsResponse,
             )
         except _errors.StreamError as err:
             # The reason goes in the details, so Workflow code gets the same Stream error.
