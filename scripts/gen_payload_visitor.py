@@ -57,6 +57,20 @@ def discover_system_nexus_roots() -> list[Descriptor]:
     return deduped
 
 
+def stream_service_roots() -> list[Descriptor]:
+    # Native Streams send the Stream service's messages as System Nexus payloads, so their
+    # Record bodies need the codec too.
+    import temporalio.api.streamservice.v1.stream_service_pb2 as stream_pb
+
+    return [
+        message.DESCRIPTOR
+        for name, message in sorted(vars(stream_pb).items())
+        if isinstance(message, type)
+        and issubclass(message, google.protobuf.message.Message)
+        and name.endswith(("Request", "Response"))
+    ]
+
+
 def name_for(desc: Descriptor) -> str:
     # Use fully-qualified name to avoid collisions; replace dots with underscores
     return desc.full_name.replace(".", "_")
@@ -445,7 +459,7 @@ def write_bridge_visitors() -> None:
         WorkflowActivation.DESCRIPTOR,
         WorkflowActivationCompletion.DESCRIPTOR,
         NexusTaskCompletion.DESCRIPTOR,
-    ] + discover_system_nexus_roots()
+    ] + discover_system_nexus_roots() + stream_service_roots()
 
     code = VisitorGenerator().generate(roots)
     out_path.write_text(code)
