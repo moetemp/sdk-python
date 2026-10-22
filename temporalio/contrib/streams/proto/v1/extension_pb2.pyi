@@ -24,6 +24,29 @@ else:
 
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
+class NativeStreamConfig(google.protobuf.message.Message):
+    """The settings of the native Stream extension, on the server's Stream service. The connection
+    comes from the Worker or the client, so it needs no address.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    BACKEND_FIELD_NUMBER: builtins.int
+    backend: builtins.str
+    """The backend name that lang registered this extension under. Empty is `native`. The crate
+    puts it in each StreamRef it builds.
+    """
+    def __init__(
+        self,
+        *,
+        backend: builtins.str = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["backend", b"backend"]
+    ) -> None: ...
+
+global___NativeStreamConfig = NativeStreamConfig
+
 class RedisStreamConfig(google.protobuf.message.Message):
     """The settings of the Redis Stream extension. Lang builds it from the plugin options."""
 

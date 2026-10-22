@@ -200,7 +200,7 @@ pub fn new_worker_extension(
         #[cfg(feature = "streams")]
         temporalio_streams::NATIVE_EXTENSION_NAME => {
             let meter = runtime.core.telemetry().get_temporal_metric_meter();
-            temporalio_streams::StreamExtension::for_backend("native", &config, meter)
+            temporalio_streams::NativeStreamExtension::from_config_bytes(&config, meter)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?
         }
         #[cfg(debug_assertions)]
