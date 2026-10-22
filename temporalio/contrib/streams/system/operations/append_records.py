@@ -14,31 +14,21 @@ from ..models import (
 )
 
 
-def _append_records(
+async def _append_records(
     request: AppendRecordsRequest,
-) -> None:
+) -> temporalio.workflow.NexusOperationHandle[AppendRecordsResponse,]:
     nexus_client = temporalio.workflow.create_nexus_client(
         service="temporal.api.streamservice.v1.StreamService",
         endpoint="__temporal_system",
     )
-    start = nexus_client.start_operation(
+    return await nexus_client.start_operation(
         operation="AppendRecords",
         input=request,
         output_type=AppendRecordsResponse,
     )
-    try:
-        _ = start.send(None)
-    except StopIteration:
-        return
-    start.close()
-    raise RuntimeError(
-        "one-way operation AppendRecords did not complete at once. "
-        "It needs an outbound interceptor that takes the call, such as one that "
-        "buffers it."
-    )
 
 
-def append_records(
+async def append_records(
     *,
     stream: StreamRef | None = None,
     producer: Producer | None = None,
@@ -47,8 +37,9 @@ def append_records(
     previous_completed_task: WorkflowTaskEpoch | None = None,
     failed_tasks: list[int] | None = None,
     withdraw_run: str | None = None,
-) -> None:
-    """In Workflow code, the Brook transport puts this call into a buffer.
+) -> temporalio.workflow.NexusOperationHandle[AppendRecordsResponse,]:
+    """In Workflow code, the Brook transport puts this call into the run's buffer, and the
+    Workflow facade drops the response.
 
     Args:
         producer: Required outside a Workflow. In a Workflow the transport sets it.
@@ -70,4 +61,4 @@ def append_records(
         failed_tasks=failed_tasks or [],
         withdraw_run=withdraw_run,
     )
-    _append_records(request)
+    return await _append_records(request)

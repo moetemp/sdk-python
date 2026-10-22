@@ -15,31 +15,21 @@ from ..models import (
 )
 
 
-def _close_stream(
+async def _close_stream(
     request: CloseStreamRequest,
-) -> None:
+) -> temporalio.workflow.NexusOperationHandle[CloseStreamResponse,]:
     nexus_client = temporalio.workflow.create_nexus_client(
         service="temporal.api.streamservice.v1.StreamService",
         endpoint="__temporal_system",
     )
-    start = nexus_client.start_operation(
+    return await nexus_client.start_operation(
         operation="CloseStream",
         input=request,
         output_type=CloseStreamResponse,
     )
-    try:
-        _ = start.send(None)
-    except StopIteration:
-        return
-    start.close()
-    raise RuntimeError(
-        "one-way operation CloseStream did not complete at once. "
-        "It needs an outbound interceptor that takes the call, such as one that "
-        "buffers it."
-    )
 
 
-def close_stream(
+async def close_stream(
     *,
     stream: StreamRef | None = None,
     producer: Producer | None = None,
@@ -47,7 +37,7 @@ def close_stream(
     failure: BaseException | None = None,
     previous_completed_task: WorkflowTaskEpoch | None = None,
     failed_tasks: list[int] | None = None,
-) -> None:
+) -> temporalio.workflow.NexusOperationHandle[CloseStreamResponse,]:
     """
     Args:
         previous_completed_task: Workflow only. The previous completed Workflow Task of
@@ -63,4 +53,4 @@ def close_stream(
         previous_completed_task=previous_completed_task,
         failed_tasks=failed_tasks or [],
     )
-    _close_stream(request)
+    return await _close_stream(request)

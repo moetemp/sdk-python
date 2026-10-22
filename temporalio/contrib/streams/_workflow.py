@@ -150,9 +150,11 @@ class WorkflowStream(_Writable):
         self._check("write to")
         self._ensure_created()
         self._used = True
-        append_records(
-            stream=self._model_ref(),
-            records=[models.AppendRecord(topic=topic, body=value)],
+        _now(
+            append_records(
+                stream=self._model_ref(),
+                records=[models.AppendRecord(topic=topic, body=value)],
+            )
         )
 
     def close(
@@ -166,7 +168,7 @@ class WorkflowStream(_Writable):
         self._check("close")
         self._ensure_created()
         self._closed = True
-        close_stream(stream=self._model_ref(), result=result, failure=failure)
+        _now(close_stream(stream=self._model_ref(), result=result, failure=failure))
 
     def __enter__(self) -> WorkflowStream:
         """Use the Stream in a ``with`` block, which closes it at the end."""
