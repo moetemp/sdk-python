@@ -12,6 +12,7 @@ from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 
 E = TypeVar("E")
+H = TypeVar("H", bound="StreamHandle[Any]")
 
 
 def _to_json(handle: StreamHandle[Any]) -> dict[str, str]:
@@ -97,6 +98,22 @@ class StreamHandle(Generic[E]):
         self._definition = definition
         if definition is not None:
             definition_of(definition)
+
+    @classmethod
+    def from_handle(cls: type[H], handle: StreamHandle[Any]) -> H:
+        """The same Stream as a handle of this class, such as an ``ActivityStream`` from a
+        ``WorkflowStream``.
+
+        A handle passes as data, so a Workflow uses it to give an Activity's input the type
+        that the Activity declares.
+        """
+        return cls(
+            id=handle.id,
+            workflow_id=handle.workflow_id,
+            first_execution_run_id=handle.first_execution_run_id,
+            backend=handle.backend,
+            definition=handle.definition,
+        )
 
     @property
     def id(self) -> str:

@@ -158,3 +158,16 @@ def test_handle_in_a_pydantic_field():
     payload = converter.to_payload(model)
     decoded = converter.from_payload(payload, CallModelModel)
     assert decoded.stream == OWNED
+
+
+class OtherStream(streams.StreamHandle[E]):
+    pass
+
+
+def test_from_handle_keeps_the_stream():
+    other: OtherStream[Events] = OtherStream.from_handle(OWNED)
+    assert type(other) is OtherStream
+    assert other.definition is Events
+    assert DataConverter.default.payload_converter.to_payload(
+        other
+    ) == DataConverter.default.payload_converter.to_payload(OWNED)
