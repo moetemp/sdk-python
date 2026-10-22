@@ -346,14 +346,13 @@ class WorkflowStream(StreamHandle[E]):
             await self.close(failure=exc)
 
 
-def _own_handle(
-    definition: type[E], name: str | None, backend: str | None
-) -> WorkflowStream[E]:
+def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:
     info = temporalio.workflow.info()
-    stream_name = name or definition_of(definition).name
     return WorkflowStream(
         id=_ids.scoped_stream_id(
-            info.workflow_id, info.first_execution_run_id, stream_name
+            info.workflow_id,
+            info.first_execution_run_id,
+            definition_of(definition).name,
         ),
         workflow_id=info.workflow_id,
         first_execution_run_id=info.first_execution_run_id,
@@ -365,7 +364,6 @@ def _own_handle(
 async def create_stream(
     definition: type[E],
     *,
-    name: str | None = None,
     retention: timedelta | None = None,
     auto_close: timedelta | None = None,
     close_with_run: bool = True,
@@ -377,9 +375,8 @@ async def create_stream(
     handle with no call. The create is one Local Activity, and its error raises here.
 
     Args:
-        definition: The Stream definition class.
-        name: The Stream name. Defaults to the definition's name. Give one Stream per turn,
-            for example, its own name.
+        definition: The Stream definition class. Its name is the Stream name. For one Stream
+            per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
         retention: How long the Records stay after the close. Defaults to the backend's.
         auto_close: Close the Stream with no result when no Record was appended for this
             long, so a Stream that nobody closes does not stay open. Defaults to never.
@@ -398,9 +395,7 @@ async def create_stream(
         ValueError: ``close_with_run=False`` for a Stream that already closes with the run
             chain.
     """
-    stream, task = _create(
-        definition, name, retention, auto_close, close_with_run, backend
-    )
+    stream, task = _create(definition, retention, auto_close, close_with_run, backend)
     await task
     return stream
 
@@ -408,7 +403,6 @@ async def create_stream(
 def create_stream_nowait(
     definition: type[E],
     *,
-    name: str | None = None,
     retention: timedelta | None = None,
     auto_close: timedelta | None = None,
     close_with_run: bool = True,
@@ -420,22 +414,19 @@ def create_stream_nowait(
     is for code that can't await ``put``. It takes the options of :py:func:`create_stream`. A
     backend error fails the Workflow Task.
     """
-    stream, task = _create(
-        definition, name, retention, auto_close, close_with_run, backend
-    )
+    stream, task = _create(definition, retention, auto_close, close_with_run, backend)
     _write_nowait(task)
     return stream
 
 
 def _create(
     definition: type[E],
-    name: str | None,
     retention: timedelta | None,
     auto_close: timedelta | None,
     close_with_run: bool,
     backend: str | None,
 ) -> tuple[WorkflowStream[E], asyncio.Task[int]]:
-    stream = _own_handle(definition, name, _check_backend(backend, "create"))
+    stream = _own_handle(definition, _check_backend(backend, "create"))
     run_stream = stream._check("create", backend_checked=True)
     if run_stream.close_with_run and not close_with_run:
         raise ValueError(
@@ -462,20 +453,19 @@ def _create(
 
 
 def stream_handle(
-    definition: type[E], *, name: str | None = None, backend: str | None = None
+    definition: type[E], *, backend: str | None = None
 ) -> WorkflowStream[E]:
-    """A Stream that this run chain created, by its definition and name. It makes no call.
+    """A Stream that this run chain created, by its definition. It makes no call.
 
     A later run of the chain, such as one after continue-as-new, uses it to write the Stream
     again.
 
     Args:
-        definition: The Stream definition class.
-        name: The Stream name. Defaults to the definition's name.
+        definition: The Stream definition class, renamed as for the create.
         backend: The backend of the Stream. Defaults to the one that the run chain created it
             on, and else to the Worker's.
     """
-    stream = _own_handle(definition, name, backend)
+    stream = _own_handle(definition, backend)
     if backend is None:
         known = _state().streams.get(stream.id)
         stream._backend = (known.backend if known else None) or _backend_name() or None
