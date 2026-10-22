@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import collections.abc
 import dataclasses
 import datetime
 import typing
@@ -20,9 +22,16 @@ from ..models import (
     Producer,
     ReadRecordsRequest,
     ReadRecordsResponse,
+    StreamRecord,
     StreamRef,
     WorkflowTaskEpoch,
 )
+
+# An answer with nothing that comes back in less than half of its wait is
+# followed by a pause, so a service that ignores the wait is not asked again
+# at once. The pause doubles up to the last one.
+_LONG_POLL_FIRST_PAUSE = 0.05
+_LONG_POLL_LAST_PAUSE = 2.0
 
 
 @dataclasses.dataclass
@@ -92,6 +101,62 @@ class Stream:
         )
         handle = await _read_records(request)
         return await handle
+
+    async def iter_read_records(
+        self,
+        from_offset: int | None = None,
+        start: temporalio.api.streamservice.v1.stream_service_pb2.ReadStart.ValueType
+        | None = None,
+        topics: list[str] | None = None,
+        topic_prefixes: list[str] | None = None,
+        max_records: int | None = None,
+        wait: datetime.timedelta | None = None,
+        create_wait: datetime.timedelta | None = None,
+        *,
+        deadline: datetime.timedelta | None = None,
+    ) -> collections.abc.AsyncIterator[StreamRecord]:
+        """Yield each item of ``records``, page after page, as one sequence.
+
+        Each page is one ``ReadRecords`` operation call, which sets ``wait`` to what is
+        left of the deadline. The next page starts at the answer's ``next_offset``.
+        The iterator ends after an answer with ``done`` set, or when the deadline
+        passes. With no deadline, it ends only on ``done``.
+        """
+        request = ReadRecordsRequest(
+            stream=self.stream,
+            from_offset=from_offset,
+            start=start,
+            topics=topics or [],
+            max_records=max_records,
+            wait=wait,
+            create_wait=create_wait,
+            topic_prefixes=topic_prefixes or [],
+        )
+        clock = asyncio.get_running_loop()
+        end = None if deadline is None else clock.time() + deadline.total_seconds()
+        pause = _LONG_POLL_FIRST_PAUSE
+        while True:
+            page_wait = 60.0 if end is None else max(end - clock.time(), 0.001)
+            page_wait = min(page_wait, 60.0)
+            request = dataclasses.replace(
+                request, wait=datetime.timedelta(seconds=page_wait)
+            )
+            asked = clock.time()
+            handle = await _read_records(request)
+            answer = await handle
+            for item in answer.records or []:
+                yield item
+            if answer.done:
+                return
+            if answer.next_offset is not None:
+                request = dataclasses.replace(request, from_offset=answer.next_offset)
+            if end is not None and clock.time() >= end:
+                return
+            if not answer.records and clock.time() - asked < page_wait / 2:
+                await asyncio.sleep(pause)
+                pause = min(pause * 2, _LONG_POLL_LAST_PAUSE)
+            else:
+                pause = _LONG_POLL_FIRST_PAUSE
 
     async def describe(
         self,

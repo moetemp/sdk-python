@@ -86,13 +86,13 @@ temporalio.converter.transfer_type_convertible(
 
 
 @dataclasses.dataclass(slots=True)
-class CreateStreamResult:
+class StreamResult:
     stream: StreamRef | None = None
 
 
-class _CreateStreamResultTransferTypeConverter(
+class _StreamResultTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
-        CreateStreamResult,
+        StreamResult,
         temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse,
     ]
 ):
@@ -105,9 +105,9 @@ class _CreateStreamResultTransferTypeConverter(
     def from_transfer_type(
         self,
         value: temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse,
-        type_hint: type[CreateStreamResult],
-    ) -> CreateStreamResult:
-        return CreateStreamResult(
+        type_hint: type[StreamResult],
+    ) -> StreamResult:
+        return StreamResult(
             stream=_StreamRefTransferTypeConverter().from_transfer_type(
                 value.stream, StreamRef
             )
@@ -118,7 +118,7 @@ class _CreateStreamResultTransferTypeConverter(
     @typing_extensions.override
     def to_transfer_type(
         self,
-        value: CreateStreamResult,
+        value: StreamResult,
     ) -> temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse:
         message = (
             temporalio.api.streamservice.v1.stream_service_pb2.CreateStreamResponse()
@@ -130,9 +130,9 @@ class _CreateStreamResultTransferTypeConverter(
         return message
 
 
-temporalio.converter.transfer_type_convertible(
-    _CreateStreamResultTransferTypeConverter
-)(CreateStreamResult)  # pyright: ignore[reportUnusedCallResult]
+temporalio.converter.transfer_type_convertible(_StreamResultTransferTypeConverter)(
+    StreamResult
+)  # pyright: ignore[reportUnusedCallResult]
 
 
 @dataclasses.dataclass(slots=True)

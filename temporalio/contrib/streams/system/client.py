@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import dataclasses
 import datetime
 import typing
@@ -19,21 +20,22 @@ from .models import (
     CloseStreamRequest,
     CloseStreamResponse,
     CreateStreamRequest,
-    CreateStreamResult,
     DescribeStreamRequest,
     DescribeStreamResponse,
     ReadRecordsRequest,
     ReadRecordsResponse,
+    StreamRecord,
+    StreamResult,
     _AppendRecordsRequestTransferTypeConverter,
     _AppendRecordsResponseTransferTypeConverter,
     _CloseStreamRequestTransferTypeConverter,
     _CloseStreamResponseTransferTypeConverter,
     _CreateStreamRequestTransferTypeConverter,
-    _CreateStreamResultTransferTypeConverter,
     _DescribeStreamRequestTransferTypeConverter,
     _DescribeStreamResponseTransferTypeConverter,
     _ReadRecordsRequestTransferTypeConverter,
     _ReadRecordsResponseTransferTypeConverter,
+    _StreamResultTransferTypeConverter,
 )
 
 
@@ -155,15 +157,15 @@ class StreamServiceClient:
             [answer] = await self._payload_codec.decode([answer])
         return answer
 
-    async def create_stream(self, request: CreateStreamRequest) -> CreateStreamResult:
+    async def create_stream(self, request: CreateStreamRequest) -> StreamResult:
         payload = _proto_payload(
             _CreateStreamRequestTransferTypeConverter().to_transfer_type(request)
         )
         answer = await self._call("CreateStream", payload)
-        converter = _CreateStreamResultTransferTypeConverter()
+        converter = _StreamResultTransferTypeConverter()
         return converter.from_transfer_type(
             _proto_message(answer, converter.transfer_type),
-            CreateStreamResult,
+            StreamResult,
         )
 
     async def append_records(
@@ -254,6 +256,37 @@ class StreamServiceClient:
                 pause = min(pause * 2, _LONG_POLL_LAST_PAUSE)
             else:
                 pause = _LONG_POLL_FIRST_PAUSE
+
+    async def iter_read_records(
+        self,
+        request: ReadRecordsRequest,
+        *,
+        deadline: datetime.timedelta | None = None,
+    ) -> collections.abc.AsyncIterator[StreamRecord]:
+        """Yield each item of ``records``, page after page, as one sequence.
+
+        Each page is one ``read_records_until_records`` call, which sets ``wait`` to
+        what is left of the deadline. The next page starts at the answer's
+        ``next_offset``.
+        The iterator ends after an answer with ``done`` set, or when the deadline
+        passes. With no deadline, it ends only on ``done``.
+        """
+        clock = asyncio.get_running_loop()
+        end = None if deadline is None else clock.time() + deadline.total_seconds()
+        attempt = request
+        while True:
+            left = 60.0 if end is None else end - clock.time()
+            if left <= 0:
+                return
+            answer = await self.read_records_until_records(
+                attempt, deadline=datetime.timedelta(seconds=left)
+            )
+            for item in answer.records or []:
+                yield item
+            if answer.done:
+                return
+            if answer.next_offset is not None:
+                attempt = dataclasses.replace(attempt, from_offset=answer.next_offset)
 
     async def describe_stream(
         self, request: DescribeStreamRequest

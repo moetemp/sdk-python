@@ -9,7 +9,7 @@ import temporalio.workflow
 from .._resources import Stream
 from ..models import (
     CreateStreamRequest,
-    CreateStreamResult,
+    StreamResult,
 )
 
 
@@ -23,7 +23,7 @@ async def _create_stream(
     handle = await nexus_client.start_operation(
         operation="CreateStream",
         input=request,
-        output_type=CreateStreamResult,
+        output_type=StreamResult,
     )
     result = await handle
     if result.stream is None:

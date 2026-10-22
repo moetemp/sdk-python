@@ -33,7 +33,7 @@ output_dir = base_dir / "temporalio" / "contrib" / "streams" / "system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
 # The head of moe/brook/v3/n8-stream-resource. A branch moves, so the pin is the commit.
-NEX_GEN_REVISION = "de0c7edd5e36552391cb4f37c96aeb065270035e"
+NEX_GEN_REVISION = "aff8ff85450ebfbabe17fccb87b00acb7a97aad5"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 

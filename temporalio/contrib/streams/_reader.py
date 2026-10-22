@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import timedelta
 from typing import Any
@@ -18,8 +19,6 @@ Item = Record[Any] | Superseded | Closed
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
-# How long one loop of the generated long poll may run before the reader looks again.
-_POLL_DEADLINE = timedelta(minutes=5)
 
 
 async def read(
@@ -40,46 +39,62 @@ async def read(
     loop = asyncio.get_running_loop()
     create_until = loop.time() + create_wait.total_seconds() if create_wait else None
     offset = from_offset
-    names = list(topics or [])
-    while True:
+
+    def request() -> models.ReadRecordsRequest:
         create_left = (
             timedelta(seconds=max(create_until - loop.time(), 0))
             if create_until is not None
             else None
         )
-        request = models.ReadRecordsRequest(
+        return models.ReadRecordsRequest(
             stream=models.StreamRef(id=stream_id),
             from_offset=offset,
             start=None if offset is not None else ReadStart.READ_START_BEGINNING,
-            topics=names,
+            topics=list(topics or []),
             topic_prefixes=list(topic_prefixes),
             create_wait=min(create_left, _MAX_WAIT) if create_left else None,
         )
+
+    while True:
+        # The generated iterator pages the long poll. A read with no wait reads pages until
+        # one has no Record.
+        records = (
+            service.iter_read_records(request())
+            if wait_new_records
+            else _pages_until_empty(service, request())
+        )
         try:
-            with _convert.raw_bodies(converter.failure_converter):
-                if wait_new_records:
-                    answer = await service.read_records_until_records(
-                        request, deadline=_POLL_DEADLINE
-                    )
-                else:
-                    answer = await service.read_records(request)
+            while True:
+                try:
+                    # Only the service's own conversion keeps Record bodies raw.
+                    with _convert.raw_bodies(converter.failure_converter):
+                        record = await records.__anext__()
+                except StopAsyncIteration:
+                    return
+                item = await _item(converter, record, types)
+                if item is None:
+                    continue
+                yield item
+                if isinstance(item, Closed):
+                    return
         except _errors.StreamNotFoundError:
-            if create_until is not None and loop.time() < create_until:
-                continue
-            raise
+            if create_until is None or loop.time() >= create_until:
+                raise
+        finally:
+            if isinstance(records, AsyncGenerator):
+                await records.aclose()
+
+
+async def _pages_until_empty(
+    service: service_client.StreamServiceClient, request: models.ReadRecordsRequest
+) -> AsyncGenerator[models.StreamRecord, None]:
+    while True:
+        answer = await service.read_records(request)
         for record in answer.records or []:
-            item = await _item(converter, record, types)
-            if item is None:
-                continue
-            yield item
-            if isinstance(item, Closed):
-                return
-        if answer.next_offset is not None:
-            offset = answer.next_offset
-        if answer.records:
-            continue
-        if answer.done or not wait_new_records:
+            yield record
+        if answer.done or not answer.records or answer.next_offset is None:
             return
+        request = dataclasses.replace(request, from_offset=answer.next_offset)
 
 
 async def _item(
