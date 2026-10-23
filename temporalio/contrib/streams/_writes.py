@@ -6,6 +6,8 @@ behind a write to the same Stream share one. History has the answer and not the 
 
 from __future__ import annotations
 
+import dataclasses
+from collections import OrderedDict
 from typing import Any
 
 import temporalio.activity
@@ -102,26 +104,68 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
     return 0
 
 
+# The appends that have not succeeded yet, by Producer and epoch, with their bodies after the
+# codec. A retry of the Local Activity in this process sends the same bytes, so the Store's
+# dedupe of a resend matches them, also when the codec adds random bytes. A rerun after a crash
+# is a new epoch, so it needs none.
+_PENDING: OrderedDict[bytes, list[stream_pb.AppendRecord]] = OrderedDict()
+_PENDING_LIMIT = 1024
+
+
+async def _encode(
+    streams: _activity.ActivityStreams, request: stream_pb.AppendRecordsRequest
+) -> list[stream_pb.AppendRecord]:
+    # The Workflow converted the values, so only the codec runs on them here.
+    bodies = [record.body for record in request.records]
+    codec = streams.converter.payload_codec
+    if codec is not None:
+        bodies = await codec.encode(bodies)
+    return [
+        stream_pb.AppendRecord(topic=record.topic, body=body)
+        for record, body in zip(request.records, bodies)
+    ]
+
+
 @temporalio.activity.defn(name=APPEND_ACTIVITY)
 async def append_records(request: stream_pb.AppendRecordsRequest) -> int:
     """Append a Workflow's Records as one batch, and return the last offset."""
-    streams, service = _context()
+    streams, _ = _context()
+    producer = _producer(streams)
+    key = b"\n".join(
+        [
+            streams.namespace.encode(),
+            request.stream.id.encode(),
+            models._ProducerTransferTypeConverter()
+            .to_transfer_type(producer)
+            .SerializeToString(deterministic=True),
+        ]
+    )
+    records = _PENDING.get(key)
+    if records is None:
+        records = await _encode(streams, request)
+        _PENDING[key] = records
+        while len(_PENDING) > _PENDING_LIMIT:
+            _PENDING.popitem(last=False)
+    # The bodies went through the codec once already.
+    service = streams.backend.service(
+        streams.namespace, dataclasses.replace(streams.converter, payload_codec=None)
+    )
     response = await service.append_records(
         models.AppendRecordsRequest(
             stream=_ref(request.stream),
-            producer=_producer(streams),
+            producer=producer,
             sequence=1,
             records=[
-                # The Workflow converted the values, so only the codec runs on them here.
                 models.AppendRecord(
                     topic=record.topic, body=temporalio.common.RawValue(record.body)
                 )
-                for record in request.records
+                for record in records
             ],
             withdraw_run=request.withdraw_run or None,
             **_history(streams),
         )
     )
+    _PENDING.pop(key, None)
     return response.last_offset or 0
 
 
