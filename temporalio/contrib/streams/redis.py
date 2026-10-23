@@ -967,6 +967,8 @@ def _activity_streams(
         backend_name=interceptor.plugin.backend_name,
         previous_completed_task=previous,
         failed_tasks=failed,
+        # A Local Activity writes for its Workflow run, so the run's checks cover it.
+        task_token=b"" if info.is_local else info.task_token,
     )
 
 

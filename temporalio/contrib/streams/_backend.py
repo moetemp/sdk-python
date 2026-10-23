@@ -89,6 +89,24 @@ def using(options: CallOptions | None) -> Iterator[None]:
         call_options.reset(token)
 
 
+# The task token of the Activity attempt whose write is in progress. The generated models leave
+# it out, so the transport puts it into the request, and the native server checks the Producer
+# against the Activity's current attempt.
+_task_token: contextvars.ContextVar[bytes] = contextvars.ContextVar(
+    "__temporal_stream_task_token", default=b""
+)
+
+
+@contextlib.contextmanager
+def with_task_token(token: bytes) -> Iterator[None]:
+    """Send ``token`` with the writes in the block."""
+    reset = _task_token.set(token)
+    try:
+        yield
+    finally:
+        _task_token.reset(reset)
+
+
 def longest_wait(longest: timedelta) -> timedelta:
     """The longest wait of one call. It is less than ``longest`` to answer before the call's
     rpc_timeout.
@@ -215,6 +233,9 @@ class _ExtensionTransport:
         # The IDL leaves the namespace out, since the server knows it.
         if "namespace" in request.DESCRIPTOR.fields_by_name:
             setattr(request, "namespace", self._namespace)
+        token = _task_token.get()
+        if token and "task_token" in request.DESCRIPTOR.fields_by_name:
+            setattr(request, "task_token", token)
         # The runtime makes no RPC, so it has no use for rpc_metadata. The rpc_timeout is the
         # call's deadline here too.
         options = call_options.get()

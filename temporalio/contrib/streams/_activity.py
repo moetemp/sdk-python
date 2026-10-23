@@ -28,6 +28,9 @@ class ActivityStreams:
     # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.
     previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None
     failed_tasks: tuple[int, ...] = ()
+    # An Activity's task token, which its writes send, so the native server checks the
+    # Producer against the Activity's current attempt. Empty for a Local Activity.
+    task_token: bytes = b""
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
@@ -47,6 +50,7 @@ class ActivityStreams:
                 free=self.backend.free_writer,
                 previous_completed_task=self.previous_completed_task,
                 failed_tasks=self.failed_tasks,
+                task_token=self.task_token,
             )
             self.writers[handle.id] = writer
         return writer
