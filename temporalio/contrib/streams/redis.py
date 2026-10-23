@@ -147,8 +147,8 @@ class RedisStreamPlugin(_ExtensionStreamPlugin):
             runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry, so every process routes a
                 handle it receives.
-            default: Make this the client's default backend when the client has more than
-                one Stream plugin. With none marked, the first one is the default.
+            default: Make this the client's default backend. A client with more than one
+                Stream plugin marks exactly one, else it raises ``StreamConfigError``.
         """
         config = ext_pb.RedisStreamConfig(
             urls=[url] if isinstance(url, str) else list(url),

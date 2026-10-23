@@ -12,6 +12,7 @@ from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
 from tests.contrib.streams.fake_extension import FakeExtension
@@ -230,11 +231,25 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     ]
     stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
     assert stream.backend == "b"
+    # The default is part of Workflow code, so it must not follow the order of the list.
+    for plugins in (
+        [MemoryStreamPlugin(), MemoryStreamPlugin(name="b")],
+        [MemoryStreamPlugin(default=True), MemoryStreamPlugin(name="b", default=True)],
+    ):
+        config["plugins"] = plugins
+        with pytest.raises(streams.StreamConfigError, match="exactly one"):
+            Client(**config)
+    config["plugins"] = [MemoryStreamPlugin()]
+    with pytest.raises(streams.StreamConfigError, match="Worker has"):
+        new_worker(Client(**config), Agent, plugins=[RedisStreamPlugin("redis://-")])
 
 
 async def test_handle_looks_in_each_backend_during_a_move(client: Client):
     config = client.config()
-    config["plugins"] = [MemoryStreamPlugin(name="a"), MemoryStreamPlugin(name="b")]
+    config["plugins"] = [
+        MemoryStreamPlugin(name="a", default=True),
+        MemoryStreamPlugin(name="b"),
+    ]
     stream_client = streams.StreamClient(Client(**config))
     created = await stream_client.create(Events, id="moving", backend="b")
     await created.topic(Events.tokens).publish("on b")

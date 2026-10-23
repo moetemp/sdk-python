@@ -760,7 +760,7 @@ async def test_two_backends_on_one_client(client: Client, redis_url: str):
     # another. Each handle carries its backend, so a call goes to the backend that has it.
     config = client.config()
     config["plugins"] = [
-        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}"),
+        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
         MemoryStreamPlugin(),
     ]
     stream_client = streams.StreamClient(Client(**config))

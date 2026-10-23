@@ -293,7 +293,7 @@ class StreamClient:
             retention: How long the Records stay after the close. Defaults to the backend's.
             auto_close: Close the Stream with no result when no Record was appended for this
                 long, so a Stream that nobody closes does not stay open. Defaults to never.
-            backend: The name of the backend. Defaults to the client's first Stream plugin.
+            backend: The name of the backend. Defaults to the client's default backend.
 
         Raises:
             StreamConfigError: The client has no backend of that name. No call is made.
