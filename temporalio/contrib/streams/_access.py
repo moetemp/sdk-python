@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -29,6 +30,9 @@ class Access:
     namespace: str
     ref: Callable[[], Awaitable[models.StreamRef]]
     writer: Callable[[], StreamWriter]
+    # The run chain that a close names, which the Store checks against the Stream's owner.
+    workflow_id: str | None = None
+    first_execution_run_id: str | None = None
 
     async def publish(self, topic: str, values: Sequence[Any]) -> int:
         """Write the values as Records now, and return the offset of the last one."""
@@ -78,6 +82,18 @@ class Access:
         # Offsets start above zero, so zero means the Stream has no Record.
         return response.last_offset + 1 if response.last_offset else 0
 
+    async def _close_ref(self) -> models.StreamRef:
+        # A handle with only an id names no chain, so a close names the chain that the Access
+        # gives, and the Store refuses it when another chain owns the Stream.
+        ref = await self.ref()
+        if ref.workflow_id or not self.workflow_id:
+            return ref
+        return dataclasses.replace(
+            ref,
+            workflow_id=self.workflow_id,
+            first_execution_run_id=self.first_execution_run_id,
+        )
+
     async def close(self, result: Any | None, failure: BaseException | None) -> None:
         """Write this Producer's Records, then close the Stream."""
         writer = self.writer()
@@ -87,7 +103,7 @@ class Access:
         )
         await self.backend.service(self.namespace, self.converter).close_stream(
             models.CloseStreamRequest(
-                stream=await self.ref(),
+                stream=await self._close_ref(),
                 producer=producer,
                 result=result,
                 failure=failure,

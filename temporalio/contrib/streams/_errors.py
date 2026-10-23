@@ -142,6 +142,11 @@ def from_call_error(err: Exception) -> StreamError:
     )
 
 
+def from_reason(reason: str, message: str) -> StreamError:
+    """The Stream error for a reason token."""
+    return _BY_REASON.get(reason, StreamError)(message, reason=reason)
+
+
 _BY_TYPE: dict[str, type[StreamError]] = {
     "StreamError": StreamError,
     **{cls.__name__: cls for cls in _BY_REASON.values()},
