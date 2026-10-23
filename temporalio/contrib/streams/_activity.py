@@ -25,6 +25,8 @@ class ActivityStreams:
     producer: stream_pb.Producer
     loop: asyncio.AbstractEventLoop
     backend_name: str = ""
+    # The Workflow of the attempt, so a close checks that the Stream is its run chain's.
+    workflow_id: str | None = None
     # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.
     previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None
     failed_tasks: tuple[int, ...] = ()
