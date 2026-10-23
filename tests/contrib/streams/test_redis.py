@@ -164,6 +164,97 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
     assert isinstance(items[-1], streams.Closed)
 
 
+async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Client):
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client,
+        PublishThenFailTask,
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            PublishThenFailTask.run,
+            key,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    stream = workflow_stream(stream_client, handle)
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    # The retried task's batch has its Superseded item and its first Record in one entry.
+    record_offsets = {r.offset for r in records(items)}
+    [shared] = [
+        i
+        for i in items
+        if isinstance(i, streams.Superseded) and i.offset in record_offsets
+    ]
+    reader = stream.subscribe(wait_new_records=False)
+    async for item in reader:
+        if item == shared:
+            break
+    resume_at = reader.next_offset
+    await reader.aclose()
+    assert resume_at == shared.offset
+    resumed = [
+        item
+        async for item in stream.subscribe(
+            from_offset=resume_at, wait_new_records=False
+        )
+    ]
+    assert [r.data for r in records(resumed) if r.offset == shared.offset] == ["after"]
+
+
+@workflow.defn
+class StopsAtASuperseded:
+    @workflow.run
+    async def run(
+        self, stream: stream_workflow.WorkflowStream[Events], offset: int
+    ) -> int | None:
+        items = stream.subscribe(wait_new_records=False)
+        async for item in items:
+            if isinstance(item, streams.Superseded) and item.offset == offset:
+                break
+        return items.next_offset
+
+
+async def test_a_workflow_read_resumes_at_a_superseded_item(stream_client: Client):
+    # A Workflow read is a Subscription too, so a Workflow that stops after a Superseded item
+    # and continues as new keeps the Record that shares its offset.
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client,
+        PublishThenFailTask,
+        StopsAtASuperseded,
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            PublishThenFailTask.run,
+            key,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        stream = workflow_stream(stream_client, handle)
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
+        record_offsets = {r.offset for r in records(items)}
+        [shared] = [
+            i
+            for i in items
+            if isinstance(i, streams.Superseded) and i.offset in record_offsets
+        ]
+        assert (
+            await stream_client.execute_workflow(
+                StopsAtASuperseded.run,
+                args=[
+                    stream_workflow.WorkflowStream.from_handle(stream),
+                    shared.offset,
+                ],
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == shared.offset
+        )
+
+
 @activity.defn
 async def noop() -> None:
     pass
