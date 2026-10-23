@@ -142,6 +142,7 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
             if request.HasField("result")
             else None,
             failure=failure,
+            status=request.status or None,
             **_history(streams),
         )
     )

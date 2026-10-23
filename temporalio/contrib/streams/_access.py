@@ -12,10 +12,9 @@ from temporalio.contrib.streams import _convert, _reader
 from temporalio.contrib.streams._backend import CallOptions, StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle, TopicBase
-from temporalio.contrib.streams._items import End
+from temporalio.contrib.streams._items import End, close_status
 from temporalio.contrib.streams._reader import Item, Position, Subscription
 from temporalio.contrib.streams._writer import StreamWriter
-from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
 T = TypeVar("T")
@@ -84,14 +83,18 @@ class Access:
         """Write this Producer's Records, then close the Stream."""
         writer = self.writer()
         await writer.close()
-        stream = service_client.Stream(
-            self.backend.service(self.namespace, self.converter),
-            models.StreamRef(id=await self.stream_id()),
-        )
         producer = models._ProducerTransferTypeConverter().from_transfer_type(
             writer.producer, models.Producer
         )
-        await stream.close(producer=producer, result=result, failure=failure)
+        await self.backend.service(self.namespace, self.converter).close_stream(
+            models.CloseStreamRequest(
+                stream=models.StreamRef(id=await self.stream_id()),
+                producer=producer,
+                result=result,
+                failure=failure,
+                status=close_status(failure),
+            )
+        )
 
 
 @dataclass

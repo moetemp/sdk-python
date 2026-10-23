@@ -35,6 +35,7 @@ from temporalio.contrib.streams._handle import (
     TopicBase,
     exit_failure,
 )
+from temporalio.contrib.streams._items import close_status
 from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
@@ -376,7 +377,8 @@ class WorkflowStream(StreamHandle[E]):
         """Close the Stream with one Local Activity, after the writes before it.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. Later writes in this run raise :py:class:`StreamClosedError`.
+        ``failure``. A ``CancelledError`` failure closes it as canceled. Later writes in this run
+        raise :py:class:`StreamClosedError`.
 
         Raises:
             StreamNotOwnerError: This run chain didn't create the Stream.
@@ -413,6 +415,9 @@ class WorkflowStream(StreamHandle[E]):
             temporalio.converter.DataConverter.default.failure_converter.to_failure(
                 failure, temporalio.workflow.payload_converter(), request.failure
             )
+        status = close_status(failure)
+        if status is not None:
+            request.status = status
         return _write(self.id, CLOSE_ACTIVITY, request)
 
     async def __aenter__(self) -> WorkflowStream[E]:

@@ -13,6 +13,7 @@ from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
 from temporalio.contrib.streams import _backend, _convert, _errors
 from temporalio.contrib.streams._items import (
     Closed,
+    CloseStatus,
     End,
     Record,
     Superseded,
@@ -213,5 +214,12 @@ async def _item(
         return Superseded(offset=offset, supersession=record.supersession)
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
         result = _convert.decode(converter, record.close_result, None)
-        return Closed(offset=offset, result=result, failure=record.close_failure)
+        failure = record.close_failure
+        # A close Record from before close statuses has none, and its failure tells.
+        status = record.close_status or (
+            CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
+        )
+        return Closed(
+            offset=offset, result=result, failure=failure, status=CloseStatus(status)
+        )
     return None

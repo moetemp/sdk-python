@@ -132,7 +132,11 @@ class ActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``.
+        ``failure``. A ``CancelledError`` failure closes it as canceled.
+
+        Only a Local Activity of the run chain that created the Stream may close it. Any other
+        Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
+        reader.
         """
         await self._access().close(result, failure)
 
@@ -313,7 +317,9 @@ class SyncActivityStream(StreamHandle[E]):
     def close(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        """Write this attempt's Records, then close the Stream."""
+        """Write this attempt's Records, then close the Stream. See
+        :py:meth:`ActivityStream.close`.
+        """
         self._run(self._access().close(result, failure))
 
 

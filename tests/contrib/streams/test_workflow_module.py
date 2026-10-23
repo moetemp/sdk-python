@@ -267,6 +267,7 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
+    assert items[-1].status == streams.CloseStatus.FAILED
 
 
 @workflow.defn

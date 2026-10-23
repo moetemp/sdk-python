@@ -345,7 +345,8 @@ class ClientStream(StreamHandle[E]):
         """Write this handle's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
+        ``failure``. A ``CancelledError`` failure closes it as canceled. ``rpc_metadata`` and
+        ``rpc_timeout`` are as for :py:meth:`get_offset`.
         """
         self._closed = True
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
+from temporalio.api.streamservice.v1 import CloseStatus as _CloseStatus
 from temporalio.api.streamservice.v1 import ProducerKind
 from temporalio.contrib.streams.system import models
+from temporalio.exceptions import CancelledError
 
 T = TypeVar("T")
 
@@ -75,6 +78,36 @@ class Superseded:
         return withdraws(self.supersession, record.producer)
 
 
+class CloseStatus(enum.IntEnum):
+    """How a Stream closed.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    COMPLETED = int(_CloseStatus.CLOSE_STATUS_COMPLETED)
+    """Closed with no failure."""
+
+    FAILED = int(_CloseStatus.CLOSE_STATUS_FAILED)
+    """Closed with a failure."""
+
+    CANCELED = int(_CloseStatus.CLOSE_STATUS_CANCELED)
+    """Closed with a ``CancelledError`` failure, such as by a cancelled owner run."""
+
+    TERMINATED = int(_CloseStatus.CLOSE_STATUS_TERMINATED)
+    """The server closed it, since the owner run was terminated."""
+
+    TIMED_OUT = int(_CloseStatus.CLOSE_STATUS_TIMED_OUT)
+    """The server closed it, since the owner run timed out."""
+
+
+def close_status(failure: BaseException | None) -> _CloseStatus.ValueType | None:
+    """The status a caller's close asks for. None lets the backend pick completed or failed."""
+    if isinstance(failure, (asyncio.CancelledError, CancelledError)):
+        return _CloseStatus.CLOSE_STATUS_CANCELED
+    return None
+
+
 @dataclass(frozen=True)
 class Closed:
     """The last item of a closed Stream.
@@ -91,6 +124,11 @@ class Closed:
 
     failure: BaseException | None
     """Failure that the close carries. None if it has none."""
+
+    status: CloseStatus = CloseStatus.COMPLETED
+    """How the Stream closed, so a reader tells a cancelled or terminated owner from a failed
+    one with no check of the failure's type.
+    """
 
 
 # Fields compare in the order of the proto. An empty or negative field compares as zero, as in

@@ -192,14 +192,20 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
             raise ValueError("turn failed")
     async with await client.create(Events, id=f"block-{uuid.uuid4()}") as early:
         await early.close(result="early")
-    for stream, result, failure in (
-        (done, None, None),
-        (failed, None, "turn failed"),
-        (early, "early", None),
+    cancelled = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    with pytest.raises(asyncio.CancelledError):
+        async with client.create(Events, id=cancelled.id):
+            raise asyncio.CancelledError()
+    for stream, result, failure, status in (
+        (done, None, None, streams.CloseStatus.COMPLETED),
+        (failed, None, "turn failed", streams.CloseStatus.FAILED),
+        (early, "early", None, streams.CloseStatus.COMPLETED),
+        (cancelled, None, "Cancelled", streams.CloseStatus.CANCELED),
     ):
         items = [item async for item in stream.subscribe()]
         closes = [item for item in items if isinstance(item, streams.Closed)]
         assert len(closes) == 1 and closes[0].result == result
+        assert closes[0].status == status
         assert (failure is None) == (closes[0].failure is None)
         assert failure is None or failure in str(closes[0].failure)
 
