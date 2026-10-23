@@ -347,8 +347,8 @@ async def leaves_its_stream_open() -> str:
 
 
 async def test_a_standalone_activity_owns_its_stream(native_client: Client):
-    # The server closes the Stream when the Activity ends, with its status and result, so a
-    # Stream that the Activity leaves open doesn't stay.
+    # The Activity may close its own Stream. The server closes it when the Activity ends, with
+    # its status and result, so a Stream that the Activity leaves open doesn't stay.
     task_queue = f"tq-{uuid.uuid4()}"
     async with new_worker(
         native_client,
@@ -377,6 +377,8 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
         "a",
         "b",
     ]
+    # The Activity's own close got past the early owner check, so its close has no result.
+    assert isinstance(items[-1], streams.Closed) and items[-1].result is None
     left = [
         item
         async for item in stream_client.activity_stream(left_open, Events).subscribe()
