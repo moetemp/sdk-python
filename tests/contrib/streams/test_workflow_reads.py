@@ -266,7 +266,7 @@ async def test_a_read_ends_when_the_owner_ended_with_no_close(
     stream_client: Client, monkeypatch: pytest.MonkeyPatch
 ):
     # A terminated run writes no close, so with no end of its own the reader would wait
-    # until the Stream expires.
+    # until the Stream expires. The native server closes the Stream with the run instead.
     monkeypatch.setattr(_workflow_reader, "_OWNER_END_GRACE", timedelta())
     async with new_worker(stream_client, WritesAndWaits, ReadsUntilItEnds) as worker:
         writer = await stream_client.start_workflow(
@@ -283,7 +283,10 @@ async def test_a_read_ends_when_the_owner_ended_with_no_close(
             if isinstance(item, streams.Record):
                 break
         await writer.terminate()
-        assert await reader.result() == [["a"], True, True]
+        native = any(
+            isinstance(p, NativeStreamPlugin) for p in plugins_of(stream_client)
+        )
+        assert await reader.result() == [["a"], not native, True]
 
 
 def test_a_server_failure_maps_by_its_reason():
