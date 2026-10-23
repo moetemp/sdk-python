@@ -326,7 +326,6 @@ class Replayer:
                     nonsticky_to_sticky_poll_ratio=1,
                     no_remote_activities=True,
                     disable_payload_error_limit=True,
-                    extension=None,
                     task_types=temporalio.bridge.worker.WorkerTaskTypes(
                         enable_workflows=True,
                         enable_local_activities=False,

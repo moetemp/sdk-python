@@ -64,7 +64,8 @@ async def connect_before(target_host: str, redis_url: str) -> Client:
 
 async def connect_during(target_host: str, redis_url: str) -> Client:
     return await Client.connect(
-        target_host, plugins=[RedisStreamPlugin(redis_url), NativeStreamPlugin()]
+        target_host,
+        plugins=[RedisStreamPlugin(redis_url, default=True), NativeStreamPlugin()],
     )
 
 

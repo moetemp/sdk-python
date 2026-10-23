@@ -101,7 +101,7 @@ async def test_redis_and_native_on_a_native_server(
 ):
     config = native_client.config()
     config["plugins"] = [
-        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}"),
+        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
         NativeStreamPlugin(),
     ]
     two = Client(**config)

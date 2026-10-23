@@ -66,7 +66,8 @@ class TwoStreams:
 
 async def connect(target_host: str, redis_url: str) -> Client:
     return await Client.connect(
-        target_host, plugins=[RedisStreamPlugin(redis_url), NativeStreamPlugin()]
+        target_host,
+        plugins=[RedisStreamPlugin(redis_url, default=True), NativeStreamPlugin()],
     )
 
 
