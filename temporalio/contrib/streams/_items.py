@@ -186,6 +186,10 @@ def withdraws(
         return False
     if supersession.withdraw_run and producer.run_id == supersession.withdraw_run:
         return True
+    if supersession.producer_kind == ProducerKind.PRODUCER_KIND_CLIENT:
+        # A client's newer epoch only fences. Its earlier Records are real messages, not a
+        # failed attempt's.
+        return False
     if supersession.epoch is None or producer.epoch is None:
         return False
     if supersession.producer_kind != ProducerKind.PRODUCER_KIND_WORKFLOW:

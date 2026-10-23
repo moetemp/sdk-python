@@ -464,8 +464,9 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
         for e in history.events
         if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
     ]
-    # The create, the first write, the four that waited, and the close with the run.
-    assert len(markers) == 4
+    # The create, the first write and the four that waited. The worker writes the close with
+    # the run after the run, so it has no marker.
+    assert len(markers) == 3
     # Replay answers from the markers and writes nothing.
     plugins = [
         p

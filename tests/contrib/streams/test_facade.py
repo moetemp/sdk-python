@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -7,6 +8,7 @@ import pytest
 
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
+from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
 from temporalio.common import RawValue
 from temporalio.contrib import streams
@@ -16,7 +18,6 @@ from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
-from temporalio.worker import ExtensionError
 from tests.contrib.streams.fake_extension import FakeExtension
 
 
@@ -39,15 +40,15 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     return Client(**config), extension
 
 
-def test_extension_errors_map_to_stream_errors():
+def test_runtime_errors_map_to_stream_errors():
     details = ext_pb.StreamErrorDetails(reason="stream_fenced").SerializeToString()
-    err = _errors.from_extension_error(
-        ExtensionError("fenced", RPCStatusCode.FAILED_PRECONDITION, details)
+    err = _errors.from_call_error(
+        StreamCallError(int(RPCStatusCode.FAILED_PRECONDITION), "fenced", details)
     )
     assert isinstance(err, streams.StreamFencedError)
     assert err.reason == "stream_fenced"
-    other = _errors.from_extension_error(
-        ExtensionError("odd", RPCStatusCode.INTERNAL, b"")
+    other = _errors.from_call_error(
+        StreamCallError(int(RPCStatusCode.INTERNAL), "odd", b"")
     )
     assert type(other) is streams.StreamError
 
@@ -136,14 +137,14 @@ def test_stream_errors_fail_the_workflow_not_the_task():
     assert err.non_retryable and err.type == "StreamClosedError"
     assert not streams.StreamStorageError("down").non_retryable
     details = ext_pb.StreamErrorDetails(reason="stream_closed").SerializeToString()
-    mapped = _errors.from_extension_error(
-        ExtensionError("closed", RPCStatusCode.FAILED_PRECONDITION, details)
+    mapped = _errors.from_call_error(
+        StreamCallError(int(RPCStatusCode.FAILED_PRECONDITION), "closed", details)
     )
     assert mapped.code == RPCStatusCode.FAILED_PRECONDITION
 
 
-async def test_each_client_handle_is_its_own_producer(client: Client):
-    client, _ = fake_client(client)
+async def test_handles_of_one_client_share_a_producer_and_free_it(client: Client):
+    client, extension = fake_client(client)
     stream_client = streams.StreamClient(client)
     stream = await stream_client.create(Events, id="two-writers")
     other = stream_client.get_handle(Events, id="two-writers")
@@ -155,20 +156,25 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
         for item in items
         if isinstance(item, streams.Record) and item.producer
     }
-    assert len(producers) == 2
+    assert len(producers) == 1
+    # A handle that goes with no close frees its writer, so a server that makes a handle per
+    # request keeps no writer for it.
+    del other
+    gc.collect()
+    assert len(extension.freed) == 1
 
 
 async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
     client, extension = fake_client(client)
     stream = await streams.StreamClient(client).create(Events, id="slow")
-    call_async = extension.call_async
+    call = extension.call
 
     async def slow_describe(method: str, input: bytes) -> bytes:
         if method == "DescribeStream":
             await asyncio.sleep(1)
-        return await call_async(method, input)
+        return await call(method, input)
 
-    setattr(extension, "call_async", slow_describe)
+    setattr(extension, "call", slow_describe)
     with pytest.raises(RPCError) as err:
         await stream.get_offset(rpc_timeout=timedelta(milliseconds=100))
     assert err.value.status == RPCStatusCode.DEADLINE_EXCEEDED
@@ -190,9 +196,9 @@ async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
 
 def test_unsupported_capability_maps_to_its_error():
     details = ext_pb.StreamErrorDetails(reason="stream_unsupported").SerializeToString()
-    err = _errors.from_extension_error(
-        ExtensionError(
-            "The Store lacks replica_wait", RPCStatusCode.UNIMPLEMENTED, details
+    err = _errors.from_call_error(
+        StreamCallError(
+            int(RPCStatusCode.UNIMPLEMENTED), "The Store lacks replica_wait", details
         )
     )
     assert isinstance(err, streams.StreamUnsupportedError)

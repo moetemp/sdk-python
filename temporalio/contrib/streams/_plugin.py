@@ -28,10 +28,14 @@ class StreamPlugin(SimplePlugin):
         *,
         backend_name: str,
         default: bool,
-        stream_backend: StreamBackend,
+        stream_backend: StreamBackend | None = None,
         **options: Any,
     ) -> None:
-        """Create the plugin. ``options`` go to :py:class:`temporalio.plugin.SimplePlugin`."""
+        """Create the plugin. ``options`` go to :py:class:`temporalio.plugin.SimplePlugin`.
+
+        A plugin with no ``stream_backend`` gives each client its own in
+        :py:meth:`backend_for`.
+        """
         self._backend_name = backend_name
         self._default = default
         self._stream_backend = stream_backend
@@ -47,9 +51,13 @@ class StreamPlugin(SimplePlugin):
         """Whether a client with more than one Stream plugin uses this one by default."""
         return self._default
 
-    @property
-    def stream_backend(self) -> StreamBackend:
-        """The backend that carries the calls."""
+    def backend_for(
+        self,
+        client: temporalio.client.Client,  # pyright: ignore[reportUnusedParameter]
+    ) -> StreamBackend:
+        """The backend that carries the calls of ``client`` and of its Workers."""
+        if self._stream_backend is None:
+            raise NotImplementedError(f"{type(self).__name__} gives no backend")
         return self._stream_backend
 
     def configure_client(
@@ -106,7 +114,7 @@ def client_backend(
             one where ``only`` needs one.
     """
     backends = [
-        (plugin.backend_name, plugin.stream_backend, plugin.default)
+        (plugin.backend_name, plugin.backend_for(client), plugin.default)
         for plugin in client.config()["plugins"]
         if isinstance(plugin, StreamPlugin)
     ]

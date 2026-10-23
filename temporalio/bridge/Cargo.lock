@@ -2938,7 +2938,7 @@ dependencies = [
 [[package]]
 name = "temporalio-streams"
 version = "0.1.0"
-source = "git+https://github.com/moetemp/sdk-streams?rev=aef21756b2582451d64ea1ddf569d040b8e410db#aef21756b2582451d64ea1ddf569d040b8e410db"
+source = "git+https://github.com/moetemp/sdk-streams?rev=879563a2f47212c10052423dbdfb15f44bcbeef8#879563a2f47212c10052423dbdfb15f44bcbeef8"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2949,7 +2949,6 @@ dependencies = [
  "redis",
  "sha2",
  "temporalio-common",
- "temporalio-sdk-core",
  "thiserror",
  "tokio",
  "tokio-util",

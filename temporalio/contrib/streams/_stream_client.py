@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import uuid
+import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import timedelta
 from types import TracebackType
@@ -32,15 +33,30 @@ from temporalio.contrib.streams.system import models
 E = TypeVar("E")
 T = TypeVar("T")
 
-# A client's Producer id has a key per process and handle, so two handles never share a fence
-# or a sequence. The crate takes two parts after `client:`, so the handle number goes into the
-# key.
+# The handles of one client and Stream write as one Producer, so the crate shares one writer
+# between them. Each client gets its own key, since two clients may have two runtime objects,
+# and two writers of one Producer would send clashing sequences.
 _PROCESS_KEY = str(uuid.uuid4())
-_WRITERS = itertools.count(1)
+_CLIENTS = itertools.count(1)
+_CLIENT_KEYS: weakref.WeakKeyDictionary[temporalio.client.Client, str] = (
+    weakref.WeakKeyDictionary()
+)
 
 
-def _client_producer(client: temporalio.client.Client) -> stream_pb.Producer:
-    key = f"{_PROCESS_KEY}-{next(_WRITERS)}"
+def _client_producer(
+    client: temporalio.client.Client, named: tuple[str, int] | None
+) -> stream_pb.Producer:
+    if named is not None:
+        name, epoch = named
+        return stream_pb.Producer(
+            kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT,
+            id=_ids.named_client_producer_id(name),
+            epoch=stream_pb.ProducerEpoch(attempt=epoch),
+        )
+    key = _CLIENT_KEYS.get(client)
+    if key is None:
+        key = f"{_PROCESS_KEY}-{next(_CLIENTS)}"
+        _CLIENT_KEYS[client] = key
     return stream_pb.Producer(
         kind=stream_pb.ProducerKind.PRODUCER_KIND_CLIENT,
         id=_ids.client_producer_id(client.identity, key),
@@ -101,8 +117,9 @@ class ClientTopic(_AsyncTopic[T]):
 class ClientStream(StreamHandle[E]):
     """A Stream that a client writes, reads and closes. Get one from :py:class:`StreamClient`.
 
-    Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. Each
-    handle writes as its own Producer. Use it in ``async with`` to close it at the end of the
+    Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. The
+    handles of one client and Stream write as one Producer, and :py:meth:`producer` gives a
+    handle that writes as a named one. Use it in ``async with`` to close it at the end of the
     block.
 
     .. warning::
@@ -136,6 +153,8 @@ class ClientStream(StreamHandle[E]):
         # The backends to look in, in order, until one has the Stream.
         self._probe: list[tuple[str, StreamBackend]] = []
         self._closed = False
+        # The name and the epoch of a named Producer.
+        self._named: tuple[str, int] | None = None
 
     def _bind(
         self,
@@ -223,7 +242,8 @@ class ClientStream(StreamHandle[E]):
                 self._writer = StreamWriter(
                     writers=backend.writers(client.namespace, client.data_converter),
                     stream_id=self._stream_id,
-                    producer=_client_producer(client),
+                    producer=_client_producer(client, self._named),
+                    free=backend.free_writer,
                 )
             return self._writer
 
@@ -234,6 +254,36 @@ class ClientStream(StreamHandle[E]):
             stream_id=self._stream_id,
             writer=writer,
         )
+
+    def producer(self, name: str, epoch: int) -> ClientStream[E]:
+        """This Stream as a handle that writes as the Producer ``name`` at ``epoch``.
+
+        It is for a writer that must fence its earlier self, such as a server that restarts.
+        Keep ``epoch`` in durable storage, and raise it at each start. After a write at a
+        higher epoch, a write at a lower one raises :py:class:`StreamFencedError`. The Records
+        of the earlier epochs stay, since they are real messages. Run one live writer for a
+        name.
+
+        Args:
+            name: The Producer name, the same across restarts.
+            epoch: The writer's epoch, 1 or more.
+        """
+        if epoch < 1:
+            raise ValueError("A Producer's epoch is 1 or more")
+        handle = ClientStream(
+            id=self._id,
+            workflow_id=self._workflow_id,
+            first_execution_run_id=self._first_execution_run_id,
+            backend=self._backend,
+            definition=self._definition,
+        )
+        handle._stream_name = self._stream_name
+        handle._named = (name, epoch)
+        if self._client is not None and self._stream_backend is not None:
+            handle._bind(
+                self._client, self._stream_backend, self._find_first_run, self._probe
+            )
+        return handle
 
     @overload
     def topic(self, topic: TopicDefinition[T]) -> ClientTopic[T]: ...
