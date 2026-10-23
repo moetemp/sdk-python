@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -142,8 +143,8 @@ def test_stream_errors_fail_the_workflow_not_the_task():
     assert mapped.code == RPCStatusCode.FAILED_PRECONDITION
 
 
-async def test_each_client_handle_is_its_own_producer(client: Client):
-    client, _ = fake_client(client)
+async def test_handles_of_one_client_share_a_producer_and_free_it(client: Client):
+    client, extension = fake_client(client)
     stream_client = streams.StreamClient(client)
     stream = await stream_client.create(Events, id="two-writers")
     other = stream_client.get_handle(Events, id="two-writers")
@@ -155,7 +156,12 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
         for item in items
         if isinstance(item, streams.Record) and item.producer
     }
-    assert len(producers) == 2
+    assert len(producers) == 1
+    # A handle that goes with no close frees its writer, so a server that makes a handle per
+    # request keeps no writer for it.
+    del other
+    gc.collect()
+    assert len(extension.freed) == 1
 
 
 async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):

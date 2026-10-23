@@ -299,6 +299,25 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
     ]
 
 
+async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"named-{uuid.uuid4()}"
+    )
+    # A server that restarts writes as one name with a higher epoch, so the zombie it
+    # replaces can't write after it.
+    before = stream.producer("ingest", epoch=1)
+    await before.topic(Events.tokens).publish("before restart")
+    after = stream.producer("ingest", epoch=2)
+    await after.topic(Events.tokens).publish("after restart")
+    with pytest.raises(streams.StreamFencedError):
+        await before.topic(Events.tokens).publish("zombie")
+    # The earlier epoch's Records are real messages, so nothing withdraws them.
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert [type(item) for item in items] == [streams.Record, streams.Record]
+    with pytest.raises(ValueError):
+        stream.producer("ingest", epoch=0)
+
+
 async def test_auto_close_of_a_client_stream(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)

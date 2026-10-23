@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -22,16 +23,20 @@ class StreamWriter:
         writers: writer_client.StreamWriterClient,
         stream_id: Callable[[], Awaitable[str]],
         producer: stream_pb.Producer,
+        free: Callable[[int], None] | None = None,
         previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None,
         failed_tasks: Sequence[int] = (),
     ) -> None:
         """Create a writer. It opens on its first write.
 
-        ``writers`` runs the values through the user's converter and codec.
+        ``writers`` runs the values through the user's converter and codec. ``free`` releases
+        the crate's writer when Python drops this one with no close.
         """
         self._writers = writers
         self._resolve_id = stream_id
         self._producer = producer
+        self._free = free
+        self._release: weakref.finalize[Any, StreamWriter] | None = None
         self._previous_completed_task = previous_completed_task
         self._failed_tasks = list(failed_tasks)
         self._writer: writer_client.Writer | None = None
@@ -77,6 +82,12 @@ class StreamWriter:
                         failed_tasks=self._failed_tasks,
                     )
                 )
+                if self._free is not None:
+                    # The crate keeps a writer for each open that no one closed or freed, so a
+                    # writer that Python drops frees its open.
+                    self._release = weakref.finalize(
+                        self, self._free, self._writer.writer_id
+                    )
             return self._writer
 
     async def write(self, records: Sequence[tuple[str, Any]]) -> int:
@@ -100,5 +111,7 @@ class StreamWriter:
         if self._closed:
             return
         self._closed = True
+        if self._release is not None:
+            self._release.detach()
         if self._writer is not None:
             await self._writer.close()
