@@ -50,8 +50,9 @@ CREATE_ACTIVITY = "__temporal_streams_create"
 APPEND_ACTIVITY = "__temporal_streams_append"
 CLOSE_ACTIVITY = "__temporal_streams_close"
 _WRITE_TIMEOUT = timedelta(seconds=30)
-# The most that one merged append takes. The Store's limit is 4 MiB per batch, and the codec
-# runs on the values after the merge, so a merge stays well below it.
+# The most that one merged append takes before the codec. The Local Activity checks the size
+# after the codec, and sends each call as its own batch when the codec grew the merge past the
+# Store's 4 MiB batch limit. Half of it leaves room for most codecs.
 _MERGE_RECORDS = 1000
 _MERGE_BYTES = 2 * 1024 * 1024
 
@@ -233,12 +234,29 @@ def _write(
         if state.waiting.get(stream_id) is write:
             del state.waiting[stream_id]
         try:
-            last = await temporalio.workflow.execute_local_activity(
-                activity,
-                write.request,
-                result_type=int,
-                start_to_close_timeout=_WRITE_TIMEOUT,
-            )
+            if isinstance(write.request, stream_pb.AppendRecordsRequest):
+                # The Local Activity answers each merged call with its last offset or its error.
+                counts = [
+                    count - before
+                    for (before, _), (count, _) in zip(
+                        [(0, None), *write.calls], write.calls
+                    )
+                ]
+                answers = await temporalio.workflow.execute_local_activity(
+                    activity,
+                    args=[write.request, counts],
+                    result_type=list[Any],
+                    start_to_close_timeout=_WRITE_TIMEOUT,
+                )
+            else:
+                answers = [
+                    await temporalio.workflow.execute_local_activity(
+                        activity,
+                        write.request,
+                        result_type=int,
+                        start_to_close_timeout=_WRITE_TIMEOUT,
+                    )
+                ]
         except (
             temporalio.exceptions.ActivityError,
             temporalio.exceptions.ApplicationError,
@@ -251,12 +269,15 @@ def _write(
             for _, call in write.calls:
                 call.cancel()
             raise
-        # A Store gives one batch consecutive offsets, so each call's last Record is the
-        # batch's last one less the Records after it.
-        total = _records(write.request)
-        for count, call in write.calls:
-            if not call.done():
-                call.set_result(last - (total - count) if total else last)
+        for (_, call), answer in zip(write.calls, answers):
+            if call.done():
+                continue
+            if isinstance(answer, dict):
+                call.set_exception(
+                    _errors.from_reason(str(answer["reason"]), str(answer["message"]))
+                )
+            else:
+                call.set_result(int(answer))
 
     task = loop.create_task(run())
     state.tails[stream_id] = task
@@ -659,6 +680,7 @@ def _create(
         )
     run_id = temporalio.workflow.info().run_id
     # The owner makes the Stream the run chain's, and names a retry run's withdrawal.
+    # The ref names the run chain, which the Store keeps for its owner check of a close.
     request = stream_pb.CreateStreamRequest(
         stream_id=stream.id,
         owner=stream_pb.Producer(
@@ -666,6 +688,7 @@ def _create(
             id=_ids.workflow_producer_id(run_id),
             run_id=run_id,
         ),
+        ref=stream._ref(),
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)
