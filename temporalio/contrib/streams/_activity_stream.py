@@ -88,8 +88,10 @@ def _access(handle: StreamHandle[Any]) -> Access:
         ref=ref,
         writer=lambda: streams.writer(handle),
         # A handle with only an id names no chain, so the close names this Activity's own, and
-        # the Store refuses it when another chain owns the Stream.
-        workflow_id=handle.workflow_id or streams.workflow_id,
+        # the Store refuses it when another chain owns the Stream. A Store that nests a
+        # Workflow's Stream finds none by such a handle, and the chain's id alone is no ref.
+        workflow_id=handle.workflow_id
+        or (None if streams.nests_workflow_streams else streams.workflow_id),
         first_execution_run_id=handle.first_execution_run_id,
     )
 

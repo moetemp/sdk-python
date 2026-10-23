@@ -27,6 +27,9 @@ class StreamPlugin(SimplePlugin):
     _activity_streams = False
     # The most bytes of one append that the Store takes, as it counts them.
     _max_batch_bytes = 4 * 1024 * 1024
+    # Whether the Store finds a Workflow's Stream only by its owner fields, so a ref with a
+    # Workflow id and no first run id names nothing.
+    _nests_workflow_streams = False
 
     def __init__(
         self,
