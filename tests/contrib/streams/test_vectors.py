@@ -69,6 +69,8 @@ def test_producer_ids_match_the_crate():
         _ids.client_producer_id(client["identity"], client["process_key"])
         == client["id"]
     )
+    named = producers["named_client"]
+    assert _ids.named_client_producer_id(named["name"]) == named["id"]
 
 
 def _time(value: list[int] | None) -> models.Timestamp | None:

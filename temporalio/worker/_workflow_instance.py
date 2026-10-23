@@ -239,15 +239,6 @@ class WorkflowInstance(ABC):
         """Return the workflow info for this instance."""
         raise NotImplementedError
 
-    def take_plugin_items(self) -> list[Any]:
-        """Return and clear the values that Workflow code gave to
-        :py:func:`temporalio.workflow.send_to_plugins` in the last Activation.
-
-        Not an abstractmethod because it is not mandatory to implement. A runner that does not
-        implement it gives plugins no values.
-        """
-        return []
-
     def get_thread_id(self) -> int | None:
         """Return the thread identifier that this workflow is running on.
 
@@ -420,7 +411,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # The current details (as opposed to static details on workflow start), returned in the
         # metadata query
         self._current_details = ""
-        self._plugin_items: list[Any] = []
 
         self._last_completion_result = det.last_completion_result
         self._last_failure = det.last_failure
@@ -470,7 +460,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         self._current_completion.successful.SetInParent()
 
         self._current_activation_error: Exception | None = None
-        self._plugin_items = []
         self._deployment_version_for_current_task = (
             act.deployment_version_for_current_task
         )
@@ -2026,15 +2015,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     def workflow_set_current_details(self, details: str):
         self._assert_not_read_only("set current details")
         self._current_details = details
-
-    def workflow_send_to_plugins(self, value: Any, during_replay: bool) -> None:
-        self._assert_not_read_only("send to plugins")
-        if during_replay or not self._is_replaying:
-            self._plugin_items.append(value)
-
-    def take_plugin_items(self) -> list[Any]:
-        items, self._plugin_items = self._plugin_items, []
-        return items
 
     def workflow_is_failure_exception(self, err: BaseException) -> bool:
         # An exception causes the workflow to fail (rather than the task) if it

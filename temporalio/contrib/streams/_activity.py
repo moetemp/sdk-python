@@ -23,6 +23,11 @@ class ActivityStreams:
     producer: stream_pb.Producer
     loop: asyncio.AbstractEventLoop
     backend_name: str = ""
+    # The Workflow of the attempt, so a close checks that the Stream is its run chain's.
+    workflow_id: str | None = None
+    # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.
+    previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None
+    failed_tasks: tuple[int, ...] = ()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
@@ -36,11 +41,12 @@ class ActivityStreams:
                 return stream_id
 
             writer = StreamWriter(
-                backend=self.backend,
-                converter=self.converter,
-                namespace=self.namespace,
+                writers=self.backend.writers(self.namespace, self.converter),
                 stream_id=known_id,
                 producer=self.producer,
+                free=self.backend.free_writer,
+                previous_completed_task=self.previous_completed_task,
+                failed_tasks=self.failed_tasks,
             )
             self.writers[stream_id] = writer
         return writer
@@ -62,6 +68,19 @@ class ActivityStreams:
             raise errors[0]
 
 
-current: contextvars.ContextVar[ActivityStreams | None] = contextvars.ContextVar(
+@dataclass
+class AttemptStreams:
+    """The Stream state of one Activity attempt, one entry for each backend of the Worker."""
+
+    # The backend that a handle with no backend name uses.
+    default: str
+    backends: dict[str, ActivityStreams] = field(default_factory=dict)
+
+    def get(self, backend: str | None) -> ActivityStreams | None:
+        """The attempt's state for a backend name. None or empty is the default."""
+        return self.backends.get(backend or self.default)
+
+
+current: contextvars.ContextVar[AttemptStreams | None] = contextvars.ContextVar(
     "__temporal_activity_streams", default=None
 )

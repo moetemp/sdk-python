@@ -1,4 +1,6 @@
 import asyncio
+import dataclasses
+import os
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.common.v1 import Payload
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -15,7 +19,11 @@ from temporalio.client import (
 )
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams._defn import definition_of
+from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
+from temporalio.worker import Replayer
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -34,7 +42,9 @@ class Events:
 async def read(
     client: Client, handle: WorkflowHandle[Any, Any], name: str = "events"
 ) -> list[object]:
-    stream = streams.StreamClient(client).workflow_stream(handle, Events, name=name)
+    stream = streams.StreamClient(client).workflow_stream(
+        handle, streams.with_name(Events, name)
+    )
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
@@ -71,8 +81,8 @@ class Turns:
     async def run(self, fail_at: int) -> None:
         for n in range(2):
             try:
-                async with await stream_workflow.create_stream(
-                    Events, name=f"turn-{n}", close_with_run=False
+                async with stream_workflow.create_stream(
+                    streams.with_name(Events, f"turn-{n}"), close_with_run=False
                 ) as turn:
                     await turn.topic(Events.tokens).publish(f"token-{n}")
                     if n == fail_at:
@@ -109,6 +119,41 @@ class Continuing:
         assert stream == stream_workflow.stream_handle(Events)
         await stream.topic(Events.tokens).publish("run 2")
         return "done"
+
+
+@workflow.defn
+class RenamedAcrossRuns:
+    @workflow.run
+    async def run(self, first: bool) -> list[str]:
+        renamed = streams.with_name(Events, "turn-1")
+        if first:
+            turn = await stream_workflow.create_stream(renamed)
+            await turn.topic(Events.tokens).publish("run 1")
+            workflow.continue_as_new(False)
+        turn = stream_workflow.stream_handle(renamed)
+        await turn.topic(Events.tokens).publish("run 2")
+        return [stream_workflow.stream_handle(Events).id, turn.id]
+
+
+async def test_renamed_definition_is_another_stream(stream_client: Client):
+    async with new_worker(stream_client, RenamedAcrossRuns) as worker:
+        handle = await stream_client.start_workflow(
+            RenamedAcrossRuns.run,
+            True,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        plain_id, turn_id = await handle.result()
+        turn = await read(stream_client, handle, "turn-1")
+    assert plain_id.endswith(":events") and turn_id.endswith(":turn-1")
+    assert data(turn) == ["run 1", "run 2"]
+
+
+def test_with_name_leaves_the_definition_unchanged():
+    renamed = streams.with_name(Events, "turn-1")
+    assert definition_of(Events).name == "events"
+    assert definition_of(renamed).name == "turn-1"
+    assert definition_of(renamed).topics == definition_of(Events).topics
 
 
 async def test_continue_as_new_passes_the_stream(stream_client: Client):
@@ -176,6 +221,37 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
 
 
 @workflow.defn
+class ClosesAReceivedStream:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
+        await stream.topic(Events.tokens).publish("from workflow")
+        try:
+            await stream.close(result="ended by a writer")
+        except streams.StreamNotOwnerError as err:
+            return err.reason
+        return "closed"
+
+
+async def test_workflow_closes_only_its_own_streams(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"owned-{uuid.uuid4()}"
+    )
+    async with new_worker(stream_client, ClosesAReceivedStream) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                ClosesAReceivedStream.run,
+                stream_workflow.WorkflowStream.from_handle(stream),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_owner"
+        )
+    # The writer can't end the Stream for every reader, so it stays open.
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert data(items) == ["from workflow"]
+
+
+@workflow.defn
 class Failing:
     @workflow.run
     async def run(self) -> None:
@@ -195,6 +271,7 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
+    assert items[-1].status == streams.CloseStatus.FAILED
 
 
 @workflow.defn
@@ -286,15 +363,16 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
 class SyncHandlers:
     @workflow.init
     def __init__(self, prompt: str) -> None:
-        self._stream = stream_workflow.stream_handle(Events)
+        # The create goes first, so the signal's writes find the Stream.
+        self._stream = stream_workflow.create_stream_nowait(
+            Events, close_with_run=False
+        )
         self._prompt = prompt
         self._done = False
 
     @workflow.run
     async def run(self, prompt: str) -> None:
-        # The init made the handle before the create, since a handle makes no call.
         assert prompt == self._prompt
-        await stream_workflow.create_stream(Events, close_with_run=False)
         await workflow.wait_condition(lambda: self._done)
 
     @workflow.signal
@@ -351,3 +429,168 @@ async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
         items = await read(stream_client, handle)
     assert data(items) == ["hi", "HI"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+
+
+@workflow.defn
+class Gathers:
+    @workflow.run
+    async def run(self) -> list[int]:
+        tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        tokens.publish_nowait("0")
+        # The first write starts, so the next ones wait behind it.
+        await asyncio.sleep(0)
+        return list(
+            await asyncio.gather(*(tokens.publish(str(n)) for n in range(1, 5)))
+        )
+
+
+async def test_concurrent_publishes_keep_their_order(stream_client: Client):
+    async with new_worker(stream_client, Gathers) as worker:
+        handle = await stream_client.start_workflow(
+            Gathers.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        offsets = await handle.result()
+        items = await read(stream_client, handle)
+    assert data(items) == ["0", "1", "2", "3", "4"]
+    # The four writes that waited went as one Local Activity, and each call got the offset of
+    # its own Record.
+    assert (
+        offsets
+        == [item.offset for item in items if isinstance(item, streams.Record)][1:]
+    )
+    history = await handle.fetch_history()
+    markers = [
+        e
+        for e in history.events
+        if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+    ]
+    # The create, the first write and the four that waited. The worker writes the close with
+    # the run after the run, so it has no marker.
+    assert len(markers) == 3
+    # Replay answers from the markers and writes nothing.
+    plugins = [
+        p
+        for p in stream_client.config()["plugins"]
+        if isinstance(p, streams.StreamPlugin)
+    ]
+    await Replayer(workflows=[Gathers], plugins=plugins).replay_workflow(history)
+    assert data(await read(stream_client, handle)) == ["0", "1", "2", "3", "4"]
+
+
+class _RandomCodec(PayloadCodec):
+    # Adds random bytes to each payload, as the random IV of an encryption codec does.
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={"encoding": b"binary/random"},
+                data=os.urandom(8) + p.SerializeToString(),
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            _inner(p.data[8:]) if _encoded(p, b"binary/random") else p for p in payloads
+        ]
+
+
+class _GrowingCodec(PayloadCodec):
+    # Triples each payload, so a merge under the Workflow's cap passes the Store's batch limit
+    # after the codec.
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={
+                    "encoding": b"binary/grown",
+                    "size": str(len(p.SerializeToString())).encode(),
+                },
+                data=p.SerializeToString() * 3,
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            _inner(p.data[: int(p.metadata["size"])])
+            if _encoded(p, b"binary/grown")
+            else p
+            for p in payloads
+        ]
+
+
+def _encoded(payload: Payload, encoding: bytes) -> bool:
+    return payload.metadata.get("encoding") == encoding
+
+
+def _inner(data: bytes) -> Payload:
+    inner = Payload()
+    inner.ParseFromString(data)
+    return inner
+
+
+def with_codec(client: Client, codec: PayloadCodec) -> Client:
+    config = client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, payload_codec=codec
+    )
+    return Client(**config)
+
+
+async def test_retried_write_goes_in_once(
+    stream_client: Client, monkeypatch: pytest.MonkeyPatch
+):
+    original = _ExtensionStreamBackend.call_async
+    sent: list[list[bytes]] = []
+
+    async def loses_the_first_answer(
+        self: Any, method: str, request: Any, response: Any
+    ) -> Any:
+        answer = await original(self, method, request, response)
+        if method == "AppendRecords":
+            sent.append([record.body.SerializeToString() for record in request.records])
+            if len(sent) == 1:
+                raise RuntimeError("the answer is lost")
+        return answer
+
+    monkeypatch.setattr(_ExtensionStreamBackend, "call_async", loses_the_first_answer)
+    client = with_codec(stream_client, _RandomCodec())
+    async with new_worker(client, Gathers) as worker:
+        handle = await client.start_workflow(
+            Gathers.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+        items = await read(client, handle)
+    assert data(items) == ["0", "1", "2", "3", "4"]
+    # The retry sends the bytes of the first attempt, so the Store's dedupe takes it as the
+    # same batch, though the codec adds random bytes.
+    assert sent[0] == sent[1]
+
+
+@workflow.defn
+class PublishesLargeValues:
+    @workflow.run
+    async def run(self, size: int) -> list[int]:
+        tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        return list(
+            await asyncio.gather(
+                tokens.publish(*["a" * size] * 3), tokens.publish(*["b" * size] * 3)
+            )
+        )
+
+
+async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Client):
+    # The two publishes merge under the Workflow's cap, and the codec makes the merge larger
+    # than one batch may be, so each publish goes as its own batch.
+    client = with_codec(stream_client, _GrowingCodec())
+    async with new_worker(client, PublishesLargeValues) as worker:
+        handle = await client.start_workflow(
+            PublishesLargeValues.run,
+            300_000,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        offsets = await handle.result()
+        items = await read(client, handle)
+    written = [item for item in items if isinstance(item, streams.Record)]
+    assert [len(r.data) for r in written] == [300_000] * 6
+    assert offsets == [written[2].offset, written[5].offset]

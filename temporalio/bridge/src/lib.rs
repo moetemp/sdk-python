@@ -4,9 +4,9 @@ use pyo3::types::PyTuple;
 mod client;
 mod client_rpc_generated;
 mod envconfig;
-mod extension;
 mod metric;
 mod runtime;
+mod streams;
 mod testing;
 mod worker;
 
@@ -70,12 +70,12 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::LocalActivitySlotInfo>()?;
     m.add_function(wrap_pyfunction!(new_worker, m)?)?;
     m.add_function(wrap_pyfunction!(new_replay_worker, m)?)?;
-    m.add(
-        "ExtensionCallError",
-        py.get_type::<extension::ExtensionCallError>(),
-    )?;
-    m.add_class::<extension::WorkerExtensionRef>()?;
-    m.add_function(wrap_pyfunction!(new_worker_extension, m)?)?;
+    m.add("StreamCallError", py.get_type::<streams::StreamCallError>())?;
+    #[cfg(feature = "streams")]
+    {
+        m.add_class::<streams::StreamRuntimeRef>()?;
+        m.add_function(wrap_pyfunction!(new_stream_runtime, m)?)?;
+    }
 
     // envconfig
     let envconfig_module = PyModule::new(py, "envconfig")?;
@@ -138,13 +138,14 @@ fn new_worker(
     worker::new_worker(runtime_ref, client, config)
 }
 
+#[cfg(feature = "streams")]
 #[pyfunction]
-fn new_worker_extension(
+fn new_stream_runtime(
     runtime_ref: &runtime::RuntimeRef,
-    name: &str,
+    memory: bool,
     config: Vec<u8>,
-) -> PyResult<extension::WorkerExtensionRef> {
-    extension::new_worker_extension(runtime_ref, name, config)
+) -> PyResult<streams::StreamRuntimeRef> {
+    streams::new_stream_runtime(runtime_ref, memory, config)
 }
 
 #[pyfunction]

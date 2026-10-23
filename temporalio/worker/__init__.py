@@ -2,7 +2,6 @@
 
 from ..common import WorkerDeploymentVersion
 from ._activity import SharedHeartbeatSender, SharedStateManager
-from ._extension import ExtensionError, WorkerExtension
 from ._interceptor import (
     ActivityInboundInterceptor,
     ActivityOutboundInterceptor,
@@ -26,7 +25,7 @@ from ._interceptor import (
     WorkflowInterceptorClassInput,
     WorkflowOutboundInterceptor,
 )
-from ._plugin import Plugin, WorkflowActivationCompleteInput
+from ._plugin import Plugin, WorkflowEvictedInput
 from ._replayer import (
     Replayer,
     ReplayerConfig,
@@ -80,8 +79,6 @@ __all__ = [
     "PollerBehaviorSimpleMaximum",
     "PollerBehaviorAutoscaling",
     "PatchActivationInput",
-    "WorkerExtension",
-    "ExtensionError",
     # Interceptor base classes
     "Interceptor",
     "ActivityInboundInterceptor",
@@ -90,7 +87,7 @@ __all__ = [
     "WorkflowOutboundInterceptor",
     "NexusOperationInboundInterceptor",
     "Plugin",
-    "WorkflowActivationCompleteInput",
+    "WorkflowEvictedInput",
     # Interceptor input
     "ContinueAsNewInput",
     "ExecuteActivityInput",

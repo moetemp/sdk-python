@@ -227,9 +227,7 @@ class StreamServiceClient:
     async def append_records(
         self, request: AppendRecordsRequest
     ) -> AppendRecordsResponse:
-        """In Workflow code, Brook buffers this call in the run, and the facade drops the
-        answer.
-        """
+        """Append one batch. Workflow code makes the call from a Local Activity."""
         with self._converters():
             message = _AppendRecordsRequestTransferTypeConverter().to_transfer_type(
                 request
@@ -258,7 +256,9 @@ class StreamServiceClient:
             return converter.from_transfer_type(message, CloseStreamResponse)
 
     async def read_records(self, request: ReadRecordsRequest) -> ReadRecordsResponse:
-        """Not for Workflow code in Brook. A long poll. NOT_FOUND for an uncreated Stream."""
+        """A long poll. NOT_FOUND for an uncreated Stream. Workflow code reads from a Local
+        Activity.
+        """
         with self._converters():
             message = _ReadRecordsRequestTransferTypeConverter().to_transfer_type(
                 request

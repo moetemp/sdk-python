@@ -12,6 +12,7 @@ from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
 from tests.contrib.streams.fake_extension import FakeExtension
@@ -77,7 +78,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     handle = client.get_workflow_handle("agent-1")
     calls = []
 
-    async def describe() -> object:
+    async def describe(**_: Any) -> object:
         calls.append(1)
 
         class Info:
@@ -94,7 +95,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     setattr(handle, "describe", describe)
     stream_client = streams.StreamClient(client)
     await stream_client.create(Events, id="agent-1:first:n")
-    stream = stream_client.workflow_stream(handle, Events, name="n")
+    stream = stream_client.workflow_stream(handle, streams.with_name(Events, "n"))
     with pytest.raises(RuntimeError, match="not known yet"):
         stream.id
     assert await stream.get_offset() == 0
@@ -179,6 +180,144 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
     ]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "HI THERE"
     assert stream.workflow_id == handle.id
+    with pytest.raises(streams.StreamNotOwnerError):
+        await stream.close()
+
+
+async def test_async_with_closes_a_client_stream(stream_client: Client):
+    client = streams.StreamClient(stream_client)
+    async with client.create(Events, id=f"block-{uuid.uuid4()}") as done:
+        await done.topic(Events.tokens).publish("a")
+    failed = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    with pytest.raises(ValueError):
+        async with client.create(Events, id=failed.id):
+            raise ValueError("turn failed")
+    async with await client.create(Events, id=f"block-{uuid.uuid4()}") as early:
+        await early.close(result="early")
+    cancelled = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    with pytest.raises(asyncio.CancelledError):
+        async with client.create(Events, id=cancelled.id):
+            raise asyncio.CancelledError()
+    for stream, result, failure, status in (
+        (done, None, None, streams.CloseStatus.COMPLETED),
+        (failed, None, "turn failed", streams.CloseStatus.FAILED),
+        (early, "early", None, streams.CloseStatus.COMPLETED),
+        (cancelled, None, "Cancelled", streams.CloseStatus.CANCELED),
+    ):
+        items = [item async for item in stream.subscribe()]
+        closes = [item for item in items if isinstance(item, streams.Closed)]
+        assert len(closes) == 1 and closes[0].result == result
+        assert closes[0].status == status
+        assert (failure is None) == (closes[0].failure is None)
+        assert failure is None or failure in str(closes[0].failure)
+
+
+async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"resume-{uuid.uuid4()}"
+    )
+    await stream.topic(Events.tokens).publish("a")
+    turn = await stream.topic(Events.turns).publish(Turn("model"))
+    tokens = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+    assert tokens.next_offset == 0
+    assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
+        "a"
+    ]
+    # The page ends past the Record that the Topic filter left out.
+    assert tokens.next_offset == turn + 1
+    new = stream.subscribe(from_offset=streams.END, wait_new_records=False)
+    assert new.next_offset is None
+    assert [item async for item in new] == []
+    assert new.next_offset == turn + 1
+    await stream.topic(Events.tokens).publish("b")
+    resumed = stream.subscribe(from_offset=tokens.next_offset, wait_new_records=False)
+    assert [
+        item.data async for item in resumed if isinstance(item, streams.Record)
+    ] == ["b"]
+
+
+async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"last-{uuid.uuid4()}"
+    )
+    tokens = stream.topic(Events.tokens)
+    await tokens.publish("a", "b", "c")
+    await stream.topic(Events.turns).publish(Turn("model"))
+    # A chat view shows the last few Records first, then follows.
+    tail = tokens.subscribe(last=2)
+    assert tail.next_offset is None
+    shown = [await anext(tail), await anext(tail)]
+    await tokens.publish("d")
+    shown.append(await anext(tail))
+    await tail.aclose()
+    assert [item.data for item in shown if isinstance(item, streams.Record)] == [
+        "b",
+        "c",
+        "d",
+    ]
+    newest = stream.subscribe(last=1, wait_new_records=False)
+    assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
+        "d"
+    ]
+    with pytest.raises(ValueError, match="no from_offset"):
+        stream.subscribe(last=2, from_offset=0)
+
+
+async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"typed-{uuid.uuid4()}"
+    )
+    await stream.topic("extra", type=Turn).publish(Turn("extra"))
+    await stream.topic(Events.tokens).publish("a")
+
+    async def read(**options: Any) -> list[object]:
+        items = stream.subscribe(wait_new_records=False, **options)
+        return [item.data async for item in items if isinstance(item, streams.Record)]
+
+    assert await read() == [{"kind": "extra", "text": ""}, "a"]
+    assert await read(type=Turn) == [Turn("extra"), "a"]
+
+
+async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"buffered-{uuid.uuid4()}"
+    )
+    async with streams.BufferedPublisher(stream) as publisher:
+        publisher.publish(Events.turns, Turn("user"))
+        publisher.publish(Events.tokens, "a", "b")
+        publisher.publish("turns", Turn("model"))
+        with pytest.raises(streams.StreamError, match="no Topic"):
+            publisher.publish("turn", Turn("typo"))
+    written = [
+        (item.topic, item.data)
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+    assert written == [
+        ("turns", Turn("user")),
+        ("tokens", "a"),
+        ("tokens", "b"),
+        ("turns", Turn("model")),
+    ]
+
+
+async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"named-{uuid.uuid4()}"
+    )
+    # A server that restarts writes as one name with a higher epoch, so the zombie it
+    # replaces can't write after it.
+    before = stream.producer("ingest", epoch=1)
+    await before.topic(Events.tokens).publish("before restart")
+    after = stream.producer("ingest", epoch=2)
+    await after.topic(Events.tokens).publish("after restart")
+    with pytest.raises(streams.StreamFencedError):
+        await before.topic(Events.tokens).publish("zombie")
+    # The earlier epoch's Records are real messages, so nothing withdraws them.
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert [type(item) for item in items] == [streams.Record, streams.Record]
+    with pytest.raises(ValueError):
+        stream.producer("ingest", epoch=0)
 
 
 async def test_auto_close_of_a_client_stream(stream_client: Client):
@@ -200,12 +339,12 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     handle = client.get_workflow_handle("agent-2")
     first = stream_client.workflow_stream(handle, Events)
     same = stream_client.workflow_stream(handle, Events)
-    other = stream_client.workflow_stream(handle, Events, name="other")
+    other = stream_client.workflow_stream(handle, streams.with_name(Events, "other"))
     key = hash(first)
     assert first == same and first != other
     describes = []
 
-    async def describe() -> Any:
+    async def describe(**_: Any) -> Any:
         describes.append(1)
         await asyncio.sleep(0.05)
         info = SimpleNamespace(first_run_id="run-2")
@@ -230,11 +369,25 @@ async def test_default_plugin_is_the_default_backend(client: Client):
     ]
     stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
     assert stream.backend == "b"
+    # The default is part of Workflow code, so it must not follow the order of the list.
+    for plugins in (
+        [MemoryStreamPlugin(), MemoryStreamPlugin(name="b")],
+        [MemoryStreamPlugin(default=True), MemoryStreamPlugin(name="b", default=True)],
+    ):
+        config["plugins"] = plugins
+        with pytest.raises(streams.StreamConfigError, match="exactly one"):
+            Client(**config)
+    config["plugins"] = [MemoryStreamPlugin()]
+    with pytest.raises(streams.StreamConfigError, match="Worker has"):
+        new_worker(Client(**config), Agent, plugins=[RedisStreamPlugin("redis://-")])
 
 
 async def test_handle_looks_in_each_backend_during_a_move(client: Client):
     config = client.config()
-    config["plugins"] = [MemoryStreamPlugin(name="a"), MemoryStreamPlugin(name="b")]
+    config["plugins"] = [
+        MemoryStreamPlugin(name="a", default=True),
+        MemoryStreamPlugin(name="b"),
+    ]
     stream_client = streams.StreamClient(Client(**config))
     created = await stream_client.create(Events, id="moving", backend="b")
     await created.topic(Events.tokens).publish("on b")

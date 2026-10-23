@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, overload
+from dataclasses import dataclass, replace
+from typing import Any, Generic, TypeVar, cast, overload
 
 T = TypeVar("T")
 ClassT = TypeVar("ClassT", bound=type)
@@ -82,7 +82,7 @@ class StreamDefinition:
     """
 
     name: str
-    """Default name of a Stream of this definition."""
+    """Name of a Stream of this definition."""
 
     topics: Mapping[str, TopicDefinition[Any]]
     """The Topics by name."""
@@ -105,7 +105,8 @@ def defn(
 
     Args:
         cls: The class.
-        name: The default name of a Stream of this definition. Defaults to the class name.
+        name: The name of a Stream of this definition. Defaults to the class name. Use
+            :py:func:`with_name` for another Stream of the same Topics.
 
     .. warning::
         This API is experimental.
@@ -136,6 +137,34 @@ def defn(
     if cls is not None:
         return decorate(cls)
     return decorate
+
+
+def with_name(definition: ClassT, name: str) -> ClassT:
+    """The definition with the same Topics and another Stream name, such as one per turn.
+
+    It is a subclass of ``definition``, which stays unchanged. Its Topics are the same
+    attributes, so ``Events.tokens`` is a Topic of ``with_name(Events, "turn-3")`` too.
+
+    Args:
+        definition: The definition class.
+        name: The Stream name.
+
+    .. warning::
+        This API is experimental.
+    """
+    renamed = replace(definition_of(definition), name=name)
+    return cast(
+        ClassT,
+        type(
+            definition.__name__,
+            (definition,),
+            {
+                _DEFINITION_ATTR: renamed,
+                "__module__": definition.__module__,
+                "__qualname__": definition.__qualname__,
+            },
+        ),
+    )
 
 
 def definition_of(cls: type) -> StreamDefinition:

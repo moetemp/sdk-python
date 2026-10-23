@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import temporalio.converter
-import temporalio.workflow
 from temporalio.client import WorkflowHistory
 
 if TYPE_CHECKING:
@@ -21,8 +19,8 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class WorkflowActivationCompleteInput:
-    """Input for :py:meth:`Plugin.on_workflow_activation_complete`.
+class WorkflowEvictedInput:
+    """Input for :py:meth:`Plugin.on_workflow_evicted`.
 
     .. warning::
         This API is experimental.
@@ -31,19 +29,9 @@ class WorkflowActivationCompleteInput:
     run_id: str
     """Run ID of the Workflow."""
 
-    info: temporalio.workflow.Info
-    """Info of the Workflow."""
-
-    is_replaying: bool
-    """True if the Workflow replayed History in this Activation."""
-
-    items: Sequence[Any]
-    """Values that Workflow code gave to :py:func:`temporalio.workflow.send_to_plugins` in this
-    Activation, in order. Values given during replay are not here, unless they were given with
-    ``during_replay=True``."""
-
-    data_converter: temporalio.converter.DataConverter
-    """Data converter of the Worker, with the Workflow's serialization context."""
+    execution_ending: bool
+    """Whether the server accepted the run's last completion, so the run ended. False for any
+    other eviction, such as a full cache, a failed Workflow Task or a Worker shutdown."""
 
 
 class Plugin(abc.ABC):
@@ -93,22 +81,23 @@ class Plugin(abc.ABC):
             next: Callable to continue the worker execution.
         """
 
-    async def on_workflow_activation_complete(
+    def on_workflow_evicted(
         self,
-        input: WorkflowActivationCompleteInput,  # pyright: ignore[reportUnusedParameter]
+        input: WorkflowEvictedInput,  # pyright: ignore[reportUnusedParameter]
     ) -> None:
-        """Hook called at the end of each successful Workflow Activation on a Worker.
+        """Hook called after the Worker evicts a Workflow run from its cache.
 
-        The Worker calls it outside the sandbox, after it encodes the Activation's completion and
-        before it sends the completion to Core. So the hook can run the payload codec and call
-        native code. An exception fails the Workflow Task. The :py:class:`Replayer` never calls
-        it. The default does nothing.
+        The Worker calls it outside the sandbox, on its event loop, after Core reports the
+        eviction. So a plugin can act on a run that ended only once the server accepted its
+        completion. The hook must not block. A plugin starts its async work here and waits for
+        it in :py:meth:`run_worker`. The Worker logs an exception and goes on. The
+        :py:class:`Replayer` never calls it. The default does nothing.
 
         .. warning::
             This API is experimental.
 
         Args:
-            input: The Activation's values and context.
+            input: The run and why it was evicted.
         """
         pass
 

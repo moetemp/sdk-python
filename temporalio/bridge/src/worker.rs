@@ -26,7 +26,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use crate::client;
-use crate::extension::WorkerExtensionRef;
 use crate::runtime;
 
 pyo3::create_exception!(temporal_sdk_bridge, PollShutdownError, PyException);
@@ -66,16 +65,6 @@ pub struct WorkerConfig {
     plugins: Vec<String>,
     storage_drivers: HashSet<String>,
     disable_payload_error_limit: bool,
-    #[pyo3(from_py_with = extract_extension)]
-    extension: Option<WorkerExtensionRef>,
-}
-
-/// Python wraps the extension, so the config has the wrapper.
-fn extract_extension(obj: &Bound<'_, PyAny>) -> PyResult<Option<WorkerExtensionRef>> {
-    if obj.is_none() {
-        return Ok(None);
-    }
-    obj.getattr("_ref")?.extract().map(Some).map_err(Into::into)
 }
 
 #[derive(FromPyObject)]
@@ -791,7 +780,6 @@ fn convert_worker_config(
                 .collect::<HashSet<_>>(),
         )
         .disable_payload_error_limit(conf.disable_payload_error_limit)
-        .maybe_extension(conf.extension.map(|ext| ext.extension))
         .build()
         .map_err(|err| PyValueError::new_err(format!("Invalid worker config: {err}")))
 }
