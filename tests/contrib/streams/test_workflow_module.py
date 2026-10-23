@@ -462,6 +462,30 @@ class _RandomCodec(PayloadCodec):
         ]
 
 
+class _GrowingCodec(PayloadCodec):
+    # Triples each payload, so a merge under the Workflow's cap passes the Store's batch limit
+    # after the codec.
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={
+                    "encoding": b"binary/grown",
+                    "size": str(len(p.SerializeToString())).encode(),
+                },
+                data=p.SerializeToString() * 3,
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            _inner(p, p.data[: int(p.metadata["size"])])
+            if _encoded(p, b"binary/grown")
+            else p
+            for p in payloads
+        ]
+
+
 def _encoded(payload: Payload, encoding: bytes) -> bool:
     return payload.metadata.get("encoding") == encoding
 
@@ -508,3 +532,33 @@ async def test_retried_write_goes_in_once(
     # The retry sends the bytes of the first attempt, so the Store's dedupe takes it as the
     # same batch, though the codec adds random bytes.
     assert sent[0] == sent[1]
+
+
+@workflow.defn
+class PublishesLargeValues:
+    @workflow.run
+    async def run(self, size: int) -> list[int]:
+        tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        return list(
+            await asyncio.gather(
+                tokens.publish(*["a" * size] * 3), tokens.publish(*["b" * size] * 3)
+            )
+        )
+
+
+async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Client):
+    # The two publishes merge under the Workflow's cap, and the codec makes the merge larger
+    # than one batch may be, so each publish goes as its own batch.
+    client = with_codec(stream_client, _GrowingCodec())
+    async with new_worker(client, PublishesLargeValues) as worker:
+        handle = await client.start_workflow(
+            PublishesLargeValues.run,
+            300_000,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        offsets = await handle.result()
+        items = await read(client, handle)
+    written = [item for item in items if isinstance(item, streams.Record)]
+    assert [len(r.data) for r in written] == [300_000] * 6
+    assert offsets == [written[2].offset, written[5].offset]
