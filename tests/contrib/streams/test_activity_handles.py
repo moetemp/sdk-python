@@ -265,41 +265,47 @@ async def wrong_backend(stream: streams.ActivityStream[Events]) -> str:
 
 
 @activity.defn
-async def close_it(stream: streams.ActivityStream[Events]) -> None:
+async def close_it(stream: streams.ActivityStream[Events]) -> str:
     await stream.topic(Events.tokens).publish("last")
-    await stream.close(result="closed by activity")
+    try:
+        await stream.close(result="closed by activity")
+    except streams.StreamNotOwnerError as err:
+        return err.reason
+    return "closed"
 
 
 @workflow.defn
 class Closing:
     @workflow.run
-    async def run(self) -> str:
+    async def run(self) -> list[str]:
         stream = await stream_workflow.create_stream(Events, close_with_run=False)
-        reason = await workflow.execute_activity(
+        backend = await workflow.execute_activity(
             wrong_backend,
             streams.ActivityStream(id=stream.id, backend="elsewhere"),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        await workflow.execute_activity(
+        owner = await workflow.execute_activity(
             close_it,
             streams.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        return reason
+        await stream.close(result="closed by workflow")
+        return [backend, owner]
 
 
-async def test_activity_closes_and_checks_the_backend(stream_client: Client):
+async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
     async with new_worker(
         stream_client, Closing, activities=[wrong_backend, close_it]
     ) as worker:
         handle = await stream_client.start_workflow(
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        assert await handle.result() == "config"
+        # An Activity writes to the Workflow's Stream but can't end it for every reader.
+        assert await handle.result() == ["config", "stream_not_owner"]
         items = await read(stream_client, handle)
     assert [r.data for r in records(items)] == ["last"]
     assert isinstance(items[-1], streams.Closed)
-    assert items[-1].result == "closed by activity"
+    assert items[-1].result == "closed by workflow"
 
 
 @dataclass

@@ -688,6 +688,9 @@ class CloseStreamRequest:
     producer: Producer | None = None
     result: typing.Any | None = None
     failure: BaseException | None = None
+    status: (
+        temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType | None
+    ) = None
     previous_completed_task: WorkflowTaskEpoch | None = None
     failed_tasks: list[int] | None = dataclasses.field(default_factory=list)
 
@@ -726,6 +729,11 @@ class _CloseStreamRequestTransferTypeConverter(
             failure=_support.failure_from_proto(value.failure)
             if value.HasField("failure")
             else None,
+            status=temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType(
+                value.status
+            )
+            if value.status != 0
+            else None,
             previous_completed_task=_WorkflowTaskEpochTransferTypeConverter().from_transfer_type(
                 value.previous_completed_task, WorkflowTaskEpoch
             )
@@ -754,6 +762,10 @@ class _CloseStreamRequestTransferTypeConverter(
             message.result.CopyFrom(_support.payload_to_proto(value.result))
         if value.failure is not None:
             message.failure.CopyFrom(_support.failure_to_proto(value.failure))
+        if value.status is not None:
+            message.status = temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType(
+                value.status
+            )
         if value.previous_completed_task is not None:
             message.previous_completed_task.CopyFrom(
                 _WorkflowTaskEpochTransferTypeConverter().to_transfer_type(
@@ -824,6 +836,8 @@ class ReadRecordsRequest:
     max_records: int | None = None
     wait: datetime.timedelta | None = None
     create_wait: datetime.timedelta | None = None
+    last: int | None = None
+    max_bytes: int | None = None
 
 
 class _ReadRecordsRequestTransferTypeConverter(
@@ -864,6 +878,8 @@ class _ReadRecordsRequestTransferTypeConverter(
             create_wait=_support.duration_from_proto(value.create_wait)
             if value.HasField("create_wait")
             else None,
+            last=value.last if value.last != 0 else None,
+            max_bytes=value.max_bytes if value.max_bytes != 0 else None,
         )
 
     @typing_extensions.override
@@ -896,6 +912,10 @@ class _ReadRecordsRequestTransferTypeConverter(
             message.wait.CopyFrom(_support.duration_to_proto(value.wait))
         if value.create_wait is not None:
             message.create_wait.CopyFrom(_support.duration_to_proto(value.create_wait))
+        if value.last is not None:
+            message.last = value.last
+        if value.max_bytes is not None:
+            message.max_bytes = value.max_bytes
         return message
 
 
@@ -980,6 +1000,9 @@ class StreamRecord:
     supersession: Supersession | None = None
     close_result: typing.Any | None = None
     close_failure: BaseException | None = None
+    close_status: (
+        temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType | None
+    ) = None
 
 
 class _StreamRecordTransferTypeConverter(
@@ -1024,6 +1047,11 @@ class _StreamRecordTransferTypeConverter(
             close_failure=_support.failure_from_proto(value.close_failure)
             if value.HasField("close_failure")
             else None,
+            close_status=temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType(
+                value.close_status
+            )
+            if value.close_status != 0
+            else None,
         )
 
     @typing_extensions.override
@@ -1057,6 +1085,10 @@ class _StreamRecordTransferTypeConverter(
         if value.close_failure is not None:
             message.close_failure.CopyFrom(
                 _support.failure_to_proto(value.close_failure)
+            )
+        if value.close_status is not None:
+            message.close_status = temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType(
+                value.close_status
             )
         return message
 
