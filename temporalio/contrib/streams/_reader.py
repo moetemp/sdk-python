@@ -66,8 +66,10 @@ class Subscription(Generic[T]):
     def next_offset(self) -> int | None:
         """The offset to resume from, after the last item given or the last page read.
 
-        Pass it as ``from_offset`` to a later read. It is None only before the first page of a
-        read from ``END``.
+        After a ``Superseded`` item it is that item's own offset, since the first Record of its
+        batch has the same offset and comes next. A read from there gives the ``Superseded``
+        item again, which withdraws nothing new. Pass it as ``from_offset`` to a later read. It
+        is None only before the first page of a read from ``END``.
         """
         return self._position.next_offset
 
@@ -79,9 +81,13 @@ class Subscription(Generic[T]):
         """The next item."""
         with _backend.using(self._options):
             item = await self._items.__anext__()
-        self._position.next_offset = max(
-            self._position.next_offset or 0, item.offset + 1
-        )
+        if isinstance(item, Superseded):
+            # The Record of the same entry shares the offset and is not given yet.
+            self._position.next_offset = item.offset
+        else:
+            self._position.next_offset = max(
+                self._position.next_offset or 0, item.offset + 1
+            )
         if isinstance(item, Record) and item.producer is not None:
             key = producer_key(item.producer)
             self._shown.setdefault(key, (item.producer, []))[1].append(item.offset)
