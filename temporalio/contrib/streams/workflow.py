@@ -155,7 +155,7 @@ def _backends() -> list[tuple[str, bool]]:
 
 
 def _backend_name() -> str | None:
-    # The Worker's default backend: the one marked default, or else the first.
+    # The Worker's default backend: the one marked default, or its only one.
     backends = _backends()
     if not backends:
         return None
@@ -609,8 +609,8 @@ def create_stream(
             long, so a Stream that nobody closes does not stay open. Defaults to never.
         close_with_run: Close the Stream when the run chain closes, with the result or the
             failure of its last run. A run that continues as new passes it on.
-        backend: The name of the backend. Defaults to the Worker's default backend: the
-            Stream plugin with ``default=True``, or else the first. The default is part of
+        backend: The name of the backend. Defaults to the Worker's default backend: its only
+            Stream plugin, or the one with ``default=True``. The default is part of
             the Workflow's code, since a replay must create on the same backend. To move a
             Workflow to another backend, gate it with a patch, for example
             ``backend="native" if workflow.patched("streams-native") else "redis"``.

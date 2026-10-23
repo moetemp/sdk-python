@@ -8,10 +8,10 @@ server parks reads also starts a wake with ``_temporal_stream_start_wake``.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
@@ -21,6 +21,7 @@ import temporalio.nexus.system
 import temporalio.workflow
 from temporalio.contrib.streams import _convert, _errors
 from temporalio.contrib.streams._items import Closed, End, Record, Superseded
+from temporalio.contrib.streams._reader import Position, Subscription
 from temporalio.contrib.streams.system import models
 
 Item = Record[Any] | Superseded | Closed
@@ -82,12 +83,13 @@ def cancel_wakes() -> None:
         wake.cancel()
 
 
-class WorkflowItems(AsyncIterator[Item]):
+class WorkflowItems(Subscription[Any]):
     """The items of a Stream in order, in Workflow code. ``subscribe`` returns it.
 
     It ends at a close, or at the newest Record when ``wait_new_records`` is False. It also
-    ends when this run should continue as new, and then :py:attr:`continue_as_new_suggested`
-    is True. Pass :py:attr:`next_offset` to the next run, which reads on from there.
+    ends when this run should continue as new, after at least one page, and then
+    :py:attr:`continue_as_new_suggested` is True. Pass :py:attr:`next_offset` to the next run,
+    which reads on from there.
 
     .. warning::
         This API is experimental.
@@ -121,8 +123,9 @@ class WorkflowItems(AsyncIterator[Item]):
             self._request.from_offset = from_offset
         else:
             self._request.start = stream_pb.ReadStart.READ_START_BEGINNING
-        self._items: deque[Item] = deque()
+        self._queue: deque[Item] = deque()
         self._page_end = 0
+        self._paged = False
         self._started = False
         self._ended = False
         self._closed = False
@@ -133,10 +136,10 @@ class WorkflowItems(AsyncIterator[Item]):
         self._range_until: datetime | None = None
         self._owner_ended_at: datetime | None = None
         self._wake: Any = None
-        self.next_offset: int | End | None = from_offset or None
-        """Where to read on from, as ``from_offset`` of the next read: after the last item
-        that the iterator gave, or after the Records that its Topics skip. Before the first
-        page it is the read's own ``from_offset``."""
+        super().__init__(
+            self._pages(),
+            Position(None if from_offset is End.END else from_offset or 0),
+        )
         self.continue_as_new_suggested = False
         """Whether the read ended because this run should continue as new. The server
         suggests it for the run's History or for the Records that the reader keeps on the
@@ -146,32 +149,32 @@ class WorkflowItems(AsyncIterator[Item]):
         """Whether the read ended because the run chain that owns the Stream ended with no
         close, such as a terminated run on Redis."""
 
-    def __aiter__(self) -> WorkflowItems:
-        """Return the iterator."""
-        return self
-
-    async def __anext__(self) -> Item:
-        """Give the next item, reading pages and waiting as needed."""
-        while not self._items:
-            if self._ended or self._closed:
-                raise StopAsyncIteration
-            await self._read()
-        if self._closed:
-            # A page that came after the close.
-            self._items.clear()
-            raise StopAsyncIteration
-        item = self._items.popleft()
-        self.next_offset = item.offset + 1
-        if not self._items:
-            self.next_offset = max(item.offset + 1, self._page_end)
-        return item
+    async def _pages(self) -> AsyncGenerator[Item, None]:
+        # Gives the items of each page, and reads or waits when none is left.
+        while True:
+            while not self._queue:
+                if self._ended or self._closed:
+                    return
+                await self._read()
+            if self._closed:
+                # A page that came after the close.
+                return
+            item = self._queue.popleft()
+            if not self._queue:
+                self._position.next_offset = max(
+                    self._position.next_offset or 0, self._page_end
+                )
+            yield item
 
     async def aclose(self) -> None:
         """End the read. A wait on the server ends with it."""
         self._closed = True
-        self._items.clear()
+        self._queue.clear()
         if self._wake is not None:
             self._wake.cancel()
+        # A read that waits in another task ends there once its wake ends.
+        if not cast(Any, self._items).ag_running:
+            await super().aclose()
 
     async def _read(self) -> None:
         # Reads one page, or waits once at the end of the Stream.
@@ -182,7 +185,8 @@ class WorkflowItems(AsyncIterator[Item]):
             self._started = True
             if self._create_wait:
                 self._create_until = now + self._create_wait
-        if self._suggests_continue_as_new(now):
+        # A read ends only after a page, so next_offset says where the next run goes on.
+        if self._paged and self._suggests_continue_as_new(now):
             self.continue_as_new_suggested = True
             self._ended = True
             return
@@ -241,11 +245,12 @@ class WorkflowItems(AsyncIterator[Item]):
     async def _take(
         self, request: stream_pb.ReadRecordsRequest, page: stream_pb.ReadRecordsResponse
     ) -> None:
+        self._paged = True
         for record in page.records:
             item = workflow_item(record, self._types)
             if item is None:
                 continue
-            self._items.append(item)
+            self._queue.append(item)
             if isinstance(item, Closed):
                 self._ended = True
                 break
@@ -255,9 +260,10 @@ class WorkflowItems(AsyncIterator[Item]):
             self._request.from_offset = page.next_offset
             self._request.ClearField("start")
             self._page_end = page.next_offset
-            if not self._items:
-                offset = self.next_offset if isinstance(self.next_offset, int) else 0
-                self.next_offset = max(offset, page.next_offset)
+            if not self._queue:
+                self._position.next_offset = max(
+                    self._position.next_offset or 0, page.next_offset
+                )
         if page.continue_as_new_suggested:
             self._server_suggests = True
         if not page.records:
