@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import temporalio.exceptions
 import temporalio.service
-import temporalio.worker
 from temporalio.contrib.streams.proto.v1 import StreamErrorDetails
 
 
@@ -81,6 +80,23 @@ class StreamUnsupportedError(StreamError):
     """The Store lacks a capability that the call needs. The message ends with its name."""
 
 
+class StreamNotOwnerError(StreamError):
+    """The caller may not close the Stream or write as that Producer, since the Stream's owner
+    doesn't allow it.
+
+    A Workflow's Stream closes only from its own run chain, and a client's Stream only from a
+    client.
+    """
+
+
+class StreamSeqDivergentError(StreamError):
+    """A resend has the sequence of the Producer's last batch and other content.
+
+    A writer that starts again with the same Producer id and epoch sends its first sequence
+    again. Give it a higher epoch instead.
+    """
+
+
 class StreamConfigError(RuntimeError):
     """No Stream plugin, or no backend of a given name. It is config, not a Store error.
 
@@ -100,6 +116,8 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
     "stream_unsupported": StreamUnsupportedError,
+    "stream_not_owner": StreamNotOwnerError,
+    "seq_divergent": StreamSeqDivergentError,
     # The native server's Workflow reader cap. Readers leave, so a retry may get in.
     "stream_exhausted": StreamStorageError,
 }
@@ -112,13 +130,15 @@ _DETAILS_TYPES = (
 )
 
 
-def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
-    """Turn a failed extension call into the Stream error for its reason."""
-    reason = ""
-    if err.details:
-        reason = StreamErrorDetails.FromString(err.details).reason
+def from_call_error(err: Exception) -> StreamError:
+    """Turn a failed call of the crate's runtime into the Stream error for its reason.
+
+    Its args are the gRPC code, the message and the encoded ``StreamErrorDetails``.
+    """
+    code, message, details = err.args
+    reason = StreamErrorDetails.FromString(details).reason if details else ""
     return _BY_REASON.get(reason, StreamError)(
-        err.message, reason=reason, code=err.code
+        message, reason=reason, code=temporalio.service.RPCStatusCode(code)
     )
 
 

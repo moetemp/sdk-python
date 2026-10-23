@@ -1,18 +1,18 @@
-"""An in-memory stand-in for the temporalio-streams extension, for facade tests."""
+"""An in-memory stand-in for the temporalio-streams runtime, for facade tests."""
 
 from __future__ import annotations
 
 import asyncio
 
 import temporalio.api.streamservice.v1 as stream_pb
+from temporalio.bridge.streams import StreamCallError
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.service import RPCStatusCode
-from temporalio.worker import ExtensionError, WorkerExtension
 
 
-def _error(code: RPCStatusCode, reason: str) -> ExtensionError:
+def _error(code: RPCStatusCode, reason: str) -> Exception:
     details = ext_pb.StreamErrorDetails(reason=reason).SerializeToString()
-    return ExtensionError(reason, code, details)
+    return StreamCallError(int(code), reason, details)
 
 
 class _Stream:
@@ -22,16 +22,13 @@ class _Stream:
         self.changed = asyncio.Event()
 
 
-class FakeExtension(WorkerExtension):
-    def __init__(self) -> None:  # pyright: ignore[reportMissingSuperCall]
+class FakeExtension:
+    def __init__(self) -> None:
         self.streams: dict[str, _Stream] = {}
         self.writers: dict[int, tuple[str, stream_pb.Producer]] = {}
+        self.freed: list[int] = []
         self.namespaces: set[str] = set()
         self.next_offset = 1
-
-    @property
-    def name(self) -> str:
-        return "fake-streams"
 
     def _append(self, stream_id: str, record: stream_pb.StreamRecord) -> int:
         stream = self.streams.get(stream_id)
@@ -46,10 +43,10 @@ class FakeExtension(WorkerExtension):
         stream.changed = asyncio.Event()
         return record.offset
 
-    def call(self, method: str, input: bytes) -> bytes:
-        raise _error(RPCStatusCode.UNIMPLEMENTED, method)
+    def free_writer(self, writer_id: int) -> None:
+        self.freed.append(writer_id)
 
-    async def call_async(self, method: str, input: bytes) -> bytes:
+    async def call(self, method: str, input: bytes) -> bytes:
         if method == "CreateStream":
             create = stream_pb.CreateStreamRequest.FromString(input)
             self.namespaces.add(create.namespace)

@@ -40,25 +40,25 @@ class Chat:
 
 async def main(client: Client, task_queue: str) -> list[Turn]:
     async with Worker(client, task_queue=task_queue, workflows=[Chat]):
-        chat_stream = await streams.StreamClient(client).create(
+        turns = []
+        # The block closes the Stream at its end, or with the error that ends it.
+        async with streams.StreamClient(client).create(
             Events,
             id=f"chat-{uuid.uuid4()}",
             retention=timedelta(days=1),
             auto_close=timedelta(hours=1),
-        )
-        await client.start_workflow(
-            Chat.run,
-            # A Stream is data, so the Workflow gets it as an argument.
-            stream_workflow.WorkflowStream.from_handle(chat_stream),
-            id=f"chat-{uuid.uuid4()}",
-            task_queue=task_queue,
-        )
-        turns = []
-        async for item in chat_stream.subscribe():
-            if not isinstance(item, streams.Record):
-                continue
-            turns.append(item.data)
-            if item.data.kind == "last":
-                break
-        await chat_stream.close()
+        ) as chat_stream:
+            await client.start_workflow(
+                Chat.run,
+                # A Stream is data, so the Workflow gets it as an argument.
+                stream_workflow.WorkflowStream.from_handle(chat_stream),
+                id=f"chat-{uuid.uuid4()}",
+                task_queue=task_queue,
+            )
+            async for item in chat_stream.subscribe():
+                if not isinstance(item, streams.Record):
+                    continue
+                turns.append(item.data)
+                if item.data.kind == "last":
+                    break
         return turns

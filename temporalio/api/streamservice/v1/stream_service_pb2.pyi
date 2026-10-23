@@ -81,6 +81,37 @@ STREAM_RECORD_KIND_SUPERSEDED: StreamRecordKind.ValueType  # 2
 STREAM_RECORD_KIND_CLOSE: StreamRecordKind.ValueType  # 3
 global___StreamRecordKind = StreamRecordKind
 
+class _CloseStatus:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _CloseStatusEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[_CloseStatus.ValueType],
+    builtins.type,
+):  # noqa: F821
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    CLOSE_STATUS_UNSPECIFIED: _CloseStatus.ValueType  # 0
+    CLOSE_STATUS_COMPLETED: _CloseStatus.ValueType  # 1
+    CLOSE_STATUS_FAILED: _CloseStatus.ValueType  # 2
+    CLOSE_STATUS_CANCELED: _CloseStatus.ValueType  # 3
+    CLOSE_STATUS_TERMINATED: _CloseStatus.ValueType  # 4
+    """TERMINATED and TIMED_OUT come only from the owner's end, never from a caller."""
+    CLOSE_STATUS_TIMED_OUT: _CloseStatus.ValueType  # 5
+
+class CloseStatus(_CloseStatus, metaclass=_CloseStatusEnumTypeWrapper):
+    """How a Stream closed, so a reader tells a terminated or timed out owner from a failed one
+    without parsing the failure.
+    """
+
+CLOSE_STATUS_UNSPECIFIED: CloseStatus.ValueType  # 0
+CLOSE_STATUS_COMPLETED: CloseStatus.ValueType  # 1
+CLOSE_STATUS_FAILED: CloseStatus.ValueType  # 2
+CLOSE_STATUS_CANCELED: CloseStatus.ValueType  # 3
+CLOSE_STATUS_TERMINATED: CloseStatus.ValueType  # 4
+"""TERMINATED and TIMED_OUT come only from the owner's end, never from a caller."""
+CLOSE_STATUS_TIMED_OUT: CloseStatus.ValueType  # 5
+global___CloseStatus = CloseStatus
+
 class _StreamStatus:
     ValueType = typing.NewType("ValueType", builtins.int)
     V: typing_extensions.TypeAlias = ValueType
@@ -134,6 +165,8 @@ class StreamRef(google.protobuf.message.Message):
     WORKFLOW_ID_FIELD_NUMBER: builtins.int
     FIRST_EXECUTION_RUN_ID_FIELD_NUMBER: builtins.int
     BACKEND_FIELD_NUMBER: builtins.int
+    ACTIVITY_ID_FIELD_NUMBER: builtins.int
+    ACTIVITY_RUN_ID_FIELD_NUMBER: builtins.int
     id: builtins.str
     workflow_id: builtins.str
     """The Workflow that owns the Stream. Set on a Workflow's ref, empty on a standalone,
@@ -145,6 +178,11 @@ class StreamRef(google.protobuf.message.Message):
     it, so every process routes a ref it receives. Empty is the default backend. The Store
     never reads it.
     """
+    activity_id: builtins.str
+    """The Standalone Activity that owns the Stream. Set on the Activity's ref, so a call routes to
+    the Activity's shard and finds the Stream in the Activity. The Store never reads these.
+    """
+    activity_run_id: builtins.str
     def __init__(
         self,
         *,
@@ -152,10 +190,16 @@ class StreamRef(google.protobuf.message.Message):
         workflow_id: builtins.str = ...,
         first_execution_run_id: builtins.str = ...,
         backend: builtins.str = ...,
+        activity_id: builtins.str = ...,
+        activity_run_id: builtins.str = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
+            "activity_id",
+            b"activity_id",
+            "activity_run_id",
+            b"activity_run_id",
             "backend",
             b"backend",
             "first_execution_run_id",
@@ -402,6 +446,7 @@ class StreamRecord(google.protobuf.message.Message):
     SUPERSESSION_FIELD_NUMBER: builtins.int
     CLOSE_RESULT_FIELD_NUMBER: builtins.int
     CLOSE_FAILURE_FIELD_NUMBER: builtins.int
+    CLOSE_STATUS_FIELD_NUMBER: builtins.int
     kind: global___StreamRecordKind.ValueType
     offset: builtins.int
     topic: builtins.str
@@ -415,6 +460,8 @@ class StreamRecord(google.protobuf.message.Message):
     def close_result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
     @property
     def close_failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    close_status: global___CloseStatus.ValueType
+    """CLOSE only. The result or the failure stays next to it."""
     def __init__(
         self,
         *,
@@ -426,6 +473,7 @@ class StreamRecord(google.protobuf.message.Message):
         supersession: global___Supersession | None = ...,
         close_result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
         close_failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        close_status: global___CloseStatus.ValueType = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -451,6 +499,8 @@ class StreamRecord(google.protobuf.message.Message):
             b"close_failure",
             "close_result",
             b"close_result",
+            "close_status",
+            b"close_status",
             "kind",
             b"kind",
             "offset",
@@ -481,6 +531,7 @@ class CreateStreamRequest(google.protobuf.message.Message):
     OWNER_FIELD_NUMBER: builtins.int
     CLOSE_WITH_RUN_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
+    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     stream_id: builtins.str
     """Required from Workflow code."""
@@ -508,6 +559,10 @@ class CreateStreamRequest(google.protobuf.message.Message):
         """The ref of the Stream. A Workflow-owned Stream sets workflow_id and
         first_execution_run_id, which name the owner's run chain.
         """
+    task_token: builtins.bytes
+    """A Standalone Activity's create of its own Stream. The server checks that the token is the
+    Activity's current attempt, so a caller can't put a Stream into an Activity it isn't.
+    """
     def __init__(
         self,
         *,
@@ -519,6 +574,7 @@ class CreateStreamRequest(google.protobuf.message.Message):
         owner: global___Producer | None = ...,
         close_with_run: builtins.bool = ...,
         ref: global___StreamRef | None = ...,
+        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -550,6 +606,8 @@ class CreateStreamRequest(google.protobuf.message.Message):
             b"retention",
             "stream_id",
             b"stream_id",
+            "task_token",
+            b"task_token",
             "withdraw_run",
             b"withdraw_run",
         ],
@@ -602,6 +660,7 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     FAILED_TASKS_FIELD_NUMBER: builtins.int
     WITHDRAW_RUN_FIELD_NUMBER: builtins.int
     DEFER_WITHDRAWAL_FIELD_NUMBER: builtins.int
+    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(self) -> global___StreamRef: ...
@@ -631,6 +690,10 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     """Workflow only. The batch before a Local Activity, whose task facts come later with the
     task's completion. It withdraws no task and keeps no facts. withdraw_run still applies.
     """
+    task_token: builtins.bytes
+    """An Activity's write on the native backend. The server checks the Producer against the
+    Activity's current attempt, so nobody else writes as that Activity.
+    """
     def __init__(
         self,
         *,
@@ -643,6 +706,7 @@ class AppendRecordsRequest(google.protobuf.message.Message):
         failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
         withdraw_run: builtins.str = ...,
         defer_withdrawal: builtins.bool = ...,
+        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -674,6 +738,8 @@ class AppendRecordsRequest(google.protobuf.message.Message):
             b"sequence",
             "stream",
             b"stream",
+            "task_token",
+            b"task_token",
             "withdraw_run",
             b"withdraw_run",
         ],
@@ -714,6 +780,8 @@ class CloseStreamRequest(google.protobuf.message.Message):
     PREVIOUS_COMPLETED_TASK_FIELD_NUMBER: builtins.int
     FAILED_TASKS_FIELD_NUMBER: builtins.int
     WITHDRAW_RUN_FIELD_NUMBER: builtins.int
+    STATUS_FIELD_NUMBER: builtins.int
+    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(self) -> global___StreamRef: ...
@@ -734,6 +802,10 @@ class CloseStreamRequest(google.protobuf.message.Message):
     ]: ...
     withdraw_run: builtins.str
     """Workflow only. A retry run's close: the previous run, whose Records it withdraws."""
+    status: global___CloseStatus.ValueType
+    """Empty is COMPLETED with no failure and FAILED with one. A caller sets CANCELED itself."""
+    task_token: builtins.bytes
+    """An Activity's close on the native backend, checked as on the append."""
     def __init__(
         self,
         *,
@@ -745,6 +817,8 @@ class CloseStreamRequest(google.protobuf.message.Message):
         previous_completed_task: global___WorkflowTaskEpoch | None = ...,
         failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
         withdraw_run: builtins.str = ...,
+        status: global___CloseStatus.ValueType = ...,
+        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -776,8 +850,12 @@ class CloseStreamRequest(google.protobuf.message.Message):
             b"producer",
             "result",
             b"result",
+            "status",
+            b"status",
             "stream",
             b"stream",
+            "task_token",
+            b"task_token",
             "withdraw_run",
             b"withdraw_run",
         ],
@@ -808,6 +886,9 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     TOPIC_PREFIXES_FIELD_NUMBER: builtins.int
     TO_OFFSET_FIELD_NUMBER: builtins.int
     WAKE_ONLY_FIELD_NUMBER: builtins.int
+    LAST_FIELD_NUMBER: builtins.int
+    MAX_BYTES_FIELD_NUMBER: builtins.int
+    FLOOR_FROM_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(self) -> global___StreamRef: ...
@@ -841,6 +922,19 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     wake_only: builtins.bool
     """Park as a normal read, then answer with no Records and next_offset = from_offset, when a
     Record that passes the filter exists, when the Stream closes (done), or when wait ends.
+    Its wait may be days, since a parked read adds nothing to History while it waits.
+    """
+    last: builtins.int
+    """Read the newest `last` Records that pass the filter, oldest first. It needs no from_offset
+    and no start. Not with wake_only, and not in Workflow code, where replay needs a fixed range.
+    """
+    max_bytes: builtins.int
+    """The most Record bytes in one page, so a page fits the caller's limit, such as a History
+    marker. A larger Record still comes alone, so the read always moves on. Zero is no cap.
+    """
+    floor_from: builtins.int
+    """The lowest offset this run read on replay. A reset run copies the reads of the old run into
+    its History, so its floor must cover them too, not only its first live page.
     """
     def __init__(
         self,
@@ -856,6 +950,9 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         topic_prefixes: collections.abc.Iterable[builtins.str] | None = ...,
         to_offset: builtins.int = ...,
         wake_only: builtins.bool = ...,
+        last: builtins.int = ...,
+        max_bytes: builtins.int = ...,
+        floor_from: builtins.int = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -868,8 +965,14 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "create_wait",
             b"create_wait",
+            "floor_from",
+            b"floor_from",
             "from_offset",
             b"from_offset",
+            "last",
+            b"last",
+            "max_bytes",
+            b"max_bytes",
             "max_records",
             b"max_records",
             "namespace",
@@ -899,6 +1002,7 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     RECORDS_FIELD_NUMBER: builtins.int
     NEXT_OFFSET_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
+    CONTINUE_AS_NEW_SUGGESTED_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -908,17 +1012,29 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     next_offset: builtins.int
     """The from_offset of the next read: the newest offset read + 1."""
     done: builtins.bool
+    continue_as_new_suggested: builtins.bool
+    """This reader's floor keeps more than half of the Stream's byte cap. The writer fails when the
+    cap fills, and only the reader's continue-as-new frees it.
+    """
     def __init__(
         self,
         *,
         records: collections.abc.Iterable[global___StreamRecord] | None = ...,
         next_offset: builtins.int = ...,
         done: builtins.bool = ...,
+        continue_as_new_suggested: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "done", b"done", "next_offset", b"next_offset", "records", b"records"
+            "continue_as_new_suggested",
+            b"continue_as_new_suggested",
+            "done",
+            b"done",
+            "next_offset",
+            b"next_offset",
+            "records",
+            b"records",
         ],
     ) -> None: ...
 
@@ -1004,7 +1120,10 @@ class StreamErrorDetails(google.protobuf.message.Message):
 
     REASON_FIELD_NUMBER: builtins.int
     reason: builtins.str
-    """A token such as `stream_closed`, `stream_fenced` or `stream_format_too_new`."""
+    """A token such as `stream_closed`, `stream_fenced` or `stream_format_too_new`.
+    `seq_divergent` is a resend with the sequence of the last batch and other content.
+    `stream_not_owner` is a close or a Producer that the Stream's owner doesn't allow.
+    """
     def __init__(
         self,
         *,

@@ -1,8 +1,8 @@
 """Brook API proposal, "A client resumes a scoped Stream from an offset".
 
-The Workflow writes one Stream per turn, a renamed definition from ``streams.with_name``. The Reader saves the offset
-after each Record itself, stops, and later resumes from it with ``from_offset``. A view that
-wants only new Records starts at ``streams.END``.
+The Workflow writes one Stream per turn, a renamed definition from ``streams.with_name``. The
+Reader saves the read's ``next_offset`` after each Record, stops, and later resumes from it with
+``from_offset``. A view that wants only new Records starts at ``streams.END``.
 """
 
 from __future__ import annotations
@@ -63,18 +63,20 @@ async def read_some(
     turn3 = streams.StreamClient(client).workflow_stream(handle, Turn3)
     tokens = turn3.topic(Events.tokens)
     seen = []
-    async for item in tokens.subscribe(
+    read = tokens.subscribe(
         from_offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
-    ):
+    )
+    async for item in read:
         if isinstance(item, streams.Closed):
             break
         if isinstance(item, streams.Superseded):
             continue
         seen.append(item.data)
-        # from_offset is inclusive, so the next read starts after this Record.
-        store.save("turn-3", item.offset + 1)
+        # The read's next offset is after this Record, so the next read starts there.
+        store.save("turn-3", read.next_offset or 0)
         if len(seen) == count:
             break
+    await read.aclose()
     return seen
 
 
