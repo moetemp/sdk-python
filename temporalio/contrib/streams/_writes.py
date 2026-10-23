@@ -112,9 +112,9 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
     return 0
 
 
-# The Store's limits on the Records that it keeps, as the crate counts them.
+# The Store's limit on one Record that it keeps, as the crate counts it. The batch limit is the
+# backend's.
 _MAX_RECORD_BYTES = 1536 * 1024
-_MAX_BATCH_BYTES = 4 * 1024 * 1024
 
 
 @dataclasses.dataclass
@@ -156,7 +156,10 @@ async def _encode(
         ).ByteSize()
         for record in records
     ]
-    if sum(sizes) <= _MAX_BATCH_BYTES and max(sizes, default=0) <= _MAX_RECORD_BYTES:
+    if (
+        sum(sizes) <= streams.max_batch_bytes
+        and max(sizes, default=0) <= _MAX_RECORD_BYTES
+    ):
         return _Encoded([(list(range(len(counts))), records)])
     # The codec grew the merge past the Store's limit, so each call goes as its own batch, as
     # it would with no merge. A call that is too large alone fails alone.
