@@ -180,6 +180,8 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
     ]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "HI THERE"
     assert stream.workflow_id == handle.id
+    with pytest.raises(streams.StreamNotOwnerError):
+        await stream.close()
 
 
 async def test_async_with_closes_a_client_stream(stream_client: Client):
@@ -192,14 +194,20 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
             raise ValueError("turn failed")
     async with await client.create(Events, id=f"block-{uuid.uuid4()}") as early:
         await early.close(result="early")
-    for stream, result, failure in (
-        (done, None, None),
-        (failed, None, "turn failed"),
-        (early, "early", None),
+    cancelled = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    with pytest.raises(asyncio.CancelledError):
+        async with client.create(Events, id=cancelled.id):
+            raise asyncio.CancelledError()
+    for stream, result, failure, status in (
+        (done, None, None, streams.CloseStatus.COMPLETED),
+        (failed, None, "turn failed", streams.CloseStatus.FAILED),
+        (early, "early", None, streams.CloseStatus.COMPLETED),
+        (cancelled, None, "Cancelled", streams.CloseStatus.CANCELED),
     ):
         items = [item async for item in stream.subscribe()]
         closes = [item for item in items if isinstance(item, streams.Closed)]
         assert len(closes) == 1 and closes[0].result == result
+        assert closes[0].status == status
         assert (failure is None) == (closes[0].failure is None)
         assert failure is None or failure in str(closes[0].failure)
 
@@ -226,6 +234,33 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
     ] == ["b"]
+
+
+async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"last-{uuid.uuid4()}"
+    )
+    tokens = stream.topic(Events.tokens)
+    await tokens.publish("a", "b", "c")
+    await stream.topic(Events.turns).publish(Turn("model"))
+    # A chat view shows the last few Records first, then follows.
+    tail = tokens.subscribe(last=2)
+    assert tail.next_offset is None
+    shown = [await anext(tail), await anext(tail)]
+    await tokens.publish("d")
+    shown.append(await anext(tail))
+    await tail.aclose()
+    assert [item.data for item in shown if isinstance(item, streams.Record)] == [
+        "b",
+        "c",
+        "d",
+    ]
+    newest = stream.subscribe(last=1, wait_new_records=False)
+    assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
+        "d"
+    ]
+    with pytest.raises(ValueError, match="no from_offset"):
+        stream.subscribe(last=2, from_offset=0)
 
 
 async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):

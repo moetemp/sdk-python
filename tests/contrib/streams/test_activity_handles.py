@@ -265,41 +265,99 @@ async def wrong_backend(stream: streams.ActivityStream[Events]) -> str:
 
 
 @activity.defn
-async def close_it(stream: streams.ActivityStream[Events]) -> None:
+async def close_it(stream: streams.ActivityStream[Events]) -> str:
     await stream.topic(Events.tokens).publish("last")
-    await stream.close(result="closed by activity")
+    try:
+        await stream.close(result="closed by activity")
+    except streams.StreamNotOwnerError as err:
+        return err.reason
+    return "closed"
 
 
 @workflow.defn
 class Closing:
     @workflow.run
-    async def run(self) -> str:
+    async def run(self) -> list[str]:
         stream = await stream_workflow.create_stream(Events, close_with_run=False)
-        reason = await workflow.execute_activity(
+        backend = await workflow.execute_activity(
             wrong_backend,
             streams.ActivityStream(id=stream.id, backend="elsewhere"),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        await workflow.execute_activity(
+        owner = await workflow.execute_activity(
             close_it,
             streams.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        return reason
+        # A Local Activity is part of the run chain, so it may close the chain's Stream.
+        local = await workflow.execute_local_activity(
+            close_it,
+            streams.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        return [backend, owner, local]
 
 
-async def test_activity_closes_and_checks_the_backend(stream_client: Client):
+async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
     async with new_worker(
         stream_client, Closing, activities=[wrong_backend, close_it]
     ) as worker:
         handle = await stream_client.start_workflow(
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        assert await handle.result() == "config"
+        # An Activity writes to the Workflow's Stream but can't end it for every reader.
+        assert await handle.result() == ["config", "stream_not_owner", "closed"]
         items = await read(stream_client, handle)
-    assert [r.data for r in records(items)] == ["last"]
+    assert [r.data for r in records(items)] == ["last", "last"]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == "closed by activity"
+
+
+@workflow.defn
+class CreatesAndLeavesOpen:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await stream_workflow.create_stream(Events, close_with_run=False)
+        return stream.id
+
+
+@workflow.defn
+class ClosesAnotherChainsStream:
+    @workflow.run
+    async def run(self, stream_id: str) -> str:
+        # The handle has only the id, so the SDK can't tell that another chain owns it.
+        return await workflow.execute_local_activity(
+            close_it,
+            streams.ActivityStream(id=stream_id),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+
+async def test_store_refuses_another_chains_close(stream_client: Client):
+    async with new_worker(
+        stream_client,
+        CreatesAndLeavesOpen,
+        ClosesAnotherChainsStream,
+        activities=[close_it],
+    ) as worker:
+        owner = await stream_client.start_workflow(
+            CreatesAndLeavesOpen.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        stream_id = await owner.result()
+        assert (
+            await stream_client.execute_workflow(
+                ClosesAnotherChainsStream.run,
+                stream_id,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_owner"
+        )
+    stream = streams.StreamClient(stream_client).get_handle(Events, id=stream_id)
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert [type(item) for item in items] == [streams.Record]
 
 
 @dataclass

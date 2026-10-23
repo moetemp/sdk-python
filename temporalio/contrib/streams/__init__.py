@@ -42,12 +42,20 @@ from temporalio.contrib.streams._errors import (
     StreamExpiredError,
     StreamFencedError,
     StreamNotFoundError,
+    StreamNotOwnerError,
     StreamOffsetError,
+    StreamSeqDivergentError,
     StreamStorageError,
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import END, Closed, Record, Superseded
+from temporalio.contrib.streams._items import (
+    END,
+    Closed,
+    CloseStatus,
+    Record,
+    Superseded,
+)
 from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams._reader import Subscription
 from temporalio.contrib.streams._stream_client import (
@@ -64,6 +72,7 @@ __all__ = [
     "BufferedPublisher",
     "ClientStream",
     "ClientTopic",
+    "CloseStatus",
     "Closed",
     "ReadOnlyContextError",
     "Record",
@@ -76,8 +85,10 @@ __all__ = [
     "StreamFencedError",
     "StreamHandle",
     "StreamNotFoundError",
+    "StreamNotOwnerError",
     "StreamOffsetError",
     "StreamPlugin",
+    "StreamSeqDivergentError",
     "StreamStorageError",
     "StreamUnsupportedError",
     "Subscription",

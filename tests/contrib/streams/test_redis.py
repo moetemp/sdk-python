@@ -281,6 +281,7 @@ async def test_cancelled_block_closes_with_a_failure(stream_client: Client):
     closed = items[-1]
     assert isinstance(closed, streams.Closed)
     assert closed.failure is not None
+    assert closed.status == streams.CloseStatus.CANCELED
 
 
 @streams.defn(name="plain")

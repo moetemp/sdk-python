@@ -35,6 +35,7 @@ from temporalio.contrib.streams._handle import (
     TopicBase,
     exit_failure,
 )
+from temporalio.contrib.streams._items import close_status
 from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
@@ -397,7 +398,11 @@ class WorkflowStream(StreamHandle[E]):
         """Close the Stream with one Local Activity, after the writes before it.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. Later writes in this run raise :py:class:`StreamClosedError`.
+        ``failure``. A ``CancelledError`` failure closes it as canceled. Later writes in this run
+        raise :py:class:`StreamClosedError`.
+
+        Raises:
+            StreamNotOwnerError: This run chain didn't create the Stream.
         """
         await self._close(result, failure)
 
@@ -412,6 +417,17 @@ class WorkflowStream(StreamHandle[E]):
         _write_nowait(self._close(result, failure))
 
     def _close(self, result: Any, failure: BaseException | None) -> asyncio.Future[int]:
+        info = temporalio.workflow.info()
+        if (self.workflow_id, self.first_execution_run_id) != (
+            info.workflow_id,
+            info.first_execution_run_id,
+        ):
+            # Only the run chain that created a Stream ends it for every reader. The backend
+            # refuses it too, and this error comes before a Local Activity is spent.
+            raise _errors.StreamNotOwnerError(
+                f"Can't close the Stream {self.id}, since this run chain didn't create it",
+                reason="stream_not_owner",
+            )
         self._check("close").closed = True
         request = stream_pb.CloseStreamRequest(stream=self._ref())
         if result is not None:
@@ -420,6 +436,9 @@ class WorkflowStream(StreamHandle[E]):
             temporalio.converter.DataConverter.default.failure_converter.to_failure(
                 failure, temporalio.workflow.payload_converter(), request.failure
             )
+        status = close_status(failure)
+        if status is not None:
+            request.status = status
         return _write(self.id, CLOSE_ACTIVITY, request)
 
     async def __aenter__(self) -> WorkflowStream[E]:
@@ -545,6 +564,7 @@ def _create(
         )
     run_id = temporalio.workflow.info().run_id
     # The owner makes the Stream the run chain's, and names a retry run's withdrawal.
+    # The ref names the run chain, which the Store keeps for its owner check of a close.
     request = stream_pb.CreateStreamRequest(
         stream_id=stream.id,
         owner=stream_pb.Producer(
@@ -552,6 +572,7 @@ def _create(
             id=_ids.workflow_producer_id(run_id),
             run_id=run_id,
         ),
+        ref=stream._ref(),
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)

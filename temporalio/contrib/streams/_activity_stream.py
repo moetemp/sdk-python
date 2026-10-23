@@ -8,6 +8,7 @@ from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, cast, overload
 
+import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.contrib.streams import _activity, _errors
 from temporalio.contrib.streams._access import (
     Access,
@@ -43,6 +44,20 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
     return streams
 
 
+def _check_close(handle: StreamHandle[Any]) -> None:
+    # A Workflow's Stream closes only from its run chain, and a client's only from a client. So
+    # only a Local Activity of the chain may close here. The Store refuses the others too, and
+    # this error comes with no call.
+    streams = _bound(handle)
+    local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
+    if not local or (handle.workflow_id and handle.workflow_id != streams.workflow_id):
+        raise _errors.StreamNotOwnerError(
+            f"Can't close the Stream {handle.id} from this Activity. A Workflow's Stream "
+            "closes only from its run chain, and a client's only from a client.",
+            reason="stream_not_owner",
+        )
+
+
 def _access(handle: StreamHandle[Any]) -> Access:
     streams = _bound(handle)
     stream_id = handle.id
@@ -56,6 +71,10 @@ def _access(handle: StreamHandle[Any]) -> Access:
         namespace=streams.namespace,
         stream_id=known_id,
         writer=lambda: streams.writer(stream_id),
+        # A handle with only an id names no chain, so the close names this Activity's own, and
+        # the Store refuses it when another chain owns the Stream.
+        workflow_id=handle.workflow_id or streams.workflow_id,
+        first_execution_run_id=handle.first_execution_run_id,
     )
 
 
@@ -100,6 +119,7 @@ class ActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -112,11 +132,12 @@ class ActivityStream(StreamHandle[E]):
             prefixes=prefixes,
             default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
         access = self._access()
-        return subscription(lambda position: access.items(read, position), from_offset)
+        return subscription(lambda position: access.items(read, position), read)
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
@@ -132,8 +153,13 @@ class ActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``.
+        ``failure``. A ``CancelledError`` failure closes it as canceled.
+
+        Only a Local Activity of the run chain that created the Stream may close it. Any other
+        Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
+        reader.
         """
+        _check_close(self)
         await self._access().close(result, failure)
 
 
@@ -157,6 +183,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
         self,
         *,
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> SyncSubscription[T]:
@@ -170,6 +197,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
             stream.subscribe(
                 self,
                 from_offset=from_offset,
+                last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
             ),
@@ -268,6 +296,7 @@ class SyncActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -280,13 +309,13 @@ class SyncActivityStream(StreamHandle[E]):
             prefixes=prefixes,
             default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
         access = self._access()
         return SyncSubscription(
-            self,
-            subscription(lambda position: access.items(read, position), from_offset),
+            self, subscription(lambda position: access.items(read, position), read)
         )
 
     def _items(
@@ -313,7 +342,10 @@ class SyncActivityStream(StreamHandle[E]):
     def close(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        """Write this attempt's Records, then close the Stream."""
+        """Write this attempt's Records, then close the Stream. See
+        :py:meth:`ActivityStream.close`.
+        """
+        _check_close(self)
         self._run(self._access().close(result, failure))
 
 
