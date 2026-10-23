@@ -100,6 +100,7 @@ class ActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -112,11 +113,12 @@ class ActivityStream(StreamHandle[E]):
             prefixes=prefixes,
             default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
         access = self._access()
-        return subscription(lambda position: access.items(read, position), from_offset)
+        return subscription(lambda position: access.items(read, position), read)
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
@@ -161,6 +163,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
         self,
         *,
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> SyncSubscription[T]:
@@ -174,6 +177,7 @@ class SyncActivityTopic(SyncTopicBase[T]):
             stream.subscribe(
                 self,
                 from_offset=from_offset,
+                last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
             ),
@@ -272,6 +276,7 @@ class SyncActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -284,13 +289,13 @@ class SyncActivityStream(StreamHandle[E]):
             prefixes=prefixes,
             default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
         access = self._access()
         return SyncSubscription(
-            self,
-            subscription(lambda position: access.items(read, position), from_offset),
+            self, subscription(lambda position: access.items(read, position), read)
         )
 
     def _items(

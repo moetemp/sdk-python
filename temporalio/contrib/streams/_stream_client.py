@@ -73,6 +73,7 @@ class ClientTopic(_AsyncTopic[T]):
         self,
         *,
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
@@ -88,6 +89,7 @@ class ClientTopic(_AsyncTopic[T]):
             stream.subscribe(
                 self,
                 from_offset=from_offset,
+                last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
                 rpc_metadata=rpc_metadata,
@@ -260,6 +262,7 @@ class ClientStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | ClientTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
@@ -279,6 +282,9 @@ class ClientStream(StreamHandle[E]):
             topics: Read these Topics. With no Topics and no prefixes, read every Topic.
             from_offset: Start at this offset, inclusive, or at ``streams.END`` for new
                 Records only. Defaults to the first Record.
+            last: Start with the newest this many Records that pass the filter, oldest
+                first, such as the first view of a chat. Not with ``from_offset``. A Record
+                that a later ``Superseded`` item withdraws doesn't count. At most 1000.
             wait_new_records: Wait for new Records at the end of the Stream.
             prefixes: Also read the Topics whose names start with one of these.
             create_wait: How long to wait for a Stream that nobody created yet, such as the
@@ -296,12 +302,13 @@ class ClientStream(StreamHandle[E]):
             prefixes=prefixes,
             default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
         return subscription(
             lambda position: self._items(read, position),
-            from_offset,
+            read,
             _backend.options_of(rpc_metadata, rpc_timeout),
         )
 

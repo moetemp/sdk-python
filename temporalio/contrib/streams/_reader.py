@@ -118,11 +118,12 @@ async def read(
     types: Mapping[str, Any],
     default_type: Any = None,
     from_offset: int | End | None,
+    last: int | None = None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
     """Give the items of a Stream in order, until a close, or the newest Record when
-    ``wait_new_records`` is False.
+    ``wait_new_records`` is False. With ``last``, start with the newest ``last`` Records.
     """
     loop = asyncio.get_running_loop()
     create_until = loop.time() + create_wait.total_seconds() if create_wait else None
@@ -140,8 +141,9 @@ async def read(
             start=ReadStart.READ_START_END
             if from_offset is End.END
             else ReadStart.READ_START_BEGINNING
-            if from_offset is None
+            if from_offset is None and not last
             else None,
+            last=last,
             topics=list(topics or []),
             topic_prefixes=list(topic_prefixes),
             create_wait=min(create_left, _backend.longest_wait(_MAX_WAIT))
@@ -180,6 +182,14 @@ async def _pages(
 ) -> AsyncGenerator[models.ReadRecordsResponse, None]:
     # A read that waits long-polls each page. A read with no wait reads pages until one has no
     # Record.
+    if request.last:
+        # The newest Records come in one page that never waits. A read that follows goes on
+        # after them.
+        page = await service.read_records(request)
+        yield page
+        if page.done or not wait_new_records or page.next_offset is None:
+            return
+        request = dataclasses.replace(request, last=None, from_offset=page.next_offset)
     while True:
         if wait_new_records:
             page = await service.read_records_until_records(

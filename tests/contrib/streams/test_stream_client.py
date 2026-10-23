@@ -234,6 +234,33 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     ] == ["b"]
 
 
+async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"last-{uuid.uuid4()}"
+    )
+    tokens = stream.topic(Events.tokens)
+    await tokens.publish("a", "b", "c")
+    await stream.topic(Events.turns).publish(Turn("model"))
+    # A chat view shows the last few Records first, then follows.
+    tail = tokens.subscribe(last=2)
+    assert tail.next_offset is None
+    shown = [await anext(tail), await anext(tail)]
+    await tokens.publish("d")
+    shown.append(await anext(tail))
+    await tail.aclose()
+    assert [item.data for item in shown if isinstance(item, streams.Record)] == [
+        "b",
+        "c",
+        "d",
+    ]
+    newest = stream.subscribe(last=1, wait_new_records=False)
+    assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
+        "d"
+    ]
+    with pytest.raises(ValueError, match="no from_offset"):
+        stream.subscribe(last=2, from_offset=0)
+
+
 async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"typed-{uuid.uuid4()}"

@@ -56,6 +56,7 @@ class Access:
             types=read.types,
             default_type=read.default_type,
             from_offset=read.from_offset,
+            last=read.last,
             wait_new_records=read.wait_new_records,
             create_wait=read.create_wait,
         )
@@ -106,6 +107,7 @@ class ReadSpec:
     types: dict[str, Any]
     default_type: Any
     from_offset: int | End | None
+    last: int | None
     wait_new_records: bool
     create_wait: timedelta | None
 
@@ -119,10 +121,17 @@ def read_spec(
     prefixes: Sequence[str],
     default_type: Any,
     from_offset: int | End | None,
+    last: int | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> ReadSpec:
-    """The Topic names of a read, the decode type of each known Topic, and its options."""
+    """The Topic names of a read, the decode type of each known Topic, and its options.
+
+    Raises:
+        ValueError: ``last`` is not above zero, or it comes with ``from_offset``.
+    """
+    if last is not None and (last < 1 or from_offset is not None):
+        raise ValueError("last takes a count above zero and no from_offset")
     types = handle._known_types()
     names = []
     for topic in topics:
@@ -143,6 +152,7 @@ def read_spec(
         types=types,
         default_type=default_type,
         from_offset=from_offset,
+        last=last,
         wait_new_records=wait_new_records,
         create_wait=create_wait,
     )
@@ -150,13 +160,16 @@ def read_spec(
 
 def subscription(
     items: Callable[[Position], AsyncGenerator[Item, None]],
-    from_offset: int | End | None,
+    read: ReadSpec,
     options: CallOptions | None = None,
 ) -> Subscription[Any]:
-    """A read that starts at ``from_offset``, over the items that ``items`` gives."""
-    # Before its first page, a read from the start resumes at 0 and a read from END has no
-    # offset yet.
-    position = Position(None if from_offset is End.END else from_offset or 0)
+    """A read over the items that ``items`` gives."""
+    # Before its first page, a read from the start resumes at 0, and a read from END or of the
+    # last Records has no offset yet.
+    if read.last is not None or read.from_offset is End.END:
+        position = Position(None)
+    else:
+        position = Position(read.from_offset or 0)
     return Subscription(items(position), position, options)
 
 
@@ -175,6 +188,7 @@ class _AsyncTopic(TopicBase[T]):
         self,
         *,
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> Subscription[T]:
@@ -186,6 +200,7 @@ class _AsyncTopic(TopicBase[T]):
             self._stream.subscribe(
                 self,
                 from_offset=from_offset,
+                last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
             ),
