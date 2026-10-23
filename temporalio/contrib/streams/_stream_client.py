@@ -13,13 +13,19 @@ from typing import Any, TypeVar, overload
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
 from temporalio.contrib.streams import _errors, _ids
-from temporalio.contrib.streams._access import Access, _AsyncTopic, read_spec
+from temporalio.contrib.streams._access import (
+    Access,
+    ReadSpec,
+    _AsyncTopic,
+    read_spec,
+    subscription,
+)
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import Creating, StreamHandle, exit_failure
 from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._plugin import client_backend
-from temporalio.contrib.streams._reader import Item
+from temporalio.contrib.streams._reader import Item, Position, Subscription
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import models
 
@@ -217,13 +223,15 @@ class ClientStream(StreamHandle[E]):
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
-    ) -> AsyncGenerator[Item, None]:
+        type: Any = None,
+    ) -> Subscription[Any]:
         """Read the Stream's items in order.
 
         The read ends after a ``Closed`` item, or at the newest Record when
         ``wait_new_records`` is False. A reader that wants to stop after a quiet time sets its
-        own timer, and resumes later with ``from_offset``. A ``Superseded`` item withdraws
-        earlier Records of a failed attempt, and it passes every Topic filter.
+        own timer, and resumes later with ``from_offset=`` the read's ``next_offset``. A
+        ``Superseded`` item withdraws earlier Records of a failed attempt, and it passes every
+        Topic filter.
 
         Args:
             topics: Read these Topics. With no Topics and no prefixes, read every Topic.
@@ -233,21 +241,31 @@ class ClientStream(StreamHandle[E]):
             prefixes: Also read the Topics whose names start with one of these.
             create_wait: How long to wait for a Stream that nobody created yet, such as the
                 Stream of a Workflow that just started. Defaults to no wait.
+            type: The type of the values of Topics outside the definition, such as Topics that
+                ``prefixes`` match. Topics of the definition keep their own types. Defaults to
+                no type, so the values decode as the converter gives them.
         """
-        names, types = read_spec(self, topics)
-        return self._read(
-            topics=names,
+        read = read_spec(
+            self,
+            topics,
             prefixes=prefixes,
-            types=types,
+            default_type=type,
             from_offset=from_offset,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
+        return subscription(lambda position: self._items(read, position), from_offset)
 
-    async def _read(self, **options: Any) -> AsyncGenerator[Item, None]:
+    async def _items(
+        self, read: ReadSpec, position: Position
+    ) -> AsyncGenerator[Item, None]:
         await self._ready()
-        async for item in self._access().read(**options):
-            yield item
+        items = self._access().items(read, position)
+        try:
+            async for item in items:
+                yield item
+        finally:
+            await items.aclose()
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one."""

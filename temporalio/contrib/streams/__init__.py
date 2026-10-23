@@ -24,6 +24,7 @@ from temporalio.contrib.streams._activity_stream import (
     ActivityTopic,
     SyncActivityStream,
     SyncActivityTopic,
+    SyncSubscription,
 )
 from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._defn import (
@@ -48,6 +49,7 @@ from temporalio.contrib.streams._errors import (
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import END, Closed, Record, Superseded
 from temporalio.contrib.streams._plugin import StreamPlugin
+from temporalio.contrib.streams._reader import Subscription
 from temporalio.contrib.streams._stream_client import (
     ClientStream,
     ClientTopic,
@@ -78,9 +80,11 @@ __all__ = [
     "StreamPlugin",
     "StreamStorageError",
     "StreamUnsupportedError",
+    "Subscription",
     "Superseded",
     "SyncActivityStream",
     "SyncActivityTopic",
+    "SyncSubscription",
     "TopicDefinition",
     "WorkflowStream",
     "WorkflowTopic",

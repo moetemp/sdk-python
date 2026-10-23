@@ -204,6 +204,45 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
         assert failure is None or failure in str(closes[0].failure)
 
 
+async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"resume-{uuid.uuid4()}"
+    )
+    await stream.topic(Events.tokens).publish("a")
+    turn = await stream.topic(Events.turns).publish(Turn("model"))
+    tokens = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+    assert tokens.next_offset == 0
+    assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
+        "a"
+    ]
+    # The page ends past the Record that the Topic filter left out.
+    assert tokens.next_offset == turn + 1
+    new = stream.subscribe(from_offset=streams.END, wait_new_records=False)
+    assert new.next_offset is None
+    assert [item async for item in new] == []
+    assert new.next_offset == turn + 1
+    await stream.topic(Events.tokens).publish("b")
+    resumed = stream.subscribe(from_offset=tokens.next_offset, wait_new_records=False)
+    assert [
+        item.data async for item in resumed if isinstance(item, streams.Record)
+    ] == ["b"]
+
+
+async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"typed-{uuid.uuid4()}"
+    )
+    await stream.topic("extra", type=Turn).publish(Turn("extra"))
+    await stream.topic(Events.tokens).publish("a")
+
+    async def read(**options: Any) -> list[object]:
+        items = stream.subscribe(wait_new_records=False, **options)
+        return [item.data async for item in items if isinstance(item, streams.Record)]
+
+    assert await read() == [{"kind": "extra", "text": ""}, "a"]
+    assert await read(type=Turn) == [Turn("extra"), "a"]
+
+
 async def test_auto_close_of_a_client_stream(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)
