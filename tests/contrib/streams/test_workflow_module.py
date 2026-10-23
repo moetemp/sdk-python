@@ -24,6 +24,7 @@ from temporalio.contrib.streams._defn import definition_of
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
+from tests.contrib.streams._support import on_native
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -352,10 +353,11 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
         first = await reader.__anext__()
         second = await reader.__anext__()
         await reader.aclose()
+        # Read before the terminate, since a native server closes the Stream with it.
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
         await handle.terminate()
     assert isinstance(first, streams.Record) and first.data == "turn"
     assert isinstance(second, streams.Record) and second.data == "turn"
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert not any(isinstance(item, streams.Closed) for item in items)
 
 
@@ -582,15 +584,17 @@ async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Cl
     # The two publishes merge under the Workflow's cap, and the codec makes the merge larger
     # than one batch may be, so each publish goes as its own batch.
     client = with_codec(stream_client, _GrowingCodec())
+    # The native server takes half the bytes of one append, so each publish there is smaller.
+    size = 150_000 if on_native(stream_client) else 300_000
     async with new_worker(client, PublishesLargeValues) as worker:
         handle = await client.start_workflow(
             PublishesLargeValues.run,
-            300_000,
+            size,
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
         offsets = await handle.result()
         items = await read(client, handle)
     written = [item for item in items if isinstance(item, streams.Record)]
-    assert [len(r.data) for r in written] == [300_000] * 6
+    assert [len(r.data) for r in written] == [size] * 6
     assert offsets == [written[2].offset, written[5].offset]

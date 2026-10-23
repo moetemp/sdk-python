@@ -6,6 +6,7 @@ import functools
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -39,3 +40,10 @@ def crate_file(relative: str) -> Path:
 
 def vectors(name: str) -> object:
     return json.loads(crate_file(f"testdata/{name}").read_text())
+
+
+def on_native(client: Any) -> bool:
+    """Whether a client's Streams are on the native server, whose rules differ in places."""
+    from temporalio.contrib.streams.native import NativeStreamPlugin
+
+    return any(isinstance(p, NativeStreamPlugin) for p in client.config()["plugins"])

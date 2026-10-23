@@ -18,6 +18,7 @@ from temporalio.contrib import streams
 from temporalio.contrib.streams import _activity
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.exceptions import CancelledError
+from tests.contrib.streams._support import on_native
 from tests.helpers import new_worker
 
 
@@ -321,24 +322,37 @@ class CreatesAndLeavesOpen:
         return stream.id
 
 
+@activity.defn
+async def only_closes(stream: streams.ActivityStream[Events]) -> str:
+    try:
+        await stream.close(result="closed by activity")
+    except streams.StreamNotFoundError as err:
+        return err.reason
+    return "closed"
+
+
 @workflow.defn
 class ClosesAnotherChainsStream:
     @workflow.run
-    async def run(self, stream_id: str) -> str:
-        # The handle has only the id, so the SDK can't tell that another chain owns it.
+    async def run(self, stream_id: str, native: bool) -> str:
+        # The handle has only the id, so the SDK can't tell that another chain owns it. On the
+        # native server such a handle finds no Workflow's Stream, so it can't write there.
         return await workflow.execute_local_activity(
-            close_it,
+            only_closes if native else close_it,
             streams.ActivityStream(id=stream_id),
             start_to_close_timeout=timedelta(seconds=30),
         )
 
 
 async def test_store_refuses_another_chains_close(stream_client: Client):
+    # The native server finds a Workflow's Stream only by its owner fields, so there a handle
+    # with only the id finds nothing, and the other chain writes nothing.
+    native = on_native(stream_client)
     async with new_worker(
         stream_client,
         CreatesAndLeavesOpen,
         ClosesAnotherChainsStream,
-        activities=[close_it],
+        activities=[close_it, only_closes],
     ) as worker:
         owner = await stream_client.start_workflow(
             CreatesAndLeavesOpen.run,
@@ -346,18 +360,15 @@ async def test_store_refuses_another_chains_close(stream_client: Client):
             task_queue=worker.task_queue,
         )
         stream_id = await owner.result()
-        assert (
-            await stream_client.execute_workflow(
-                ClosesAnotherChainsStream.run,
-                stream_id,
-                id=f"wf-{uuid.uuid4()}",
-                task_queue=worker.task_queue,
-            )
-            == "stream_not_owner"
-        )
-    stream = streams.StreamClient(stream_client).get_handle(Events, id=stream_id)
+        assert await stream_client.execute_workflow(
+            ClosesAnotherChainsStream.run,
+            args=[stream_id, native],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        ) == ("stream_not_found" if native else "stream_not_owner")
+    stream = streams.StreamClient(stream_client).workflow_stream(owner, Events)
     items = [item async for item in stream.subscribe(wait_new_records=False)]
-    assert [type(item) for item in items] == [streams.Record]
+    assert [type(item) for item in items] == ([] if native else [streams.Record])
 
 
 @dataclass

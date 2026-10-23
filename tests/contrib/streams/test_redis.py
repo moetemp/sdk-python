@@ -37,6 +37,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
+from tests.contrib.streams._support import on_native
 from tests.helpers import new_worker
 
 
@@ -180,13 +181,7 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
         await handle.result()
     stream = workflow_stream(stream_client, handle)
     items = [item async for item in stream.subscribe(wait_new_records=False)]
-    # The retried task's batch has its Superseded item and its first Record in one entry.
-    record_offsets = {r.offset for r in records(items)}
-    [shared] = [
-        i
-        for i in items
-        if isinstance(i, streams.Superseded) and i.offset in record_offsets
-    ]
+    shared = superseded_of_the_retry(stream_client, items)
     reader = stream.subscribe(wait_new_records=False)
     async for item in reader:
         if item == shared:
@@ -200,7 +195,20 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
             from_offset=resume_at, wait_new_records=False
         )
     ]
-    assert [r.data for r in records(resumed) if r.offset == shared.offset] == ["after"]
+    assert [r.data for r in records(resumed)][:1] == ["after"]
+
+
+def superseded_of_the_retry(client: Client, items: list[Any]) -> streams.Superseded:
+    # The retried task's batch is its Superseded item and then its Record. On Redis and memory
+    # both are one entry with one offset. The native server gives each entry its own offset.
+    after = max(
+        i for i, item in enumerate(items) if getattr(item, "data", None) == "after"
+    )
+    shared = items[after - 1]
+    assert isinstance(shared, streams.Superseded)
+    if not on_native(client):
+        assert shared.offset == items[after].offset
+    return shared
 
 
 @workflow.defn
@@ -235,12 +243,7 @@ async def test_a_workflow_read_resumes_at_a_superseded_item(stream_client: Clien
         await handle.result()
         stream = workflow_stream(stream_client, handle)
         items = [item async for item in stream.subscribe(wait_new_records=False)]
-        record_offsets = {r.offset for r in records(items)}
-        [shared] = [
-            i
-            for i in items
-            if isinstance(i, streams.Superseded) and i.offset in record_offsets
-        ]
+        shared = superseded_of_the_retry(stream_client, items)
         assert (
             await stream_client.execute_workflow(
                 StopsAtASuperseded.run,
@@ -569,11 +572,12 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
         await handle.result()
         stream = workflow_stream(codec_client, handle)
         decoded = await read_all(stream)
-        # A Stream with no definition reads the raw Payloads.
+        # A Stream with no definition reads the raw Payloads. The handle keeps the owner
+        # fields, since a native server finds a Workflow's Stream only by them.
         raw = [
             item
             async for item in streams.StreamClient(codec_client)
-            .get_handle(Plain, id=stream.id)
+            .get_handle(Plain, stream=stream)
             .topic("tokens", type=RawValue)
             .subscribe(wait_new_records=False)
         ]
