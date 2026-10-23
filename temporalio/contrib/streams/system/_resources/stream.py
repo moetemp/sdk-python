@@ -207,8 +207,7 @@ async def append_records(
     failed_tasks: list[int] | None = None,
     withdraw_run: str | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[AppendRecordsResponse,]:
-    """In Workflow code, Brook buffers this call in the run, and the facade drops the
-    answer.
+    """Append one batch. Workflow code makes the call from a Local Activity.
 
     Args:
         producer: Required outside a Workflow. In a Workflow the transport sets it.
@@ -251,11 +250,14 @@ async def close_stream(
     producer: Producer | None = None,
     result: typing.Any | None = None,
     failure: BaseException | None = None,
+    status: temporalio.api.streamservice.v1.stream_service_pb2.CloseStatus.ValueType
+    | None = None,
     previous_completed_task: WorkflowTaskEpoch | None = None,
     failed_tasks: list[int] | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[CloseStreamResponse,]:
     """
     Args:
+        status: Empty is completed, or failed with a failure. A caller may set canceled.
         previous_completed_task: Workflow only. The previous completed Workflow Task of
             the run.
         failed_tasks: Workflow only. Failed or timed out tasks since this run's last
@@ -266,6 +268,7 @@ async def close_stream(
         producer=producer,
         result=result,
         failure=failure,
+        status=status,
         previous_completed_task=previous_completed_task,
         failed_tasks=failed_tasks or [],
     )
@@ -297,8 +300,11 @@ async def read_records(
     max_records: int | None = None,
     wait: datetime.timedelta | None = None,
     create_wait: datetime.timedelta | None = None,
+    last: int | None = None,
+    max_bytes: int | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[ReadRecordsResponse,]:
-    """Not for Workflow code in Brook. A long poll. NOT_FOUND for an uncreated Stream.
+    """A long poll. NOT_FOUND for an uncreated Stream. Workflow code reads from a Local
+    Activity.
 
     Args:
         from_offset: Start offset. Empty uses start. INVALID_ARGUMENT past the newest
@@ -311,6 +317,8 @@ async def read_records(
         wait: How long to wait for a new Record before an empty answer. At most 60 s.
         create_wait: How long to wait for an uncreated Stream. Empty fails at once. At
             most 60 s.
+        last: Read the newest this many Records, oldest first. No from-offset. No wait.
+        max_bytes: The most Record bytes in a page. A larger Record still comes alone.
     """
     request = ReadRecordsRequest(
         stream=stream,
@@ -321,6 +329,8 @@ async def read_records(
         max_records=max_records,
         wait=wait,
         create_wait=create_wait,
+        last=last,
+        max_bytes=max_bytes,
     )
     return await _read_records(request)
 

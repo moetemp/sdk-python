@@ -9,31 +9,37 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from collections.abc import Callable, Mapping, Sequence
+import weakref
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NoReturn, cast
 
 import temporalio.activity
 import temporalio.api.common.v1
+import temporalio.api.failure.v1
 import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.bridge.streams
 import temporalio.client
+import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.runtime
+import temporalio.service
 import temporalio.worker
 import temporalio.workflow
 from temporalio.contrib.streams import _activity, _ids, _writes
 from temporalio.contrib.streams import workflow as streams_workflow
-from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams._backend import StreamBackend, _ExtensionStreamBackend
+from temporalio.contrib.streams._errors import StreamConfigError
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import close_status
 from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
-
-EXTENSION_NAME = "temporalio-streams-redis"
 
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
@@ -43,64 +49,118 @@ _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 
 
 class _ExtensionStreamPlugin(StreamPlugin):
-    # The Redis, memory and native plugins: the Stream calls go to a temporalio-streams
-    # extension.
-    _backend_class = _ExtensionStreamBackend
+    # The Redis, memory and native plugins: the Stream calls go to the temporalio-streams
+    # runtime.
     # Whether the Store closes a Stream with its owner's run chain on the server.
     _server_closes_with_run = False
 
     def __init__(
         self,
         name: str,
-        extension_name: str,
+        memory: bool,
         config: ext_pb.RedisStreamConfig | ext_pb.NativeStreamConfig,
         runtime: temporalio.runtime.Runtime | None,
         backend_name: str,
         default: bool,
     ) -> None:
-        """Create the plugin over the bridge's extension with ``extension_name``.
+        """Create the plugin over the bridge's Stream runtime, on Redis or in memory.
 
         ``backend_name`` is the name that Stream handles carry for this backend. ``default``
         makes it the client's default backend when the client has more than one.
         """
         config.backend = backend_name
-        self._extension = temporalio.worker.WorkerExtension(
-            extension_name, config.SerializeToString(), runtime=runtime
+        self._config = config.SerializeToString()
+        self._backends: weakref.WeakSet[_ExtensionStreamBackend] = weakref.WeakSet()
+        # The closes of the runs that ended on this plugin's Workers, by run id, until the
+        # Worker evicts the run.
+        self._run_closes: dict[str, _RunClose] = {}
+        self._closing: set[asyncio.Task[None]] = set()
+        # Each client gets its own runtime object on Redis. The memory Store has one for the
+        # plugin, so every client and Worker that shares the plugin shares its Streams.
+        self._memory: _ExtensionStreamBackend | None = None
+        if memory:
+            self._memory = self._runtime_backend(
+                runtime or temporalio.runtime.Runtime.default(), True
+            )
+        super().__init__(name, backend_name=backend_name, default=default)
+
+    def _runtime_backend(
+        self, runtime: temporalio.runtime.Runtime, memory: bool
+    ) -> _ExtensionStreamBackend:
+        backend = _ExtensionStreamBackend(
+            temporalio.bridge.streams.StreamRuntime(
+                runtime._core_runtime, memory, self._config
+            )
         )
-        self._backend = self._backend_class(self._extension)
-        self._converter = temporalio.converter.DataConverter.default
-        super().__init__(
-            name,
-            backend_name=backend_name,
-            default=default,
-            stream_backend=self._backend,
-            interceptors=[_StreamInterceptor(self)],
+        self._backends.add(backend)
+        return backend
+
+    def _new_backend(
+        self, service: temporalio.service.ServiceClient
+    ) -> _ExtensionStreamBackend:
+        # The backend of one client, on the runtime of its connection.
+        if self._memory is not None:
+            return self._memory
+        return self._runtime_backend(_runtime_of(service), False)
+
+    def configure_client(
+        self, config: temporalio.client.ClientConfig
+    ) -> temporalio.client.ClientConfig:
+        """Check the default backend, and give the client its own Stream runtime."""
+        config = super().configure_client(config)
+        backend = self._new_backend(config["service_client"])
+        config["interceptors"] = [
+            *config.get("interceptors", []),
+            _StreamInterceptor(self, backend, config["data_converter"]),
+        ]
+        return config
+
+    def backend_for(self, client: temporalio.client.Client) -> StreamBackend:
+        """The Stream runtime that this plugin gave ``client``."""
+        interceptor = self._interceptor_of(
+            client.config(active_config=True)["interceptors"]
         )
+        if interceptor is None or interceptor.backend is None:
+            raise StreamConfigError(
+                f"The client has no {type(self).__name__}. Put the plugin on the client."
+            )
+        return interceptor.backend
+
+    def _interceptor_of(self, interceptors: Sequence[Any]) -> _StreamInterceptor | None:
+        for interceptor in interceptors:
+            if (
+                isinstance(interceptor, _StreamInterceptor)
+                and interceptor.plugin is self
+            ):
+                return interceptor
+        return None
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
     ) -> temporalio.worker.WorkerConfig:
-        """Add the plugin's interceptors and give Core the extension."""
+        """Add the plugin's Activities, and its interceptor when the client has none."""
         config = super().configure_worker(config)
         check_worker_backends(config)
-        # Core takes one extension, so the extensions of two Stream plugins go as one.
-        other = config.get("extension")
-        config["extension"] = (
-            temporalio.worker.WorkerExtension.combine(other, self._extension)
-            if other is not None
-            else self._extension
-        )
         # The write Local Activities route by the backend in each request, so every Stream
         # plugin of the Worker shares one set.
         activities: list[Callable[..., Any]] = list(config.get("activities", []))
         writes = cast(list[Callable[..., Any]], _writes.ACTIVITIES)
         activities.extend(write for write in writes if write not in activities)
         config["activities"] = activities
+        client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
+        interceptors = [
+            *client.config(active_config=True)["interceptors"],
+            *config.get("interceptors", []),
+        ]
         # Records get no serialization context, so Workflows, Activities and clients encode
         # them alike.
-        client = config.get("client")
-        if client is not None:
-            self._converter = client.data_converter
+        mine = self._interceptor_of(interceptors)
+        if mine is None:
+            mine = _StreamInterceptor(
+                self, self._new_backend(client.service_client), None
+            )
+            config["interceptors"] = [*config.get("interceptors", []), mine]
+        mine.converter = client.data_converter
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -113,11 +173,47 @@ class _ExtensionStreamPlugin(StreamPlugin):
             )
         return config
 
+    def configure_replayer(
+        self, config: temporalio.worker.ReplayerConfig
+    ) -> temporalio.worker.ReplayerConfig:
+        """Add the Workflow interceptor. A replay runs no Activity, so it needs no runtime."""
+        config = super().configure_replayer(config)
+        config["interceptors"] = [
+            *config.get("interceptors", []),
+            _StreamInterceptor(self, None, None),
+        ]
+        return config
+
+    def on_workflow_evicted(
+        self, input: temporalio.worker.WorkflowEvictedInput
+    ) -> None:
+        """Write the closes of a run that ended, once the server accepted its completion."""
+        close = self._run_closes.pop(input.run_id, None)
+        if close is None or not input.execution_ending:
+            return
+        task = asyncio.get_running_loop().create_task(_write_closes(close))
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    async def run_worker(
+        self,
+        worker: temporalio.worker.Worker,
+        next: Callable[[temporalio.worker.Worker], Awaitable[None]],
+    ) -> None:
+        """Run the Worker, then wait for the closes of the runs that ended on it."""
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            if self._closing:
+                await asyncio.gather(*list(self._closing), return_exceptions=True)
+
     async def shutdown(self) -> None:
         """Drop every open writer, including the client's. Call it once the process no longer
         writes Streams.
         """
-        failed = await self._backend.close_writers()
+        failed = 0
+        for backend in list(self._backends):
+            failed += await backend.close_writers()
         if failed:
             logger.warning("Stream shutdown left %d failed writers", failed)
 
@@ -141,14 +237,26 @@ def check_worker_backends(config: temporalio.worker.WorkerConfig) -> None:
             )
 
 
+def _runtime_of(
+    service: temporalio.service.ServiceClient,
+) -> temporalio.runtime.Runtime:
+    # The runtime of a client's connection, as the Worker finds it.
+    service = getattr(service, "worker_service_client", service)
+    runtime = getattr(service, "_runtime", None) or getattr(
+        getattr(service, "config", None), "runtime", None
+    )
+    return runtime or temporalio.runtime.Runtime.default()
+
+
 class RedisStreamPlugin(_ExtensionStreamPlugin):
     """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
 
     Put it on the client. A Worker takes its client's plugins, so one plugin serves Workflow
-    code, Activities and the client. It registers the backend name ``redis``, which the
-    Stream handles it creates carry. A client and a Worker may have more than one Stream
-    plugin, such as this one and ``NativeStreamPlugin``. Each call goes to the backend that
-    the handle names, and ``backend=`` picks one for a create.
+    code, Activities and the client. Each client of the plugin gets its own runtime object, and
+    the client's Workers share it. It registers the backend name ``redis``, which the Stream
+    handles it creates carry. A client and a Worker may have more than one Stream plugin, such
+    as this one and ``NativeStreamPlugin``. Each call goes to the backend that the handle
+    names, and ``backend=`` picks one for a create.
 
     .. warning::
         This API is experimental.
@@ -163,11 +271,11 @@ class RedisStreamPlugin(_ExtensionStreamPlugin):
         retention: timedelta | None = None,
         safety_ttl: timedelta | None = None,
         response_timeout: timedelta | None = None,
-        runtime: temporalio.runtime.Runtime | None = None,
         name: str = "redis",
         default: bool = False,
     ) -> None:
-        """Create the plugin. It connects to Redis on the first Stream call.
+        """Create the plugin. Each client of the plugin connects to Redis on its first Stream
+        call, on the client's runtime.
 
         Args:
             url: A Redis URL, or the seed URLs of a cluster. Credentials and TLS come from the
@@ -178,11 +286,10 @@ class RedisStreamPlugin(_ExtensionStreamPlugin):
             safety_ttl: How long an open Workflow-owned Stream stays after its last write.
                 Defaults to 90 days.
             response_timeout: How long one Redis call takes at most. Defaults to 5 s.
-            runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry, so every process routes a
                 handle it receives.
-            default: Make this the client's default backend when the client has more than
-                one Stream plugin. With none marked, the first one is the default.
+            default: Make this the client's default backend. A client with more than one
+                Stream plugin marks exactly one, else it raises ``StreamConfigError``.
         """
         config = ext_pb.RedisStreamConfig(
             urls=[url] if isinstance(url, str) else list(url),
@@ -197,49 +304,64 @@ class RedisStreamPlugin(_ExtensionStreamPlugin):
             if value is not None:
                 getattr(config, field).FromTimedelta(value)
         super().__init__(
-            "temporalio.RedisStreamPlugin",
-            EXTENSION_NAME,
-            config,
-            runtime,
-            name,
-            default,
+            "temporalio.RedisStreamPlugin", False, config, None, name, default
         )
 
 
 class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interceptor):
-    def __init__(self, plugin: _ExtensionStreamPlugin) -> None:
+    # One for each client of the plugin, with that client's Stream runtime. The client's
+    # Workers take it from the client.
+    def __init__(
+        self,
+        plugin: _ExtensionStreamPlugin,
+        backend: _ExtensionStreamBackend | None,
+        converter: temporalio.converter.DataConverter | None,
+    ) -> None:
         super().__init__()
-        self._plugin = plugin
+        self.plugin = plugin
+        self.backend = backend
+        self.converter = converter or temporalio.converter.DataConverter.default
 
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
-        # Workflow code learns the Worker's backend names from the interceptor classes.
+        # Workflow code learns the Worker's backend names from the interceptor classes, and
+        # the run gives its closes to the interceptor.
         return type(
             "_WorkflowInbound",
             (_WorkflowInbound,),
             {
-                "_backend_name": self._plugin.backend_name,
-                "_default": self._plugin.default,
-                "_server_closes_with_run": self._plugin._server_closes_with_run,
+                "_backend_name": self.plugin.backend_name,
+                "_default": self.plugin.default,
+                "_server_closes_with_run": self.plugin._server_closes_with_run,
+                "_interceptor": self if self.backend is not None else None,
             },
         )
 
     def intercept_activity(
         self, next: temporalio.worker.ActivityInboundInterceptor
     ) -> temporalio.worker.ActivityInboundInterceptor:
-        return _ActivityInbound(next, self._plugin)
+        return _ActivityInbound(next, self)
+
+
+@dataclass
+class _RunClose:
+    # The closes of a run's close-with-run Streams, which the worker writes once the server
+    # accepted the run's completion.
+    interceptor: _StreamInterceptor
+    namespace: str
+    run_id: str
+    streams: list[models.StreamRef]
+    result: temporalio.api.common.v1.Payload | None
+    failure: temporalio.api.failure.v1.Failure | None
+    status: stream_pb.CloseStatus.ValueType | None
 
 
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend_name = ""
     _default = False
     _server_closes_with_run = False
-
-    async def _close_run_streams(self, **options: Any) -> None:
-        # A server that closes a Stream with its owner's run chain needs no close from here.
-        if not self._server_closes_with_run:
-            await _close_with_run(self._backend_name, **options)
+    _interceptor: _StreamInterceptor | None = None
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
         super().init(_WorkflowOutbound(outbound, self._backend_name, self._default))
@@ -265,20 +387,65 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 and temporalio.workflow.cancellation_reason() is not None
             ):
                 # The run ends cancelled.
-                await self._close_run_streams(
-                    failure=temporalio.exceptions.CancelledError("Workflow cancelled"),
+                await streams_workflow.drain()
+                self._close_with_run(
+                    failure=temporalio.exceptions.CancelledError("Workflow cancelled")
                 )
             elif _fails_run(err) and not chain_continues(
                 temporalio.workflow.info(), temporalio.workflow.now(), err
             ):
-                await self._close_run_streams(failure=err)
+                await streams_workflow.drain()
+                self._close_with_run(failure=err)
             raise
         # A cron run that completes still goes on with the chain.
         if not chain_continues(
             temporalio.workflow.info(), temporalio.workflow.now(), None
         ):
-            await self._close_run_streams(result=result)
+            self._close_with_run(result=result)
         return result
+
+    def _close_with_run(
+        self, *, result: Any | None = None, failure: BaseException | None = None
+    ) -> None:
+        # The closes wait until the server accepts the run's completion. A last Workflow Task
+        # that fails then leaves the Streams open, so its retry still writes to them.
+        interceptor = self._interceptor
+        if (
+            interceptor is None
+            or self._server_closes_with_run
+            or temporalio.workflow.unsafe.is_replaying()
+        ):
+            # A server that closes a Stream with its owner's run chain needs no close from
+            # here.
+            return
+        # Each Stream plugin's inbound interceptor closes the Streams of its own backend.
+        default = streams_workflow._backend_name()
+        streams = [
+            run_stream.ref
+            for run_stream in streams_workflow._state().streams.values()
+            if run_stream.close_with_run
+            and not run_stream.closed
+            and (run_stream.backend or default) == self._backend_name
+        ]
+        if not streams:
+            return
+        converter = temporalio.workflow.payload_converter()
+        failure_proto = None
+        if failure is not None:
+            failure_proto = temporalio.api.failure.v1.Failure()
+            temporalio.converter.DataConverter.default.failure_converter.to_failure(
+                failure, converter, failure_proto
+            )
+        info = temporalio.workflow.info()
+        interceptor.plugin._run_closes[info.run_id] = _RunClose(
+            interceptor=interceptor,
+            namespace=info.namespace,
+            run_id=info.run_id,
+            streams=streams,
+            result=converter.to_payload(result) if result is not None else None,
+            failure=failure_proto,
+            status=close_status(failure),
+        )
 
 
 def _fails_run(err: BaseException) -> bool:
@@ -325,30 +492,41 @@ def _non_retryable(err: BaseException, types: Sequence[str] | None) -> bool:
     return type(err).__name__ in (types or [])
 
 
-async def _close_with_run(
-    backend: str, *, result: Any | None = None, failure: BaseException | None = None
-) -> None:
-    # Each Stream plugin's inbound interceptor closes the Streams of its own backend.
-    default = streams_workflow._backend_name()
-    for stream_id, run_stream in list(streams_workflow._state().streams.items()):
-        if not run_stream.close_with_run or run_stream.closed:
-            continue
-        if (run_stream.backend or default) != backend:
-            continue
-        stream: streams_workflow.WorkflowStream[Any] = streams_workflow.WorkflowStream(
-            id=stream_id,
-            workflow_id=run_stream.ref.workflow_id,
-            first_execution_run_id=run_stream.ref.first_execution_run_id,
-            backend=run_stream.backend,
+async def _write_closes(close: _RunClose) -> None:
+    backend, converter = close.interceptor.backend, close.interceptor.converter
+    assert backend is not None
+    service = backend.service(close.namespace, converter)
+    failure = (
+        converter.failure_converter.from_failure(
+            close.failure, converter.payload_converter
         )
+        if close.failure is not None
+        else None
+    )
+    for ref in close.streams:
         try:
-            await stream.close(result=result, failure=failure)
+            await service.close_stream(
+                models.CloseStreamRequest(
+                    stream=ref,
+                    # The run itself closes its Streams, as their owner.
+                    producer=models.Producer(
+                        kind=stream_pb.ProducerKind.PRODUCER_KIND_WORKFLOW,
+                        id=_ids.workflow_producer_id(close.run_id),
+                        run_id=close.run_id,
+                    ),
+                    result=temporalio.common.RawValue(close.result)
+                    if close.result is not None
+                    else None,
+                    failure=failure,
+                    status=close.status,
+                )
+            )
         except Exception:
-            if failure is None:
-                raise
-            # The run's own failure wins over a close that failed.
-            temporalio.workflow.logger.warning(
-                "Failed closing the Stream %s with the run", stream_id, exc_info=True
+            logger.warning(
+                "Failed closing the Stream %s with the run %s",
+                ref.id,
+                close.run_id,
+                exc_info=True,
             )
 
 
@@ -434,17 +612,17 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
     def __init__(
         self,
         next: temporalio.worker.ActivityInboundInterceptor,
-        plugin: _ExtensionStreamPlugin,
+        interceptor: _StreamInterceptor,
     ) -> None:
         super().__init__(next)
-        self._plugin = plugin
-        self._temporal_stream_backend_name = plugin.backend_name
-        self._temporal_stream_default = plugin.default
+        self._interceptor = interceptor
+        self._temporal_stream_backend_name = interceptor.plugin.backend_name
+        self._temporal_stream_default = interceptor.plugin.default
 
     async def execute_activity(
         self, input: temporalio.worker.ExecuteActivityInput
     ) -> Any:
-        streams = _activity_streams(input, self._plugin)
+        streams = _activity_streams(input, self._interceptor)
         attempt, token = enter_attempt(self, streams)
         try:
             if temporalio.activity.info().attempt > 1:
@@ -545,9 +723,10 @@ async def _close_quietly(streams: _activity.ActivityStreams) -> None:
 
 
 def _activity_streams(
-    input: temporalio.worker.ExecuteActivityInput, plugin: _ExtensionStreamPlugin
+    input: temporalio.worker.ExecuteActivityInput, interceptor: _StreamInterceptor
 ) -> _activity.ActivityStreams:
-    # A sync Activity has no client, so the plugin gives the backend and the converter.
+    # A sync Activity has no client, so the interceptor gives the backend and the converter.
+    assert interceptor.backend is not None
     info = temporalio.activity.info()
     converter = temporalio.converter.PayloadConverter.default
     key = input.headers.get(_KEY_HEADER)
@@ -592,12 +771,12 @@ def _activity_streams(
             )
     producer.epoch.CopyFrom(epoch)
     return _activity.ActivityStreams(
-        backend=plugin._backend,
-        converter=plugin._converter,
+        backend=interceptor.backend,
+        converter=interceptor.converter,
         namespace=info.namespace,
         producer=producer,
         loop=asyncio.get_running_loop(),
-        backend_name=plugin.backend_name,
+        backend_name=interceptor.plugin.backend_name,
         previous_completed_task=previous,
         failed_tasks=failed,
     )

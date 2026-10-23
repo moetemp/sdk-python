@@ -692,6 +692,85 @@ temporalio.converter.transfer_type_convertible(
 
 
 @dataclasses.dataclass(slots=True)
+class FreeWriterRequest:
+    writer_id: int | None = None
+
+
+class _FreeWriterRequestTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        FreeWriterRequest,
+        temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest,
+    ]
+):
+    transfer_type: (
+        type[temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest] | None
+    ) = temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest,
+        type_hint: type[FreeWriterRequest],
+    ) -> FreeWriterRequest:
+        return FreeWriterRequest(
+            writer_id=value.writer_id if value.writer_id != 0 else None,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: FreeWriterRequest,
+    ) -> temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest:
+        message = temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterRequest()
+        if value.writer_id is not None:
+            message.writer_id = value.writer_id
+        return message
+
+
+temporalio.converter.transfer_type_convertible(_FreeWriterRequestTransferTypeConverter)(
+    FreeWriterRequest
+)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
+class FreeWriterResponse:
+    pass
+
+
+class _FreeWriterResponseTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter[
+        FreeWriterResponse,
+        temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse,
+    ]
+):
+    transfer_type: (
+        type[temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse]
+        | None
+    ) = temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse
+
+    @typing_extensions.override
+    def from_transfer_type(
+        self,
+        value: temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse,
+        type_hint: type[FreeWriterResponse],
+    ) -> FreeWriterResponse:
+        return FreeWriterResponse()
+
+    @typing_extensions.override
+    def to_transfer_type(
+        self,
+        value: FreeWriterResponse,
+    ) -> temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse:
+        message = temporalio.contrib.streams.proto.v1.extension_pb2.FreeWriterResponse()
+        return message
+
+
+temporalio.converter.transfer_type_convertible(
+    _FreeWriterResponseTransferTypeConverter
+)(FreeWriterResponse)  # pyright: ignore[reportUnusedCallResult]
+
+
+@dataclasses.dataclass(slots=True)
 class CloseWritersRequest:
     pass
 
