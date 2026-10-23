@@ -87,6 +87,10 @@ def _access(handle: StreamHandle[Any]) -> Access:
         namespace=streams.namespace,
         ref=ref,
         writer=lambda: streams.writer(handle),
+        # A handle with only an id names no chain, so the close names this Activity's own, and
+        # the Store refuses it when another chain owns the Stream.
+        workflow_id=handle.workflow_id or streams.workflow_id,
+        first_execution_run_id=handle.first_execution_run_id,
     )
 
 
