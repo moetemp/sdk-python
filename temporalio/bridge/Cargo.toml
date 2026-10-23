@@ -39,9 +39,9 @@ tls-aws-lc = [
     "tokio-rustls/aws_lc_rs",
 ]
 fips = ["tls-aws-lc", "dep:aws-lc-rs", "streams", "temporalio-streams?/fips"]
-# Links the Stream runtime as the `temporalio-streams-redis` worker extension. No stream code
-# runs unless a plugin builds the extension. The official builds turn it on. It is off by
-# default, since its git dependencies would break offline builds of the sdist.
+# Links the Stream runtime, which a Stream plugin builds for each client. No stream code runs
+# unless a plugin builds it. The official builds turn it on. It is off by default, since its git
+# dependencies would break offline builds of the sdist.
 streams = ["dep:temporalio-streams"]
 
 [dependencies]
@@ -94,7 +94,7 @@ url = "2.2"
 # crates, so the bridge sees one type of each.
 [dependencies.temporalio-streams]
 git = "https://github.com/moetemp/sdk-streams"
-rev = "f3c74d24a7cb0e370c1a0222696707d6a0014315"
+rev = "879563a2f47212c10052423dbdfb15f44bcbeef8"
 default-features = false
 optional = true
 
@@ -102,7 +102,6 @@ optional = true
 # ignores the patch with only a warning.
 [patch."https://github.com/moetemp/sdk-rust"]
 temporalio-common = { path = "./sdk-core/crates/common" }
-temporalio-sdk-core = { path = "./sdk-core/crates/sdk-core" }
 
 [profile.release]
 opt-level = 3

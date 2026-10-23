@@ -42,3 +42,8 @@ def standalone_activity_producer_id(activity_id: str, activity_run_id: str) -> s
 def client_producer_id(identity: str, process_key: str) -> str:
     """Producer id of a client process."""
     return f"client:{_join(identity, process_key)}"
+
+
+def named_client_producer_id(name: str) -> str:
+    """Producer id of a client with a name of its own, which it keeps across restarts."""
+    return f"client:{_join(name)}"

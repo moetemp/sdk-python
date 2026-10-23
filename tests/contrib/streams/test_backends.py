@@ -27,7 +27,9 @@ def two_backend_client(
 ) -> Client:
     config = client.config()
     config["plugins"] = [
-        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}"),
+        RedisStreamPlugin(
+            redis_url, key_prefix=f"t-{uuid.uuid4()}", default=not memory_default
+        ),
         MemoryStreamPlugin(default=memory_default),
     ]
     return Client(**config)
@@ -219,6 +221,6 @@ async def test_continued_run_closes_each_backend(client: Client, redis_url: str)
 
 def test_two_plugins_with_one_backend_name(client: Client):
     config = client.config()
-    config["plugins"] = [MemoryStreamPlugin(), MemoryStreamPlugin()]
+    config["plugins"] = [MemoryStreamPlugin(default=True), MemoryStreamPlugin()]
     with pytest.raises(ValueError, match="backend memory"):
         Worker(Client(**config), task_queue="q", workflows=[CreatesDefault])

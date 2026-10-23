@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-from collections.abc import AsyncGenerator, Coroutine, Iterator, Sequence
+from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
-from typing import Any, TypeVar, overload
+from typing import Any, Generic, TypeVar, cast, overload
 
 from temporalio.contrib.streams import _activity, _errors
 from temporalio.contrib.streams._access import (
@@ -14,11 +14,12 @@ from temporalio.contrib.streams._access import (
     SyncTopicBase,
     _AsyncTopic,
     read_spec,
+    subscription,
 )
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import End
-from temporalio.contrib.streams._reader import Item
+from temporalio.contrib.streams._items import Closed, End, Record, Superseded
+from temporalio.contrib.streams._reader import Subscription
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -100,20 +101,25 @@ class ActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
-    ) -> AsyncGenerator[Item, None]:
+        type: Any = None,
+    ) -> Subscription[Any]:
         """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
-        names, types = read_spec(self, topics)
-        return self._access().read(
-            topics=names,
+        read = read_spec(
+            self,
+            topics,
             prefixes=prefixes,
-            types=types,
+            default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
+        access = self._access()
+        return subscription(lambda position: access.items(read, position), read)
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
@@ -129,7 +135,11 @@ class ActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``.
+        ``failure``. A ``CancelledError`` failure closes it as canceled.
+
+        Only a Local Activity of the run chain that created the Stream may close it. Any other
+        Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
+        reader.
         """
         await self._access().close(result, failure)
 
@@ -154,18 +164,59 @@ class SyncActivityTopic(SyncTopicBase[T]):
         self,
         *,
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
-    ) -> Iterator[Item]:
-        """Read this Topic only. See the Stream's ``subscribe``."""
+    ) -> SyncSubscription[T]:
+        """Read this Topic only. Its Records have the Topic's type. See the Stream's
+        ``subscribe``.
+        """
         stream = self._stream
         assert isinstance(stream, SyncActivityStream)
-        return stream.subscribe(
-            self,
-            from_offset=from_offset,
-            wait_new_records=wait_new_records,
-            create_wait=create_wait,
+        return cast(
+            SyncSubscription[T],
+            stream.subscribe(
+                self,
+                from_offset=from_offset,
+                last=last,
+                wait_new_records=wait_new_records,
+                create_wait=create_wait,
+            ),
         )
+
+
+class SyncSubscription(Generic[T]):
+    """The items of one read of a Stream in a sync Activity, in order. Use it in ``for``.
+
+    Each step blocks the Activity's thread. See :py:class:`Subscription`.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(
+        self, stream: SyncActivityStream[Any], subscription: Subscription[T]
+    ) -> None:
+        """Create a read. Use a handle's ``subscribe`` instead."""
+        self._subscription = subscription
+        self._steps = stream._items(subscription)
+
+    @property
+    def next_offset(self) -> int | None:
+        """The offset to resume from. See :py:attr:`Subscription.next_offset`."""
+        return self._subscription.next_offset
+
+    def __iter__(self) -> SyncSubscription[T]:
+        """The read is its own iterator."""
+        return self
+
+    def __next__(self) -> Record[T] | Superseded | Closed:
+        """The next item."""
+        return next(self._steps)
+
+    def close(self) -> None:
+        """End the read early. It makes no more calls."""
+        self._steps.close()
 
 
 class SyncActivityStream(StreamHandle[E]):
@@ -226,23 +277,31 @@ class SyncActivityStream(StreamHandle[E]):
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
         from_offset: int | End | None = None,
+        last: int | None = None,
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
-    ) -> Iterator[Item]:
+        type: Any = None,
+    ) -> SyncSubscription[Any]:
         """Read the Stream's items in order. See :py:meth:`ClientStream.subscribe`."""
-        names, types = read_spec(self, topics)
-        items = self._access().read(
-            topics=names,
+        read = read_spec(
+            self,
+            topics,
             prefixes=prefixes,
-            types=types,
+            default_type=type,
             from_offset=from_offset,
+            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
-        return self._items(items)
+        access = self._access()
+        return SyncSubscription(
+            self, subscription(lambda position: access.items(read, position), read)
+        )
 
-    def _items(self, items: AsyncGenerator[Item, None]) -> Iterator[Item]:
+    def _items(
+        self, items: Subscription[T]
+    ) -> Generator[Record[T] | Superseded | Closed, None, None]:
         try:
             while True:
                 try:
@@ -264,9 +323,11 @@ class SyncActivityStream(StreamHandle[E]):
     def close(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        """Write this attempt's Records, then close the Stream."""
+        """Write this attempt's Records, then close the Stream. See
+        :py:meth:`ActivityStream.close`.
+        """
         self._run(self._access().close(result, failure))
 
 
-async def _next(items: AsyncGenerator[Item, None]) -> Item:
+async def _next(items: Subscription[T]) -> Record[T] | Superseded | Closed:
     return await items.__anext__()

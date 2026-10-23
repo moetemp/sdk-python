@@ -11,8 +11,8 @@ A Stream plugin carries the calls and registers a backend name with ``name=``, s
 :py:class:`temporalio.contrib.streams.redis.RedisStreamPlugin` (``redis``) and
 :py:class:`temporalio.contrib.streams.testing.MemoryStreamPlugin` (``memory``). A handle
 carries the name of its backend. A client and a Worker may have more than one Stream plugin,
-and each call goes to the backend that the handle names. ``default=True`` marks the one that a
-create with no ``backend=`` uses, or else the first plugin is the default.
+and each call goes to the backend that the handle names. Then exactly one of them has
+``default=True``, the one that a create with no ``backend=`` uses.
 
 .. warning::
     This package is experimental.
@@ -24,6 +24,7 @@ from temporalio.contrib.streams._activity_stream import (
     ActivityTopic,
     SyncActivityStream,
     SyncActivityTopic,
+    SyncSubscription,
 )
 from temporalio.contrib.streams._buffered import BufferedPublisher
 from temporalio.contrib.streams._defn import (
@@ -41,13 +42,22 @@ from temporalio.contrib.streams._errors import (
     StreamExpiredError,
     StreamFencedError,
     StreamNotFoundError,
+    StreamNotOwnerError,
     StreamOffsetError,
+    StreamSeqDivergentError,
     StreamStorageError,
     StreamUnsupportedError,
 )
 from temporalio.contrib.streams._handle import StreamHandle
-from temporalio.contrib.streams._items import END, Closed, Record, Superseded
+from temporalio.contrib.streams._items import (
+    END,
+    Closed,
+    CloseStatus,
+    Record,
+    Superseded,
+)
 from temporalio.contrib.streams._plugin import StreamPlugin
+from temporalio.contrib.streams._reader import Subscription
 from temporalio.contrib.streams._stream_client import (
     ClientStream,
     ClientTopic,
@@ -62,6 +72,7 @@ __all__ = [
     "BufferedPublisher",
     "ClientStream",
     "ClientTopic",
+    "CloseStatus",
     "Closed",
     "ReadOnlyContextError",
     "Record",
@@ -74,13 +85,17 @@ __all__ = [
     "StreamFencedError",
     "StreamHandle",
     "StreamNotFoundError",
+    "StreamNotOwnerError",
     "StreamOffsetError",
     "StreamPlugin",
+    "StreamSeqDivergentError",
     "StreamStorageError",
     "StreamUnsupportedError",
+    "Subscription",
     "Superseded",
     "SyncActivityStream",
     "SyncActivityTopic",
+    "SyncSubscription",
     "TopicDefinition",
     "WorkflowStream",
     "WorkflowTopic",

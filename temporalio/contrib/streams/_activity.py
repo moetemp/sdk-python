@@ -42,6 +42,7 @@ class ActivityStreams:
                 writers=self.backend.writers(self.namespace, self.converter),
                 stream_id=known_id,
                 producer=self.producer,
+                free=self.backend.free_writer,
                 previous_completed_task=self.previous_completed_task,
                 failed_tasks=self.failed_tasks,
             )
