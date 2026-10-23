@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from temporalio.client import WorkflowHistory
@@ -15,6 +16,22 @@ if TYPE_CHECKING:
         WorkerConfig,
         WorkflowReplayResult,
     )
+
+
+@dataclass(frozen=True)
+class WorkflowEvictedInput:
+    """Input for :py:meth:`Plugin.on_workflow_evicted`.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    run_id: str
+    """Run ID of the Workflow."""
+
+    execution_ending: bool
+    """Whether the server accepted the run's last completion, so the run ended. False for any
+    other eviction, such as a full cache, a failed Workflow Task or a Worker shutdown."""
 
 
 class Plugin(abc.ABC):
@@ -63,6 +80,26 @@ class Plugin(abc.ABC):
             worker: The worker instance to run.
             next: Callable to continue the worker execution.
         """
+
+    def on_workflow_evicted(
+        self,
+        input: WorkflowEvictedInput,  # pyright: ignore[reportUnusedParameter]
+    ) -> None:
+        """Hook called after the Worker evicts a Workflow run from its cache.
+
+        The Worker calls it outside the sandbox, on its event loop, after Core reports the
+        eviction. So a plugin can act on a run that ended only once the server accepted its
+        completion. The hook must not block. A plugin starts its async work here and waits for
+        it in :py:meth:`run_worker`. The Worker logs an exception and goes on. The
+        :py:class:`Replayer` never calls it. The default does nothing.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            input: The run and why it was evicted.
+        """
+        pass
 
     @abc.abstractmethod
     def configure_replayer(self, config: ReplayerConfig) -> ReplayerConfig:

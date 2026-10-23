@@ -12,7 +12,7 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
-from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
+from temporalio.client import Client, Interceptor, WorkflowFailureError, WorkflowHandle
 from temporalio.common import RawValue, RetryPolicy
 from temporalio.contrib import streams
 from temporalio.contrib.streams import StreamPlugin
@@ -30,7 +30,9 @@ from temporalio.worker import (
     Replayer,
     UnsandboxedWorkflowRunner,
     WorkflowInboundInterceptor,
+    WorkflowInterceptorClassInput,
 )
+from temporalio.worker import Interceptor as WorkerInterceptor
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -242,6 +244,7 @@ async def test_cancelled_block_closes_with_a_failure(stream_client: Client):
     closed = items[-1]
     assert isinstance(closed, streams.Closed)
     assert closed.failure is not None
+    assert closed.status == streams.CloseStatus.CANCELED
 
 
 @streams.defn(name="plain")
@@ -760,7 +763,7 @@ async def test_two_backends_on_one_client(client: Client, redis_url: str):
     # another. Each handle carries its backend, so a call goes to the backend that has it.
     config = client.config()
     config["plugins"] = [
-        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}"),
+        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
         MemoryStreamPlugin(),
     ]
     stream_client = streams.StreamClient(Client(**config))
@@ -778,6 +781,68 @@ async def test_two_backends_on_one_client(client: Client, redis_url: str):
             if isinstance(item, streams.Record)
         ]
         assert data == [expected]
+
+
+failed_last_task: set[str] = set()
+
+
+class _FailsTheLastTaskOnce(Interceptor, WorkerInterceptor):
+    # On the client before the Stream plugin, so it is the outer Workflow interceptor and
+    # fails the task after the plugin's part of the run end.
+    def workflow_interceptor_class(
+        self, input: WorkflowInterceptorClassInput
+    ) -> type[WorkflowInboundInterceptor]:
+        return _FailsTheLastTaskOnceInbound
+
+
+class _FailsTheLastTaskOnceInbound(WorkflowInboundInterceptor):
+    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        result = await super().execute_workflow(input)
+        workflow_id = workflow.info().workflow_id
+        if workflow_id not in failed_last_task:
+            failed_last_task.add(workflow_id)
+            raise RuntimeError("fail the last Workflow Task once")
+        return result
+
+
+@workflow.defn
+class PublishesAndReturns:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await stream_workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("token")
+        return "done"
+
+
+@pytest.mark.parametrize("cache", [0, 10])
+async def test_failed_last_task_leaves_the_close_to_its_retry(
+    stream_client: Client, cache: int
+):
+    # The close with the run goes out once the server accepted the run's completion. A close
+    # in the failed task would make the retry's create raise StreamClosedError.
+    config = stream_client.config()
+    config["interceptors"] = [_FailsTheLastTaskOnce()]
+    client = Client(**config)
+    async with new_worker(
+        client,
+        PublishesAndReturns,
+        max_cached_workflows=cache,
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await client.start_workflow(
+            PublishesAndReturns.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "done"
+        items = await asyncio.wait_for(read_all(workflow_stream(client, handle)), 20)
+    written = records(items)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
+    assert [r.data for r in visible] == ["token"]
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    assert len(closes) == 1 and closes[0].result == "done"
+    assert closes[0].status == streams.CloseStatus.COMPLETED
 
 
 @workflow.defn

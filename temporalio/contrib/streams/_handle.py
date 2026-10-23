@@ -2,18 +2,82 @@
 
 from __future__ import annotations
 
+import asyncio
 import typing
-from typing import Any, Generic, TypeVar
+from collections.abc import Callable, Coroutine, Generator
+from types import TracebackType
+from typing import Any, Generic, Protocol, TypeVar
 
 from typing_extensions import Self
 
 import temporalio.converter
+import temporalio.exceptions
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
+
+
+def exit_failure(exc: BaseException | None) -> tuple[bool, BaseException | None]:
+    """Whether the end of an ``async with`` block closes the Stream, and with which failure.
+
+    A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
+    an eviction, leaves it open, since the block did not end in the caller's code.
+    """
+    if isinstance(exc, asyncio.CancelledError):
+        return True, temporalio.exceptions.CancelledError(str(exc) or "Cancelled")
+    if exc is None or isinstance(exc, Exception):
+        return True, exc
+    return False, None
+
+
+class _ClosesOnExit(Protocol):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+
+
+S = TypeVar("S", bound=_ClosesOnExit)
+
+
+class Creating(Generic[S]):
+    """A Stream create. Await it for the handle, or use it in ``async with``, which closes the
+    Stream at the end of the block.
+
+    The create starts when it is awaited or entered, not before.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(self, create: Callable[[], Coroutine[Any, Any, S]]) -> None:
+        """Create it. Use a context's create call instead."""
+        self._create = create
+        self._stream: S | None = None
+
+    def __await__(self) -> Generator[Any, None, S]:
+        """Create the Stream and give its handle."""
+        return self._create().__await__()
+
+    async def __aenter__(self) -> S:
+        """Create the Stream and give its handle for the block."""
+        self._stream = await self._create()
+        return self._stream
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the Stream as the handle's own ``async with`` does."""
+        assert self._stream is not None
+        await self._stream.__aexit__(exc_type, exc, tb)
 
 
 class TopicBase(Generic[T]):

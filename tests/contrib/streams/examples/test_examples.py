@@ -30,7 +30,7 @@ def task_queue() -> str:
 
 async def test_ui_backend_reads(stream_client: Client):
     screen = await ui_backend_reads.main(stream_client, task_queue())
-    assert [(record.topic, record.data) for record in screen.shown] == [
+    assert [(record.topic, record.data) for record in screen.shown.values()] == [
         ("turns", ui_backend_reads.Turn("model")),
         ("tokens", "hello"),
         ("tokens", "there"),
@@ -111,13 +111,15 @@ def lane_plugins(
 ) -> tuple[streams.StreamPlugin, streams.StreamPlugin]:
     """The plugins of a lane: one named `redis` and one named `native`."""
     if lane == "memory":
-        return MemoryStreamPlugin(name="redis"), MemoryStreamPlugin(name="native")
+        return MemoryStreamPlugin(name="redis", default=True), MemoryStreamPlugin(
+            name="native"
+        )
     if lane == "native" and not NATIVE_TARGET:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
     redis_url = request.getfixturevalue("redis_url")
-    redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+    redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True)
     if lane == "redis":
         return redis, MemoryStreamPlugin(name="native")
     return redis, NativeStreamPlugin()

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -76,7 +77,7 @@ class Turns:
     async def run(self, fail_at: int) -> None:
         for n in range(2):
             try:
-                async with await stream_workflow.create_stream(
+                async with stream_workflow.create_stream(
                     streams.with_name(Events, f"turn-{n}"), close_with_run=False
                 ) as turn:
                     await turn.topic(Events.tokens).publish(f"token-{n}")
@@ -216,6 +217,37 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
 
 
 @workflow.defn
+class ClosesAReceivedStream:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
+        await stream.topic(Events.tokens).publish("from workflow")
+        try:
+            await stream.close(result="ended by a writer")
+        except streams.StreamNotOwnerError as err:
+            return err.reason
+        return "closed"
+
+
+async def test_workflow_closes_only_its_own_streams(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"owned-{uuid.uuid4()}"
+    )
+    async with new_worker(stream_client, ClosesAReceivedStream) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                ClosesAReceivedStream.run,
+                stream_workflow.WorkflowStream.from_handle(stream),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_owner"
+        )
+    # The writer can't end the Stream for every reader, so it stays open.
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert data(items) == ["from workflow"]
+
+
+@workflow.defn
 class Failing:
     @workflow.run
     async def run(self) -> None:
@@ -235,6 +267,7 @@ async def test_close_with_run_takes_the_failure(stream_client: Client):
     assert data(items) == ["before"]
     assert isinstance(items[-1], streams.Closed)
     assert str(items[-1].failure) == "run failed"
+    assert items[-1].status == streams.CloseStatus.FAILED
 
 
 @workflow.defn
@@ -399,7 +432,12 @@ class Gathers:
     @workflow.run
     async def run(self) -> list[int]:
         tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
-        return list(await asyncio.gather(*(tokens.publish(str(n)) for n in range(5))))
+        tokens.publish_nowait("0")
+        # The first write starts, so the next ones wait behind it.
+        await asyncio.sleep(0)
+        return list(
+            await asyncio.gather(*(tokens.publish(str(n)) for n in range(1, 5)))
+        )
 
 
 async def test_concurrent_publishes_keep_their_order(stream_client: Client):
@@ -410,8 +448,21 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
         offsets = await handle.result()
         items = await read(stream_client, handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
-    assert offsets == sorted(offsets)
+    # The four writes that waited went as one Local Activity, and each call got the offset of
+    # its own Record.
+    assert (
+        offsets
+        == [item.offset for item in items if isinstance(item, streams.Record)][1:]
+    )
     history = await handle.fetch_history()
+    markers = [
+        e
+        for e in history.events
+        if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+    ]
+    # The create, the first write and the four that waited. The worker writes the close with
+    # the run after the run, so it has no marker.
+    assert len(markers) == 3
     # Replay answers from the markers and writes nothing.
     plugins = [
         p

@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -333,7 +334,8 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
     # A replay reads a recorded range again. Other Records there mean other code ran, and
     # fewer mean the Store lost the range, which a retry of the task can't fix.
     plugin = NativeStreamPlugin()
-    codec = _DirectReadCodec(plugin, None, None)
+    backend = SimpleNamespace()
+    codec = _DirectReadCodec(plugin, lambda: cast(Any, backend), None, None)
 
     def record(topic: str) -> stream_pb.StreamRecord:
         return stream_pb.StreamRecord(
@@ -346,7 +348,9 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
         namespace="ns", stream=stream_pb.StreamRef(id="s"), from_offset=5
     )
     live = stream_pb.ReadRecordsResponse(records=[record("tokens")], next_offset=6)
-    positions = (await plugin._read_result("run", request, live, False)).payload
+    positions = (
+        await plugin._read_result("run", request, live, False, DataConverter.default)
+    ).payload
     reads: list[stream_pb.ReadRecordsRequest] = []
     answers: list[Any] = [
         live,
@@ -362,7 +366,7 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
             raise answer
         return answer
 
-    setattr(plugin._backend, "call_async", call_async)
+    backend.call_async = call_async
     # The live task takes the page from the cache, and a replay reads it again.
     for _ in range(2):
         [page] = await codec.decode([positions])

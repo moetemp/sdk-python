@@ -9,32 +9,36 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.bridge.client
+import temporalio.bridge.streams
 import temporalio.client
 import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.nexus.system
-import temporalio.runtime
+import temporalio.service
 import temporalio.worker
 import temporalio.workflow
 from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.contrib.streams import _errors, _workflow_reader
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams._errors import StreamConfigError
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import (
+    _attempt_streams,
     _decode_page,
     _ExtensionStreamPlugin,
+    _runtime_of,
     _WorkflowOutbound,
     page_payload,
 )
 
-NATIVE_EXTENSION_NAME = "temporalio-streams-native"
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 
 # Nothing waits for the answer of a wake that the reader dropped, so its cancel ends it at once.
@@ -86,10 +90,14 @@ class _DirectReadCodec(
     def __init__(
         self,
         plugin: NativeStreamPlugin,
+        backend: Callable[[], _ExtensionStreamBackend],
         inner: temporalio.converter.PayloadCodec | None,
         records: temporalio.converter.PayloadCodec | None,
     ) -> None:
         self._plugin = plugin
+        # The runtime that a replay reads again on: the client's, or for a Replayer, one of
+        # a client of the plugin.
+        self._backend = backend
         self._inner = inner
         # Writers encode Records with no serialization context, so a page decodes with the
         # client's codec as it is, live and on replay alike.
@@ -101,7 +109,7 @@ class _DirectReadCodec(
         inner = self._inner
         if isinstance(inner, temporalio.converter.WithSerializationContext):
             inner = inner.with_context(context)
-        return _DirectReadCodec(self._plugin, inner, self._records)
+        return _DirectReadCodec(self._plugin, self._backend, inner, self._records)
 
     async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
         if self._inner is None:
@@ -159,7 +167,7 @@ class _DirectReadCodec(
         request.to_offset = answer.next_offset
         stream_id = request.stream.id
         try:
-            page = await self._plugin._backend.call_async(
+            page = await self._backend().call_async(
                 "ReadRecords", request, stream_pb.ReadRecordsResponse
             )
         except (_errors.StreamExpiredError, _errors.StreamNotFoundError) as err:
@@ -183,12 +191,43 @@ class _DirectReadCodec(
         )
 
 
-class _NativeBackend(_ExtensionStreamBackend):
-    def for_client(self, client: temporalio.client.Client) -> _NativeBackend:
-        # A process with no Worker gives the extension its client's connection. A Worker
-        # gives it the Worker's at its start.
-        self._extension.attach(client)
-        return self
+class _ConnectionRuntime:
+    # The native runtime of one client, on that client's connection. A lazy client connects at
+    # its first call, so the runtime comes then too.
+    def __init__(
+        self, service: temporalio.service.ServiceClient, config: bytes
+    ) -> None:
+        self._service = service
+        self._config = config
+        self._streams: temporalio.bridge.streams.StreamRuntime | None = None
+
+    async def call(self, method: str, input: bytes) -> bytes:
+        if self._streams is None:
+            bridge_client = await _bridge_client(self._service)
+            # Two first calls may both wait for the connection. One runtime serves both, so
+            # a writer that one opens is known to the other.
+            if self._streams is None:
+                self._streams = temporalio.bridge.streams.StreamRuntime.on_client(
+                    _runtime_of(self._service)._core_runtime,
+                    bridge_client,
+                    self._config,
+                )
+        return await self._streams.call(method, input)
+
+    def free_writer(self, writer_id: int) -> None:
+        # A writer exists only after a call, which built the runtime.
+        if self._streams is not None:
+            self._streams.free_writer(writer_id)
+
+
+async def _bridge_client(
+    service: temporalio.service.ServiceClient,
+) -> temporalio.bridge.client.Client:
+    service = getattr(service, "worker_service_client", service)
+    connect = getattr(service, "_connected_client", None)
+    if connect is None:
+        raise RuntimeError("The native Stream backend needs a client with a connection")
+    return await connect()
 
 
 class _NativeWorkflowOutbound(_WorkflowOutbound):
@@ -254,21 +293,38 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
 class NativeStreamPlugin(_ExtensionStreamPlugin):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
 
-    Workflow writes run as Local Activities, as on Redis, and the extension writes them to the
-    server's ``temporal.api.streamservice.v1.StreamService`` on the Worker's connection.
-    Activity and client calls go to the same service through the extension. A page of a
-    Workflow read is a direct read in a Local Activity whose marker holds only its positions,
-    and a replay reads the page again. It registers the backend name ``native``. Put it on the
-    client next to ``RedisStreamPlugin`` to keep old Streams on Redis and create new ones on
-    the server.
+    Workflow writes run as Local Activities, as on Redis, and the client's Stream runtime
+    writes them to the server's ``temporal.api.streamservice.v1.StreamService``. Activity and
+    client calls go to the same service. Each client of the plugin gets its own runtime on its
+    own connection, and the client's Workers share it. A page of a Workflow read is a direct
+    read in a Local Activity whose marker holds only its positions, and a replay reads the page
+    again. It registers the backend name ``native``. Put it on the client next to
+    ``RedisStreamPlugin`` to keep old Streams on Redis and create new ones on the server.
 
     .. warning::
         This API is experimental.
     """
 
-    _backend_class = _NativeBackend
     _outbound_class = _NativeWorkflowOutbound
     _server_closes_with_run = True
+
+    def _new_backend(
+        self, service: temporalio.service.ServiceClient
+    ) -> _ExtensionStreamBackend:
+        # Each client gets its own runtime on its own connection, so a call goes on the
+        # connection of the client that makes it.
+        backend = _ExtensionStreamBackend(_ConnectionRuntime(service, self._config))
+        self._backends.add(backend)
+        return backend
+
+    def _any_backend(self) -> _ExtensionStreamBackend:
+        # A Replayer has no client, so a replay reads again on a client of the plugin.
+        for backend in self._backends:
+            return backend
+        raise StreamConfigError(
+            "A native replay reads the Stream again, so use the plugin of a client that "
+            "connected"
+        )
 
     async def _read_result(
         self,
@@ -276,6 +332,7 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
         request: stream_pb.ReadRecordsRequest,
         page: stream_pb.ReadRecordsResponse,
         owner_ended: bool,  # pyright: ignore[reportUnusedParameter]
+        converter: temporalio.converter.DataConverter,  # pyright: ignore[reportUnusedParameter]
     ) -> Any:
         # The marker holds the positions, and the Records wait as the Store gave them for the
         # codec step, which decodes them as on replay.
@@ -305,8 +362,12 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
                 self._pages.popitem(last=False)
         return temporalio.common.RawValue(positions)
 
-    def _forget_run(self, run_id: str) -> None:
-        for key in [key for key in self._pages if key[0] == run_id]:
+    def on_workflow_evicted(
+        self, input: temporalio.worker.WorkflowEvictedInput
+    ) -> None:
+        """Drop the pages of a run that left the Worker, which no Workflow Task takes now."""
+        super().on_workflow_evicted(input)
+        for key in [key for key in self._pages if key[0] == input.run_id]:
             del self._pages[key]
 
     def _activities(self) -> list[Any]:
@@ -317,41 +378,46 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
     ) -> temporalio.client.ClientConfig:
         """Wrap the client's codec, so a Workflow read's positions turn back into its page."""
         config = super().configure_client(config)
+        interceptor = self._interceptor_of(config.get("interceptors", []))
+        backend = interceptor.backend if interceptor is not None else None
         converter = (
             config.get("data_converter") or temporalio.converter.DataConverter.default
         )
-        config["data_converter"] = _wrap(self, converter)
+        config["data_converter"] = _wrap(
+            self,
+            (lambda: backend) if backend is not None else self._any_backend,
+            converter,
+        )
         return config
 
     def configure_replayer(
         self, config: temporalio.worker.ReplayerConfig
     ) -> temporalio.worker.ReplayerConfig:
-        """Wrap the Replayer's codec, as the client's. A replay reads again over the
-        extension's connection, so use the plugin of a client or Worker that connected.
+        """Wrap the Replayer's codec, as the client's. A replay reads again on the connection
+        of a client of the plugin, so use the plugin of a client that connected.
         """
         config = super().configure_replayer(config)
         converter = (
             config.get("data_converter") or temporalio.converter.DataConverter.default
         )
-        config["data_converter"] = _wrap(self, converter)
+        config["data_converter"] = _wrap(self, self._any_backend, converter)
         return config
 
     def __init__(
         self,
         *,
         retention: timedelta | None = None,
-        runtime: temporalio.runtime.Runtime | None = None,
         name: str = "native",
         default: bool = False,
     ) -> None:
-        """Create the plugin. It makes no call.
+        """Create the plugin. It makes no call. Each client of the plugin calls the server on
+        its own connection.
 
         Args:
             retention: The default Retention of a new Stream. Defaults to the server's.
-            runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry.
-            default: Make this the default backend when the client or Worker has more than
-                one Stream plugin. With none marked, the first one is the default.
+            default: Make this the client's default backend. A client with more than one
+                Stream plugin marks exactly one, else it raises ``StreamConfigError``.
         """
         config = ext_pb.NativeStreamConfig()
         if retention is not None:
@@ -360,12 +426,7 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
             OrderedDict()
         )
         super().__init__(
-            "temporalio.NativeStreamPlugin",
-            NATIVE_EXTENSION_NAME,
-            config,
-            runtime,
-            name,
-            default,
+            "temporalio.NativeStreamPlugin", False, config, None, name, default
         )
 
 
@@ -377,8 +438,10 @@ def _describe_activity(plugin: NativeStreamPlugin) -> Any:
         request: stream_pb.DescribeStreamRequest,
     ) -> stream_pb.DescribeStreamResponse:
         request.namespace = temporalio.activity.info().namespace
+        # The Worker's client gave the attempt its Stream runtime.
+        streams = _attempt_streams(plugin.backend_name)
         try:
-            return await plugin._backend.call_async(
+            return await cast(_ExtensionStreamBackend, streams.backend).call_async(
                 "DescribeStream", request, stream_pb.DescribeStreamResponse
             )
         except _errors.StreamError as err:
@@ -393,11 +456,13 @@ def _describe_activity(plugin: NativeStreamPlugin) -> Any:
 
 
 def _wrap(
-    plugin: NativeStreamPlugin, converter: temporalio.converter.DataConverter
+    plugin: NativeStreamPlugin,
+    backend: Callable[[], _ExtensionStreamBackend],
+    converter: temporalio.converter.DataConverter,
 ) -> temporalio.converter.DataConverter:
     if isinstance(converter.payload_codec, _DirectReadCodec):
         return converter
     codec = converter.payload_codec
     return dataclasses.replace(
-        converter, payload_codec=_DirectReadCodec(plugin, codec, codec)
+        converter, payload_codec=_DirectReadCodec(plugin, backend, codec, codec)
     )
