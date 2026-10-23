@@ -118,6 +118,8 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_unsupported": StreamUnsupportedError,
     "stream_not_owner": StreamNotOwnerError,
     "seq_divergent": StreamSeqDivergentError,
+    # The native server's Workflow reader cap. Readers leave, so a retry may get in.
+    "stream_exhausted": StreamStorageError,
 }
 
 

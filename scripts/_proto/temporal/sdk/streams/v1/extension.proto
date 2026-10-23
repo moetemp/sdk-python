@@ -8,6 +8,16 @@ package temporal.sdk.streams.v1;
 import "google/protobuf/duration.proto";
 import "temporal/api/streamservice/v1/stream_service.proto";
 
+// The settings of the native Stream extension, on the server's Stream service. The connection
+// comes from the Worker or the client, so it needs no address.
+message NativeStreamConfig {
+    // The backend name that lang registered this extension under. Empty is `native`. The crate
+    // puts it in each StreamRef it builds.
+    string backend = 1;
+    // The Retention of a create that gives none. Empty leaves it to the server's default.
+    google.protobuf.Duration retention = 2;
+}
+
 // The settings of the Redis Stream extension. Lang builds it from the plugin options.
 message RedisStreamConfig {
     // One URL, or the seed URLs of a cluster. Credentials and TLS come from the URL.
@@ -31,6 +41,17 @@ message RedisStreamConfig {
     string backend = 10;
 }
 
+// Method `WorkflowReadRecords`, asynchronous. A `ReadRecords` that a Workflow run makes, for
+// example from its read Local Activity. It answers a `ReadRecordsResponse`. On native the server
+// gets the reading run as a link, and Retention never trims a nested Workflow Stream past the
+// lowest offset that the open run read. The other backends read as `ReadRecords` does.
+message WorkflowReadRecordsRequest {
+    temporal.api.streamservice.v1.ReadRecordsRequest read = 1;
+    // The reading run.
+    string workflow_id = 2;
+    string run_id = 3;
+}
+
 // Method `OpenWriter`, asynchronous. A writer for an Activity or a client Producer, which keeps
 // its epoch and `sequence` order. A writer of an Activity attempt above 1 first sends an empty
 // batch, so the new epoch withdraws the earlier attempt's Records. The handles of one Producer
@@ -52,6 +73,9 @@ message OpenWriterRequest {
     // the writes withdraw the run's orphaned Local Activity Records.
     temporal.api.streamservice.v1.WorkflowTaskEpoch previous_completed_task = 8;
     repeated int64 failed_tasks = 9;
+    // Activity and Standalone Activity only. The task token, which each batch sends as
+    // AppendRecords does, so the native server checks the Producer against the current attempt.
+    bytes task_token = 10;
 }
 
 message OpenWriterResponse {

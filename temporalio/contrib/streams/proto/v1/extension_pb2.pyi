@@ -24,6 +24,40 @@ else:
 
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
+class NativeStreamConfig(google.protobuf.message.Message):
+    """The settings of the native Stream extension, on the server's Stream service. The connection
+    comes from the Worker or the client, so it needs no address.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    BACKEND_FIELD_NUMBER: builtins.int
+    RETENTION_FIELD_NUMBER: builtins.int
+    backend: builtins.str
+    """The backend name that lang registered this extension under. Empty is `native`. The crate
+    puts it in each StreamRef it builds.
+    """
+    @property
+    def retention(self) -> google.protobuf.duration_pb2.Duration:
+        """The Retention of a create that gives none. Empty leaves it to the server's default."""
+    def __init__(
+        self,
+        *,
+        backend: builtins.str = ...,
+        retention: google.protobuf.duration_pb2.Duration | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["retention", b"retention"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "backend", b"backend", "retention", b"retention"
+        ],
+    ) -> None: ...
+
+global___NativeStreamConfig = NativeStreamConfig
+
 class RedisStreamConfig(google.protobuf.message.Message):
     """The settings of the Redis Stream extension. Lang builds it from the plugin options."""
 
@@ -107,6 +141,45 @@ class RedisStreamConfig(google.protobuf.message.Message):
 
 global___RedisStreamConfig = RedisStreamConfig
 
+class WorkflowReadRecordsRequest(google.protobuf.message.Message):
+    """Method `WorkflowReadRecords`, asynchronous. A `ReadRecords` that a Workflow run makes, for
+    example from its read Local Activity. It answers a `ReadRecordsResponse`. On native the server
+    gets the reading run as a link, and Retention never trims a nested Workflow Stream past the
+    lowest offset that the open run read. The other backends read as `ReadRecords` does.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    READ_FIELD_NUMBER: builtins.int
+    WORKFLOW_ID_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    @property
+    def read(
+        self,
+    ) -> temporalio.api.streamservice.v1.stream_service_pb2.ReadRecordsRequest: ...
+    workflow_id: builtins.str
+    """The reading run."""
+    run_id: builtins.str
+    def __init__(
+        self,
+        *,
+        read: temporalio.api.streamservice.v1.stream_service_pb2.ReadRecordsRequest
+        | None = ...,
+        workflow_id: builtins.str = ...,
+        run_id: builtins.str = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["read", b"read"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "read", b"read", "run_id", b"run_id", "workflow_id", b"workflow_id"
+        ],
+    ) -> None: ...
+
+global___WorkflowReadRecordsRequest = WorkflowReadRecordsRequest
+
 class OpenWriterRequest(google.protobuf.message.Message):
     """Method `OpenWriter`, asynchronous. A writer for an Activity or a client Producer, which keeps
     its epoch and `sequence` order. A writer of an Activity attempt above 1 first sends an empty
@@ -125,6 +198,7 @@ class OpenWriterRequest(google.protobuf.message.Message):
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
     PREVIOUS_COMPLETED_TASK_FIELD_NUMBER: builtins.int
     FAILED_TASKS_FIELD_NUMBER: builtins.int
+    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream(
@@ -152,6 +226,10 @@ class OpenWriterRequest(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
         builtins.int
     ]: ...
+    task_token: builtins.bytes
+    """Activity and Standalone Activity only. The task token, which each batch sends as
+    AppendRecords does, so the native server checks the Producer against the current attempt.
+    """
     def __init__(
         self,
         *,
@@ -165,6 +243,7 @@ class OpenWriterRequest(google.protobuf.message.Message):
         previous_completed_task: temporalio.api.streamservice.v1.stream_service_pb2.WorkflowTaskEpoch
         | None = ...,
         failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
+        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -196,6 +275,8 @@ class OpenWriterRequest(google.protobuf.message.Message):
             b"producer",
             "stream",
             b"stream",
+            "task_token",
+            b"task_token",
         ],
     ) -> None: ...
 

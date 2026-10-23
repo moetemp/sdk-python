@@ -178,9 +178,7 @@ class ClientStream(StreamHandle[E]):
         # The first backend that has the Stream keeps it. Two first calls may both look.
         for name, backend in self._probe:
             assert self._client is not None
-            request = models.DescribeStreamRequest(
-                stream=models.StreamRef(id=await self._stream_id())
-            )
+            request = models.DescribeStreamRequest(stream=await self._resolved_ref())
             try:
                 await backend.service(self._client.namespace).describe_stream(request)
             except _errors.StreamNotFoundError:
@@ -229,6 +227,11 @@ class ClientStream(StreamHandle[E]):
             fields["name"] = self._stream_name
         return fields
 
+    async def _resolved_ref(self) -> models.StreamRef:
+        # The first call finds the first run id of a Workflow's Stream, which the ref carries.
+        await self._stream_id()
+        return self._owner_ref()
+
     def _access(self) -> Access:
         client, backend = self._client, self._stream_backend
         if client is None or backend is None:
@@ -241,7 +244,7 @@ class ClientStream(StreamHandle[E]):
             if self._writer is None:
                 self._writer = StreamWriter(
                     writers=backend.writers(client.namespace, client.data_converter),
-                    stream_id=self._stream_id,
+                    ref=self._resolved_ref,
                     producer=_client_producer(client, self._named),
                     free=backend.free_writer,
                 )
@@ -251,7 +254,7 @@ class ClientStream(StreamHandle[E]):
             backend=backend,
             converter=client.data_converter,
             namespace=client.namespace,
-            stream_id=self._stream_id,
+            ref=self._resolved_ref,
             writer=writer,
         )
 

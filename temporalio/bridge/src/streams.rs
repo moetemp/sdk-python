@@ -75,3 +75,26 @@ pub fn new_stream_runtime(
     .map_err(|err| PyValueError::new_err(err.to_string()))?;
     Ok(StreamRuntimeRef { streams, runtime })
 }
+
+/// Builds the native runtime on a client's connection, from its encoded `NativeStreamConfig`.
+/// Each client gets its own, so a call goes on the connection of the client that makes it.
+#[cfg(feature = "streams")]
+pub fn new_native_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    client: &crate::client::ClientRef,
+    config: Vec<u8>,
+) -> PyResult<StreamRuntimeRef> {
+    use pyo3::exceptions::PyValueError;
+
+    let runtime = runtime_ref.runtime.clone();
+    runtime.assert_same_process("create a Stream runtime")?;
+    let _guard = runtime.core.tokio_handle().enter();
+    let meter = runtime.core.telemetry().get_temporal_metric_meter();
+    let streams = temporalio_streams::NativeStreamExtension::from_config_bytes(
+        &config,
+        client.connection.clone(),
+        meter,
+    )
+    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(StreamRuntimeRef { streams, runtime })
+}

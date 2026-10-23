@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -27,7 +28,7 @@ class Access:
     backend: StreamBackend
     converter: temporalio.converter.DataConverter
     namespace: str
-    stream_id: Callable[[], Awaitable[str]]
+    ref: Callable[[], Awaitable[models.StreamRef]]
     writer: Callable[[], StreamWriter]
     # The run chain that a close names, which the Store checks against the Stream's owner.
     workflow_id: str | None = None
@@ -52,7 +53,7 @@ class Access:
         items = _reader.read(
             self.backend.service(self.namespace, _convert.raw(self.converter)),
             self.converter,
-            await self.stream_id(),
+            await self.ref(),
             position=position,
             topics=read.topics,
             topic_prefixes=read.prefixes,
@@ -76,12 +77,22 @@ class Access:
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
         response = await self.backend.service(self.namespace).describe_stream(
-            models.DescribeStreamRequest(
-                stream=models.StreamRef(id=await self.stream_id())
-            )
+            models.DescribeStreamRequest(stream=await self.ref())
         )
         # Offsets start above zero, so zero means the Stream has no Record.
         return response.last_offset + 1 if response.last_offset else 0
+
+    async def _close_ref(self) -> models.StreamRef:
+        # A handle with only an id names no chain, so a close names the chain that the Access
+        # gives, and the Store refuses it when another chain owns the Stream.
+        ref = await self.ref()
+        if ref.workflow_id or not self.workflow_id:
+            return ref
+        return dataclasses.replace(
+            ref,
+            workflow_id=self.workflow_id,
+            first_execution_run_id=self.first_execution_run_id,
+        )
 
     async def close(self, result: Any | None, failure: BaseException | None) -> None:
         """Write this Producer's Records, then close the Stream."""
@@ -92,11 +103,7 @@ class Access:
         )
         await self.backend.service(self.namespace, self.converter).close_stream(
             models.CloseStreamRequest(
-                stream=models.StreamRef(
-                    id=await self.stream_id(),
-                    workflow_id=self.workflow_id,
-                    first_execution_run_id=self.first_execution_run_id,
-                ),
+                stream=await self._close_ref(),
                 producer=producer,
                 result=result,
                 failure=failure,

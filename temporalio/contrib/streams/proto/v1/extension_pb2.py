@@ -21,11 +21,15 @@ from temporalio.api.streamservice.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"\xb7\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\x0e\x64urable_writesR\x0f\x64urable_timeout"\x85\x03\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration\x12Q\n\x17previous_completed_task\x18\x08 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12\x14\n\x0c\x66\x61iled_tasks\x18\t \x03(\x03J\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"&\n\x11\x46reeWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"\x14\n\x12\x46reeWriterResponse"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
+    b'\n\'temporal/sdk/streams/v1/extension.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x32temporal/api/streamservice/v1/stream_service.proto"S\n\x12NativeStreamConfig\x12\x0f\n\x07\x62\x61\x63kend\x18\x01 \x01(\t\x12,\n\tretention\x18\x02 \x01(\x0b\x32\x19.google.protobuf.Duration"\xb7\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\tJ\x04\x08\x06\x10\x07J\x04\x08\x07\x10\x08R\x0e\x64urable_writesR\x0f\x64urable_timeout"\x82\x01\n\x1aWorkflowReadRecordsRequest\x12?\n\x04read\x18\x01 \x01(\x0b\x32\x31.temporal.api.streamservice.v1.ReadRecordsRequest\x12\x13\n\x0bworkflow_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t"\x99\x03\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12\x38\n\x06stream\x18\x02 \x01(\x0b\x32(.temporal.api.streamservice.v1.StreamRef\x12\x39\n\x08producer\x18\x03 \x01(\x0b\x32\'.temporal.api.streamservice.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x05 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x06 \x01(\x0b\x32\x19.google.protobuf.Duration\x12Q\n\x17previous_completed_task\x18\x08 \x01(\x0b\x32\x30.temporal.api.streamservice.v1.WorkflowTaskEpoch\x12\x14\n\x0c\x66\x61iled_tasks\x18\t \x03(\x03\x12\x12\n\ntask_token\x18\n \x01(\x0cJ\x04\x08\x04\x10\x05J\x04\x08\x07\x10\x08R\x0e\x62\x61tch_intervalR\x14max_buffered_records"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"f\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12<\n\x07records\x18\x02 \x03(\x0b\x32+.temporal.api.streamservice.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x03\x12\x13\n\x0blast_offset\x18\x02 \x01(\x03"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x03"&\n\x11\x46reeWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"\x14\n\x12\x46reeWriterResponse"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05"$\n\x12StreamErrorDetails\x12\x0e\n\x06reason\x18\x01 \x01(\tb\x06proto3'
 )
 
 
+_NATIVESTREAMCONFIG = DESCRIPTOR.message_types_by_name["NativeStreamConfig"]
 _REDISSTREAMCONFIG = DESCRIPTOR.message_types_by_name["RedisStreamConfig"]
+_WORKFLOWREADRECORDSREQUEST = DESCRIPTOR.message_types_by_name[
+    "WorkflowReadRecordsRequest"
+]
 _OPENWRITERREQUEST = DESCRIPTOR.message_types_by_name["OpenWriterRequest"]
 _OPENWRITERRESPONSE = DESCRIPTOR.message_types_by_name["OpenWriterResponse"]
 _WRITERECORDSREQUEST = DESCRIPTOR.message_types_by_name["WriteRecordsRequest"]
@@ -37,6 +41,17 @@ _FREEWRITERRESPONSE = DESCRIPTOR.message_types_by_name["FreeWriterResponse"]
 _CLOSEWRITERSREQUEST = DESCRIPTOR.message_types_by_name["CloseWritersRequest"]
 _CLOSEWRITERSRESPONSE = DESCRIPTOR.message_types_by_name["CloseWritersResponse"]
 _STREAMERRORDETAILS = DESCRIPTOR.message_types_by_name["StreamErrorDetails"]
+NativeStreamConfig = _reflection.GeneratedProtocolMessageType(
+    "NativeStreamConfig",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _NATIVESTREAMCONFIG,
+        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.NativeStreamConfig)
+    },
+)
+_sym_db.RegisterMessage(NativeStreamConfig)
+
 RedisStreamConfig = _reflection.GeneratedProtocolMessageType(
     "RedisStreamConfig",
     (_message.Message,),
@@ -47,6 +62,17 @@ RedisStreamConfig = _reflection.GeneratedProtocolMessageType(
     },
 )
 _sym_db.RegisterMessage(RedisStreamConfig)
+
+WorkflowReadRecordsRequest = _reflection.GeneratedProtocolMessageType(
+    "WorkflowReadRecordsRequest",
+    (_message.Message,),
+    {
+        "DESCRIPTOR": _WORKFLOWREADRECORDSREQUEST,
+        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.WorkflowReadRecordsRequest)
+    },
+)
+_sym_db.RegisterMessage(WorkflowReadRecordsRequest)
 
 OpenWriterRequest = _reflection.GeneratedProtocolMessageType(
     "OpenWriterRequest",
@@ -171,28 +197,32 @@ _sym_db.RegisterMessage(StreamErrorDetails)
 
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
-    _REDISSTREAMCONFIG._serialized_start = 153
-    _REDISSTREAMCONFIG._serialized_end = 464
-    _OPENWRITERREQUEST._serialized_start = 467
-    _OPENWRITERREQUEST._serialized_end = 856
-    _OPENWRITERRESPONSE._serialized_start = 858
-    _OPENWRITERRESPONSE._serialized_end = 897
-    _WRITERECORDSREQUEST._serialized_start = 899
-    _WRITERECORDSREQUEST._serialized_end = 1001
-    _WRITERECORDSRESPONSE._serialized_start = 1003
-    _WRITERECORDSRESPONSE._serialized_end = 1068
-    _CLOSEWRITERREQUEST._serialized_start = 1070
-    _CLOSEWRITERREQUEST._serialized_end = 1109
-    _CLOSEWRITERRESPONSE._serialized_start = 1111
-    _CLOSEWRITERRESPONSE._serialized_end = 1153
-    _FREEWRITERREQUEST._serialized_start = 1155
-    _FREEWRITERREQUEST._serialized_end = 1193
-    _FREEWRITERRESPONSE._serialized_start = 1195
-    _FREEWRITERRESPONSE._serialized_end = 1215
-    _CLOSEWRITERSREQUEST._serialized_start = 1217
-    _CLOSEWRITERSREQUEST._serialized_end = 1238
-    _CLOSEWRITERSRESPONSE._serialized_start = 1240
-    _CLOSEWRITERSRESPONSE._serialized_end = 1278
-    _STREAMERRORDETAILS._serialized_start = 1280
-    _STREAMERRORDETAILS._serialized_end = 1316
+    _NATIVESTREAMCONFIG._serialized_start = 152
+    _NATIVESTREAMCONFIG._serialized_end = 235
+    _REDISSTREAMCONFIG._serialized_start = 238
+    _REDISSTREAMCONFIG._serialized_end = 549
+    _WORKFLOWREADRECORDSREQUEST._serialized_start = 552
+    _WORKFLOWREADRECORDSREQUEST._serialized_end = 682
+    _OPENWRITERREQUEST._serialized_start = 685
+    _OPENWRITERREQUEST._serialized_end = 1094
+    _OPENWRITERRESPONSE._serialized_start = 1096
+    _OPENWRITERRESPONSE._serialized_end = 1135
+    _WRITERECORDSREQUEST._serialized_start = 1137
+    _WRITERECORDSREQUEST._serialized_end = 1239
+    _WRITERECORDSRESPONSE._serialized_start = 1241
+    _WRITERECORDSRESPONSE._serialized_end = 1306
+    _CLOSEWRITERREQUEST._serialized_start = 1308
+    _CLOSEWRITERREQUEST._serialized_end = 1347
+    _CLOSEWRITERRESPONSE._serialized_start = 1349
+    _CLOSEWRITERRESPONSE._serialized_end = 1391
+    _FREEWRITERREQUEST._serialized_start = 1393
+    _FREEWRITERREQUEST._serialized_end = 1431
+    _FREEWRITERRESPONSE._serialized_start = 1433
+    _FREEWRITERRESPONSE._serialized_end = 1453
+    _CLOSEWRITERSREQUEST._serialized_start = 1455
+    _CLOSEWRITERSREQUEST._serialized_end = 1476
+    _CLOSEWRITERSRESPONSE._serialized_start = 1478
+    _CLOSEWRITERSRESPONSE._serialized_end = 1516
+    _STREAMERRORDETAILS._serialized_start = 1518
+    _STREAMERRORDETAILS._serialized_end = 1554
 # @@protoc_insertion_point(module_scope)

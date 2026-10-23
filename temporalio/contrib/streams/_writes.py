@@ -100,6 +100,7 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
                 id=request.owner.id,
                 run_id=request.owner.run_id or None,
             ),
+            close_with_run=request.close_with_run or None,
             ref=_ref(request.ref) if request.HasField("ref") else None,
         )
     )

@@ -75,6 +75,7 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         m.add_class::<streams::StreamRuntimeRef>()?;
         m.add_function(wrap_pyfunction!(new_stream_runtime, m)?)?;
+        m.add_function(wrap_pyfunction!(new_native_stream_runtime, m)?)?;
     }
 
     // envconfig
@@ -146,6 +147,16 @@ fn new_stream_runtime(
     config: Vec<u8>,
 ) -> PyResult<streams::StreamRuntimeRef> {
     streams::new_stream_runtime(runtime_ref, memory, config)
+}
+
+#[cfg(feature = "streams")]
+#[pyfunction]
+fn new_native_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    client: &client::ClientRef,
+    config: Vec<u8>,
+) -> PyResult<streams::StreamRuntimeRef> {
+    streams::new_native_stream_runtime(runtime_ref, client, config)
 }
 
 #[pyfunction]

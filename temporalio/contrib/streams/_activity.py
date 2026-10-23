@@ -10,7 +10,9 @@ from typing import Any
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._writer import StreamWriter
+from temporalio.contrib.streams.system import models
 
 
 @dataclass
@@ -32,23 +34,23 @@ class ActivityStreams:
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
 
-    def writer(self, stream_id: str) -> StreamWriter:
+    def writer(self, handle: StreamHandle[Any]) -> StreamWriter:
         """The attempt's writer for a Stream, one per Stream."""
-        writer = self.writers.get(stream_id)
+        writer = self.writers.get(handle.id)
         if writer is None:
 
-            async def known_id() -> str:
-                return stream_id
+            async def ref() -> models.StreamRef:
+                return handle._owner_ref()
 
             writer = StreamWriter(
                 writers=self.backend.writers(self.namespace, self.converter),
-                stream_id=known_id,
+                ref=ref,
                 producer=self.producer,
                 free=self.backend.free_writer,
                 previous_completed_task=self.previous_completed_task,
                 failed_tasks=self.failed_tasks,
             )
-            self.writers[stream_id] = writer
+            self.writers[handle.id] = writer
         return writer
 
     async def close(self) -> None:

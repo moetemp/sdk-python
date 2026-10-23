@@ -116,7 +116,7 @@ class Subscription(Generic[T]):
 async def read(
     service: service_client.StreamServiceClient,
     converter: temporalio.converter.DataConverter,
-    stream_id: str,
+    stream: models.StreamRef,
     *,
     position: Position,
     topics: Sequence[str] | None,
@@ -141,7 +141,7 @@ async def read(
             else None
         )
         return models.ReadRecordsRequest(
-            stream=models.StreamRef(id=stream_id),
+            stream=stream,
             # END is only the first page's start. Each answer's next offset pins later pages.
             from_offset=from_offset if isinstance(from_offset, int) else None,
             start=ReadStart.READ_START_END

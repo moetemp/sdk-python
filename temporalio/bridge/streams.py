@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import temporalio.bridge.client
 import temporalio.bridge.runtime
 import temporalio.bridge.temporal_sdk_bridge
 
@@ -14,7 +15,7 @@ StreamCallError: type[Exception] = temporalio.bridge.temporal_sdk_bridge.StreamC
 
 
 class StreamRuntime:
-    """The temporalio-streams runtime, on Redis or on the memory Store."""
+    """The temporalio-streams runtime, on Redis, on the memory Store, or on the server."""
 
     def __init__(
         self, runtime: temporalio.bridge.runtime.Runtime, memory: bool, config: bytes
@@ -28,6 +29,28 @@ class StreamRuntime:
         if new is None:
             raise ValueError("This bridge build has no Stream runtime")
         self._ref: Any = new(runtime._ref, memory, config)
+
+    @classmethod
+    def on_client(
+        cls,
+        runtime: temporalio.bridge.runtime.Runtime,
+        client: temporalio.bridge.client.Client,
+        config: bytes,
+    ) -> StreamRuntime:
+        """Build the native runtime on a connected client's connection, from its encoded
+        ``NativeStreamConfig``.
+
+        Raises:
+            ValueError: The bridge build doesn't link the crate, or the config is not valid.
+        """
+        new = getattr(
+            temporalio.bridge.temporal_sdk_bridge, "new_native_stream_runtime", None
+        )
+        if new is None:
+            raise ValueError("This bridge build has no Stream runtime")
+        streams = cls.__new__(cls)
+        streams._ref = new(runtime._ref, client._ref, config)
+        return streams
 
     @property
     def name(self) -> str:

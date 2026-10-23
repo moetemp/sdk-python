@@ -613,6 +613,9 @@ def _create(
         request.retention.FromTimedelta(retention)
     if auto_close is not None:
         request.auto_close.FromTimedelta(auto_close)
+    # A Store that closes a Stream with its owner's run chain takes the owner's ref.
+    request.ref.CopyFrom(stream._ref())
+    request.close_with_run = close_with_run
     run_stream.close_with_run = close_with_run
     run_stream.backend = stream.backend
     return stream, _write(stream.id, CREATE_ACTIVITY, request, backend_name)

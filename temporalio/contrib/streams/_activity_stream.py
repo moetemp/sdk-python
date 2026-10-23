@@ -21,6 +21,7 @@ from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle
 from temporalio.contrib.streams._items import Closed, End, Record, Superseded
 from temporalio.contrib.streams._reader import Subscription
+from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -61,17 +62,16 @@ def _check_close(handle: StreamHandle[Any]) -> None:
 
 def _access(handle: StreamHandle[Any]) -> Access:
     streams = _bound(handle)
-    stream_id = handle.id
 
-    async def known_id() -> str:
-        return stream_id
+    async def ref() -> models.StreamRef:
+        return handle._owner_ref()
 
     return Access(
         backend=streams.backend,
         converter=streams.converter,
         namespace=streams.namespace,
-        stream_id=known_id,
-        writer=lambda: streams.writer(stream_id),
+        ref=ref,
+        writer=lambda: streams.writer(handle),
         # A handle with only an id names no chain, so the close names this Activity's own, and
         # the Store refuses it when another chain owns the Stream.
         workflow_id=handle.workflow_id or streams.workflow_id,
