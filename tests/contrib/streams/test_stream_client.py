@@ -243,6 +243,29 @@ async def test_read_type_decodes_topics_outside_the_definition(stream_client: Cl
     assert await read(type=Turn) == [Turn("extra"), "a"]
 
 
+async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"buffered-{uuid.uuid4()}"
+    )
+    async with streams.BufferedPublisher(stream) as publisher:
+        publisher.publish(Events.turns, Turn("user"))
+        publisher.publish(Events.tokens, "a", "b")
+        publisher.publish("turns", Turn("model"))
+        with pytest.raises(streams.StreamError, match="no Topic"):
+            publisher.publish("turn", Turn("typo"))
+    written = [
+        (item.topic, item.data)
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+    assert written == [
+        ("turns", Turn("user")),
+        ("tokens", "a"),
+        ("tokens", "b"),
+        ("turns", Turn("model")),
+    ]
+
+
 async def test_auto_close_of_a_client_stream(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)

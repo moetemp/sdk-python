@@ -79,8 +79,10 @@ class StreamWriter:
                 )
             return self._writer
 
-    async def write(self, topic: str, values: Sequence[Any]) -> int:
-        """Write the values as Records now. Returns the last Record's offset."""
+    async def write(self, records: Sequence[tuple[str, Any]]) -> int:
+        """Write ``(topic, value)`` pairs as Records now, in order. Returns the last Record's
+        offset.
+        """
         from temporalio.contrib.streams.writer_system import models
 
         if self._closed:
@@ -89,7 +91,7 @@ class StreamWriter:
             )
         writer = await self.open()
         answer = await writer.write_records(
-            [models.AppendRecord(topic=topic, body=value) for value in values]
+            [models.AppendRecord(topic=topic, body=value) for topic, value in records]
         )
         return answer.last_offset or 0
 

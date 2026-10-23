@@ -35,7 +35,13 @@ class Access:
         """Write the values as Records now, and return the offset of the last one."""
         if not values:
             raise TypeError("publish takes one or more values")
-        return await self.writer().write(topic, values)
+        return await self.writer().write([(topic, value) for value in values])
+
+    async def publish_records(self, records: Sequence[tuple[str, Any]]) -> int:
+        """Write ``(topic, value)`` pairs as Records now, in order, and return the offset of
+        the last one.
+        """
+        return await self.writer().write(records)
 
     async def items(
         self, read: ReadSpec, position: Position

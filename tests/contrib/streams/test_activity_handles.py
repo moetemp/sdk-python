@@ -306,6 +306,8 @@ async def test_activity_closes_and_checks_the_backend(stream_client: Client):
 class _Batches(streams.ActivityTopic[int]):
     batches: list[tuple[int, ...]] = field(default_factory=list)
     fail: bool = False
+    in_flight: int = 0
+    most_in_flight: int = 0
 
     def __post_init__(self) -> None:
         super().__init__(None, "t", int)
@@ -313,6 +315,10 @@ class _Batches(streams.ActivityTopic[int]):
     async def publish(self, *values: int) -> int:
         if self.fail:
             raise streams.StreamStorageError("store down")
+        self.in_flight += 1
+        self.most_in_flight = max(self.most_in_flight, self.in_flight)
+        await asyncio.sleep(0.01)
+        self.in_flight -= 1
         self.batches.append(values)
         return sum(len(batch) for batch in self.batches)
 
@@ -328,6 +334,19 @@ async def test_buffered_publisher_batches_by_delay():
     assert await publisher.flush() == 4
     assert topic.batches == [(1, 2, 3), (4,)]
     assert await publisher.flush() == 4
+
+
+async def test_buffered_publisher_writes_a_full_batch_with_one_write_in_flight():
+    topic = _Batches()
+    publisher = streams.BufferedPublisher(topic, max_delay=timedelta(minutes=10))
+    publisher.publish(*range(1000))
+    publisher.publish(*range(1000, 2500))
+    await asyncio.sleep(0.2)
+    # A full batch goes with no wait for the delay, and the values published during its
+    # write go in the next one.
+    assert [len(batch) for batch in topic.batches] == [1000, 1500]
+    assert topic.most_in_flight == 1
+    assert await publisher.flush() == 2500
 
 
 async def test_buffered_publisher_raises_a_failed_batch():
