@@ -46,8 +46,9 @@ class Record(Generic[T]):
 class Superseded:
     """A failed attempt's Records are withdrawn.
 
-    It comes at the same point for every Reader. Use :py:meth:`withdraws` to find the earlier
-    Records that it withdraws.
+    It comes at the same point for every Reader. A live view takes back the Records in
+    :py:attr:`withdrawn_offsets`. A view that keeps Records from an earlier read, such as one
+    before a reconnect, uses :py:meth:`withdraws` on them.
 
     The next write of a run to a Stream withdraws the Records that the run's Local Activities
     wrote there in Workflow Tasks that never completed. A Stream that the run never writes
@@ -62,6 +63,12 @@ class Superseded:
 
     supersession: models.Supersession
     """Which earlier Records the item withdraws."""
+
+    withdrawn_offsets: tuple[int, ...] = ()
+    """The offsets of the Records that this read gave and this item withdraws, in order.
+
+    A read gives each offset once. Records from before the read's start are not in it.
+    """
 
     def withdraws(self, record: Record[Any]) -> bool:
         """Whether this item withdraws an earlier Record."""
@@ -112,6 +119,14 @@ def _epoch(epoch: models.ProducerEpoch) -> tuple[Any, ...]:
 
 def _completed(task: models.WorkflowTaskEpoch) -> tuple[int, int, tuple[int, int]]:
     return (_n(task.started_event_id), _n(task.attempt), _time(task.started_time))
+
+
+def producer_key(producer: models.Producer) -> tuple[Any, ...]:
+    """The fields of a Producer that :py:func:`withdraws` looks at, so equal keys are withdrawn
+    together.
+    """
+    epoch = _epoch(producer.epoch) if producer.epoch is not None else None
+    return (producer.kind or 0, producer.id, producer.run_id or "", epoch)
 
 
 def _of_run(producer: models.Producer, supersession: models.Supersession) -> bool:

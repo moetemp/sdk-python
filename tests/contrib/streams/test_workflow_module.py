@@ -1,4 +1,6 @@
 import asyncio
+import dataclasses
+import os
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.common.v1 import Payload
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -15,8 +19,9 @@ from temporalio.client import (
 )
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams._defn import definition_of
-from temporalio.contrib.streams.system import client as service_client
+from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
 from tests.helpers import assert_task_fail_eventually, new_worker
@@ -76,7 +81,7 @@ class Turns:
     async def run(self, fail_at: int) -> None:
         for n in range(2):
             try:
-                async with await stream_workflow.create_stream(
+                async with stream_workflow.create_stream(
                     streams.with_name(Events, f"turn-{n}"), close_with_run=False
                 ) as turn:
                     await turn.topic(Events.tokens).publish(f"token-{n}")
@@ -399,7 +404,12 @@ class Gathers:
     @workflow.run
     async def run(self) -> list[int]:
         tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
-        return list(await asyncio.gather(*(tokens.publish(str(n)) for n in range(5))))
+        tokens.publish_nowait("0")
+        # The first write starts, so the next ones wait behind it.
+        await asyncio.sleep(0)
+        return list(
+            await asyncio.gather(*(tokens.publish(str(n)) for n in range(1, 5)))
+        )
 
 
 async def test_concurrent_publishes_keep_their_order(stream_client: Client):
@@ -410,8 +420,20 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
         offsets = await handle.result()
         items = await read(stream_client, handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
-    assert offsets == sorted(offsets)
+    # The four writes that waited went as one Local Activity, and each call got the offset of
+    # its own Record.
+    assert (
+        offsets
+        == [item.offset for item in items if isinstance(item, streams.Record)][1:]
+    )
     history = await handle.fetch_history()
+    markers = [
+        e
+        for e in history.events
+        if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+    ]
+    # The create, the first write, the four that waited, and the close with the run.
+    assert len(markers) == 4
     # Replay answers from the markers and writes nothing.
     plugins = [
         p
@@ -422,28 +444,120 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
     assert data(await read(stream_client, handle)) == ["0", "1", "2", "3", "4"]
 
 
+class _RandomCodec(PayloadCodec):
+    # Adds random bytes to each payload, as the random IV of an encryption codec does.
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={"encoding": b"binary/random"},
+                data=os.urandom(8) + p.SerializeToString(),
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            _inner(p.data[8:]) if _encoded(p, b"binary/random") else p for p in payloads
+        ]
+
+
+class _GrowingCodec(PayloadCodec):
+    # Triples each payload, so a merge under the Workflow's cap passes the Store's batch limit
+    # after the codec.
+    async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            Payload(
+                metadata={
+                    "encoding": b"binary/grown",
+                    "size": str(len(p.SerializeToString())).encode(),
+                },
+                data=p.SerializeToString() * 3,
+            )
+            for p in payloads
+        ]
+
+    async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
+        return [
+            _inner(p.data[: int(p.metadata["size"])])
+            if _encoded(p, b"binary/grown")
+            else p
+            for p in payloads
+        ]
+
+
+def _encoded(payload: Payload, encoding: bytes) -> bool:
+    return payload.metadata.get("encoding") == encoding
+
+
+def _inner(data: bytes) -> Payload:
+    inner = Payload()
+    inner.ParseFromString(data)
+    return inner
+
+
+def with_codec(client: Client, codec: PayloadCodec) -> Client:
+    config = client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, payload_codec=codec
+    )
+    return Client(**config)
+
+
 async def test_retried_write_goes_in_once(
     stream_client: Client, monkeypatch: pytest.MonkeyPatch
 ):
-    original = service_client.StreamServiceClient.append_records
-    calls = []
+    original = _ExtensionStreamBackend.call_async
+    sent: list[list[bytes]] = []
 
-    async def fails_after_the_first_write(self: Any, request: Any) -> Any:
-        answer = await original(self, request)
-        calls.append(answer)
-        if len(calls) == 1:
-            raise RuntimeError("the answer is lost")
+    async def loses_the_first_answer(
+        self: Any, method: str, request: Any, response: Any
+    ) -> Any:
+        answer = await original(self, method, request, response)
+        if method == "AppendRecords":
+            sent.append([record.body.SerializeToString() for record in request.records])
+            if len(sent) == 1:
+                raise RuntimeError("the answer is lost")
         return answer
 
-    monkeypatch.setattr(
-        service_client.StreamServiceClient,
-        "append_records",
-        fails_after_the_first_write,
-    )
-    async with new_worker(stream_client, Gathers) as worker:
-        handle = await stream_client.start_workflow(
+    monkeypatch.setattr(_ExtensionStreamBackend, "call_async", loses_the_first_answer)
+    client = with_codec(stream_client, _RandomCodec())
+    async with new_worker(client, Gathers) as worker:
+        handle = await client.start_workflow(
             Gathers.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        items = await read(stream_client, handle)
+        items = await read(client, handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
+    # The retry sends the bytes of the first attempt, so the Store's dedupe takes it as the
+    # same batch, though the codec adds random bytes.
+    assert sent[0] == sent[1]
+
+
+@workflow.defn
+class PublishesLargeValues:
+    @workflow.run
+    async def run(self, size: int) -> list[int]:
+        tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        return list(
+            await asyncio.gather(
+                tokens.publish(*["a" * size] * 3), tokens.publish(*["b" * size] * 3)
+            )
+        )
+
+
+async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Client):
+    # The two publishes merge under the Workflow's cap, and the codec makes the merge larger
+    # than one batch may be, so each publish goes as its own batch.
+    client = with_codec(stream_client, _GrowingCodec())
+    async with new_worker(client, PublishesLargeValues) as worker:
+        handle = await client.start_workflow(
+            PublishesLargeValues.run,
+            300_000,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        offsets = await handle.result()
+        items = await read(client, handle)
+    written = [item for item in items if isinstance(item, streams.Record)]
+    assert [len(r.data) for r in written] == [300_000] * 6
+    assert offsets == [written[2].offset, written[5].offset]

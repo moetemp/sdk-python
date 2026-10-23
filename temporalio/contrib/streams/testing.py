@@ -43,8 +43,8 @@ class MemoryStreamPlugin(_ExtensionStreamPlugin):
                 Defaults to 90 days.
             runtime: The runtime of the client. Defaults to the default runtime.
             name: The backend name that Stream handles carry.
-            default: Make this the client's default backend when the client has more than
-                one Stream plugin.
+            default: Make this the client's default backend. A client with more than one
+                Stream plugin marks exactly one.
         """
         config = ext_pb.RedisStreamConfig()
         if retention is not None:

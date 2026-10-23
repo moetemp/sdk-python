@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import temporalio.client
+import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.plugin import SimplePlugin
@@ -13,7 +15,8 @@ from temporalio.plugin import SimplePlugin
 class StreamPlugin(SimplePlugin):
     """Base of the Stream plugins. Each registers one backend under its name.
 
-    Put a Stream plugin on the client. A Worker takes its client's plugins.
+    Put a Stream plugin on the client. A Worker takes its client's plugins. With more than one
+    Stream plugin, exactly one has ``default=True``.
 
     .. warning::
         This API is experimental.
@@ -49,13 +52,54 @@ class StreamPlugin(SimplePlugin):
         """The backend that carries the calls."""
         return self._stream_backend
 
+    def configure_client(
+        self, config: temporalio.client.ClientConfig
+    ) -> temporalio.client.ClientConfig:
+        """Check the default backend, then add the plugin's parts to the client."""
+        check_default(config.get("plugins", []), "client")
+        return super().configure_client(config)
+
+    def configure_worker(
+        self, config: temporalio.worker.WorkerConfig
+    ) -> temporalio.worker.WorkerConfig:
+        """Check the default backend, then add the plugin's parts to the Worker."""
+        client = config.get("client")
+        client_plugins = client.config()["plugins"] if client is not None else []
+        check_default([*client_plugins, *config.get("plugins", [])], "Worker")
+        return super().configure_worker(config)
+
+
+def check_default(plugins: Iterable[object], owner: str) -> None:
+    """Check that one Stream plugin is the default.
+
+    The default backend is part of Workflow code, since a replayed create uses it. So the
+    default must not follow the order of the plugin list.
+
+    Raises:
+        StreamConfigError: More than one Stream plugin, and not exactly one with
+            ``default=True``.
+    """
+    stream_plugins = list(
+        {id(p): p for p in plugins if isinstance(p, StreamPlugin)}.values()
+    )
+    if len(stream_plugins) < 2:
+        return
+    defaults = [p.backend_name for p in stream_plugins if p.default]
+    if len(defaults) != 1:
+        names = ", ".join(p.backend_name for p in stream_plugins)
+        marked = f"{', '.join(defaults)} have" if defaults else "none has"
+        raise _errors.StreamConfigError(
+            f"The {owner} has the Stream plugins {names}, and {marked} default=True. "
+            "Mark exactly one with default=True."
+        )
+
 
 def client_backend(
     client: temporalio.client.Client, name: str | None, *, only: bool = False
 ) -> tuple[str, StreamBackend]:
-    """The name and the backend of a client's Stream plugin. None picks the plugin marked
-    as the default, or else the first one. With ``only``, None needs a client with one
-    backend, since a handle with no backend name may be of any of them.
+    """The name and the backend of a client's Stream plugin. None picks the default plugin,
+    which is the only one or the one with ``default=True``. With ``only``, None needs a client
+    with one backend, since a handle with no backend name may be of any of them.
 
     Raises:
         StreamConfigError: The client has no Stream plugin, none of that name, or more than

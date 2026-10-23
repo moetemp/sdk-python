@@ -5,15 +5,15 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import temporalio.converter
 from temporalio.contrib.streams import _convert, _reader
-from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._backend import CallOptions, StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams._items import End
-from temporalio.contrib.streams._reader import Item
+from temporalio.contrib.streams._reader import Item, Position, Subscription
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
@@ -35,51 +35,36 @@ class Access:
         """Write the values as Records now, and return the offset of the last one."""
         if not values:
             raise TypeError("publish takes one or more values")
-        return await self.writer().write(topic, values)
+        return await self.writer().write([(topic, value) for value in values])
 
-    def read(
-        self,
-        *,
-        topics: list[str] | None,
-        prefixes: Sequence[str],
-        types: dict[str, Any],
-        from_offset: int | End | None,
-        wait_new_records: bool,
-        create_wait: timedelta | None,
-    ) -> AsyncGenerator[Item, None]:
-        """Read the Stream's items in order."""
-        return self._read(
-            topics=topics,
-            prefixes=prefixes,
-            types=types,
-            from_offset=from_offset,
-            wait_new_records=wait_new_records,
-            create_wait=create_wait,
-        )
+    async def publish_records(self, records: Sequence[tuple[str, Any]]) -> int:
+        """Write ``(topic, value)`` pairs as Records now, in order, and return the offset of
+        the last one.
+        """
+        return await self.writer().write(records)
 
-    async def _read(
-        self,
-        *,
-        topics: list[str] | None,
-        prefixes: Sequence[str],
-        types: dict[str, Any],
-        from_offset: int | End | None,
-        wait_new_records: bool,
-        create_wait: timedelta | None,
+    async def items(
+        self, read: ReadSpec, position: Position
     ) -> AsyncGenerator[Item, None]:
+        """Read the Stream's items in order, and move ``position`` past each page."""
         items = _reader.read(
             self.backend.service(self.namespace, _convert.raw(self.converter)),
             self.converter,
             await self.stream_id(),
-            topics=topics,
-            topic_prefixes=prefixes,
-            types=types,
-            from_offset=from_offset,
-            wait_new_records=wait_new_records,
-            create_wait=create_wait,
+            position=position,
+            topics=read.topics,
+            topic_prefixes=read.prefixes,
+            types=read.types,
+            default_type=read.default_type,
+            from_offset=read.from_offset,
+            wait_new_records=read.wait_new_records,
+            create_wait=read.create_wait,
         )
-        async for item in items:
-            yield item
+        try:
+            async for item in items:
+                yield item
+        finally:
+            await items.aclose()
 
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
@@ -109,13 +94,32 @@ class Access:
         await stream.close(producer=producer, result=result, failure=failure)
 
 
+@dataclass
+class ReadSpec:
+    """What one read asks for."""
+
+    topics: list[str] | None
+    prefixes: Sequence[str]
+    types: dict[str, Any]
+    default_type: Any
+    from_offset: int | End | None
+    wait_new_records: bool
+    create_wait: timedelta | None
+
+
 def read_spec(
     handle: StreamHandle[Any],
     topics: Sequence[
         str | TopicDefinition[Any] | _AsyncTopic[Any] | SyncTopicBase[Any]
     ],
-) -> tuple[list[str] | None, dict[str, Any]]:
-    """The Topic names of a read and the decode type of each known Topic."""
+    *,
+    prefixes: Sequence[str],
+    default_type: Any,
+    from_offset: int | End | None,
+    wait_new_records: bool,
+    create_wait: timedelta | None,
+) -> ReadSpec:
+    """The Topic names of a read, the decode type of each known Topic, and its options."""
     types = handle._known_types()
     names = []
     for topic in topics:
@@ -125,12 +129,32 @@ def read_spec(
             name, topic_type = handle._topic_spec(topic, None)
         else:
             # A read names a Topic outside the definition with no type, and its values
-            # decode as the converter gives them.
+            # decode with the read's default type.
             name, topic_type = topic, types.get(topic)
         names.append(name)
         if topic_type is not None:
             types[name] = topic_type
-    return names or None, types
+    return ReadSpec(
+        topics=names or None,
+        prefixes=prefixes,
+        types=types,
+        default_type=default_type,
+        from_offset=from_offset,
+        wait_new_records=wait_new_records,
+        create_wait=create_wait,
+    )
+
+
+def subscription(
+    items: Callable[[Position], AsyncGenerator[Item, None]],
+    from_offset: int | End | None,
+    options: CallOptions | None = None,
+) -> Subscription[Any]:
+    """A read that starts at ``from_offset``, over the items that ``items`` gives."""
+    # Before its first page, a read from the start resumes at 0 and a read from END has no
+    # offset yet.
+    position = Position(None if from_offset is End.END else from_offset or 0)
+    return Subscription(items(position), position, options)
 
 
 class _AsyncTopic(TopicBase[T]):
@@ -150,13 +174,18 @@ class _AsyncTopic(TopicBase[T]):
         from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
-    ) -> AsyncGenerator[Item, None]:
-        """Read this Topic only. See the Stream's ``subscribe``."""
-        return self._stream.subscribe(
-            self,
-            from_offset=from_offset,
-            wait_new_records=wait_new_records,
-            create_wait=create_wait,
+    ) -> Subscription[T]:
+        """Read this Topic only. Its Records have the Topic's type. See the Stream's
+        ``subscribe``.
+        """
+        return cast(
+            Subscription[T],
+            self._stream.subscribe(
+                self,
+                from_offset=from_offset,
+                wait_new_records=wait_new_records,
+                create_wait=create_wait,
+            ),
         )
 
 

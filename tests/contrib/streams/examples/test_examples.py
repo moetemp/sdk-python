@@ -21,7 +21,7 @@ def task_queue() -> str:
 
 async def test_ui_backend_reads(stream_client: Client):
     screen = await ui_backend_reads.main(stream_client, task_queue())
-    assert [(record.topic, record.data) for record in screen.shown] == [
+    assert [(record.topic, record.data) for record in screen.shown.values()] == [
         ("turns", ui_backend_reads.Turn("model")),
         ("tokens", "hello"),
         ("tokens", "there"),

@@ -61,19 +61,19 @@ class Agent:
 
 
 class Screen:
-    """Stands in for the UI. It keeps what it shows, so a withdrawal can take items back."""
+    """Stands in for the UI. It keeps what it shows by offset, so a withdrawal can take items
+    back.
+    """
 
     def __init__(self) -> None:
-        self.shown: list[streams.Record[Any]] = []
+        self.shown: dict[int, streams.Record[Any]] = {}
         self.result: Any = None
 
     def render(self, record: streams.Record[Any]) -> None:
-        self.shown.append(record)
+        self.shown[record.offset] = record
 
-    def unrender_where(self, superseded: streams.Superseded) -> None:
-        self.shown = [
-            record for record in self.shown if not superseded.withdraws(record)
-        ]
+    def unrender(self, offset: int) -> None:
+        del self.shown[offset]
 
 
 async def main(client: Client, task_queue: str) -> Screen:
@@ -92,7 +92,9 @@ async def main(client: Client, task_queue: str) -> Screen:
             if isinstance(item, streams.Closed):
                 screen.result = item.result if item.failure is None else item.failure
             elif isinstance(item, streams.Superseded):
-                screen.unrender_where(item)
+                # The offsets of the Records that this read showed and the item withdraws.
+                for offset in item.withdrawn_offsets:
+                    screen.unrender(offset)
             else:
                 # item.data is a Turn or a str, by item.topic.
                 screen.render(item)
