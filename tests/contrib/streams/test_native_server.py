@@ -261,6 +261,50 @@ async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
 
 
 @workflow.defn
+class ClosesItsRead:
+    def __init__(self) -> None:
+        self._stop = False
+
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
+        items = stream.subscribe(from_offset=streams.END)
+        reading = asyncio.create_task(items.__anext__())
+        await workflow.wait_condition(lambda: self._stop)
+        await items.aclose()
+        try:
+            await reading
+        except StopAsyncIteration:
+            return "ended"
+        return "read"
+
+    @workflow.signal
+    def stop(self) -> None:
+        self._stop = True
+
+
+async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
+    # A wake may park for days, so a read that its code closed must not keep it.
+    stream = await streams.StreamClient(native_client).create(
+        Events, id=f"native-{uuid.uuid4()}", auto_close=timedelta(minutes=5)
+    )
+    async with new_worker(native_client, ClosesItsRead) as worker:
+        reader = await native_client.start_workflow(
+            ClosesItsRead.run,
+            stream_workflow.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await until_wake(reader)
+        await reader.signal(ClosesItsRead.stop)
+        assert await reader.result() == "ended"
+    history = await reader.fetch_history()
+    assert any(
+        event.HasField("nexus_operation_cancel_requested_event_attributes")
+        for event in history.events
+    )
+
+
+@workflow.defn
 class ReadsUntilHalfRetention:
     @workflow.run
     async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
