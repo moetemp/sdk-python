@@ -972,6 +972,7 @@ def _activity_streams(
         task_token=b"" if info.is_local else info.task_token,
         activity_streams=interceptor.plugin._activity_streams,
         max_batch_bytes=interceptor.plugin._max_batch_bytes,
+        nests_workflow_streams=interceptor.plugin._nests_workflow_streams,
     )
 
 

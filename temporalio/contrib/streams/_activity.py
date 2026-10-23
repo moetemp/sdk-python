@@ -37,6 +37,8 @@ class ActivityStreams:
     activity_streams: bool = False
     # The most bytes of one append that the backend's Store takes.
     max_batch_bytes: int = 4 * 1024 * 1024
+    # Whether the backend's Store finds a Workflow's Stream only by its owner fields.
+    nests_workflow_streams: bool = False
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
