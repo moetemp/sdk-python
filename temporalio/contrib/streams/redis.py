@@ -968,6 +968,11 @@ def _activity_streams(
         workflow_id=info.workflow_id,
         previous_completed_task=previous,
         failed_tasks=failed,
+        # A Local Activity writes for its Workflow run, so the run's checks cover it.
+        task_token=b"" if info.is_local else info.task_token,
+        activity_streams=interceptor.plugin._activity_streams,
+        max_batch_bytes=interceptor.plugin._max_batch_bytes,
+        nests_workflow_streams=interceptor.plugin._nests_workflow_streams,
     )
 
 

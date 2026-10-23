@@ -6,10 +6,11 @@ import asyncio
 import concurrent.futures
 from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
+from types import TracebackType
 from typing import Any, Generic, TypeVar, cast, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.contrib.streams import _activity, _errors
+from temporalio.contrib.streams import _activity, _errors, _ids
 from temporalio.contrib.streams._access import (
     Access,
     SyncTopicBase,
@@ -18,7 +19,7 @@ from temporalio.contrib.streams._access import (
     subscription,
 )
 from temporalio.contrib.streams._defn import TopicDefinition
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import StreamHandle, exit_failure
 from temporalio.contrib.streams._items import Closed, End, Record, Superseded
 from temporalio.contrib.streams._reader import Subscription
 from temporalio.contrib.streams.system import models
@@ -47,12 +48,26 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
 
 
 def _check_close(handle: StreamHandle[Any]) -> None:
-    # A Workflow's Stream closes only from its run chain, and a client's only from a client. So
-    # only a Local Activity of the chain may close here. The Store refuses the others too, and
-    # this error comes with no call.
+    # A Workflow's Stream closes only from its run chain, a Standalone Activity's only from that
+    # Activity, and a client's only from a client. So only a Local Activity of the chain or the
+    # owning Activity may close here. The Store refuses the others too, and this error comes
+    # with no call.
     streams = _bound(handle)
+    if handle.activity_id:
+        owner = _ids.standalone_activity_producer_id(
+            handle.activity_id, handle.activity_run_id or ""
+        )
+        if (streams.producer.kind, streams.producer.id) == (
+            stream_pb.ProducerKind.PRODUCER_KIND_STANDALONE_ACTIVITY,
+            owner,
+        ):
+            return
     local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
-    if not local or (handle.workflow_id and handle.workflow_id != streams.workflow_id):
+    if (
+        not local
+        or handle.activity_id
+        or (handle.workflow_id and handle.workflow_id != streams.workflow_id)
+    ):
         raise _errors.StreamNotOwnerError(
             f"Can't close the Stream {handle.id} from this Activity. A Workflow's Stream "
             "closes only from its run chain, and a client's only from a client.",
@@ -73,8 +88,10 @@ def _access(handle: StreamHandle[Any]) -> Access:
         ref=ref,
         writer=lambda: streams.writer(handle),
         # A handle with only an id names no chain, so the close names this Activity's own, and
-        # the Store refuses it when another chain owns the Stream.
-        workflow_id=handle.workflow_id or streams.workflow_id,
+        # the Store refuses it when another chain owns the Stream. A Store that nests a
+        # Workflow's Stream finds none by such a handle, and the chain's id alone is no ref.
+        workflow_id=handle.workflow_id
+        or (None if streams.nests_workflow_streams else streams.workflow_id),
         first_execution_run_id=handle.first_execution_run_id,
     )
 
@@ -156,12 +173,31 @@ class ActivityStream(StreamHandle[E]):
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. A ``CancelledError`` failure closes it as canceled.
 
-        Only a Local Activity of the run chain that created the Stream may close it. Any other
-        Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
-        reader.
+        Only a Local Activity of the run chain that created the Stream, or the Standalone
+        Activity that created it, may close it. Any other Activity gets
+        :py:class:`StreamNotOwnerError`, so it can't end the Stream for every reader.
         """
         _check_close(self)
         await self._access().close(result, failure)
+
+    async def __aenter__(self) -> ActivityStream[E]:
+        """Use the Stream in ``async with``, which closes it at the end."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the Stream, with the exception as its failure if there is one.
+
+        A cancel closes it with a ``CancelledError`` failure. Another ``BaseException`` leaves
+        it open.
+        """
+        close, failure = exit_failure(exc)
+        if close:
+            await self.close(failure=failure)
 
 
 class SyncActivityTopic(SyncTopicBase[T]):

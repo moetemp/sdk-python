@@ -206,6 +206,7 @@ async def append_records(
     previous_completed_task: WorkflowTaskEpoch | None = None,
     failed_tasks: list[int] | None = None,
     withdraw_run: str | None = None,
+    defer_withdrawal: bool | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[AppendRecordsResponse,]:
     """Append one batch. Workflow code makes the call from a Local Activity.
 
@@ -217,6 +218,8 @@ async def append_records(
             Task.
         failed_tasks: Local Activity only. The run's failed or timed out Workflow Tasks.
         withdraw_run: Retry run only. The previous run, whose Records this withdraws.
+        defer_withdrawal: Workflow only. The batch before a Local Activity. It withdraws
+            no task.
     """
     request = AppendRecordsRequest(
         stream=stream,
@@ -226,6 +229,7 @@ async def append_records(
         previous_completed_task=previous_completed_task,
         failed_tasks=failed_tasks or [],
         withdraw_run=withdraw_run,
+        defer_withdrawal=defer_withdrawal,
     )
     return await _append_records(request)
 
@@ -254,6 +258,7 @@ async def close_stream(
     | None = None,
     previous_completed_task: WorkflowTaskEpoch | None = None,
     failed_tasks: list[int] | None = None,
+    withdraw_run: str | None = None,
 ) -> temporalio.workflow.NexusOperationHandle[CloseStreamResponse,]:
     """
     Args:
@@ -262,6 +267,7 @@ async def close_stream(
             the run.
         failed_tasks: Workflow only. Failed or timed out tasks since this run's last
             flush here.
+        withdraw_run: Retry run only. The previous run, whose Records this withdraws.
     """
     request = CloseStreamRequest(
         stream=stream,
@@ -271,6 +277,7 @@ async def close_stream(
         status=status,
         previous_completed_task=previous_completed_task,
         failed_tasks=failed_tasks or [],
+        withdraw_run=withdraw_run,
     )
     return await _close_stream(request)
 

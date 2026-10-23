@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.contrib.streams import _errors
+from temporalio.contrib.streams import _backend, _errors
 
 if TYPE_CHECKING:
     from temporalio.contrib.streams.system import models as system_models
@@ -27,6 +27,7 @@ class StreamWriter:
         free: Callable[[int], None] | None = None,
         previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None,
         failed_tasks: Sequence[int] = (),
+        task_token: bytes = b"",
     ) -> None:
         """Create a writer. It opens on its first write.
 
@@ -39,6 +40,7 @@ class StreamWriter:
         self._free = free
         self._release: weakref.finalize[Any, StreamWriter] | None = None
         self._previous_completed_task = previous_completed_task
+        self._task_token = task_token
         self._failed_tasks = list(failed_tasks)
         self._writer: writer_client.Writer | None = None
         self._open_lock = asyncio.Lock()
@@ -48,6 +50,11 @@ class StreamWriter:
     def producer(self) -> stream_pb.Producer:
         """The Producer that the writer writes as."""
         return self._producer
+
+    @property
+    def task_token(self) -> bytes:
+        """The task token of the Activity attempt that writes, or empty."""
+        return self._task_token
 
     async def withdraw_earlier_attempts(self) -> None:
         """Open the writer of a new attempt, which withdraws the Records of the earlier ones.
@@ -72,22 +79,26 @@ class StreamWriter:
                 )
                 ref = await self._resolve_ref()
                 previous = self._previous_completed_task
-                self._writer = await self._writers.open_writer(
-                    models.OpenWriterRequest(
-                        stream=models.StreamRef(
-                            id=ref.id,
-                            workflow_id=ref.workflow_id,
-                            first_execution_run_id=ref.first_execution_run_id,
-                        ),
-                        producer=producer,
-                        previous_completed_task=models.WorkflowTaskEpoch(
-                            started_event_id=previous.started_event_id
+                # The crate keeps the token with the writer and sends it with each batch.
+                with _backend.with_task_token(self._task_token):
+                    self._writer = await self._writers.open_writer(
+                        models.OpenWriterRequest(
+                            stream=models.StreamRef(
+                                id=ref.id,
+                                workflow_id=ref.workflow_id,
+                                first_execution_run_id=ref.first_execution_run_id,
+                                activity_id=ref.activity_id,
+                                activity_run_id=ref.activity_run_id,
+                            ),
+                            producer=producer,
+                            previous_completed_task=models.WorkflowTaskEpoch(
+                                started_event_id=previous.started_event_id
+                            )
+                            if previous is not None
+                            else None,
+                            failed_tasks=self._failed_tasks,
                         )
-                        if previous is not None
-                        else None,
-                        failed_tasks=self._failed_tasks,
                     )
-                )
                 if self._free is not None:
                     # The crate keeps a writer for each open that no one closed or freed, so a
                     # writer that Python drops frees its open.

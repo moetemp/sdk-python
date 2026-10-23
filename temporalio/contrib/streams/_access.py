@@ -9,7 +9,7 @@ from datetime import timedelta
 from typing import Any, TypeVar, cast
 
 import temporalio.converter
-from temporalio.contrib.streams import _convert, _reader
+from temporalio.contrib.streams import _backend, _convert, _reader
 from temporalio.contrib.streams._backend import CallOptions, StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle, TopicBase
@@ -101,15 +101,17 @@ class Access:
         producer = models._ProducerTransferTypeConverter().from_transfer_type(
             writer.producer, models.Producer
         )
-        await self.backend.service(self.namespace, self.converter).close_stream(
-            models.CloseStreamRequest(
-                stream=await self._close_ref(),
-                producer=producer,
-                result=result,
-                failure=failure,
-                status=close_status(failure),
+        # An Activity's close sends its task token, as its writes do.
+        with _backend.with_task_token(writer.task_token):
+            await self.backend.service(self.namespace, self.converter).close_stream(
+                models.CloseStreamRequest(
+                    stream=await self._close_ref(),
+                    producer=producer,
+                    result=result,
+                    failure=failure,
+                    status=close_status(failure),
+                )
             )
-        )
 
 
 @dataclass

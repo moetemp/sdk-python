@@ -305,6 +305,8 @@ class StreamRef:
     workflow_id: str | None = None
     first_execution_run_id: str | None = None
     backend: str | None = None
+    activity_id: str | None = None
+    activity_run_id: str | None = None
 
 
 class _StreamRefTransferTypeConverter(
@@ -332,6 +334,10 @@ class _StreamRefTransferTypeConverter(
             if bool(value.first_execution_run_id)
             else None,
             backend=value.backend if bool(value.backend) else None,
+            activity_id=value.activity_id if bool(value.activity_id) else None,
+            activity_run_id=value.activity_run_id
+            if bool(value.activity_run_id)
+            else None,
         )
 
     @typing_extensions.override
@@ -347,6 +353,10 @@ class _StreamRefTransferTypeConverter(
             message.first_execution_run_id = value.first_execution_run_id
         if value.backend is not None:
             message.backend = value.backend
+        if value.activity_id is not None:
+            message.activity_id = value.activity_id
+        if value.activity_run_id is not None:
+            message.activity_run_id = value.activity_run_id
         return message
 
 
@@ -434,6 +444,7 @@ class AppendRecordsRequest:
     previous_completed_task: WorkflowTaskEpoch | None = None
     failed_tasks: list[int] | None = dataclasses.field(default_factory=list)
     withdraw_run: str | None = None
+    defer_withdrawal: bool | None = None
 
 
 class _AppendRecordsRequestTransferTypeConverter(
@@ -478,6 +489,9 @@ class _AppendRecordsRequestTransferTypeConverter(
             else None,
             failed_tasks=list(value.failed_tasks),
             withdraw_run=value.withdraw_run if bool(value.withdraw_run) else None,
+            defer_withdrawal=value.defer_withdrawal
+            if bool(value.defer_withdrawal)
+            else None,
         )
 
     @typing_extensions.override
@@ -514,6 +528,8 @@ class _AppendRecordsRequestTransferTypeConverter(
             message.failed_tasks.extend(value.failed_tasks)
         if value.withdraw_run is not None:
             message.withdraw_run = value.withdraw_run
+        if value.defer_withdrawal is not None:
+            message.defer_withdrawal = value.defer_withdrawal
         return message
 
 
@@ -693,6 +709,7 @@ class CloseStreamRequest:
     ) = None
     previous_completed_task: WorkflowTaskEpoch | None = None
     failed_tasks: list[int] | None = dataclasses.field(default_factory=list)
+    withdraw_run: str | None = None
 
 
 class _CloseStreamRequestTransferTypeConverter(
@@ -740,6 +757,7 @@ class _CloseStreamRequestTransferTypeConverter(
             if value.HasField("previous_completed_task")
             else None,
             failed_tasks=list(value.failed_tasks),
+            withdraw_run=value.withdraw_run if bool(value.withdraw_run) else None,
         )
 
     @typing_extensions.override
@@ -774,6 +792,8 @@ class _CloseStreamRequestTransferTypeConverter(
             )
         if value.failed_tasks:
             message.failed_tasks.extend(value.failed_tasks)
+        if value.withdraw_run is not None:
+            message.withdraw_run = value.withdraw_run
         return message
 
 

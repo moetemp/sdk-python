@@ -400,3 +400,12 @@ async def test_handle_looks_in_each_backend_during_a_move(client: Client):
     # A handle with no backend name is ambiguous when the client has two backends.
     with pytest.raises(streams.StreamConfigError):
         stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))
+
+
+async def test_only_the_native_backend_keeps_a_standalone_activitys_stream(
+    stream_client: Client,
+):
+    # Nothing closes a Redis Stream when its Activity ends, so it would stay open.
+    handle = stream_client.get_activity_handle("activity", run_id="run")
+    with pytest.raises(streams.StreamConfigError, match="native backend"):
+        streams.StreamClient(stream_client).activity_stream(handle, Events)

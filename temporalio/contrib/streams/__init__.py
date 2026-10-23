@@ -2,8 +2,9 @@
 
 A Stream definition, a class with ``@streams.defn``, gives the Stream name and the type of each
 Topic. Workflow code creates a Stream with
-:py:func:`temporalio.contrib.streams.workflow.create_stream`. A client creates and gets Streams
-with :py:class:`StreamClient`. A Stream is data: a Workflow passes it to an Activity, a child
+:py:func:`temporalio.contrib.streams.workflow.create_stream`, and a Standalone Activity with
+:py:func:`temporalio.contrib.streams.activity.create_stream` on the native backend. A client
+creates and gets Streams with :py:class:`StreamClient`. A Stream is data: a Workflow passes it to an Activity, a child
 Workflow or the next run as an argument, and the parameter's type gives the handle class of
 that context, such as :py:class:`ActivityStream`.
 
@@ -19,7 +20,7 @@ and each call goes to the backend that the handle names. Then exactly one of the
     This package is experimental.
 """
 
-from temporalio.contrib.streams import workflow
+from temporalio.contrib.streams import activity, workflow
 from temporalio.contrib.streams._activity_stream import (
     ActivityStream,
     ActivityTopic,
@@ -100,6 +101,7 @@ __all__ = [
     "TopicDefinition",
     "WorkflowStream",
     "WorkflowTopic",
+    "activity",
     "defn",
     "topic",
     "with_name",
