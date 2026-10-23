@@ -142,6 +142,31 @@ def from_call_error(err: Exception) -> StreamError:
     )
 
 
+_ERROR_CLASSES: list[type[StreamError]] = [StreamError, *_BY_REASON.values()]
+_BY_NAME: dict[str, type[StreamError]] = {cls.__name__: cls for cls in _ERROR_CLASSES}
+
+
+def from_application_error(
+    err: temporalio.exceptions.ApplicationError,
+) -> StreamError | None:
+    """The Stream error that an application error of a failed call carries, if any.
+
+    A Stream error's type is its class name, and its first detail is its reason. A server may
+    give the reason as the type, or at the start of the message, such as ``stream_closed: ...``.
+    """
+    token = err.message.split(":", 1)[0].strip()
+    reason = err.details[0] if err.details and isinstance(err.details[0], str) else ""
+    cls = _BY_NAME.get(err.type or "")
+    if cls is None:
+        reason = next(
+            (name for name in (err.type or "", token) if name in _BY_REASON), ""
+        )
+        cls = _BY_REASON.get(reason)
+    if cls is None:
+        return None
+    return cls(err.message, reason=reason)
+
+
 def from_reason(reason: str, message: str) -> StreamError:
     """The Stream error for a reason token."""
     return _BY_REASON.get(reason, StreamError)(message, reason=reason)

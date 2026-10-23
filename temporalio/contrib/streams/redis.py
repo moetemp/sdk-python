@@ -28,7 +28,13 @@ import temporalio.runtime
 import temporalio.service
 import temporalio.worker
 import temporalio.workflow
-from temporalio.contrib.streams import _activity, _ids, _writes
+from temporalio.contrib.streams import (
+    _activity,
+    _errors,
+    _ids,
+    _workflow_reader,
+    _writes,
+)
 from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend, _ExtensionStreamBackend
 from temporalio.contrib.streams._errors import StreamConfigError
@@ -41,6 +47,9 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
 
+# How long a Workflow read's Local Activity waits for new Records. Its timeout adds a margin.
+_READ_WAIT = timedelta(seconds=10)
+_READ_MARGIN = timedelta(seconds=10)
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
@@ -51,6 +60,7 @@ _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 class _ExtensionStreamPlugin(StreamPlugin):
     # The Redis, memory and native plugins: the Stream calls go to the temporalio-streams
     # runtime.
+    _outbound_class: type[_WorkflowOutbound]
     # Whether the Store closes a Stream with its owner's run chain on the server.
     _server_closes_with_run = False
 
@@ -83,6 +93,8 @@ class _ExtensionStreamPlugin(StreamPlugin):
                 runtime or temporalio.runtime.Runtime.default(), True
             )
         super().__init__(name, backend_name=backend_name, default=default)
+        # The read activity's name has the backend name, which the base keeps.
+        self._read_activity = _read_activity(self)
 
     def _runtime_backend(
         self, runtime: temporalio.runtime.Runtime, memory: bool
@@ -161,6 +173,9 @@ class _ExtensionStreamPlugin(StreamPlugin):
             )
             config["interceptors"] = [*config.get("interceptors", []), mine]
         mine.converter = client.data_converter
+        if not self._outbound_class._temporal_stream_parks_reads:
+            # Workflow reads run as this Local Activity, so the Worker must have it.
+            config["activities"] = [*config.get("activities", []), self._read_activity]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -235,6 +250,67 @@ def check_worker_backends(config: temporalio.worker.WorkerConfig) -> None:
             raise ValueError(
                 f"Two Stream plugins of the Worker have the backend {name}"
             )
+
+
+def read_activity_name(backend: str) -> str:
+    """The name of the Local Activity that reads a page of a backend for Workflow code."""
+    return f"__temporal_stream_read:{backend}"
+
+
+def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
+    @temporalio.activity.defn(name=read_activity_name(plugin.backend_name))
+    async def read_page(
+        request: stream_pb.ReadRecordsRequest,
+    ) -> stream_pb.ReadRecordsResponse:
+        request.namespace = temporalio.activity.info().namespace
+        # The Worker's client gave the attempt its Stream runtime.
+        streams = _attempt_streams(plugin.backend_name)
+        try:
+            page = await cast(_ExtensionStreamBackend, streams.backend).call_async(
+                "ReadRecords", request, stream_pb.ReadRecordsResponse
+            )
+        except _errors.StreamError as err:
+            # The reason goes in the details, so Workflow code gets the same Stream error.
+            raise temporalio.exceptions.ApplicationError(
+                str(err.message),
+                err.reason,
+                type=type(err).__name__,
+                non_retryable=err.non_retryable,
+            ) from None
+        # Workflow code can't run the codec, so the page's bodies go to it decoded. The page
+        # as a whole goes through the codec as the Local Activity's result.
+        await _decode_page(streams.converter, page)
+        return page
+
+    return read_page
+
+
+def _attempt_streams(backend: str) -> _activity.ActivityStreams:
+    attempt = _activity.current.get()
+    streams = attempt.get(backend) if attempt is not None else None
+    if streams is None:
+        raise StreamConfigError(
+            f"No Stream plugin of the backend {backend} runs this Local Activity"
+        )
+    return streams
+
+
+async def _decode_page(
+    converter: temporalio.converter.DataConverter, page: stream_pb.ReadRecordsResponse
+) -> None:
+    codec = converter.payload_codec
+    if codec is None:
+        return
+    payloads = [
+        payload
+        for record in page.records
+        for payload in (record.body, record.close_result)
+        if payload.ByteSize()
+    ]
+    if not payloads:
+        return
+    for payload, decoded in zip(payloads, await codec.decode(payloads)):
+        payload.CopyFrom(decoded)
 
 
 def _runtime_of(
@@ -333,6 +409,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
             {
                 "_backend_name": self.plugin.backend_name,
                 "_default": self.plugin.default,
+                "_outbound_class": self.plugin._outbound_class,
                 "_server_closes_with_run": self.plugin._server_closes_with_run,
                 "_interceptor": self if self.backend is not None else None,
             },
@@ -360,11 +437,13 @@ class _RunClose:
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend_name = ""
     _default = False
+    # Each plugin's interceptor sets it on its own class.
+    _outbound_class: type[_WorkflowOutbound]  # pyright: ignore[reportUninitializedInstanceVariable]
     _server_closes_with_run = False
     _interceptor: _StreamInterceptor | None = None
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
-        super().init(_WorkflowOutbound(outbound, self._backend_name, self._default))
+        super().init(self._outbound_class(outbound, self._backend_name, self._default))
 
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
@@ -557,6 +636,9 @@ def _take_owned_streams(
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_transport = True
+    # The runtime can't park a read yet, so a reader pauses on a timer after an empty page.
+    _temporal_stream_parks_reads = False
+    _temporal_stream_read_wait = _READ_WAIT
 
     def __init__(
         self,
@@ -578,6 +660,25 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         # header.
         converter = temporalio.converter.PayloadConverter.default
         return {_KEY_HEADER: converter.to_payload(str(self._activity_calls))}
+
+    async def _temporal_stream_read_page(
+        self, request: stream_pb.ReadRecordsRequest
+    ) -> stream_pb.ReadRecordsResponse:
+        # The page is the Local Activity's result, so it is in History.
+        try:
+            return await temporalio.workflow.execute_local_activity(
+                read_activity_name(self._temporal_stream_backend_name),
+                request,
+                result_type=stream_pb.ReadRecordsResponse,
+                start_to_close_timeout=_READ_WAIT + _READ_MARGIN,
+            )
+        except (
+            temporalio.exceptions.ActivityError,
+            temporalio.exceptions.ApplicationError,
+        ) as err:
+            # A Local Activity's failure may come as its application error, with no
+            # ActivityError around it.
+            raise _workflow_reader.error_of(err) from None
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         # The next run needs each owned Stream's backend for stream_handle.
@@ -781,3 +882,6 @@ def _activity_streams(
         previous_completed_task=previous,
         failed_tasks=failed,
     )
+
+
+_ExtensionStreamPlugin._outbound_class = _WorkflowOutbound

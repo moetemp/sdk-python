@@ -8,12 +8,26 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.client
 import temporalio.bridge.streams
+import temporalio.exceptions
+import temporalio.nexus.system
 import temporalio.service
+import temporalio.worker
+import temporalio.workflow
+from temporalio.contrib.streams import _workflow_reader
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
 from temporalio.contrib.streams.proto import v1 as ext_pb
-from temporalio.contrib.streams.redis import _ExtensionStreamPlugin, _runtime_of
+from temporalio.contrib.streams.redis import (
+    _ExtensionStreamPlugin,
+    _runtime_of,
+    _WorkflowOutbound,
+)
+
+_SERVICE = "temporal.api.streamservice.v1.StreamService"
+
+_WAIT_COMPLETED = temporalio.workflow.NexusOperationCancellationType.WAIT_COMPLETED
 
 
 class _ConnectionRuntime:
@@ -55,6 +69,37 @@ async def _bridge_client(
     return await connect()
 
 
+class _NativeWorkflowOutbound(_WorkflowOutbound):
+    # The server parks a read at the end of the Stream and completes it on an append or a
+    # close, so a reader needs no timer.
+    _temporal_stream_parks_reads = True
+    _temporal_stream_read_wait = timedelta(seconds=60)
+
+    async def _temporal_stream_read_page(
+        self, request: stream_pb.ReadRecordsRequest
+    ) -> stream_pb.ReadRecordsResponse:
+        # The page is a System Nexus operation, so its answer is in History.
+        handle = await self.next.start_system_nexus_operation(
+            temporalio.worker.StartNexusOperationInput(
+                endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
+                service=_SERVICE,
+                operation="ReadRecords",
+                input=request,
+                output_type=stream_pb.ReadRecordsResponse,
+                schedule_to_close_timeout=None,
+                schedule_to_start_timeout=None,
+                start_to_close_timeout=None,
+                cancellation_type=_WAIT_COMPLETED,
+                headers=None,
+                summary=None,
+            )
+        )
+        try:
+            return await handle
+        except temporalio.exceptions.NexusOperationError as err:
+            raise _workflow_reader.error_of(err) from None
+
+
 class NativeStreamPlugin(_ExtensionStreamPlugin):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
 
@@ -69,6 +114,7 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
         This API is experimental.
     """
 
+    _outbound_class = _NativeWorkflowOutbound
     _server_closes_with_run = True
 
     def _new_backend(

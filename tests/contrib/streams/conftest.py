@@ -10,6 +10,7 @@ import pytest
 
 from temporalio.client import Client
 from temporalio.contrib.streams import StreamPlugin
+from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 
@@ -70,3 +71,20 @@ async def stream_client(
     config = client.config()
     config["plugins"] = [plugin]
     yield Client(**config)
+
+
+# A server that serves the Stream service, such as a dev server of moetemp/temporal with the
+# native Stream backend. The native lane runs only when it is set.
+NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
+NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
+
+
+@pytest.fixture
+async def native_client() -> Client:
+    if not NATIVE_TARGET:
+        pytest.skip(
+            "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
+        )
+    return await Client.connect(
+        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
+    )
