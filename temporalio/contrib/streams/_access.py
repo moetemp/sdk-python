@@ -29,6 +29,9 @@ class Access:
     namespace: str
     stream_id: Callable[[], Awaitable[str]]
     writer: Callable[[], StreamWriter]
+    # The run chain that a close names, which the Store checks against the Stream's owner.
+    workflow_id: str | None = None
+    first_execution_run_id: str | None = None
 
     async def publish(self, topic: str, values: Sequence[Any]) -> int:
         """Write the values as Records now, and return the offset of the last one."""
@@ -89,7 +92,11 @@ class Access:
         )
         await self.backend.service(self.namespace, self.converter).close_stream(
             models.CloseStreamRequest(
-                stream=models.StreamRef(id=await self.stream_id()),
+                stream=models.StreamRef(
+                    id=await self.stream_id(),
+                    workflow_id=self.workflow_id,
+                    first_execution_run_id=self.first_execution_run_id,
+                ),
                 producer=producer,
                 result=result,
                 failure=failure,
