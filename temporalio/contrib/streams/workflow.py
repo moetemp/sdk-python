@@ -564,6 +564,7 @@ def _create(
         )
     run_id = temporalio.workflow.info().run_id
     # The owner makes the Stream the run chain's, and names a retry run's withdrawal.
+    # The ref names the run chain, which the Store keeps for its owner check of a close.
     request = stream_pb.CreateStreamRequest(
         stream_id=stream.id,
         owner=stream_pb.Producer(
@@ -571,6 +572,7 @@ def _create(
             id=_ids.workflow_producer_id(run_id),
             run_id=run_id,
         ),
+        ref=stream._ref(),
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)

@@ -94,6 +94,7 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
                 id=request.owner.id,
                 run_id=request.owner.run_id or None,
             ),
+            ref=_ref(request.ref) if request.HasField("ref") else None,
         )
     )
     if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
