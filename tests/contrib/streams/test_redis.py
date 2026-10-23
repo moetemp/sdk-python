@@ -478,11 +478,12 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
         await handle.result()
         stream = workflow_stream(codec_client, handle)
         decoded = await read_all(stream)
-        # A Stream with no definition reads the raw Payloads.
+        # A Stream with no definition reads the raw Payloads. The handle keeps the owner
+        # fields, since a native server finds a Workflow's Stream only by them.
         raw = [
             item
             async for item in streams.StreamClient(codec_client)
-            .get_handle(Plain, id=stream.id)
+            .get_handle(Plain, stream=stream)
             .topic("tokens", type=RawValue)
             .subscribe(wait_new_records=False)
         ]

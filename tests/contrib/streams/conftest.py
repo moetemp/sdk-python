@@ -56,12 +56,23 @@ def redis_url() -> Iterator[str]:
         process.wait()
 
 
-@pytest.fixture(params=["memory", "redis"])
+# A server that serves the Stream service, such as a dev server of moetemp/temporal with the
+# native Stream backend. The native lane runs only when it is set.
+NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
+NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
+
+
+@pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
 async def stream_client(
     client: Client, request: pytest.FixtureRequest
 ) -> AsyncIterator[Client]:
     # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules.
+    # rules, and on the native server when one is given.
+    if request.param == "native":
+        yield await Client.connect(
+            NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
+        )
+        return
     plugin: StreamPlugin
     if request.param == "memory":
         plugin = MemoryStreamPlugin()
@@ -71,12 +82,6 @@ async def stream_client(
     config = client.config()
     config["plugins"] = [plugin]
     yield Client(**config)
-
-
-# A server that serves the Stream service, such as a dev server of moetemp/temporal with the
-# native Stream backend. The native lane runs only when it is set.
-NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
-NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
 
 
 @pytest.fixture

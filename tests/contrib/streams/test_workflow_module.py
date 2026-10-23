@@ -348,10 +348,11 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
         first = await reader.__anext__()
         second = await reader.__anext__()
         await reader.aclose()
+        # Read before the terminate, since a native server closes the Stream with it.
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
         await handle.terminate()
     assert isinstance(first, streams.Record) and first.data == "turn"
     assert isinstance(second, streams.Record) and second.data == "turn"
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert not any(isinstance(item, streams.Closed) for item in items)
 
 

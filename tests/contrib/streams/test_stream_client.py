@@ -12,6 +12,7 @@ from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams._backend import _ExtensionStreamBackend
+from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
 from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
@@ -405,5 +406,12 @@ async def test_only_the_native_backend_keeps_a_standalone_activitys_stream(
 ):
     # Nothing closes a Redis Stream when its Activity ends, so it would stay open.
     handle = stream_client.get_activity_handle("activity", run_id="run")
+    stream_client_ = streams.StreamClient(stream_client)
+    if any(
+        isinstance(p, NativeStreamPlugin) for p in stream_client.config()["plugins"]
+    ):
+        stream = stream_client_.activity_stream(handle, Events)
+        assert (stream.activity_id, stream.activity_run_id) == ("activity", "run")
+        return
     with pytest.raises(streams.StreamConfigError, match="native backend"):
-        streams.StreamClient(stream_client).activity_stream(handle, Events)
+        stream_client_.activity_stream(handle, Events)
