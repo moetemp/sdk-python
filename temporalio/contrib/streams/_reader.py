@@ -10,7 +10,7 @@ from typing import Any, Generic, TypeVar
 
 import temporalio.converter
 from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
-from temporalio.contrib.streams import _convert, _errors
+from temporalio.contrib.streams import _backend, _convert, _errors
 from temporalio.contrib.streams._items import (
     Closed,
     End,
@@ -47,10 +47,17 @@ class Subscription(Generic[T]):
         This API is experimental.
     """
 
-    def __init__(self, items: AsyncGenerator[Item, None], position: Position) -> None:
+    def __init__(
+        self,
+        items: AsyncGenerator[Item, None],
+        position: Position,
+        options: _backend.CallOptions | None = None,
+    ) -> None:
         """Create a read. Use a handle's ``subscribe`` instead."""
         self._items = items
         self._position = position
+        # A client read's rpc_metadata and rpc_timeout, for each call of each step.
+        self._options = options
         # The Producer and the offsets of each Record this read gave, with no values, so a
         # Superseded item can give the offsets it withdraws.
         self._shown: dict[tuple[Any, ...], tuple[models.Producer, list[int]]] = {}
@@ -70,7 +77,8 @@ class Subscription(Generic[T]):
 
     async def __anext__(self) -> Record[T] | Superseded | Closed:
         """The next item."""
-        item = await self._items.__anext__()
+        with _backend.using(self._options):
+            item = await self._items.__anext__()
         self._position.next_offset = max(
             self._position.next_offset or 0, item.offset + 1
         )
@@ -94,7 +102,8 @@ class Subscription(Generic[T]):
 
     async def aclose(self) -> None:
         """End the read early. It makes no more calls."""
-        await self._items.aclose()
+        with _backend.using(self._options):
+            await self._items.aclose()
 
 
 async def read(
@@ -134,7 +143,9 @@ async def read(
             else None,
             topics=list(topics or []),
             topic_prefixes=list(topic_prefixes),
-            create_wait=min(create_left, _MAX_WAIT) if create_left else None,
+            create_wait=min(create_left, _backend.longest_wait(_MAX_WAIT))
+            if create_left
+            else None,
         )
 
     while True:
@@ -170,7 +181,9 @@ async def _pages(
     # Record.
     while True:
         if wait_new_records:
-            page = await service.read_records_until_records(request, deadline=_MAX_WAIT)
+            page = await service.read_records_until_records(
+                request, deadline=_backend.longest_wait(_MAX_WAIT)
+            )
         else:
             page = await service.read_records(request)
         yield page

@@ -158,6 +158,36 @@ async def test_each_client_handle_is_its_own_producer(client: Client):
     assert len(producers) == 2
 
 
+async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
+    client, extension = fake_client(client)
+    stream = await streams.StreamClient(client).create(Events, id="slow")
+    call_async = extension.call_async
+
+    async def slow_describe(method: str, input: bytes) -> bytes:
+        if method == "DescribeStream":
+            await asyncio.sleep(1)
+        return await call_async(method, input)
+
+    setattr(extension, "call_async", slow_describe)
+    with pytest.raises(RPCError) as err:
+        await stream.get_offset(rpc_timeout=timedelta(milliseconds=100))
+    assert err.value.status == RPCStatusCode.DEADLINE_EXCEEDED
+
+    async def publish_later() -> None:
+        await asyncio.sleep(1)
+        await stream.topic(Events.tokens).publish("late")
+
+    # Each call of a read that waits answers before the deadline, so the read goes on.
+    reader = stream.topic(Events.tokens).subscribe(
+        rpc_timeout=timedelta(milliseconds=300)
+    )
+    publisher = asyncio.create_task(publish_later())
+    item = await anext(reader)
+    await reader.aclose()
+    await publisher
+    assert isinstance(item, streams.Record) and item.data == "late"
+
+
 def test_unsupported_capability_maps_to_its_error():
     details = ext_pb.StreamErrorDetails(reason="stream_unsupported").SerializeToString()
     err = _errors.from_extension_error(

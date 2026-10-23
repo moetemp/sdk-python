@@ -78,7 +78,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     handle = client.get_workflow_handle("agent-1")
     calls = []
 
-    async def describe() -> object:
+    async def describe(**_: Any) -> object:
         calls.append(1)
 
         class Info:
@@ -267,7 +267,7 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     assert first == same and first != other
     describes = []
 
-    async def describe() -> Any:
+    async def describe(**_: Any) -> Any:
         describes.append(1)
         await asyncio.sleep(0.05)
         info = SimpleNamespace(first_run_id="run-2")

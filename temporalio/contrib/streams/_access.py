@@ -9,7 +9,7 @@ from typing import Any, TypeVar, cast
 
 import temporalio.converter
 from temporalio.contrib.streams import _convert, _reader
-from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.contrib.streams._backend import CallOptions, StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition
 from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams._items import End
@@ -142,12 +142,13 @@ def read_spec(
 def subscription(
     items: Callable[[Position], AsyncGenerator[Item, None]],
     from_offset: int | End | None,
+    options: CallOptions | None = None,
 ) -> Subscription[Any]:
     """A read that starts at ``from_offset``, over the items that ``items`` gives."""
     # Before its first page, a read from the start resumes at 0 and a read from END has no
     # offset yet.
     position = Position(None if from_offset is End.END else from_offset or 0)
-    return Subscription(items(position), position)
+    return Subscription(items(position), position, options)
 
 
 class _AsyncTopic(TopicBase[T]):

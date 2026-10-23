@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import contextvars
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import google.protobuf.message
@@ -9,6 +15,7 @@ import google.protobuf.message
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
+import temporalio.service
 import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
@@ -41,6 +48,56 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
     "WriteRecords": ext_pb.WriteRecordsResponse,
     "CloseWriter": ext_pb.CloseWriterResponse,
 }
+
+
+@dataclass(frozen=True)
+class CallOptions:
+    """The ``rpc_metadata`` and ``rpc_timeout`` of a client's Stream call."""
+
+    metadata: Mapping[str, str | bytes]
+    timeout: timedelta | None
+
+
+# The options of the client call in progress. Each transport reads them, so they reach the
+# generated clients' calls and the writer's with no new argument there.
+call_options: contextvars.ContextVar[CallOptions | None] = contextvars.ContextVar(
+    "__temporal_stream_call_options", default=None
+)
+
+
+def options_of(
+    rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
+) -> CallOptions | None:
+    """The call options, or None for a call with neither."""
+    if not rpc_metadata and rpc_timeout is None:
+        return None
+    return CallOptions(metadata=rpc_metadata, timeout=rpc_timeout)
+
+
+@contextlib.contextmanager
+def using(options: CallOptions | None) -> Iterator[None]:
+    """Give the calls in the block these options."""
+    if options is None:
+        yield
+        return
+    token = call_options.set(options)
+    try:
+        yield
+    finally:
+        call_options.reset(token)
+
+
+def longest_wait(longest: timedelta) -> timedelta:
+    """The longest wait of one call. It is less than ``longest`` to answer before the call's
+    rpc_timeout.
+    """
+    options = call_options.get()
+    if options is None or options.timeout is None:
+        return longest
+    # A long poll answers before the call's deadline, as the server does for its own long
+    # polls, so a read that waits goes on with its next poll and does not fail.
+    timeout = options.timeout
+    return min(longest, max(timeout - timedelta(seconds=1), timeout / 2))
 
 
 class StreamBackend(Protocol):
@@ -131,9 +188,22 @@ class _ExtensionTransport:
         # The IDL leaves the namespace out, since the server knows it.
         if "namespace" in request.DESCRIPTOR.fields_by_name:
             setattr(request, "namespace", self._namespace)
-        response = await self._backend.call_async(
-            operation, request, _RESPONSES[operation]
-        )
+        # The extension makes no RPC, so it has no use for rpc_metadata. The rpc_timeout is
+        # the call's deadline here too.
+        options = call_options.get()
+        timeout = options.timeout if options is not None else None
+        call = self._backend.call_async(operation, request, _RESPONSES[operation])
+        if timeout is None:
+            response = await call
+        else:
+            try:
+                response = await asyncio.wait_for(call, timeout.total_seconds())
+            except asyncio.TimeoutError:
+                raise temporalio.service.RPCError(
+                    f"The Stream call {operation} passed its rpc_timeout of {timeout}",
+                    temporalio.service.RPCStatusCode.DEADLINE_EXCEEDED,
+                    b"",
+                ) from None
         return temporalio.api.common.v1.Payload(
             metadata={
                 "encoding": b"binary/protobuf",

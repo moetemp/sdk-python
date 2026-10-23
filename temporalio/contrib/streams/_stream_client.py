@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import itertools
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar, cast, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
-from temporalio.contrib.streams import _errors, _ids
+from temporalio.contrib.streams import _backend, _errors, _ids
 from temporalio.contrib.streams._access import (
     Access,
     ReadSpec,
@@ -54,6 +54,46 @@ class ClientTopic(_AsyncTopic[T]):
     .. warning::
         This API is experimental.
     """
+
+    async def publish(
+        self,
+        *values: T,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> int:
+        """Write one Record for each value, in order, and return the last Record's offset.
+
+        A list is one value. ``rpc_metadata`` and ``rpc_timeout`` are as for
+        :py:meth:`ClientStream.get_offset`.
+        """
+        with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
+            return await super().publish(*values)
+
+    def subscribe(
+        self,
+        *,
+        from_offset: int | End | None = None,
+        wait_new_records: bool = True,
+        create_wait: timedelta | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> Subscription[T]:
+        """Read this Topic only. Its Records have the Topic's type. See
+        :py:meth:`ClientStream.subscribe`.
+        """
+        stream = self._stream
+        assert isinstance(stream, ClientStream)
+        return cast(
+            Subscription[T],
+            stream.subscribe(
+                self,
+                from_offset=from_offset,
+                wait_new_records=wait_new_records,
+                create_wait=create_wait,
+                rpc_metadata=rpc_metadata,
+                rpc_timeout=rpc_timeout,
+            ),
+        )
 
 
 class ClientStream(StreamHandle[E]):
@@ -224,6 +264,8 @@ class ClientStream(StreamHandle[E]):
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
         type: Any = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
     ) -> Subscription[Any]:
         """Read the Stream's items in order.
 
@@ -244,6 +286,9 @@ class ClientStream(StreamHandle[E]):
             type: The type of the values of Topics outside the definition, such as Topics that
                 ``prefixes`` match. Topics of the definition keep their own types. Defaults to
                 no type, so the values decode as the converter gives them.
+            rpc_metadata: Headers of each call of the read. See :py:meth:`get_offset`.
+            rpc_timeout: The deadline of each call of the read, not of the whole read. A call
+                that waits for new Records answers before it.
         """
         read = read_spec(
             self,
@@ -254,7 +299,11 @@ class ClientStream(StreamHandle[E]):
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
-        return subscription(lambda position: self._items(read, position), from_offset)
+        return subscription(
+            lambda position: self._items(read, position),
+            from_offset,
+            _backend.options_of(rpc_metadata, rpc_timeout),
+        )
 
     async def _items(
         self, read: ReadSpec, position: Position
@@ -267,22 +316,41 @@ class ClientStream(StreamHandle[E]):
         finally:
             await items.aclose()
 
-    async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one."""
-        await self._ready()
-        return await self._access().get_offset()
+    async def get_offset(
+        self,
+        *,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> int:
+        """The next offset of the Stream, the newest offset plus one.
+
+        Args:
+            rpc_metadata: Headers of each call. The Redis and memory backends make no RPC, so
+                they send none.
+            rpc_timeout: The deadline of each call. A call past it raises ``RPCError`` with
+                ``DEADLINE_EXCEEDED``.
+        """
+        with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
+            await self._ready()
+            return await self._access().get_offset()
 
     async def close(
-        self, *, result: Any | None = None, failure: BaseException | None = None
+        self,
+        *,
+        result: Any | None = None,
+        failure: BaseException | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
     ) -> None:
         """Write this handle's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``.
+        ``failure``. ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
         """
         self._closed = True
-        await self._ready()
-        await self._access().close(result, failure)
+        with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
+            await self._ready()
+            await self._access().close(result, failure)
 
     async def __aenter__(self) -> ClientStream[E]:
         """Use the Stream in ``async with``, which closes it at the end."""
@@ -325,6 +393,8 @@ class StreamClient:
         retention: timedelta | None = None,
         auto_close: timedelta | None = None,
         backend: str | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
     ) -> Creating[ClientStream[E]]:
         """Create a Stream that this client owns, so only a client closes it.
 
@@ -339,6 +409,8 @@ class StreamClient:
             auto_close: Close the Stream with no result when no Record was appended for this
                 long, so a Stream that nobody closes does not stay open. Defaults to never.
             backend: The name of the backend. Defaults to the client's default backend.
+            rpc_metadata: Headers of the call. See :py:meth:`ClientStream.get_offset`.
+            rpc_timeout: The deadline of the call.
 
         Raises:
             StreamConfigError: The client has no backend of that name. No call is made.
@@ -351,11 +423,12 @@ class StreamClient:
             definition_of(definition)
             backend_name, stream_backend = client_backend(self._client, backend)
             service = stream_backend.service(self._client.namespace)
-            response = await service.create_stream(
-                models.CreateStreamRequest(
-                    stream_id=id, retention=retention, auto_close=auto_close
+            with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
+                response = await service.create_stream(
+                    models.CreateStreamRequest(
+                        stream_id=id, retention=retention, auto_close=auto_close
+                    )
                 )
-            )
             if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
                 raise _errors.StreamClosedError(
                     f"The Stream {id} was created and closed before",
@@ -449,7 +522,12 @@ class StreamClient:
             return stream._bind(self._client, stream_backend, probe=probe)
 
         async def find_first_run() -> str:
-            description = await handle.describe()
+            # The first call that needs the id gives its own call options.
+            options = _backend.call_options.get()
+            description = await handle.describe(
+                rpc_metadata=options.metadata if options else {},
+                rpc_timeout=options.timeout if options else None,
+            )
             first = description.raw_description.workflow_execution_info.first_run_id
             if not first:
                 raise ValueError(
