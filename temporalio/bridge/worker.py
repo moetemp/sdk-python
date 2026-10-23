@@ -12,7 +12,6 @@ from typing import (
 )
 
 import temporalio.bridge.client
-import temporalio.bridge.extension
 import temporalio.bridge.proto
 import temporalio.bridge.proto.activity_task
 import temporalio.bridge.proto.nexus
@@ -61,7 +60,6 @@ class WorkerConfig:
     plugins: Sequence[str]
     storage_drivers: set[str]
     disable_payload_error_limit: bool
-    extension: temporalio.bridge.extension.WorkerExtension | None
 
 
 @dataclass

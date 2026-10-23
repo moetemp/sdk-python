@@ -27,9 +27,14 @@ def _free_port() -> int:
             return port
 
 
-# One scratch server serves every test module, and each test takes its own key prefix.
+# One scratch server serves every test module, and each test takes its own key prefix. A run
+# that must use a known port gives its own server in TEMPORAL_STREAMS_REDIS_URL.
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
+    given = os.environ.get("TEMPORAL_STREAMS_REDIS_URL")
+    if given:
+        yield given
+        return
     server = shutil.which("redis-server")
     if server is None:
         pytest.skip("redis-server is not installed")

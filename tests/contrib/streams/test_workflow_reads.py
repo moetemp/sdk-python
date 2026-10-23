@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -259,7 +260,8 @@ def test_a_server_failure_maps_by_its_reason():
 async def test_a_native_replay_checks_the_range_it_reads_again():
     # A replay reads a recorded range again. Other Records there mean other code ran.
     plugin = NativeStreamPlugin()
-    codec = _DirectReadCodec(plugin, None)
+    backend = SimpleNamespace()
+    codec = _DirectReadCodec(plugin, lambda: cast(Any, backend), None)
     record = stream_pb.StreamRecord(
         kind=stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA,
         offset=5,
@@ -278,7 +280,7 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
         reads.append(request)
         return answers.pop(0)
 
-    setattr(plugin._backend, "call_async", call_async)
+    backend.call_async = call_async
     [page] = await codec.decode([positions])
     assert stream_pb.ReadRecordsResponse.FromString(page.data) == live
     assert reads[0].to_offset == 6 and reads[0].from_offset == 5
