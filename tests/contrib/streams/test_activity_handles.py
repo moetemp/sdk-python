@@ -360,7 +360,8 @@ async def test_buffered_publisher_raises_a_failed_batch():
 
 @activity.defn
 async def local_step(stream: streams.ActivityStream[Events]) -> list[Any]:
-    # The run's buffered create and Records are in the Store before a Local Activity starts.
+    # Each Workflow write is an awaited Local Activity, so the run's create and Records are in
+    # the Store before a later Local Activity starts.
     seen = [
         item.data
         async for item in stream.subscribe(wait_new_records=False)
@@ -386,7 +387,7 @@ class LocalOrder:
         return seen
 
 
-async def test_run_buffer_goes_out_before_a_local_activity(stream_client: Client):
+async def test_workflow_writes_go_out_before_a_local_activity(stream_client: Client):
     async with new_worker(stream_client, LocalOrder, activities=[local_step]) as worker:
         handle = await stream_client.start_workflow(
             LocalOrder.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue

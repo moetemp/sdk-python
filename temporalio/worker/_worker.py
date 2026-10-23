@@ -353,9 +353,9 @@ class Worker:
                 Please report any issues you encounter with this setting or if you
                 feel the default should be changed.
                 WARNING: This setting is experimental.
-            extension: A native extension that Core calls at fixed points of each
-                Workflow Task. It must use the same runtime as the client. Plugins
-                usually set it.
+            extension: A native extension that a plugin calls, which Core keeps with the
+                Worker. It must use the same runtime as the client. Plugins usually set
+                it.
                 WARNING: This setting is experimental.
 
         """

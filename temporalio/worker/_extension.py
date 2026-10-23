@@ -11,9 +11,9 @@ import temporalio.service
 class WorkerExtension:
     """A native extension that the SDK's bridge build links, which a Worker passes to Core.
 
-    Core calls the extension at fixed points of each Workflow Task. A plugin builds the extension
-    and passes it in the Worker's ``extension`` option. The Worker must use the extension's
-    runtime.
+    A plugin builds the extension, passes it in the Worker's ``extension`` option and calls its
+    methods. Core keeps it with the Worker and does not call it. The Worker must use the
+    extension's runtime.
 
     .. warning::
         This API is experimental.
