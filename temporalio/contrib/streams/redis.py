@@ -17,9 +17,11 @@ import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
+import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.runtime
+import temporalio.service
 import temporalio.worker
 import temporalio.workflow
 from temporalio.contrib.streams import (
@@ -41,9 +43,15 @@ logger = logging.getLogger(__name__)
 
 EXTENSION_NAME = "temporalio-streams-redis"
 
-# How long a Workflow read's Local Activity waits for new Records. Its timeout adds a margin.
-_READ_WAIT = timedelta(seconds=10)
+# How long a Workflow read's Local Activity waits for new Records or for the create. It is below
+# Core's 8 s Workflow Task heartbeat, so a read that waits spans one task. The Store waits for
+# both from one start, so the timeout's margin covers the calls.
+_READ_WAIT = timedelta(seconds=5)
 _READ_MARGIN = timedelta(seconds=10)
+_PAGE_TYPE = stream_pb.ReadRecordsResponse.DESCRIPTOR.full_name.encode()
+# Set on a page of a Stream whose owner's run chain ended. Only a Store that doesn't close a
+# Stream with its owner sets it.
+_OWNER_ENDED_KEY = "temporal.io/stream-owner-ended"
 # The plugin puts this key into the headers of each Activity and Local Activity that a Workflow
 # schedules. It keeps the Producer id the same across retries.
 _KEY_HEADER = "__temporal_stream_key"
@@ -89,13 +97,29 @@ class _ExtensionStreamPlugin(StreamPlugin):
         # The read activity's name has the backend name, which the base keeps.
         self._read_activity = _read_activity(self)
 
-    def _read_result(
+    async def _read_result(
         self,
+        run_id: str,  # pyright: ignore[reportUnusedParameter]
         request: stream_pb.ReadRecordsRequest,  # pyright: ignore[reportUnusedParameter]
         page: stream_pb.ReadRecordsResponse,
+        owner_ended: bool,
     ) -> Any:
-        # The result of a Workflow read's Local Activity, which its marker holds.
-        return page
+        # The result of a Workflow read's Local Activity, which its marker holds. Workflow code
+        # can't run the codec, so the page's bodies go to it decoded. The page as a whole goes
+        # through the codec as the Local Activity's result.
+        await _decode_page(self._converter, page)
+        payload = page_payload(page)
+        if owner_ended:
+            payload.metadata[_OWNER_ENDED_KEY] = b"1"
+        return temporalio.common.RawValue(payload)
+
+    def _forget_run(self, run_id: str) -> None:  # pyright: ignore[reportUnusedParameter]
+        # Drops what the plugin keeps for a run that left the Worker.
+        pass
+
+    def _activities(self) -> list[Callable[..., Any]]:
+        # The Local Activities that Workflow reads run, so the Worker must have them.
+        return [self._read_activity]
 
     def configure_worker(
         self, config: temporalio.worker.WorkerConfig
@@ -121,8 +145,7 @@ class _ExtensionStreamPlugin(StreamPlugin):
         client = config.get("client")
         if client is not None:
             self._converter = client.data_converter
-        # Workflow reads run as this Local Activity, so the Worker must have it.
-        config["activities"] = [*config.get("activities", []), self._read_activity]
+        config["activities"] = [*config.get("activities", []), *self._activities()]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -173,15 +196,14 @@ def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
     async def read_page(request: stream_pb.ReadRecordsRequest) -> Any:
         info = temporalio.activity.info()
         request.namespace = info.namespace
+        run_id = info.workflow_run_id or ""
         try:
             # The reading run goes with the read, so a native server keeps the Records that
             # the open run may read again on replay.
             page = await plugin._backend.call_async(
                 "WorkflowReadRecords",
                 ext_pb.WorkflowReadRecordsRequest(
-                    read=request,
-                    workflow_id=info.workflow_id or "",
-                    run_id=info.workflow_run_id or "",
+                    read=request, workflow_id=info.workflow_id or "", run_id=run_id
                 ),
                 stream_pb.ReadRecordsResponse,
             )
@@ -193,12 +215,48 @@ def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
                 type=type(err).__name__,
                 non_retryable=err.non_retryable,
             ) from None
-        # Workflow code can't run the codec, so the page's bodies go to it decoded. The page
-        # as a whole goes through the codec as the Local Activity's result.
-        await _decode_page(plugin._converter, page)
-        return plugin._read_result(request, page)
+        # A reader at the end of a Stream whose owner ended with no close would wait until
+        # the Stream expires, so the page tells it.
+        owner_ended = (
+            not plugin._server_closes_with_run
+            and not page.records
+            and not page.done
+            and bool(request.stream.workflow_id)
+            and await _owner_ended(request.stream)
+        )
+        return await plugin._read_result(run_id, request, page, owner_ended)
 
     return read_page
+
+
+async def _owner_ended(ref: stream_pb.StreamRef) -> bool:
+    # The run chain ended when the Workflow id's newest run is closed, or is of another chain.
+    try:
+        description = (
+            await temporalio.activity.client()
+            .get_workflow_handle(ref.workflow_id)
+            .describe()
+        )
+    except temporalio.service.RPCError as err:
+        if err.status == temporalio.service.RPCStatusCode.NOT_FOUND:
+            return True
+        # Only a hint, so the reader waits on as before.
+        logger.debug("Describing the owner of Stream %s failed", ref.id, exc_info=True)
+        return False
+    first_run_id = description.raw_description.workflow_execution_info.first_run_id
+    if first_run_id and first_run_id != ref.first_execution_run_id:
+        return True
+    return description.status != temporalio.client.WorkflowExecutionStatus.RUNNING
+
+
+def page_payload(
+    page: stream_pb.ReadRecordsResponse,
+) -> temporalio.api.common.v1.Payload:
+    """A Workflow read's page as the payload that Workflow code takes."""
+    return temporalio.api.common.v1.Payload(
+        metadata={"encoding": b"binary/protobuf", "messageType": _PAGE_TYPE},
+        data=page.SerializeToString(),
+    )
 
 
 async def _decode_page(
@@ -301,6 +359,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
                 "_default": self._plugin.default,
                 "_outbound_class": self._plugin._outbound_class,
                 "_server_closes_with_run": self._plugin._server_closes_with_run,
+                "_forget_run": staticmethod(self._plugin._forget_run),
             },
         )
 
@@ -317,6 +376,10 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _outbound_class: type[_WorkflowOutbound]  # pyright: ignore[reportUninitializedInstanceVariable]
     _server_closes_with_run = False
 
+    @staticmethod
+    def _forget_run(run_id: str) -> None:  # pyright: ignore[reportUnusedParameter]
+        pass
+
     async def _close_run_streams(self, **options: Any) -> None:
         # A server that closes a Stream with its owner's run chain needs no close from here.
         if not self._server_closes_with_run:
@@ -328,12 +391,29 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
+        # Read before the run starts, since an eviction closes the coroutine outside the
+        # Workflow's loop.
+        runtime = temporalio.workflow._Runtime.maybe_current()
+        run_id = runtime.workflow_info().run_id if runtime else None
+        try:
+            return await self._execute_workflow(input)
+        finally:
+            # The run took every page that it will take, or it left the Worker.
+            if run_id:
+                self._forget_run(run_id)
+
+    async def _execute_workflow(
+        self, input: temporalio.worker.ExecuteWorkflowInput
+    ) -> Any:
         _take_owned_streams(input.headers)
         try:
             result = await super().execute_workflow(input)
+            # The run's reads end with it, so the server drops their parked reads.
+            _workflow_reader.cancel_wakes()
             await streams_workflow.drain()
         except temporalio.workflow.ContinueAsNewError:
             # The next run continues the run chain's Streams.
+            _workflow_reader.cancel_wakes()
             await streams_workflow.drain()
             raise
         except BaseException as err:
@@ -346,13 +426,16 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 and temporalio.workflow.cancellation_reason() is not None
             ):
                 # The run ends cancelled.
+                _workflow_reader.cancel_wakes()
                 await self._close_run_streams(
                     failure=temporalio.exceptions.CancelledError("Workflow cancelled"),
                 )
-            elif _fails_run(err) and not chain_continues(
-                temporalio.workflow.info(), temporalio.workflow.now(), err
-            ):
-                await self._close_run_streams(failure=err)
+            elif _fails_run(err):
+                _workflow_reader.cancel_wakes()
+                if not chain_continues(
+                    temporalio.workflow.info(), temporalio.workflow.now(), err
+                ):
+                    await self._close_run_streams(failure=err)
             raise
         # A cron run that completes still goes on with the chain.
         if not chain_continues(
@@ -463,6 +546,8 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     # The runtime can't park a read yet, so a reader pauses on a timer after an empty page.
     _temporal_stream_parks_reads = False
     _temporal_stream_read_wait = _READ_WAIT
+    # The Local Activity's timeout bounds its wait for the create too.
+    _temporal_stream_create_wait = _READ_WAIT
 
     def __init__(
         self,
@@ -487,13 +572,13 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
 
     async def _temporal_stream_read_page(
         self, request: stream_pb.ReadRecordsRequest
-    ) -> stream_pb.ReadRecordsResponse:
+    ) -> _workflow_reader.Page:
         # The page is the Local Activity's result, so it is in History.
         try:
-            return await temporalio.workflow.execute_local_activity(
+            result = await temporalio.workflow.execute_local_activity(
                 read_activity_name(self._temporal_stream_backend_name),
                 request,
-                result_type=stream_pb.ReadRecordsResponse,
+                result_type=temporalio.common.RawValue,
                 start_to_close_timeout=_READ_WAIT + _READ_MARGIN,
             )
         except (
@@ -503,6 +588,10 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             # A Local Activity's failure may come as its application error, with no
             # ActivityError around it.
             raise _workflow_reader.error_of(err) from None
+        return _workflow_reader.Page(
+            response=stream_pb.ReadRecordsResponse.FromString(result.payload.data),
+            owner_ended=_OWNER_ENDED_KEY in result.payload.metadata,
+        )
 
     def continue_as_new(self, input: temporalio.worker.ContinueAsNewInput) -> NoReturn:
         # The next run needs each owned Stream's backend for stream_handle.

@@ -11,7 +11,7 @@ Workflow code creates a Stream with :py:func:`create_stream` and gets one again 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import TracebackType
@@ -28,7 +28,7 @@ from temporalio.contrib.streams._access import read_spec
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import StreamHandle, TopicBase
 from temporalio.contrib.streams._items import End
-from temporalio.contrib.streams._workflow_reader import Item
+from temporalio.contrib.streams._workflow_reader import WorkflowItems
 from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
@@ -42,6 +42,7 @@ CLOSE_ACTIVITY = "__temporal_streams_close"
 _WRITE_TIMEOUT = timedelta(seconds=30)
 
 __all__ = [
+    "WorkflowItems",
     "WorkflowStream",
     "WorkflowTopic",
     "create_stream",
@@ -250,7 +251,7 @@ class WorkflowTopic(TopicBase[T]):
         from_offset: int | End | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
-    ) -> AsyncIterator[Item]:
+    ) -> WorkflowItems:
         """Read this Topic only. See :py:meth:`WorkflowStream.subscribe`."""
         return self._stream.subscribe(
             self,
@@ -318,19 +319,29 @@ class WorkflowStream(StreamHandle[E]):
         wait_new_records: bool = True,
         prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
-    ) -> AsyncIterator[Item]:
+    ) -> WorkflowItems:
         """Read the Stream's items in order, in Workflow code.
 
         It is an async iterator, as on the client, and it yields the same ``Record``,
-        ``Superseded`` and ``Closed`` items. Each page is a call whose answer is in History,
-        so a replay reads the same items. On a native Stream a page is a System Nexus
-        ``ReadRecords`` operation, and a read at the end of the Stream waits on the server
-        until a Record comes or the Stream closes. On Redis a page is a Local Activity that
-        waits a short time for new Records, and a page with none is followed by a durable
-        timer from 1 s up to 60 s.
+        ``Superseded`` and ``Closed`` items. Each page is a Local Activity whose answer is in
+        History, so a replay reads the same items. On a native Stream the marker holds only
+        the page's offsets, and a replay reads the page again from the server. A read at the
+        end of a native Stream waits on the server until a Record comes or the Stream closes.
+        On Redis the marker holds the page, the Local Activity waits a short time for new
+        Records, and a page with none is followed by a durable timer from 1 s up to 60 s.
 
-        A read sees this run's writes once they went out: at the end of the Workflow Task,
-        or on Redis before the page's Local Activity.
+        A read sees this run's writes that it awaited, since each write is a Local Activity
+        that ends before the next read starts.
+
+        The read also ends when this run should continue as new. Check
+        ``continue_as_new_suggested`` after the loop, and pass ``next_offset`` to the next
+        run::
+
+            items = stream.subscribe(from_offset=offset)
+            async for item in items:
+                ...
+            if items.continue_as_new_suggested:
+                workflow.continue_as_new(items.next_offset)
 
         Args:
             topics: Read these Topics. With no Topics and no prefixes, read every Topic.
@@ -350,7 +361,7 @@ class WorkflowStream(StreamHandle[E]):
         """
         names, types = read_spec(self, topics)
         reader = _workflow_reader.reader_of(_check_backend(self.backend, "read"))
-        return _workflow_reader.read(
+        return WorkflowItems(
             reader,
             stream_pb.StreamRef(
                 id=self.id,

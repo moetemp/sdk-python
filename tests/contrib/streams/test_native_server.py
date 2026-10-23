@@ -3,14 +3,16 @@
 Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 """
 
+import asyncio
 import base64
 import concurrent.futures
 import uuid
 from datetime import timedelta
+from typing import Any
 
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import POSITIONS_TYPE, NativeStreamPlugin
@@ -210,3 +212,77 @@ async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: C
         if not any(w.withdraws(item) for w in withdrawn)
     ]
     assert visible == ["2", "3"]
+
+
+@workflow.defn
+class ReadsNewTokens:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
+        items = stream.topic(Events.tokens).subscribe(from_offset=streams.END)
+        return [
+            item.data if isinstance(item, streams.Record) else "closed"
+            async for item in items
+        ]
+
+
+async def until_wake(handle: WorkflowHandle[Any, Any]) -> None:
+    # A reader with an empty page waits on the server with a System Nexus operation.
+    for _ in range(100):
+        history = await handle.fetch_history()
+        if any(
+            event.HasField("nexus_operation_scheduled_event_attributes")
+            for event in history.events
+        ):
+            return
+        await asyncio.sleep(0.2)
+    raise AssertionError("The reader never waited")
+
+
+async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
+    native_client: Client,
+):
+    # The server resolves END on each call, so the wait and the read after it start where the
+    # first page ended. Else the Record that wakes the reader is behind its start.
+    stream = await streams.StreamClient(native_client).create(
+        Events, id=f"native-{uuid.uuid4()}", auto_close=timedelta(minutes=5)
+    )
+    await stream.topic(Events.tokens).publish("old")
+    async with new_worker(native_client, ReadsNewTokens) as worker:
+        reader = await native_client.start_workflow(
+            ReadsNewTokens.run,
+            stream_workflow.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await until_wake(reader)
+        await stream.topic(Events.tokens).publish("new")
+        await stream.close()
+        assert await reader.result() == ["new", "closed"]
+
+
+@workflow.defn
+class ReadsUntilHalfRetention:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
+        items = stream.topic(Events.tokens).subscribe()
+        seen = [item.data async for item in items if isinstance(item, streams.Record)]
+        return [seen, items.continue_as_new_suggested, items.next_offset]
+
+
+async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
+    native_client: Client,
+):
+    # Retention trims a Stream that no Workflow owns under its readers, and a replay reads the
+    # Stream again. So the read ends in time for the run to continue as new.
+    stream = await streams.StreamClient(native_client).create(
+        Events, id=f"native-{uuid.uuid4()}", retention=timedelta(seconds=6)
+    )
+    offset = await stream.topic(Events.tokens).publish("a")
+    async with new_worker(native_client, ReadsUntilHalfRetention) as worker:
+        seen, suggested, next_offset = await native_client.execute_workflow(
+            ReadsUntilHalfRetention.run,
+            stream_workflow.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    assert seen == ["a"] and suggested and next_offset > offset
