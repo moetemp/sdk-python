@@ -878,6 +878,7 @@ def _activity_streams(
         producer=producer,
         loop=asyncio.get_running_loop(),
         backend_name=interceptor.plugin.backend_name,
+        workflow_id=info.workflow_id,
         previous_completed_task=previous,
         failed_tasks=failed,
     )
