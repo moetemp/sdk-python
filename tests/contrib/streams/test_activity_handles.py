@@ -3,6 +3,7 @@ import contextvars
 import ctypes
 import threading
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import SimpleNamespace
@@ -53,7 +54,7 @@ async def read(
     return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
 
 
-def records(items: list[object]) -> list[streams.Record[Any]]:
+def records(items: Sequence[object]) -> list[streams.Record[Any]]:
     return [item for item in items if isinstance(item, streams.Record)]
 
 
@@ -182,6 +183,76 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
     assert len(superseded) == 1
     withdrawn = [r.data for r in records(items) if superseded[0].withdraws(r)]
     assert withdrawn == ["attempt-1"]
+
+
+# Set by a test once its readers showed the first attempt's Record.
+shown: dict[str, asyncio.Event] = {}
+
+
+@activity.defn
+async def fails_after_it_is_shown(input: CallModelInput) -> None:
+    attempts[input.prompt] = attempts.get(input.prompt, 0) + 1
+    tokens = input.stream.topic(Events.tokens)
+    if attempts[input.prompt] == 1:
+        await tokens.publish("attempt-1")
+        await shown[input.prompt].wait()
+        raise RuntimeError("first attempt fails")
+    await tokens.publish("attempt-2")
+
+
+@workflow.defn
+class ShownThenWithdrawn:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        stream = await stream_workflow.create_stream(Events)
+        await workflow.execute_activity(
+            fails_after_it_is_shown,
+            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+
+
+async def test_reader_withdraws_a_shown_record_after_a_reconnect(
+    stream_client: Client,
+):
+    key = str(uuid.uuid4())
+    shown[key] = asyncio.Event()
+    async with new_worker(
+        stream_client, ShownThenWithdrawn, activities=[fails_after_it_is_shown]
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            ShownThenWithdrawn.run,
+            key,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
+        live = stream.subscribe(Events.tokens, create_wait=timedelta(seconds=20))
+        reconnects = stream.subscribe(Events.tokens, create_wait=timedelta(seconds=20))
+        first = await anext(live)
+        before = await anext(reconnects)
+        # The reader drops its connection and keeps only the Records it showed and where to
+        # go on from, as a UI does across a page reload.
+        resume_at = reconnects.next_offset
+        await reconnects.aclose()
+        shown[key].set()
+        live_items = [first, *[item async for item in live]]
+        resumed = [
+            item
+            async for item in stream.subscribe(Events.tokens, from_offset=resume_at)
+        ]
+    assert isinstance(first, streams.Record) and first.data == "attempt-1"
+    assert isinstance(before, streams.Record) and before.offset == first.offset
+    [live_superseded] = [i for i in live_items if isinstance(i, streams.Superseded)]
+    assert live_superseded.withdrawn_offsets == (first.offset,)
+    # A new read gave no Record of the failed attempt, so it names no offset. The kept
+    # Record is still withdrawn.
+    [superseded] = [i for i in resumed if isinstance(i, streams.Superseded)]
+    assert superseded.withdrawn_offsets == ()
+    assert superseded.withdraws(before)
+    assert [r.data for r in records(resumed)] == ["attempt-2"]
+    assert isinstance(resumed[-1], streams.Closed)
 
 
 @activity.defn

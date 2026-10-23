@@ -11,7 +11,14 @@ from typing import Any, Generic, TypeVar
 import temporalio.converter
 from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
 from temporalio.contrib.streams import _convert, _errors
-from temporalio.contrib.streams._items import Closed, End, Record, Superseded
+from temporalio.contrib.streams._items import (
+    Closed,
+    End,
+    Record,
+    Superseded,
+    producer_key,
+    withdraws,
+)
 from temporalio.contrib.streams.system import client as service_client
 from temporalio.contrib.streams.system import models
 
@@ -44,10 +51,13 @@ class Subscription(Generic[T]):
         """Create a read. Use a handle's ``subscribe`` instead."""
         self._items = items
         self._position = position
+        # The Producer and the offsets of each Record this read gave, with no values, so a
+        # Superseded item can give the offsets it withdraws.
+        self._shown: dict[tuple[Any, ...], tuple[models.Producer, list[int]]] = {}
 
     @property
     def next_offset(self) -> int | None:
-        """The offset to resume from: after the last item given, or after the last page read.
+        """The offset to resume from, after the last item given or the last page read.
 
         Pass it as ``from_offset`` to a later read. It is None only before the first page of a
         read from ``END``.
@@ -64,7 +74,23 @@ class Subscription(Generic[T]):
         self._position.next_offset = max(
             self._position.next_offset or 0, item.offset + 1
         )
+        if isinstance(item, Record) and item.producer is not None:
+            key = producer_key(item.producer)
+            self._shown.setdefault(key, (item.producer, []))[1].append(item.offset)
+        elif isinstance(item, Superseded):
+            item = dataclasses.replace(
+                item, withdrawn_offsets=self._withdraw(item.supersession)
+            )
         return item
+
+    def _withdraw(self, supersession: models.Supersession) -> tuple[int, ...]:
+        offsets: list[int] = []
+        for key, (producer, shown) in list(self._shown.items()):
+            if withdraws(supersession, producer):
+                offsets.extend(shown)
+                # A withdrawn Record stays withdrawn, so the read forgets it.
+                del self._shown[key]
+        return tuple(sorted(offsets))
 
     async def aclose(self) -> None:
         """End the read early. It makes no more calls."""
