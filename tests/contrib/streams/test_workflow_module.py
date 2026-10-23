@@ -76,7 +76,7 @@ class Turns:
     async def run(self, fail_at: int) -> None:
         for n in range(2):
             try:
-                async with await stream_workflow.create_stream(
+                async with stream_workflow.create_stream(
                     streams.with_name(Events, f"turn-{n}"), close_with_run=False
                 ) as turn:
                     await turn.topic(Events.tokens).publish(f"token-{n}")

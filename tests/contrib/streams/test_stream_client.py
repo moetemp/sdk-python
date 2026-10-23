@@ -182,6 +182,28 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
     assert stream.workflow_id == handle.id
 
 
+async def test_async_with_closes_a_client_stream(stream_client: Client):
+    client = streams.StreamClient(stream_client)
+    async with client.create(Events, id=f"block-{uuid.uuid4()}") as done:
+        await done.topic(Events.tokens).publish("a")
+    failed = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    with pytest.raises(ValueError):
+        async with client.create(Events, id=failed.id):
+            raise ValueError("turn failed")
+    async with await client.create(Events, id=f"block-{uuid.uuid4()}") as early:
+        await early.close(result="early")
+    for stream, result, failure in (
+        (done, None, None),
+        (failed, None, "turn failed"),
+        (early, "early", None),
+    ):
+        items = [item async for item in stream.subscribe()]
+        closes = [item for item in items if isinstance(item, streams.Closed)]
+        assert len(closes) == 1 and closes[0].result == result
+        assert (failure is None) == (closes[0].failure is None)
+        assert failure is None or failure in str(closes[0].failure)
+
+
 async def test_auto_close_of_a_client_stream(stream_client: Client):
     stream = await streams.StreamClient(stream_client).create(
         Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)

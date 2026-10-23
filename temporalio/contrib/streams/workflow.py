@@ -24,7 +24,12 @@ import temporalio.exceptions
 import temporalio.workflow
 from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
-from temporalio.contrib.streams._handle import StreamHandle, TopicBase
+from temporalio.contrib.streams._handle import (
+    Creating,
+    StreamHandle,
+    TopicBase,
+    exit_failure,
+)
 from temporalio.contrib.streams.system import models
 
 E = TypeVar("E")
@@ -338,12 +343,9 @@ class WorkflowStream(StreamHandle[E]):
         """
         if _state().stream(self._model_ref()).closed:
             return
-        if isinstance(exc, asyncio.CancelledError):
-            await self.close(
-                failure=temporalio.exceptions.CancelledError(str(exc) or "Cancelled")
-            )
-        elif exc is None or isinstance(exc, Exception):
-            await self.close(failure=exc)
+        close, failure = exit_failure(exc)
+        if close:
+            await self.close(failure=failure)
 
 
 def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:
@@ -361,18 +363,24 @@ def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:
     )
 
 
-async def create_stream(
+def create_stream(
     definition: type[E],
     *,
     retention: timedelta | None = None,
     auto_close: timedelta | None = None,
     close_with_run: bool = True,
     backend: str | None = None,
-) -> WorkflowStream[E]:
+) -> Creating[WorkflowStream[E]]:
     """Create a Stream that this run chain owns.
 
     Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
     handle with no call. The create is one Local Activity, and its error raises here.
+
+    Await the call for the handle, or use it in ``async with``, which closes the Stream at the
+    end of the block::
+
+        async with create_stream(streams.with_name(Events, "turn-3")) as turn:
+            await turn.topic(Events.tokens).publish("hi")
 
     Args:
         definition: The Stream definition class. Its name is the Stream name. For one Stream
@@ -395,9 +403,15 @@ async def create_stream(
         ValueError: ``close_with_run=False`` for a Stream that already closes with the run
             chain.
     """
-    stream, task = _create(definition, retention, auto_close, close_with_run, backend)
-    await task
-    return stream
+
+    async def create() -> WorkflowStream[E]:
+        stream, task = _create(
+            definition, retention, auto_close, close_with_run, backend
+        )
+        await task
+        return stream
+
+    return Creating(create)
 
 
 def create_stream_nowait(

@@ -7,6 +7,7 @@ import itertools
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from datetime import timedelta
+from types import TracebackType
 from typing import Any, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
@@ -15,7 +16,7 @@ from temporalio.contrib.streams import _errors, _ids
 from temporalio.contrib.streams._access import Access, _AsyncTopic, read_spec
 from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import Creating, StreamHandle, exit_failure
 from temporalio.contrib.streams._items import End
 from temporalio.contrib.streams._plugin import client_backend
 from temporalio.contrib.streams._reader import Item
@@ -53,7 +54,8 @@ class ClientStream(StreamHandle[E]):
     """A Stream that a client writes, reads and closes. Get one from :py:class:`StreamClient`.
 
     Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. Each
-    handle writes as its own Producer.
+    handle writes as its own Producer. Use it in ``async with`` to close it at the end of the
+    block.
 
     .. warning::
         This API is experimental.
@@ -85,6 +87,7 @@ class ClientStream(StreamHandle[E]):
         self._finding: asyncio.Future[str] | None = None
         # The backends to look in, in order, until one has the Stream.
         self._probe: list[tuple[str, StreamBackend]] = []
+        self._closed = False
 
     def _bind(
         self,
@@ -259,8 +262,30 @@ class ClientStream(StreamHandle[E]):
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``.
         """
+        self._closed = True
         await self._ready()
         await self._access().close(result, failure)
+
+    async def __aenter__(self) -> ClientStream[E]:
+        """Use the Stream in ``async with``, which closes it at the end."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the Stream, with the exception as its failure if there is one.
+
+        A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
+        ``KeyboardInterrupt``, leaves it open. A Stream that this handle closed stays as it is.
+        """
+        if self._closed:
+            return
+        close, failure = exit_failure(exc)
+        if close:
+            await self.close(failure=failure)
 
 
 class StreamClient:
@@ -274,7 +299,7 @@ class StreamClient:
         """Create a Stream client. It makes no call."""
         self._client = client
 
-    async def create(
+    def create(
         self,
         definition: type[E],
         *,
@@ -282,10 +307,12 @@ class StreamClient:
         retention: timedelta | None = None,
         auto_close: timedelta | None = None,
         backend: str | None = None,
-    ) -> ClientStream[E]:
+    ) -> Creating[ClientStream[E]]:
         """Create a Stream that this client owns, so only a client closes it.
 
-        It is idempotent for one id, one Retention and one ``auto_close``.
+        It is idempotent for one id, one Retention and one ``auto_close``. Await the call for
+        the handle, or use it in ``async with``, which closes the Stream at the end of the
+        block.
 
         Args:
             definition: The Stream definition class.
@@ -301,22 +328,27 @@ class StreamClient:
             StreamError: The Stream exists with another Retention or ``auto_close``, with
                 the reason ``stream_already_exists``.
         """
-        definition_of(definition)
-        backend_name, stream_backend = client_backend(self._client, backend)
-        response = await stream_backend.service(self._client.namespace).create_stream(
-            models.CreateStreamRequest(
-                stream_id=id, retention=retention, auto_close=auto_close
+
+        async def create() -> ClientStream[E]:
+            definition_of(definition)
+            backend_name, stream_backend = client_backend(self._client, backend)
+            service = stream_backend.service(self._client.namespace)
+            response = await service.create_stream(
+                models.CreateStreamRequest(
+                    stream_id=id, retention=retention, auto_close=auto_close
+                )
             )
-        )
-        if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
-            raise _errors.StreamClosedError(
-                f"The Stream {id} was created and closed before",
-                reason="stream_closed",
+            if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
+                raise _errors.StreamClosedError(
+                    f"The Stream {id} was created and closed before",
+                    reason="stream_closed",
+                )
+            stream = ClientStream(
+                id=id, backend=backend_name or None, definition=definition
             )
-        stream = ClientStream(
-            id=id, backend=backend_name or None, definition=definition
-        )
-        return stream._bind(self._client, stream_backend)
+            return stream._bind(self._client, stream_backend)
+
+        return Creating(create)
 
     def get_handle(
         self,
