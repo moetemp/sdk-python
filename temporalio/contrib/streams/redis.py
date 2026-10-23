@@ -10,15 +10,18 @@ import asyncio
 import dataclasses
 import logging
 import weakref
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, NoReturn
 
 import temporalio.activity
 import temporalio.api.common.v1
+import temporalio.api.failure.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.streams
 import temporalio.client
+import temporalio.common
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.runtime
@@ -30,6 +33,7 @@ from temporalio.contrib.streams import workflow as streams_workflow
 from temporalio.contrib.streams._backend import StreamBackend, _ExtensionStreamBackend
 from temporalio.contrib.streams._errors import StreamConfigError
 from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._items import close_status
 from temporalio.contrib.streams._plugin import StreamPlugin
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import models
@@ -64,6 +68,10 @@ class _ExtensionStreamPlugin(StreamPlugin):
         config.backend = backend_name
         self._config = config.SerializeToString()
         self._backends: weakref.WeakSet[_ExtensionStreamBackend] = weakref.WeakSet()
+        # The closes of the runs that ended on this plugin's Workers, by run id, until the
+        # Worker evicts the run.
+        self._run_closes: dict[str, _RunClose] = {}
+        self._closing: set[asyncio.Task[None]] = set()
         # Each client gets its own runtime object on Redis. The memory Store has one for the
         # plugin, so every client and Worker that shares the plugin shares its Streams.
         self._memory: _ExtensionStreamBackend | None = None
@@ -172,6 +180,29 @@ class _ExtensionStreamPlugin(StreamPlugin):
         ]
         return config
 
+    def on_workflow_evicted(
+        self, input: temporalio.worker.WorkflowEvictedInput
+    ) -> None:
+        """Write the closes of a run that ended, once the server accepted its completion."""
+        close = self._run_closes.pop(input.run_id, None)
+        if close is None or not input.execution_ending:
+            return
+        task = asyncio.get_running_loop().create_task(_write_closes(close))
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    async def run_worker(
+        self,
+        worker: temporalio.worker.Worker,
+        next: Callable[[temporalio.worker.Worker], Awaitable[None]],
+    ) -> None:
+        """Run the Worker, then wait for the closes of the runs that ended on it."""
+        try:
+            await super().run_worker(worker, next)
+        finally:
+            if self._closing:
+                await asyncio.gather(*list(self._closing), return_exceptions=True)
+
     async def shutdown(self) -> None:
         """Drop every open writer, including the client's. Call it once the process no longer
         writes Streams.
@@ -270,11 +301,15 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
-        # Workflow code learns the Worker's backend name from the interceptor class.
+        # Workflow code learns the Worker's backend name from the interceptor class, and the
+        # run gives its closes to the interceptor.
         return type(
             "_WorkflowInbound",
             (_WorkflowInbound,),
-            {"_backend_name": self.plugin.backend_name},
+            {
+                "_backend_name": self.plugin.backend_name,
+                "_interceptor": self if self.backend is not None else None,
+            },
         )
 
     def intercept_activity(
@@ -283,8 +318,22 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
         return _ActivityInbound(next, self)
 
 
+@dataclass
+class _RunClose:
+    # The closes of a run's close-with-run Streams, which the worker writes once the server
+    # accepted the run's completion.
+    interceptor: _StreamInterceptor
+    namespace: str
+    run_id: str
+    streams: list[models.StreamRef]
+    result: temporalio.api.common.v1.Payload | None
+    failure: temporalio.api.failure.v1.Failure | None
+    status: stream_pb.CloseStatus.ValueType | None
+
+
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend_name = ""
+    _interceptor: _StreamInterceptor | None = None
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
         super().init(_WorkflowOutbound(outbound, self._backend_name))
@@ -310,20 +359,55 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
                 and temporalio.workflow.cancellation_reason() is not None
             ):
                 # The run ends cancelled.
-                await _close_with_run(
+                await streams_workflow.drain()
+                self._close_with_run(
                     failure=temporalio.exceptions.CancelledError("Workflow cancelled")
                 )
             elif _fails_run(err) and not chain_continues(
                 temporalio.workflow.info(), temporalio.workflow.now(), err
             ):
-                await _close_with_run(failure=err)
+                await streams_workflow.drain()
+                self._close_with_run(failure=err)
             raise
         # A cron run that completes still goes on with the chain.
         if not chain_continues(
             temporalio.workflow.info(), temporalio.workflow.now(), None
         ):
-            await _close_with_run(result=result)
+            self._close_with_run(result=result)
         return result
+
+    def _close_with_run(
+        self, *, result: Any | None = None, failure: BaseException | None = None
+    ) -> None:
+        # The closes wait until the server accepts the run's completion. A last Workflow Task
+        # that fails then leaves the Streams open, so its retry still writes to them.
+        interceptor = self._interceptor
+        if interceptor is None or temporalio.workflow.unsafe.is_replaying():
+            return
+        streams = [
+            run_stream.ref
+            for run_stream in streams_workflow._state().streams.values()
+            if run_stream.close_with_run and not run_stream.closed
+        ]
+        if not streams:
+            return
+        converter = temporalio.workflow.payload_converter()
+        failure_proto = None
+        if failure is not None:
+            failure_proto = temporalio.api.failure.v1.Failure()
+            temporalio.converter.DataConverter.default.failure_converter.to_failure(
+                failure, converter, failure_proto
+            )
+        info = temporalio.workflow.info()
+        interceptor.plugin._run_closes[info.run_id] = _RunClose(
+            interceptor=interceptor,
+            namespace=info.namespace,
+            run_id=info.run_id,
+            streams=streams,
+            result=converter.to_payload(result) if result is not None else None,
+            failure=failure_proto,
+            status=close_status(failure),
+        )
 
 
 def _fails_run(err: BaseException) -> bool:
@@ -370,26 +454,41 @@ def _non_retryable(err: BaseException, types: Sequence[str] | None) -> bool:
     return type(err).__name__ in (types or [])
 
 
-async def _close_with_run(
-    *, result: Any | None = None, failure: BaseException | None = None
-) -> None:
-    for stream_id, run_stream in streams_workflow._state().streams.items():
-        if not run_stream.close_with_run or run_stream.closed:
-            continue
-        stream: streams_workflow.WorkflowStream[Any] = streams_workflow.WorkflowStream(
-            id=stream_id,
-            workflow_id=run_stream.ref.workflow_id,
-            first_execution_run_id=run_stream.ref.first_execution_run_id,
-            backend=run_stream.backend,
+async def _write_closes(close: _RunClose) -> None:
+    backend, converter = close.interceptor.backend, close.interceptor.converter
+    assert backend is not None
+    service = backend.service(close.namespace, converter)
+    failure = (
+        converter.failure_converter.from_failure(
+            close.failure, converter.payload_converter
         )
+        if close.failure is not None
+        else None
+    )
+    for ref in close.streams:
         try:
-            await stream.close(result=result, failure=failure)
+            await service.close_stream(
+                models.CloseStreamRequest(
+                    stream=ref,
+                    # The run itself closes its Streams, as their owner.
+                    producer=models.Producer(
+                        kind=stream_pb.ProducerKind.PRODUCER_KIND_WORKFLOW,
+                        id=_ids.workflow_producer_id(close.run_id),
+                        run_id=close.run_id,
+                    ),
+                    result=temporalio.common.RawValue(close.result)
+                    if close.result is not None
+                    else None,
+                    failure=failure,
+                    status=close.status,
+                )
+            )
         except Exception:
-            if failure is None:
-                raise
-            # The run's own failure wins over a close that failed.
-            temporalio.workflow.logger.warning(
-                "Failed closing the Stream %s with the run", stream_id, exc_info=True
+            logger.warning(
+                "Failed closing the Stream %s with the run %s",
+                ref.id,
+                close.run_id,
+                exc_info=True,
             )
 
 
