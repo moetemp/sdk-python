@@ -313,6 +313,53 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
     assert items[-1].result == "closed by activity"
 
 
+@workflow.defn
+class CreatesAndLeavesOpen:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await stream_workflow.create_stream(Events, close_with_run=False)
+        return stream.id
+
+
+@workflow.defn
+class ClosesAnotherChainsStream:
+    @workflow.run
+    async def run(self, stream_id: str) -> str:
+        # The handle has only the id, so the SDK can't tell that another chain owns it.
+        return await workflow.execute_local_activity(
+            close_it,
+            streams.ActivityStream(id=stream_id),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+
+
+async def test_store_refuses_another_chains_close(stream_client: Client):
+    async with new_worker(
+        stream_client,
+        CreatesAndLeavesOpen,
+        ClosesAnotherChainsStream,
+        activities=[close_it],
+    ) as worker:
+        owner = await stream_client.start_workflow(
+            CreatesAndLeavesOpen.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        stream_id = await owner.result()
+        assert (
+            await stream_client.execute_workflow(
+                ClosesAnotherChainsStream.run,
+                stream_id,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_owner"
+        )
+    stream = streams.StreamClient(stream_client).get_handle(Events, id=stream_id)
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert [type(item) for item in items] == [streams.Record]
+
+
 @dataclass
 class _Batches(streams.ActivityTopic[int]):
     batches: list[tuple[int, ...]] = field(default_factory=list)
