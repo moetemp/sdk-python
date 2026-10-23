@@ -3,17 +3,20 @@
 Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 """
 
+import base64
 import concurrent.futures
 import uuid
 from datetime import timedelta
 
+import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.native import NativeStreamPlugin
+from temporalio.contrib.streams.native import POSITIONS_TYPE, NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
+from tests.contrib.streams import test_redis
 from tests.contrib.streams.test_workflow_reads import (
     Events,
     Reader,
@@ -91,9 +94,27 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
             "c",
             "closed written",
         ]
-    replayer = Replayer(workflows=[Writer, Reader], plugins=[NativeStreamPlugin()])
+    # A read is direct, so the reader's History holds positions and no page of Records.
+    history = await reader.fetch_history()
+    assert base64.b64encode(POSITIONS_TYPE).decode() in history.to_json()
+    # The wake's answer is in History, and it holds offsets only.
+    wakes = [
+        stream_pb.ReadRecordsResponse.FromString(
+            event.nexus_operation_completed_event_attributes.result.data
+        )
+        for event in history.events
+        if event.HasField("nexus_operation_completed_event_attributes")
+    ]
+    assert wakes and not any(wake.records for wake in wakes)
+    # The plugin of the client has the connection that a replay reads over. A replay reads
+    # each page again once the cache is gone.
+    [plugin] = native_client.config()["plugins"]
+    assert isinstance(plugin, NativeStreamPlugin)
+    replayer = Replayer(workflows=[Writer, Reader], plugins=[plugin])
     await replayer.replay_workflow(await writer.fetch_history())
-    await replayer.replay_workflow(await reader.fetch_history())
+    await replayer.replay_workflow(history)
+    plugin._pages.clear()
+    await replayer.replay_workflow(history)
 
 
 async def test_redis_and_native_on_a_native_server(
@@ -130,3 +151,62 @@ async def test_redis_and_native_on_a_native_server(
     ]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == ["redis", "native"]
+
+
+@workflow.defn
+class WritesByBareId:
+    @workflow.run
+    async def run(self, stream_id: str) -> str:
+        stream = stream_workflow.WorkflowStream[Events](id=stream_id, backend="native")
+        try:
+            await stream.topic(Events.tokens).publish("lost")
+        except streams.StreamNotFoundError as err:
+            return err.reason
+        return "written"
+
+
+async def test_a_write_without_the_owner_fields_raises(native_client: Client):
+    # A Workflow's Stream nests in its Workflow, so a handle without the owner fields finds
+    # nothing, and the write's Local Activity raises at the await.
+    async with new_worker(native_client, Writer, WritesByBareId) as worker:
+        writer = await native_client.start_workflow(
+            Writer.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await writer.result()
+        stream_id = f"{writer.id}:{writer.first_execution_run_id}:events"
+        assert (
+            await native_client.execute_workflow(
+                WritesByBareId.run,
+                stream_id,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_found"
+        )
+
+
+async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: Client):
+    # The retry task sends the failed task, so the server withdraws its Local Activity Records.
+    async with new_worker(
+        native_client,
+        test_redis.LocalThenFailTask,
+        activities=[test_redis.local_tokens],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await native_client.start_workflow(
+            test_redis.LocalThenFailTask.run,
+            str(uuid.uuid4()),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await test_redis.read_all(
+            test_redis.workflow_stream(native_client, handle)
+        )
+    withdrawn = [item for item in items if isinstance(item, streams.Superseded)]
+    visible = [
+        item.data
+        for item in test_redis.records(items)
+        if not any(w.withdraws(item) for w in withdrawn)
+    ]
+    assert visible == ["2", "3"]

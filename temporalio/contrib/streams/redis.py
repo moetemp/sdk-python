@@ -96,6 +96,14 @@ class _ExtensionStreamPlugin(StreamPlugin):
         # The read activity's name has the backend name, which the base keeps.
         self._read_activity = _read_activity(self)
 
+    def _read_result(
+        self,
+        request: stream_pb.ReadRecordsRequest,  # pyright: ignore[reportUnusedParameter]
+        page: stream_pb.ReadRecordsResponse,
+    ) -> Any:
+        # The result of a Workflow read's Local Activity, which its marker holds.
+        return page
+
     def _runtime_backend(
         self, runtime: temporalio.runtime.Runtime, memory: bool
     ) -> _ExtensionStreamBackend:
@@ -173,9 +181,8 @@ class _ExtensionStreamPlugin(StreamPlugin):
             )
             config["interceptors"] = [*config.get("interceptors", []), mine]
         mine.converter = client.data_converter
-        if not self._outbound_class._temporal_stream_parks_reads:
-            # Workflow reads run as this Local Activity, so the Worker must have it.
-            config["activities"] = [*config.get("activities", []), self._read_activity]
+        # Workflow reads run as this Local Activity, so the Worker must have it.
+        config["activities"] = [*config.get("activities", []), self._read_activity]
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
@@ -259,15 +266,22 @@ def read_activity_name(backend: str) -> str:
 
 def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
     @temporalio.activity.defn(name=read_activity_name(plugin.backend_name))
-    async def read_page(
-        request: stream_pb.ReadRecordsRequest,
-    ) -> stream_pb.ReadRecordsResponse:
-        request.namespace = temporalio.activity.info().namespace
+    async def read_page(request: stream_pb.ReadRecordsRequest) -> Any:
+        info = temporalio.activity.info()
+        request.namespace = info.namespace
         # The Worker's client gave the attempt its Stream runtime.
         streams = _attempt_streams(plugin.backend_name)
         try:
+            # The reading run goes with the read, so a native server keeps the Records that
+            # the open run may read again on replay.
             page = await cast(_ExtensionStreamBackend, streams.backend).call_async(
-                "ReadRecords", request, stream_pb.ReadRecordsResponse
+                "WorkflowReadRecords",
+                ext_pb.WorkflowReadRecordsRequest(
+                    read=request,
+                    workflow_id=info.workflow_id or "",
+                    run_id=info.workflow_run_id or "",
+                ),
+                stream_pb.ReadRecordsResponse,
             )
         except _errors.StreamError as err:
             # The reason goes in the details, so Workflow code gets the same Stream error.
@@ -280,7 +294,7 @@ def _read_activity(plugin: _ExtensionStreamPlugin) -> Callable[..., Any]:
         # Workflow code can't run the codec, so the page's bodies go to it decoded. The page
         # as a whole goes through the codec as the Local Activity's result.
         await _decode_page(streams.converter, page)
-        return page
+        return plugin._read_result(request, page)
 
     return read_page
 
