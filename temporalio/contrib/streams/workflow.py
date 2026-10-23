@@ -567,7 +567,7 @@ def _create(
     auto_close: timedelta | None,
     close_with_run: bool,
     backend: str | None,
-    ) -> tuple[WorkflowStream[E], asyncio.Future[int]]:
+) -> tuple[WorkflowStream[E], asyncio.Future[int]]:
     backend_name = _check_backend(backend, "create")
     stream = _own_handle(definition, backend_name)
     run_stream, _ = stream._check("create", backend=backend_name)
