@@ -377,6 +377,9 @@ class WorkflowStream(StreamHandle[E]):
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. Later writes in this run raise :py:class:`StreamClosedError`.
+
+        Raises:
+            StreamNotOwnerError: This run chain didn't create the Stream.
         """
         await self._close(result, failure)
 
@@ -391,6 +394,17 @@ class WorkflowStream(StreamHandle[E]):
         _write_nowait(self._close(result, failure))
 
     def _close(self, result: Any, failure: BaseException | None) -> asyncio.Future[int]:
+        info = temporalio.workflow.info()
+        if (self.workflow_id, self.first_execution_run_id) != (
+            info.workflow_id,
+            info.first_execution_run_id,
+        ):
+            # Only the run chain that created a Stream ends it for every reader. The backend
+            # refuses it too, and this error comes before a Local Activity is spent.
+            raise _errors.StreamNotOwnerError(
+                f"Can't close the Stream {self.id}, since this run chain didn't create it",
+                reason="stream_not_owner",
+            )
         self._check("close").closed = True
         request = stream_pb.CloseStreamRequest(stream=self._ref())
         if result is not None:

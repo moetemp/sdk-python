@@ -217,6 +217,37 @@ async def test_replay_reproducible_errors_raise_in_workflow_code(
 
 
 @workflow.defn
+class ClosesAReceivedStream:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
+        await stream.topic(Events.tokens).publish("from workflow")
+        try:
+            await stream.close(result="ended by a writer")
+        except streams.StreamNotOwnerError as err:
+            return err.reason
+        return "closed"
+
+
+async def test_workflow_closes_only_its_own_streams(stream_client: Client):
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"owned-{uuid.uuid4()}"
+    )
+    async with new_worker(stream_client, ClosesAReceivedStream) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                ClosesAReceivedStream.run,
+                stream_workflow.WorkflowStream.from_handle(stream),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_not_owner"
+        )
+    # The writer can't end the Stream for every reader, so it stays open.
+    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    assert data(items) == ["from workflow"]
+
+
+@workflow.defn
 class Failing:
     @workflow.run
     async def run(self) -> None:
