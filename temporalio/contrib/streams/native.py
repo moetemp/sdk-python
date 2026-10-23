@@ -308,6 +308,8 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
     _outbound_class = _NativeWorkflowOutbound
     _server_closes_with_run = True
     _activity_streams = True
+    # The server's `stream.maxBatchBytes` default, below the crate's 4 MiB.
+    _max_batch_bytes = 2 * 1024 * 1024
 
     def _new_backend(
         self, service: temporalio.service.ServiceClient

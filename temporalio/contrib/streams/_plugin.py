@@ -25,6 +25,8 @@ class StreamPlugin(SimplePlugin):
     # Whether the backend keeps the Streams of a Standalone Activity, which it closes with the
     # Activity. Only the server does, so a Stream that nobody closes can't stay.
     _activity_streams = False
+    # The most bytes of one append that the Store takes, as it counts them.
+    _max_batch_bytes = 4 * 1024 * 1024
 
     def __init__(
         self,

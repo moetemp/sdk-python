@@ -35,6 +35,8 @@ class ActivityStreams:
     task_token: bytes = b""
     # Whether the backend keeps the Streams of a Standalone Activity.
     activity_streams: bool = False
+    # The most bytes of one append that the backend's Store takes.
+    max_batch_bytes: int = 4 * 1024 * 1024
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)
