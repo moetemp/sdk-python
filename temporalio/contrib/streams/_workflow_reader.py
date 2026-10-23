@@ -347,7 +347,11 @@ class WorkflowItems(AsyncIterator[Item]):
         try:
             answer = await wake
         except temporalio.exceptions.NexusOperationError as err:
-            if self._closed:
+            if self._closed or isinstance(
+                err.cause, temporalio.exceptions.TimeoutError
+            ):
+                # A namespace may cap a Nexus operation below the wake's wait, which ends the
+                # wake as an empty one would.
                 return
             raise error_of(err) from None
         finally:

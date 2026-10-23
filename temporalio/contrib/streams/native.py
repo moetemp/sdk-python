@@ -39,9 +39,9 @@ _SERVICE = "temporal.api.streamservice.v1.StreamService"
 
 # Nothing waits for the answer of a wake that the reader dropped, so its cancel ends it at once.
 _TRY_CANCEL = temporalio.workflow.NexusOperationCancellationType.TRY_CANCEL
-# How long a wake parks on the server. The server allows a wake up to `stream.maxWakeWait`, and
-# an older server caps every read at 60 s.
-_WAKE_WAIT = timedelta(seconds=60)
+# How long a wake parks on the server. A parked wake adds nothing to History, so an idle reader
+# costs nothing. The server caps it at `stream.maxWakeWait`, and an older server at 60 s.
+_WAKE_WAIT = timedelta(days=7)
 
 # A Workflow read's Local Activity answers with its positions only: the request, and the answer
 # with no Records. The codec step turns them back into the page before Workflow code sees it.
