@@ -1,7 +1,7 @@
 """The Local Activities that write for Workflow code.
 
-Each Workflow ``create_stream``, ``publish`` and ``close`` is one of them, so History has the
-answer and not the values.
+Each Workflow ``create_stream`` and ``close`` is one of them, and the publishes that wait
+behind a write to the same Stream share one. History has the answer and not the values.
 """
 
 from __future__ import annotations

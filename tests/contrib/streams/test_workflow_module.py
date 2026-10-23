@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from temporalio import workflow
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
     Client,
     WorkflowFailureError,
@@ -399,7 +400,12 @@ class Gathers:
     @workflow.run
     async def run(self) -> list[int]:
         tokens = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
-        return list(await asyncio.gather(*(tokens.publish(str(n)) for n in range(5))))
+        tokens.publish_nowait("0")
+        # The first write starts, so the next ones wait behind it.
+        await asyncio.sleep(0)
+        return list(
+            await asyncio.gather(*(tokens.publish(str(n)) for n in range(1, 5)))
+        )
 
 
 async def test_concurrent_publishes_keep_their_order(stream_client: Client):
@@ -410,8 +416,20 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
         offsets = await handle.result()
         items = await read(stream_client, handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
-    assert offsets == sorted(offsets)
+    # The four writes that waited went as one Local Activity, and each call got the offset of
+    # its own Record.
+    assert (
+        offsets
+        == [item.offset for item in items if isinstance(item, streams.Record)][1:]
+    )
     history = await handle.fetch_history()
+    markers = [
+        e
+        for e in history.events
+        if e.event_type == EventType.EVENT_TYPE_MARKER_RECORDED
+    ]
+    # The create, the first write, the four that waited, and the close with the run.
+    assert len(markers) == 4
     # Replay answers from the markers and writes nothing.
     plugins = [
         p
