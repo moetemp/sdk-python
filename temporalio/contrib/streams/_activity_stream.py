@@ -8,6 +8,7 @@ from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
 from typing import Any, Generic, TypeVar, cast, overload
 
+import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.contrib.streams import _activity, _errors
 from temporalio.contrib.streams._access import (
     Access,
@@ -42,6 +43,20 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
             f"{', '.join(attempt.backends)}."
         )
     return streams
+
+
+def _check_close(handle: StreamHandle[Any]) -> None:
+    # A Workflow's Stream closes only from its run chain, and a client's only from a client. So
+    # only a Local Activity of the chain may close here. The Store refuses the others too, and
+    # this error comes with no call.
+    streams = _bound(handle)
+    local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
+    if not local or (handle.workflow_id and handle.workflow_id != streams.workflow_id):
+        raise _errors.StreamNotOwnerError(
+            f"Can't close the Stream {handle.id} from this Activity. A Workflow's Stream "
+            "closes only from its run chain, and a client's only from a client.",
+            reason="stream_not_owner",
+        )
 
 
 def _access(handle: StreamHandle[Any]) -> Access:
@@ -141,6 +156,7 @@ class ActivityStream(StreamHandle[E]):
         Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
         reader.
         """
+        _check_close(self)
         await self._access().close(result, failure)
 
 
@@ -326,6 +342,7 @@ class SyncActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream. See
         :py:meth:`ActivityStream.close`.
         """
+        _check_close(self)
         self._run(self._access().close(result, failure))
 
 
