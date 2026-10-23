@@ -49,6 +49,9 @@ EXTENSION_NAME = "temporalio-streams-redis"
 _READ_WAIT = timedelta(seconds=5)
 _READ_MARGIN = timedelta(seconds=10)
 _PAGE_TYPE = stream_pb.ReadRecordsResponse.DESCRIPTOR.full_name.encode()
+# A Workflow page's marker holds its Records, and the server refuses a marker over 2 MiB. The
+# cap leaves room for the marker's envelope.
+_PAGE_BYTES = 2 * 1024 * 1024 - 64 * 1024
 # Set on a page of a Stream whose owner's run chain ended. Only a Store that doesn't close a
 # Stream with its owner sets it.
 _OWNER_ENDED_KEY = "temporal.io/stream-owner-ended"
@@ -548,6 +551,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_read_wait = _READ_WAIT
     # The Local Activity's timeout bounds its wait for the create too.
     _temporal_stream_create_wait = _READ_WAIT
+    _temporal_stream_page_bytes = _PAGE_BYTES
 
     def __init__(
         self,
@@ -574,6 +578,8 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         self, request: stream_pb.ReadRecordsRequest
     ) -> _workflow_reader.Page:
         # The page is the Local Activity's result, so it is in History.
+        if self._temporal_stream_page_bytes:
+            request.max_bytes = self._temporal_stream_page_bytes
         try:
             result = await temporalio.workflow.execute_local_activity(
                 read_activity_name(self._temporal_stream_backend_name),

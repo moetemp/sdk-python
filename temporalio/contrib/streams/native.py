@@ -197,6 +197,8 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
     _temporal_stream_parks_reads = True
     _temporal_stream_read_wait = _WAKE_WAIT
     _temporal_stream_create_wait = _WAKE_WAIT
+    # The marker holds no Records, so a page needs no byte cap.
+    _temporal_stream_page_bytes = 0
 
     async def _temporal_stream_read_page(
         self, request: stream_pb.ReadRecordsRequest

@@ -289,6 +289,34 @@ async def test_a_read_ends_when_the_owner_ended_with_no_close(
         assert await reader.result() == [["a"], not native, True]
 
 
+@workflow.defn
+class CountsTokens:
+    @workflow.run
+    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> int:
+        items = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+        return len([item async for item in items if isinstance(item, streams.Record)])
+
+
+async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Client):
+    # A Redis page is a History marker, and the server terminates a run whose marker is over
+    # 2 MiB. So a page of large Records splits.
+    stream = await streams.StreamClient(stream_client).create(
+        Events, id=f"big-{uuid.uuid4()}"
+    )
+    for _ in range(25):
+        await stream.topic(Events.tokens).publish("x" * 100_000)
+    async with new_worker(stream_client, CountsTokens) as worker:
+        assert (
+            await stream_client.execute_workflow(
+                CountsTokens.run,
+                stream_workflow.WorkflowStream.from_handle(stream),
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == 25
+        )
+
+
 def test_a_server_failure_maps_by_its_reason():
     by_type = _errors.from_application_error(
         ApplicationError("closed", type="stream_closed")
