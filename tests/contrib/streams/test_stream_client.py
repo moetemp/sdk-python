@@ -181,6 +181,8 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
     ]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "HI THERE"
     assert stream.workflow_id == handle.id
+    with pytest.raises(streams.StreamNotOwnerError):
+        await stream.close()
 
 
 async def test_async_with_closes_a_client_stream(stream_client: Client):

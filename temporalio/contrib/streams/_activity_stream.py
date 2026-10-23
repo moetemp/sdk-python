@@ -9,7 +9,8 @@ from datetime import timedelta
 from types import TracebackType
 from typing import Any, Generic, TypeVar, cast, overload
 
-from temporalio.contrib.streams import _activity, _errors
+import temporalio.api.streamservice.v1 as stream_pb
+from temporalio.contrib.streams import _activity, _errors, _ids
 from temporalio.contrib.streams._access import (
     Access,
     SyncTopicBase,
@@ -44,6 +45,34 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
             f"{', '.join(attempt.backends)}."
         )
     return streams
+
+
+def _check_close(handle: StreamHandle[Any]) -> None:
+    # A Workflow's Stream closes only from its run chain, a Standalone Activity's only from that
+    # Activity, and a client's only from a client. So only a Local Activity of the chain or the
+    # owning Activity may close here. The Store refuses the others too, and this error comes
+    # with no call.
+    streams = _bound(handle)
+    if handle.activity_id:
+        owner = _ids.standalone_activity_producer_id(
+            handle.activity_id, handle.activity_run_id or ""
+        )
+        if (streams.producer.kind, streams.producer.id) == (
+            stream_pb.ProducerKind.PRODUCER_KIND_STANDALONE_ACTIVITY,
+            owner,
+        ):
+            return
+    local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
+    if (
+        not local
+        or handle.activity_id
+        or (handle.workflow_id and handle.workflow_id != streams.workflow_id)
+    ):
+        raise _errors.StreamNotOwnerError(
+            f"Can't close the Stream {handle.id} from this Activity. A Workflow's Stream "
+            "closes only from its run chain, and a client's only from a client.",
+            reason="stream_not_owner",
+        )
 
 
 def _access(handle: StreamHandle[Any]) -> Access:
@@ -142,6 +171,7 @@ class ActivityStream(StreamHandle[E]):
         Activity that created it, may close it. Any other Activity gets
         :py:class:`StreamNotOwnerError`, so it can't end the Stream for every reader.
         """
+        _check_close(self)
         await self._access().close(result, failure)
 
     async def __aenter__(self) -> ActivityStream[E]:
@@ -346,6 +376,7 @@ class SyncActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream. See
         :py:meth:`ActivityStream.close`.
         """
+        _check_close(self)
         self._run(self._access().close(result, failure))
 
 
