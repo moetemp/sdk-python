@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import temporalio.exceptions
 import temporalio.service
-import temporalio.worker
 from temporalio.contrib.streams.proto.v1 import StreamErrorDetails
 
 
@@ -129,13 +128,15 @@ _DETAILS_TYPES = (
 )
 
 
-def from_extension_error(err: temporalio.worker.ExtensionError) -> StreamError:
-    """Turn a failed extension call into the Stream error for its reason."""
-    reason = ""
-    if err.details:
-        reason = StreamErrorDetails.FromString(err.details).reason
+def from_call_error(err: Exception) -> StreamError:
+    """Turn a failed call of the crate's runtime into the Stream error for its reason.
+
+    Its args are the gRPC code, the message and the encoded ``StreamErrorDetails``.
+    """
+    code, message, details = err.args
+    reason = StreamErrorDetails.FromString(details).reason if details else ""
     return _BY_REASON.get(reason, StreamError)(
-        err.message, reason=reason, code=err.code
+        message, reason=reason, code=temporalio.service.RPCStatusCode(code)
     )
 
 

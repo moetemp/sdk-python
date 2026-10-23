@@ -31,7 +31,6 @@ from temporalio.common import (
 )
 
 from ._activity import SharedStateManager, _ActivityWorker
-from ._extension import WorkerExtension
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
 from ._plugin import Plugin
@@ -154,7 +153,6 @@ class Worker:
         ),
         disable_payload_error_limit: bool = False,
         max_workflow_task_external_storage_concurrency: int = _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
-        extension: WorkerExtension | None = None,
     ) -> None:
         """Create a worker to process workflows and/or activities.
 
@@ -353,10 +351,6 @@ class Worker:
                 Please report any issues you encounter with this setting or if you
                 feel the default should be changed.
                 WARNING: This setting is experimental.
-            extension: A native extension that a plugin calls, which Core keeps with the
-                Worker. It must use the same runtime as the client. Plugins usually set
-                it.
-                WARNING: This setting is experimental.
 
         """
         config = WorkerConfig(
@@ -406,7 +400,6 @@ class Worker:
             nexus_task_poller_behavior=nexus_task_poller_behavior,
             disable_payload_error_limit=disable_payload_error_limit,
             max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
-            extension=extension,
         )
 
         plugins_from_client = cast(
@@ -510,9 +503,6 @@ class Worker:
             or bridge_client.config.runtime
             or temporalio.runtime.Runtime.default()
         )
-        extension = config.get("extension")
-        if extension is not None and extension.runtime is not self._runtime:
-            raise ValueError("Worker extension must use the same runtime as the client")
         activities = config.get("activities")
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
@@ -725,7 +715,6 @@ class Worker:
                 disable_payload_error_limit=config.get(
                     "disable_payload_error_limit", False
                 ),
-                extension=extension._bridge_extension if extension else None,
             ),
         )
 
@@ -1065,7 +1054,6 @@ class WorkerConfig(TypedDict, total=False):
     nexus_task_poller_behavior: PollerBehavior
     disable_payload_error_limit: bool
     max_workflow_task_external_storage_concurrency: int
-    extension: WorkerExtension | None
 
 
 def _warn_if_activity_executor_max_workers_is_inconsistent(

@@ -12,8 +12,6 @@ import temporalio.runtime
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.redis import _ExtensionStreamPlugin
 
-MEMORY_EXTENSION_NAME = "temporalio-streams-memory"
-
 
 class MemoryStreamPlugin(_ExtensionStreamPlugin):
     """Keeps Streams in this process, with the same rules as on Redis, for tests.
@@ -41,7 +39,8 @@ class MemoryStreamPlugin(_ExtensionStreamPlugin):
             retention: The default Retention of a new Stream. Defaults to 7 days.
             safety_ttl: How long an open Workflow-owned Stream stays after its last write.
                 Defaults to 90 days.
-            runtime: The runtime of the client. Defaults to the default runtime.
+            runtime: The runtime of the plugin's memory Store. Defaults to the default
+                runtime.
             name: The backend name that Stream handles carry.
             default: Make this the client's default backend. A client with more than one
                 Stream plugin marks exactly one.
@@ -52,10 +51,5 @@ class MemoryStreamPlugin(_ExtensionStreamPlugin):
         if safety_ttl is not None:
             config.safety_ttl.FromTimedelta(safety_ttl)
         super().__init__(
-            "temporalio.MemoryStreamPlugin",
-            MEMORY_EXTENSION_NAME,
-            config,
-            runtime,
-            name,
-            default,
+            "temporalio.MemoryStreamPlugin", True, config, runtime, name, default
         )

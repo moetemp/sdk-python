@@ -19,6 +19,8 @@ from .models import (
     CloseWriterResponse,
     CloseWritersRequest,
     CloseWritersResponse,
+    FreeWriterRequest,
+    FreeWriterResponse,
     OpenWriterRequest,
     WriteRecordsRequest,
     WriteRecordsResponse,
@@ -27,6 +29,8 @@ from .models import (
     _CloseWriterResponseTransferTypeConverter,
     _CloseWritersRequestTransferTypeConverter,
     _CloseWritersResponseTransferTypeConverter,
+    _FreeWriterRequestTransferTypeConverter,
+    _FreeWriterResponseTransferTypeConverter,
     _OpenWriterRequestTransferTypeConverter,
     _WriteRecordsRequestTransferTypeConverter,
     _WriteRecordsResponseTransferTypeConverter,
@@ -239,6 +243,20 @@ class StreamWriterClient:
         with self._converters():
             return converter.from_transfer_type(message, CloseWriterResponse)
 
+    async def free_writer(self, request: FreeWriterRequest) -> FreeWriterResponse:
+        with self._converters():
+            message = _FreeWriterRequestTransferTypeConverter().to_transfer_type(
+                request
+            )
+        await _encode_payloads(message, self._data_converter.payload_codec)
+        payload = _proto_payload(message)
+        answer = await self._call("FreeWriter", payload)
+        converter = _FreeWriterResponseTransferTypeConverter()
+        message = _proto_message(answer, converter.transfer_type)
+        await _decode_payloads(message, self._data_converter.payload_codec)
+        with self._converters():
+            return converter.from_transfer_type(message, FreeWriterResponse)
+
     async def close_writers(self, request: CloseWritersRequest) -> CloseWritersResponse:
         """Drop every open writer, for example at shutdown."""
         with self._converters():
@@ -281,8 +299,17 @@ class Writer:
     async def close(
         self,
     ) -> CloseWriterResponse:
-        """Wait for a write in flight, then drop the writer. The Stream stays open."""
+        """Release the handle. The last one waits for a write, then drops the writer."""
         request = CloseWriterRequest(
             writer_id=self.writer_id,
         )
         return await self._client.close_writer(request)
+
+    async def free(
+        self,
+    ) -> FreeWriterResponse:
+        """Release the handle with no wait, for a handle that lang drops."""
+        request = FreeWriterRequest(
+            writer_id=self.writer_id,
+        )
+        return await self._client.free_writer(request)

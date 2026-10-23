@@ -1,4 +1,4 @@
-"""Calls to the native Stream extension, for Activities and clients."""
+"""Calls to the temporalio-streams runtime in the bridge, for Activities and clients."""
 
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ import google.protobuf.message
 
 import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.bridge.streams
 import temporalio.converter
 import temporalio.service
-import temporalio.worker
 from temporalio.contrib.streams import _errors
 from temporalio.contrib.streams.proto import v1 as ext_pb
 from temporalio.contrib.streams.system import client as service_client
@@ -36,6 +36,7 @@ _REQUESTS: dict[str, type[google.protobuf.message.Message]] = {
     "OpenWriter": ext_pb.OpenWriterRequest,
     "WriteRecords": ext_pb.WriteRecordsRequest,
     "CloseWriter": ext_pb.CloseWriterRequest,
+    "FreeWriter": ext_pb.FreeWriterRequest,
 }
 
 _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
@@ -47,6 +48,7 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
     "OpenWriter": ext_pb.OpenWriterResponse,
     "WriteRecords": ext_pb.WriteRecordsResponse,
     "CloseWriter": ext_pb.CloseWriterResponse,
+    "FreeWriter": ext_pb.FreeWriterResponse,
 }
 
 
@@ -117,17 +119,33 @@ class StreamBackend(Protocol):
         """The writers of Activity and client Producers for ``namespace``."""
         ...
 
+    def free_writer(self, writer_id: int) -> None:
+        """Release one handle of a writer with no wait, for a writer that Python drops."""
+        ...
+
+
+class StreamRuntime(Protocol):
+    """The calls of the crate's runtime object, which the bridge builds."""
+
+    async def call(self, method: str, input: bytes) -> bytes:
+        """Call a method with encoded input, and give the encoded output."""
+        ...
+
+    def free_writer(self, writer_id: int) -> None:
+        """Release one handle of a writer with no wait."""
+        ...
+
 
 class _ExtensionStreamBackend:
-    """Carries Stream calls to a worker extension with the temporalio-streams methods.
+    """Carries Stream calls to the crate's runtime object, which serves one client.
 
     The five Stream service operations go through the generated client, and the writer
     methods are the crate's own.
     """
 
-    def __init__(self, extension: temporalio.worker.WorkerExtension) -> None:
-        """Create a backend over an extension."""
-        self._extension = extension
+    def __init__(self, runtime: StreamRuntime) -> None:
+        """Create a backend over a runtime object."""
+        self._runtime = runtime
 
     def service(
         self,
@@ -145,25 +163,34 @@ class _ExtensionStreamBackend:
     def writers(
         self, namespace: str, data_converter: temporalio.converter.DataConverter
     ) -> writer_client.StreamWriterClient:
-        """The generated writer client over the extension."""
+        """The generated writer client over the runtime."""
         from temporalio.contrib.streams.writer_system import client
 
         return client.StreamWriterClient(
             _ExtensionTransport(self, namespace), data_converter=data_converter
         )
 
+    def free_writer(self, writer_id: int) -> None:
+        """Release one handle of a writer with no wait."""
+        try:
+            self._runtime.free_writer(writer_id)
+        except temporalio.bridge.streams.StreamCallError:
+            # A writer that the runtime already dropped, such as at shutdown, has nothing to
+            # release.
+            pass
+
     async def call_async(
         self, method: str, request: google.protobuf.message.Message, response: type[_M]
     ) -> _M:
-        """Call an async extension method."""
+        """Call a method of the runtime."""
         try:
-            data = await self._extension.call_async(method, request.SerializeToString())
-        except temporalio.worker.ExtensionError as err:
-            raise _errors.from_extension_error(err) from None
+            data = await self._runtime.call(method, request.SerializeToString())
+        except temporalio.bridge.streams.StreamCallError as err:
+            raise _errors.from_call_error(err) from None
         return response.FromString(data)
 
     async def close_writers(self) -> int:
-        """Drop every open writer of the extension, and return how many failed."""
+        """Drop every open writer of the runtime, and return how many failed."""
         response = await self.call_async(
             "CloseWriters", ext_pb.CloseWritersRequest(), ext_pb.CloseWritersResponse
         )
@@ -171,8 +198,8 @@ class _ExtensionStreamBackend:
 
 
 class _ExtensionTransport:
-    # The generated client takes a transport, so the five operations reach the extension as
-    # they would reach a server later.
+    # The generated client takes a transport, so the five operations reach the runtime as they
+    # would reach a server later.
     def __init__(self, backend: _ExtensionStreamBackend, namespace: str) -> None:
         self._backend = backend
         self._namespace = namespace
@@ -188,8 +215,8 @@ class _ExtensionTransport:
         # The IDL leaves the namespace out, since the server knows it.
         if "namespace" in request.DESCRIPTOR.fields_by_name:
             setattr(request, "namespace", self._namespace)
-        # The extension makes no RPC, so it has no use for rpc_metadata. The rpc_timeout is
-        # the call's deadline here too.
+        # The runtime makes no RPC, so it has no use for rpc_metadata. The rpc_timeout is the
+        # call's deadline here too.
         options = call_options.get()
         timeout = options.timeout if options is not None else None
         call = self._backend.call_async(operation, request, _RESPONSES[operation])
