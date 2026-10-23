@@ -457,8 +457,7 @@ class _RandomCodec(PayloadCodec):
 
     async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
         return [
-            _inner(p, p.data[8:]) if _encoded(p, b"binary/random") else p
-            for p in payloads
+            _inner(p.data[8:]) if _encoded(p, b"binary/random") else p for p in payloads
         ]
 
 
@@ -479,7 +478,7 @@ class _GrowingCodec(PayloadCodec):
 
     async def decode(self, payloads: Sequence[Payload]) -> list[Payload]:
         return [
-            _inner(p, p.data[: int(p.metadata["size"])])
+            _inner(p.data[: int(p.metadata["size"])])
             if _encoded(p, b"binary/grown")
             else p
             for p in payloads
@@ -490,7 +489,7 @@ def _encoded(payload: Payload, encoding: bytes) -> bool:
     return payload.metadata.get("encoding") == encoding
 
 
-def _inner(payload: Payload, data: bytes) -> Payload:
+def _inner(data: bytes) -> Payload:
     inner = Payload()
     inner.ParseFromString(data)
     return inner
