@@ -25,7 +25,7 @@ from ._interceptor import (
     WorkflowInterceptorClassInput,
     WorkflowOutboundInterceptor,
 )
-from ._plugin import Plugin
+from ._plugin import Plugin, WorkflowEvictedInput
 from ._replayer import (
     Replayer,
     ReplayerConfig,
@@ -87,6 +87,7 @@ __all__ = [
     "WorkflowOutboundInterceptor",
     "NexusOperationInboundInterceptor",
     "Plugin",
+    "WorkflowEvictedInput",
     # Interceptor input
     "ContinueAsNewInput",
     "ExecuteActivityInput",

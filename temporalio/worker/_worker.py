@@ -19,6 +19,7 @@ from typing import (
 
 from typing_extensions import TypedDict
 
+import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.worker
 import temporalio.client
 import temporalio.common
@@ -33,7 +34,7 @@ from temporalio.common import (
 from ._activity import SharedStateManager, _ActivityWorker
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
-from ._plugin import Plugin
+from ._plugin import Plugin, WorkflowEvictedInput
 from ._tuning import WorkerTuner
 from ._workflow import (
     _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
@@ -576,7 +577,7 @@ class Worker:
                     "disable_eager_activity_execution"
                 ],  # type: ignore[reportTypedDictNotRequiredAccess]
                 metric_meter=self._runtime.metric_meter,
-                on_eviction_hook=None,
+                on_eviction_hook=self._eviction_hook(),
                 disable_safe_eviction=config["disable_safe_workflow_eviction"],  # type: ignore[reportTypedDictNotRequiredAccess]
                 should_enforce_versioning_behavior=should_enforce_versioning_behavior,
                 assert_local_activity_valid=check_activity,
@@ -717,6 +718,42 @@ class Worker:
                 ),
             ),
         )
+
+    def _eviction_hook(
+        self,
+    ) -> (
+        Callable[
+            [str, temporalio.bridge.proto.workflow_activation.RemoveFromCache], None
+        ]
+        | None
+    ):
+        plugins = [
+            plugin
+            for plugin in self._plugins
+            if type(plugin).on_workflow_evicted is not Plugin.on_workflow_evicted
+        ]
+        if not plugins:
+            return None
+        ending = temporalio.bridge.proto.workflow_activation.RemoveFromCache.EvictionReason.WORKFLOW_EXECUTION_ENDING
+
+        def on_evicted(
+            run_id: str,
+            job: temporalio.bridge.proto.workflow_activation.RemoveFromCache,
+        ) -> None:
+            input = WorkflowEvictedInput(
+                run_id=run_id, execution_ending=job.reason == ending
+            )
+            for plugin in plugins:
+                try:
+                    plugin.on_workflow_evicted(input)
+                except Exception:
+                    logger.exception(
+                        "Plugin %s failed on the eviction of run %s",
+                        plugin.name(),
+                        run_id,
+                    )
+
+        return on_evicted
 
     def config(self, *, active_config: bool = False) -> WorkerConfig:
         """Config, as a dictionary, used to create this worker.
