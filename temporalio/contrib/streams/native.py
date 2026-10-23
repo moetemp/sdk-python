@@ -307,6 +307,7 @@ class NativeStreamPlugin(_ExtensionStreamPlugin):
 
     _outbound_class = _NativeWorkflowOutbound
     _server_closes_with_run = True
+    _activity_streams = True
 
     def _new_backend(
         self, service: temporalio.service.ServiceClient

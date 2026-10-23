@@ -22,6 +22,10 @@ class StreamPlugin(SimplePlugin):
         This API is experimental.
     """
 
+    # Whether the backend keeps the Streams of a Standalone Activity, which it closes with the
+    # Activity. Only the server does, so a Stream that nobody closes can't stay.
+    _activity_streams = False
+
     def __init__(
         self,
         name: str,

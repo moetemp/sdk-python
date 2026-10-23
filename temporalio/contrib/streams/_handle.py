@@ -113,6 +113,10 @@ def _to_json(handle: StreamHandle[Any]) -> dict[str, str]:
         json["firstExecutionRunId"] = handle.first_execution_run_id
     if handle.backend:
         json["backend"] = handle.backend
+    if handle.activity_id:
+        json["activityId"] = handle.activity_id
+    if handle.activity_run_id:
+        json["activityRunId"] = handle.activity_run_id
     return json
 
 
@@ -142,6 +146,8 @@ def _from_json(value: Any, type_hint: Any) -> StreamHandle[Any]:
         first_execution_run_id=value.get("firstExecutionRunId") or None,
         backend=value.get("backend") or None,
         definition=definition,
+        activity_id=value.get("activityId") or None,
+        activity_run_id=value.get("activityRunId") or None,
     )
 
 
@@ -180,11 +186,15 @@ class StreamHandle(Generic[E]):
         first_execution_run_id: str | None = None,
         backend: str | None = None,
         definition: type[E] | None = None,
+        activity_id: str | None = None,
+        activity_run_id: str | None = None,
     ) -> None:
         """Create a handle. Use the create and get calls of a context instead."""
         self._id = id
         self._workflow_id = workflow_id
         self._first_execution_run_id = first_execution_run_id
+        self._activity_id = activity_id
+        self._activity_run_id = activity_run_id
         self._backend = backend
         self._definition = definition
         if definition is not None:
@@ -204,6 +214,8 @@ class StreamHandle(Generic[E]):
             first_execution_run_id=handle.first_execution_run_id,
             backend=handle.backend,
             definition=handle.definition,
+            activity_id=handle.activity_id,
+            activity_run_id=handle.activity_run_id,
         )
 
     @property
@@ -220,6 +232,16 @@ class StreamHandle(Generic[E]):
     def first_execution_run_id(self) -> str | None:
         """For a Workflow's Stream, the first run id of the owning run chain."""
         return self._first_execution_run_id
+
+    @property
+    def activity_id(self) -> str | None:
+        """For a Standalone Activity's Stream, the id of the Activity that owns it."""
+        return self._activity_id
+
+    @property
+    def activity_run_id(self) -> str | None:
+        """For a Standalone Activity's Stream, the run id of the owning Activity."""
+        return self._activity_run_id
 
     @property
     def backend(self) -> str | None:
@@ -267,12 +289,14 @@ class StreamHandle(Generic[E]):
         return topic, type
 
     def _owner_ref(self) -> models.StreamRef:
-        # A Workflow's Stream carries its owner on every call, so a server that nests it in the
-        # Workflow finds it.
+        # A Workflow's or a Standalone Activity's Stream carries its owner on every call, so a
+        # server that nests it in its owner finds it.
         return models.StreamRef(
             id=self._id,
             workflow_id=self._workflow_id or None,
             first_execution_run_id=self._first_execution_run_id or None,
+            activity_id=self._activity_id or None,
+            activity_run_id=self._activity_run_id or None,
         )
 
     def _known_types(self) -> dict[str, Any]:
@@ -296,6 +320,10 @@ class StreamHandle(Generic[E]):
             fields["firstExecutionRunId"] = self._first_execution_run_id
         if self._backend:
             fields["backend"] = self._backend
+        if self._activity_id:
+            fields["activityId"] = self._activity_id
+        if self._activity_run_id:
+            fields["activityRunId"] = self._activity_run_id
         return fields
 
     def __eq__(self, other: object) -> bool:

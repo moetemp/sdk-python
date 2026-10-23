@@ -25,7 +25,7 @@ from temporalio.contrib.streams._backend import StreamBackend
 from temporalio.contrib.streams._defn import TopicDefinition, definition_of
 from temporalio.contrib.streams._handle import Creating, StreamHandle, exit_failure
 from temporalio.contrib.streams._items import End
-from temporalio.contrib.streams._plugin import client_backend
+from temporalio.contrib.streams._plugin import StreamPlugin, client_backend
 from temporalio.contrib.streams._reader import Item, Position, Subscription
 from temporalio.contrib.streams._writer import StreamWriter
 from temporalio.contrib.streams.system import models
@@ -134,6 +134,8 @@ class ClientStream(StreamHandle[E]):
         first_execution_run_id: str | None = None,
         backend: str | None = None,
         definition: type[E] | None = None,
+        activity_id: str | None = None,
+        activity_run_id: str | None = None,
     ) -> None:
         """Create a handle. Use :py:class:`StreamClient` instead."""
         super().__init__(
@@ -142,6 +144,8 @@ class ClientStream(StreamHandle[E]):
             first_execution_run_id=first_execution_run_id,
             backend=backend,
             definition=definition,
+            activity_id=activity_id,
+            activity_run_id=activity_run_id,
         )
         self._client: temporalio.client.Client | None = None
         self._stream_backend: StreamBackend | None = None
@@ -279,6 +283,8 @@ class ClientStream(StreamHandle[E]):
             first_execution_run_id=self._first_execution_run_id,
             backend=self._backend,
             definition=self._definition,
+            activity_id=self._activity_id,
+            activity_run_id=self._activity_run_id,
         )
         handle._stream_name = self._stream_name
         handle._named = (name, epoch)
@@ -538,6 +544,8 @@ class StreamClient:
             first_execution_run_id=stream.first_execution_run_id if stream else None,
             backend=backend_name or None,
             definition=definition,
+            activity_id=stream.activity_id if stream else None,
+            activity_run_id=stream.activity_run_id if stream else None,
         )
         return handle._bind(self._client, stream_backend, probe=probe)
 
@@ -548,6 +556,54 @@ class StreamClient:
             return (*client_backend(self._client, backend), [])
         probe = [client_backend(self._client, name) for name in backend]
         return (*probe[0], probe if len(probe) > 1 else [])
+
+    def activity_stream(
+        self,
+        handle: temporalio.client.ActivityHandle[Any],
+        definition: type[E],
+        *,
+        backend: str | None = None,
+    ) -> ClientStream[E]:
+        """A Stream that a Standalone Activity created, by the Activity handle and the
+        definition. It makes no call.
+
+        Args:
+            handle: A handle of the Activity with its run id, such as the one that
+                ``start_activity`` returns.
+            definition: The Stream definition class, renamed as the Activity's create.
+            backend: The name of the backend. Defaults to the client's default backend.
+
+        Raises:
+            StreamConfigError: The backend keeps no Stream of a Standalone Activity, such as
+                Redis.
+            ValueError: The handle has no run id.
+        """
+        backend_name, stream_backend = client_backend(self._client, backend)
+        plugin = next(
+            plugin
+            for plugin in self._client.config()["plugins"]
+            if isinstance(plugin, StreamPlugin) and plugin.backend_name == backend_name
+        )
+        if not plugin._activity_streams:
+            raise _errors.StreamConfigError(
+                f"The backend {backend_name} keeps no Stream of a Standalone Activity. Use "
+                "the native backend."
+            )
+        if not handle.run_id:
+            raise ValueError(
+                "The Activity handle has no run id, so the Stream id is unknown. Use the "
+                "handle that start_activity returns."
+            )
+        stream = ClientStream(
+            id=_ids.scoped_stream_id(
+                handle.id, handle.run_id, definition_of(definition).name
+            ),
+            backend=backend_name or None,
+            definition=definition,
+            activity_id=handle.id,
+            activity_run_id=handle.run_id,
+        )
+        return stream._bind(self._client, stream_backend)
 
     def workflow_stream(
         self,

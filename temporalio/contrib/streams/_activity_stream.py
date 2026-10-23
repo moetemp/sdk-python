@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
+from types import TracebackType
 from typing import Any, Generic, TypeVar, cast, overload
 
 from temporalio.contrib.streams import _activity, _errors
@@ -17,7 +18,7 @@ from temporalio.contrib.streams._access import (
     subscription,
 )
 from temporalio.contrib.streams._defn import TopicDefinition
-from temporalio.contrib.streams._handle import StreamHandle
+from temporalio.contrib.streams._handle import StreamHandle, exit_failure
 from temporalio.contrib.streams._items import Closed, End, Record, Superseded
 from temporalio.contrib.streams._reader import Subscription
 from temporalio.contrib.streams.system import models
@@ -137,11 +138,30 @@ class ActivityStream(StreamHandle[E]):
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. A ``CancelledError`` failure closes it as canceled.
 
-        Only a Local Activity of the run chain that created the Stream may close it. Any other
-        Activity gets :py:class:`StreamNotOwnerError`, so it can't end the Stream for every
-        reader.
+        Only a Local Activity of the run chain that created the Stream, or the Standalone
+        Activity that created it, may close it. Any other Activity gets
+        :py:class:`StreamNotOwnerError`, so it can't end the Stream for every reader.
         """
         await self._access().close(result, failure)
+
+    async def __aenter__(self) -> ActivityStream[E]:
+        """Use the Stream in ``async with``, which closes it at the end."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the Stream, with the exception as its failure if there is one.
+
+        A cancel closes it with a ``CancelledError`` failure. Another ``BaseException`` leaves
+        it open.
+        """
+        close, failure = exit_failure(exc)
+        if close:
+            await self.close(failure=failure)
 
 
 class SyncActivityTopic(SyncTopicBase[T]):

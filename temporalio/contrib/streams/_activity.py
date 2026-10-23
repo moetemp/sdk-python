@@ -31,6 +31,8 @@ class ActivityStreams:
     # An Activity's task token, which its writes send, so the native server checks the
     # Producer against the Activity's current attempt. Empty for a Local Activity.
     task_token: bytes = b""
+    # Whether the backend keeps the Streams of a Standalone Activity.
+    activity_streams: bool = False
     writers: dict[str, StreamWriter] = field(default_factory=dict)
     # The attempt's BufferedPublishers, which the end of the attempt flushes.
     publishers: list[Any] = field(default_factory=list)

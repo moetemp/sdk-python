@@ -8,7 +8,7 @@ import base64
 import concurrent.futures
 import uuid
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
@@ -330,3 +330,73 @@ async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
             task_queue=worker.task_queue,
         )
     assert seen == ["a"] and suggested and next_offset > offset
+
+
+@activity.defn
+async def streams_its_tokens() -> str:
+    async with streams.activity.create_stream(Events) as stream:
+        await stream.topic(Events.tokens).publish("a", "b")
+    return "done"
+
+
+@activity.defn
+async def leaves_its_stream_open() -> str:
+    stream = await streams.activity.create_stream(Events)
+    await stream.topic(Events.tokens).publish("a")
+    return "done"
+
+
+async def test_a_standalone_activity_owns_its_stream(native_client: Client):
+    # The server closes the Stream when the Activity ends, with its status and result, so a
+    # Stream that the Activity leaves open doesn't stay.
+    task_queue = f"tq-{uuid.uuid4()}"
+    async with new_worker(
+        native_client,
+        activities=[streams_its_tokens, leaves_its_stream_open],
+        task_queue=task_queue,
+    ):
+        closed = await native_client.start_activity(
+            streams_its_tokens,
+            id=f"act-{uuid.uuid4()}",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        left_open = await native_client.start_activity(
+            leaves_its_stream_open,
+            id=f"act-{uuid.uuid4()}",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        assert await closed.result() == "done"
+        assert await left_open.result() == "done"
+    stream_client = streams.StreamClient(native_client)
+    items = [
+        item async for item in stream_client.activity_stream(closed, Events).subscribe()
+    ]
+    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+        "a",
+        "b",
+    ]
+    left = [
+        item
+        async for item in stream_client.activity_stream(left_open, Events).subscribe()
+    ]
+    assert [item.data for item in left if isinstance(item, streams.Record)] == ["a"]
+    assert isinstance(left[-1], streams.Closed) and left[-1].result == "done"
+    assert left[-1].status == streams.CloseStatus.COMPLETED
+
+
+async def test_each_client_of_a_native_plugin_calls_on_its_own_connection():
+    # One plugin on two clients gives each its own runtime, so a call doesn't go on the
+    # connection of the client that came last.
+    plugin = NativeStreamPlugin()
+    first = await Client.connect("127.0.0.1:1", lazy=True, plugins=[plugin])
+    second = await Client.connect("127.0.0.1:2", lazy=True, plugins=[plugin])
+    runtimes = [
+        cast(Any, plugin.backend_for(client))._runtime for client in (first, second)
+    ]
+    assert runtimes[0] is not runtimes[1]
+    assert [runtime._service for runtime in runtimes] == [
+        first.service_client,
+        second.service_client,
+    ]
