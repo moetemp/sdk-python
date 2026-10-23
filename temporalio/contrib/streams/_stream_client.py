@@ -354,7 +354,18 @@ class ClientStream(StreamHandle[E]):
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. A ``CancelledError`` failure closes it as canceled. ``rpc_metadata`` and
         ``rpc_timeout`` are as for :py:meth:`get_offset`.
+
+        Raises:
+            StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
         """
+        if self._workflow_id:
+            # A Workflow's Stream closes only from its run chain. The Store refuses a client's
+            # close too, and this error comes with no call.
+            raise _errors.StreamNotOwnerError(
+                f"Can't close the Stream {self._id or self._stream_name} from a client, since "
+                "a Workflow owns it",
+                reason="stream_not_owner",
+            )
         self._closed = True
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             await self._ready()

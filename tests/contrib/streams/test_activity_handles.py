@@ -289,8 +289,13 @@ class Closing:
             streams.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        await stream.close(result="closed by workflow")
-        return [backend, owner]
+        # A Local Activity is part of the run chain, so it may close the chain's Stream.
+        local = await workflow.execute_local_activity(
+            close_it,
+            streams.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        return [backend, owner, local]
 
 
 async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
@@ -301,11 +306,11 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         # An Activity writes to the Workflow's Stream but can't end it for every reader.
-        assert await handle.result() == ["config", "stream_not_owner"]
+        assert await handle.result() == ["config", "stream_not_owner", "closed"]
         items = await read(stream_client, handle)
-    assert [r.data for r in records(items)] == ["last"]
+    assert [r.data for r in records(items)] == ["last", "last"]
     assert isinstance(items[-1], streams.Closed)
-    assert items[-1].result == "closed by workflow"
+    assert items[-1].result == "closed by activity"
 
 
 @dataclass
