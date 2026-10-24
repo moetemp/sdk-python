@@ -2,7 +2,8 @@
 
 Each Workflow ``create_stream`` is a Local Activity, and the publishes that wait behind a write
 to the same Stream share one. History has the answer and not the values. Each Workflow
-``close`` is a regular Activity, so it runs only once its Workflow Task completed.
+``close`` on Redis is a regular Activity, so it runs only once its Workflow Task completed. The
+native backend closes with a System Nexus command instead.
 """
 
 from __future__ import annotations
