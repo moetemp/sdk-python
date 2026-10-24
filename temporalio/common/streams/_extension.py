@@ -101,8 +101,8 @@ class ExtensionStreamBackend(StreamBackend):
         ]
         return config
 
-    def backend_for(self, client: temporalio.client.Client) -> BackendCalls:
-        """The Stream runtime that this backend gave ``client``."""
+    def _backend_for(self, client: temporalio.client.Client) -> BackendCalls:
+        # The Stream runtime that this backend gave the client.
         interceptor = self._interceptor_of(
             client.config(active_config=True)["interceptors"]
         )
@@ -125,7 +125,7 @@ class ExtensionStreamBackend(StreamBackend):
     def _configure_worker(
         self, config: temporalio.worker.WorkerConfig
     ) -> temporalio.worker.WorkerConfig:
-        # Add the backend's Activities, and its interceptor when the client has none.
+        # Add the backend's Activities. The Worker takes the interceptor from its client.
         config = super()._configure_worker(config)
         client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
         interceptors = [
@@ -140,14 +140,14 @@ class ExtensionStreamBackend(StreamBackend):
                 "The Worker's client has another Stream backend. For now a Worker serves "
                 "one backend."
             )
-        # Records get no serialization context, so Workflows, Activities and clients encode
-        # them alike.
         mine = self._interceptor_of(interceptors)
         if mine is None:
-            mine = _StreamInterceptor(
-                self, self._new_backend(_runtime_of(client.service_client)), None
+            raise StreamConfigError(
+                f"The Worker's client has no {type(self).__name__}. Register it with "
+                "stream_backends=."
             )
-            config["interceptors"] = [*config.get("interceptors", []), mine]
+        # Records get no serialization context, so Workflows, Activities and clients encode
+        # them alike.
         mine.converter = client.data_converter
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
@@ -166,6 +166,14 @@ class ExtensionStreamBackend(StreamBackend):
     ) -> temporalio.worker.ReplayerConfig:
         # A replay runs no Activity, so it needs the Workflow interceptor and no runtime.
         config = super()._configure_replayer(config)
+        if any(
+            isinstance(other, _StreamInterceptor) and other.plugin is not self
+            for other in config.get("interceptors", [])
+        ):
+            raise StreamConfigError(
+                "The Replayer has another Stream backend. For now a Replayer serves one "
+                "backend, as a Worker does."
+            )
         config["interceptors"] = [
             *config.get("interceptors", []),
             _StreamInterceptor(self, None, None),

@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -15,8 +15,10 @@ from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
+from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
@@ -412,16 +414,30 @@ async def test_registration_rules(client: Client):
     config["stream_backends"] = [MemoryStreamBackend(), MemoryStreamBackend()]
     with pytest.raises(streams.StreamConfigError, match="two Stream backends"):
         Client(**config)
-    # For now a Worker serves one backend.
+    # For now a Worker serves one backend, and so does a Replayer.
     config["stream_backends"] = [
         MemoryStreamBackend(),
         MemoryStreamBackend(name="b", default=True),
     ]
     with pytest.raises(streams.StreamConfigError, match="one backend"):
         new_worker(Client(**config), Agent)
+    with pytest.raises(streams.StreamConfigError, match="one backend"):
+        Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
+    # A generator of backends works too, and a copy of the client keeps them.
+    config["stream_backends"] = cast(
+        Any, (b for b in [MemoryStreamBackend(default=True)])
+    )
+    from_generator = Client(**config)
+    assert from_generator.stream(Events, id="d-3").backend == "memory"
+    assert (
+        Client(**from_generator.config()).stream(Events, id="d-3").backend == "memory"
+    )
 
 
 async def test_backend_is_not_a_plugin(client: Client):
+    # The connect refuses it before it connects, so the unreachable target doesn't matter.
+    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+        await Client.connect("localhost:1", plugins=[MemoryStreamBackend()])
     config = client.config()
     config["plugins"] = [MemoryStreamBackend()]
     with pytest.raises(streams.StreamConfigError, match="not a plugin"):
@@ -430,6 +446,18 @@ async def test_backend_is_not_a_plugin(client: Client):
         new_worker(client, Agent, plugins=[RedisStreamBackend("redis://-")])
     with pytest.raises(streams.StreamConfigError, match="not a plugin"):
         Replayer(workflows=[Agent], plugins=[MemoryStreamBackend()])
+
+
+async def test_worker_plugin_keeps_the_streams_passthrough(client: Client):
+    # The backends configure the Worker after its plugins, so a plugin that replaces the
+    # Workflow runner doesn't drop the passthrough.
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    plugin = SimplePlugin("replaces-runner", workflow_runner=SandboxedWorkflowRunner())
+    worker = new_worker(Client(**config), Agent, plugins=[plugin])
+    runner = worker.config(active_config=True).get("workflow_runner")
+    assert isinstance(runner, SandboxedWorkflowRunner)
+    assert "temporalio.common.streams" in runner.restrictions.passthrough_modules
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):
