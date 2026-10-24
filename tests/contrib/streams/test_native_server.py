@@ -155,6 +155,33 @@ async def test_redis_and_native_on_a_native_server(
 
 
 @workflow.defn
+class LeavesItsStreamOpen:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("a")
+        return "done"
+
+
+async def test_the_server_closes_a_stream_when_its_run_chain_ends(
+    native_client: Client,
+):
+    # A Workflow's create asks the server to close the Stream when the run chain ends, with
+    # the result of its last run.
+    async with new_worker(native_client, LeavesItsStreamOpen) as worker:
+        handle = await native_client.start_workflow(
+            LeavesItsStreamOpen.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "done"
+    items = [item async for item in handle.stream(Events).subscribe()]
+    assert [item.data for item in items if isinstance(item, streams.Record)] == ["a"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+    assert items[-1].status == streams.CloseStatus.COMPLETED
+
+
+@workflow.defn
 class WritesByBareId:
     @workflow.run
     async def run(self, stream_id: str) -> str:

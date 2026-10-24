@@ -638,6 +638,8 @@ def _create(
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)
+    # The native server closes the Stream when the run chain ends. Redis ignores it.
+    request.close_with_run = True
     run_stream.backend = stream.backend
     return stream, _write(stream.id, CREATE_ACTIVITY, request, backend_name)
 

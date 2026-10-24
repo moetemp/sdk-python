@@ -68,8 +68,6 @@ class ExtensionStreamBackend(StreamBackend):
     """
 
     _outbound_class: type[_WorkflowOutbound]
-    # Whether the Store closes a Stream with its owner's run chain on the server.
-    _server_closes_with_run = False
 
     def __init__(
         self,
@@ -115,6 +113,11 @@ class ExtensionStreamBackend(StreamBackend):
         if owner_ended:
             payload.metadata[_OWNER_ENDED_KEY] = b"1"
         return temporalio.common.RawValue(payload)
+
+    async def _owner_ended(self, ref: stream_pb.StreamRef) -> bool:
+        # A reader at the end of a Stream whose owner ended with no close would wait until
+        # the Stream expires, so an empty page tells it.
+        return await _owner_chain_ended(ref)
 
     def _activities(self) -> list[Callable[..., Any]]:
         # The Local Activities that Workflow reads run, so the Worker must have them.
@@ -256,14 +259,11 @@ def _read_activity(backend: ExtensionStreamBackend) -> Callable[..., Any]:
             )
         except _errors.StreamError as err:
             raise _activity_error(err) from None
-        # A reader at the end of a Stream whose owner ended with no close would wait until
-        # the Stream expires, so the page tells it.
         owner_ended = (
-            not backend._server_closes_with_run
-            and not page.records
+            not page.records
             and not page.done
             and bool(request.stream.workflow_id)
-            and await _owner_ended(request.stream)
+            and await backend._owner_ended(request.stream)
         )
         return await backend._read_result(
             run_id, request, page, owner_ended, streams.converter
@@ -282,7 +282,7 @@ def _activity_error(err: _errors.StreamError) -> temporalio.exceptions.Applicati
     )
 
 
-async def _owner_ended(ref: stream_pb.StreamRef) -> bool:
+async def _owner_chain_ended(ref: stream_pb.StreamRef) -> bool:
     # The run chain ended when the Workflow id's newest run is closed, or is of another chain.
     try:
         description = (

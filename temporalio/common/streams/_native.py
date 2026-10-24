@@ -308,7 +308,6 @@ class NativeStreamBackend(ExtensionStreamBackend):
 
     _kind = "native"
     _outbound_class = _NativeWorkflowOutbound
-    _server_closes_with_run = True
     _activity_streams = True
     # The server's `stream.maxBatchBytes` default, below the crate's 4 MiB.
     _max_batch_bytes = 2 * 1024 * 1024
@@ -404,6 +403,13 @@ class NativeStreamBackend(ExtensionStreamBackend):
             while len(_pages) > _CACHE_SIZE:
                 _pages.popitem(last=False)
         return temporalio.common.RawValue(positions)
+
+    async def _owner_ended(
+        self,
+        ref: stream_pb.StreamRef,  # pyright: ignore[reportUnusedParameter]
+    ) -> bool:
+        # The server closes a Workflow's Stream when its run chain ends.
+        return False
 
     def _activities(self) -> list[Any]:
         return [*super()._activities(), _describe_activity(self)]
