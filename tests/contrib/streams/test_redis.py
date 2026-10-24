@@ -12,6 +12,7 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.api.enums.v1 import EventType
 from temporalio.client import Client, Interceptor, WorkflowFailureError, WorkflowHandle
 from temporalio.common import RawValue, RetryPolicy, streams
 from temporalio.common.streams._extension import (
@@ -810,39 +811,67 @@ class _FailsTheLastTaskOnceInbound(WorkflowInboundInterceptor):
 
 
 @workflow.defn
-class PublishesAndReturns:
+class PublishesClosesAndReturns:
     @workflow.run
     async def run(self) -> str:
         stream = await workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish("token")
+        await stream.close(result="done")
         return "done"
 
 
+async def close_activity_events(
+    handle: WorkflowHandle[Any, Any],
+) -> list[EventType.ValueType]:
+    # The events of the close Activity, from its schedule on.
+    history = await handle.fetch_history()
+    scheduled = {
+        event.event_id
+        for event in history.events
+        if event.activity_task_scheduled_event_attributes.activity_type.name
+        == "__temporal_streams_close"
+    }
+    return [
+        event.event_type
+        for event in history.events
+        if event.event_id in scheduled
+        or event.activity_task_started_event_attributes.scheduled_event_id in scheduled
+        or event.activity_task_completed_event_attributes.scheduled_event_id
+        in scheduled
+    ]
+
+
 @pytest.mark.parametrize("cache", [0, 10])
-async def test_failed_last_task_is_withdrawn_by_its_retry(
-    stream_client: Client, cache: int
-):
+async def test_close_survives_a_failed_last_task(stream_client: Client, cache: int):
+    # The close is an Activity, committed with the Workflow Task that scheduled it. The last
+    # task fails after it, and its retry replays the close and writes nothing more.
     config = stream_client.config()
     config["interceptors"] = [_FailsTheLastTaskOnce()]
     client = Client(**config)
     async with new_worker(
         client,
-        PublishesAndReturns,
+        PublishesClosesAndReturns,
         max_cached_workflows=cache,
         workflow_runner=UnsandboxedWorkflowRunner(),
     ) as worker:
         handle = await client.start_workflow(
-            PublishesAndReturns.run,
+            PublishesClosesAndReturns.run,
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
         assert await handle.result() == "done"
         stream = workflow_stream(handle)
         items = [item async for item in stream.subscribe(wait_new_records=False)]
-    written = records(items)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
-    assert [r.data for r in visible] == ["token"]
+    assert [r.data for r in records(items)] == ["token"]
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    assert len(closes) == 1 and items[-1] is closes[0]
+    assert closes[0].result == "done"
+    assert closes[0].status == streams.CloseStatus.COMPLETED
+    assert await close_activity_events(handle) == [
+        EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
+        EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED,
+        EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED,
+    ]
 
 
 @workflow.defn

@@ -17,14 +17,14 @@ from temporalio.client import (
     WorkflowFailureError,
     WorkflowHandle,
 )
-from temporalio.common import streams
+from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams._backend import _ExtensionCalls
 from temporalio.common.streams._defn import definition_of
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -270,6 +270,113 @@ async def test_run_end_closes_nothing(stream_client: Client):
     # The Stream stays open, so a later reader still waits for a close.
     assert data(items) == ["before"]
     assert not any(isinstance(item, streams.Closed) for item in items)
+
+
+@workflow.defn
+class FailsInItsBlockOnce:
+    @workflow.run
+    async def run(self) -> str:
+        attempt = workflow.info().attempt
+        async with workflow.create_stream(Events) as stream:
+            await stream.topic(Events.tokens).publish(f"run-{attempt}")
+            if attempt == 1:
+                raise ApplicationError("the first run fails")
+        return f"done on attempt {attempt}"
+
+
+async def test_block_end_leaves_the_stream_open_for_a_retry_run(stream_client: Client):
+    async with new_worker(stream_client, FailsInItsBlockOnce) as worker:
+        handle = await stream_client.start_workflow(
+            FailsInItsBlockOnce.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(milliseconds=100), maximum_attempts=3
+            ),
+        )
+        assert await handle.result() == "done on attempt 2"
+        items = await read(handle)
+    written = [item for item in items if isinstance(item, streams.Record)]
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    assert [r.data for r in written] == ["run-1", "run-2"]
+    assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
+    # Only the block end of the run that succeeds closes the Stream.
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    assert len(closes) == 1 and items[-1] is closes[0]
+    assert closes[0].failure is None
+
+
+@workflow.defn
+class CronBlock:
+    @workflow.run
+    async def run(self) -> str:
+        async with workflow.create_stream(Events) as stream:
+            await stream.topic(Events.tokens).publish("turn")
+        return "done"
+
+
+async def test_block_end_leaves_a_cron_stream_open(stream_client: Client):
+    # The Stream spans the cron chain, so a close would fail the next run's create.
+    async with new_worker(stream_client, CronBlock) as worker:
+        handle = await stream_client.start_workflow(
+            CronBlock.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+            cron_schedule="@every 1s",
+        )
+        reader = handle.stream(Events).subscribe(create_wait=timedelta(seconds=20))
+        first = await asyncio.wait_for(anext(reader), 20)
+        second = await asyncio.wait_for(anext(reader), 20)
+        await reader.aclose()
+        await handle.terminate()
+    assert isinstance(first, streams.Record) and isinstance(second, streams.Record)
+    items = await read(handle)
+    assert not any(isinstance(item, streams.Closed) for item in items)
+
+
+failed_close_tasks: set[str] = set()
+
+
+@workflow.defn
+class SchedulesACloseThenFailsItsTask:
+    @workflow.run
+    async def run(self) -> None:
+        stream = await workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("token")
+        stream.close_nowait(result="closed")
+        workflow_id = workflow.info().workflow_id
+        if workflow_id not in failed_close_tasks:
+            failed_close_tasks.add(workflow_id)
+            raise RuntimeError("fail the Workflow Task that schedules the close")
+
+
+async def test_failed_task_writes_no_close(stream_client: Client):
+    # The test's set must survive the retry of the task, so no sandbox.
+    async with new_worker(
+        stream_client,
+        SchedulesACloseThenFailsItsTask,
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            SchedulesACloseThenFailsItsTask.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+        items = await read(handle)
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    assert len(closes) == 1 and closes[0].result == "closed"
+    history = await handle.fetch_history()
+    # The failed task's close never went out, so History has one close Activity.
+    scheduled = [
+        event
+        for event in history.events
+        if event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
+    ]
+    assert [
+        event.activity_task_scheduled_event_attributes.activity_type.name
+        for event in scheduled
+    ] == ["__temporal_streams_close"]
 
 
 @workflow.defn

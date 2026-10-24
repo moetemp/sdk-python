@@ -24,15 +24,22 @@ def create_stream(
     """Create a Stream that this run chain owns.
 
     Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
-    handle with no call. The create is one Local Activity, and its error raises here. Only the
-    run chain closes the Stream. On Redis, the end of the run chain closes nothing, so a Stream
-    that nobody closes stays open until its ``safety_ttl``.
+    handle with no call. The create and each publish are Local Activities, and the create's
+    error raises here. Only the run chain closes the Stream, with a regular Activity that runs
+    once its Workflow Task completed, so a task that fails before then leaves the Stream open
+    for its retry. On Redis, the end of the run chain closes nothing, so a Stream that nobody
+    closes stays open until its ``safety_ttl``.
 
     Await the call for the handle, or use it in ``async with``, which closes the Stream at the
     end of the block::
 
         async with workflow.create_stream(streams.with_name(Events, "turn-3")) as turn:
             await turn.topic(Events.tokens).publish("hi")
+
+    The block end leaves the Stream open in a cron run, on an exception that fails the run when
+    the run has a retry policy, and on an exception that fails only the Workflow Task, since a
+    later run or the task's retry writes on to the same Stream. See
+    :py:meth:`temporalio.common.streams.WorkflowStream.__aexit__`.
 
     .. warning::
         This API is experimental.
