@@ -10,14 +10,14 @@ import pytest
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import streams
-from temporalio.common.streams import _plugin, _stream_client
+from temporalio.common.streams import _plugin, _stream_client, _writes
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
 from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from tests.contrib.streams._support import create_owned
 from tests.contrib.streams.fake_extension import fake_client
@@ -430,6 +430,25 @@ async def test_registration_rules(client: Client):
     assert (
         Client(**from_generator.config()).stream(Events, id="d-3").backend == "memory"
     )
+
+
+async def test_only_a_redis_backend_polls_activities(client: Client):
+    # The native close is a command, so a Worker with no Redis backend polls no Activities and
+    # shares its task queue with any other Worker. The Redis close is a regular Activity.
+    def polled(worker_client: Client) -> list[Any]:
+        worker = Worker(
+            worker_client, task_queue=f"q-{uuid.uuid4()}", workflows=[Agent]
+        )
+        return list(worker.config(active_config=True).get("activities") or [])
+
+    assert polled(client) == []
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    assert polled(Client(**config)) == [_writes.close_stream]
+    config["stream_backends"] = [
+        streams.NativeStreamBackend(retention=timedelta(days=1))
+    ]
+    assert polled(Client(**config)) == []
 
 
 async def test_backend_is_not_a_plugin(client: Client):
