@@ -12,10 +12,11 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
+from temporalio.contrib.streams import workflow as stream_workflow
+
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.worker import Worker
 
 

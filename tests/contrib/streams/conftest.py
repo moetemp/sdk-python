@@ -9,10 +9,9 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamPlugin
-from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common.streams import NativeStreamBackend, StreamBackend
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 
 # Ports that other local services own.
 _RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}
@@ -67,20 +66,25 @@ async def stream_client(
     client: Client, request: pytest.FixtureRequest
 ) -> AsyncIterator[Client]:
     # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules, and on the native server when one is given.
+    # rules, and on the native server when one is given. The backend is the default, so a
+    # create with no backend name uses it.
     if request.param == "native":
         yield await Client.connect(
-            NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
+            NATIVE_TARGET,
+            namespace=NATIVE_NAMESPACE,
+            stream_backends=[NativeStreamBackend()],
         )
         return
-    plugin: StreamPlugin
+    backend: StreamBackend
     if request.param == "memory":
-        plugin = MemoryStreamPlugin()
+        backend = MemoryStreamBackend(default=True)
     else:
         redis_url = request.getfixturevalue("redis_url")
-        plugin = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+        backend = RedisStreamBackend(
+            redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True
+        )
     config = client.config()
-    config["plugins"] = [plugin]
+    config["stream_backends"] = [backend]
     yield Client(**config)
 
 
@@ -91,5 +95,7 @@ async def native_client() -> Client:
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
     return await Client.connect(
-        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
+        NATIVE_TARGET,
+        namespace=NATIVE_NAMESPACE,
+        stream_backends=[NativeStreamBackend()],
     )

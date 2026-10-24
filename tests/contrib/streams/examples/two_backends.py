@@ -12,12 +12,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import activity, workflow
-from temporalio.client import Client
-from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
+
+from temporalio import activity, workflow
+from temporalio.client import Client
+from temporalio.contrib import streams
 from temporalio.worker import Worker
 
 

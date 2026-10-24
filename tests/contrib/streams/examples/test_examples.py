@@ -5,10 +5,9 @@ import uuid
 import pytest
 
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common import streams
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.contrib.streams.conftest import NATIVE_NAMESPACE, NATIVE_TARGET
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
@@ -108,10 +107,10 @@ LANES = ["memory", "redis", "native"]
 
 def lane_plugins(
     lane: str, request: pytest.FixtureRequest
-) -> tuple[streams.StreamPlugin, streams.StreamPlugin]:
+) -> tuple[streams.StreamBackend, streams.StreamBackend]:
     """The plugins of a lane: one named `redis` and one named `native`."""
     if lane == "memory":
-        return MemoryStreamPlugin(name="redis", default=True), MemoryStreamPlugin(
+        return MemoryStreamBackend(name="redis", default=True), MemoryStreamBackend(
             name="native"
         )
     if lane == "native" and not NATIVE_TARGET:
@@ -119,25 +118,25 @@ def lane_plugins(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
     redis_url = request.getfixturevalue("redis_url")
-    redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True)
+    redis = RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True)
     if lane == "redis":
-        return redis, MemoryStreamPlugin(name="native")
-    return redis, NativeStreamPlugin()
+        return redis, MemoryStreamBackend(name="native")
+    return redis, streams.NativeStreamBackend()
 
 
 async def lane_client(
-    lane: str, client: Client, plugins: list[streams.StreamPlugin]
+    lane: str, client: Client, plugins: list[streams.StreamBackend]
 ) -> Client:
     if lane != "native":
         config = client.config()
-        config["plugins"] = plugins
+        config["stream_backends"] = plugins
         return Client(**config)
     if not NATIVE_TARGET:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
     return await Client.connect(
-        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=plugins
+        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, stream_backends=plugins
     )
 
 

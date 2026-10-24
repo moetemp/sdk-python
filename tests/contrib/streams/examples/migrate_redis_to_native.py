@@ -14,12 +14,13 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from temporalio import workflow
-from temporalio.client import Client, WorkflowHandle
-from temporalio.contrib import streams
 from temporalio.contrib.streams import workflow as stream_workflow
 from temporalio.contrib.streams.native import NativeStreamPlugin
 from temporalio.contrib.streams.redis import RedisStreamPlugin
+
+from temporalio import workflow
+from temporalio.client import Client, WorkflowHandle
+from temporalio.contrib import streams
 from temporalio.worker import Worker
 
 

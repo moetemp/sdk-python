@@ -9,14 +9,14 @@ import pytest
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams._backend import _ExtensionStreamBackend
-from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common import streams
+from temporalio.contrib import stream as redis
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
-from tests.contrib.streams.fake_extension import FakeExtension
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer
+from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
 
@@ -32,45 +32,35 @@ class Events:
     tokens = streams.topic(str)
 
 
-def fake_client(client: Client) -> tuple[Client, FakeExtension]:
-    extension = FakeExtension()
-    plugin = streams.StreamPlugin(
-        "fake-streams",
-        backend_name="fake",
-        default=False,
-        stream_backend=_ExtensionStreamBackend(extension),
-    )
-    config = client.config()
-    config["plugins"] = [plugin]
-    return Client(**config), extension
-
-
 async def test_unknown_backend_raises_before_any_call(client: Client):
     client, extension = fake_client(client)
-    stream_client = streams.StreamClient(client)
+    with pytest.raises(
+        streams.StreamConfigError, match="no Redis Stream backend redis"
+    ):
+        await redis.create(client, Events, id="chat-1", backend="redis")
     with pytest.raises(streams.StreamConfigError, match="It has fake"):
-        await stream_client.create(Events, id="chat-1", backend="redis")
-    with pytest.raises(streams.StreamConfigError):
-        stream_client.get_handle(Events, id="chat-1", backend="redis")
+        client.stream(Events, id="chat-1", backend="redis")
     assert not extension.streams and not extension.namespaces
-    stream = await stream_client.create(Events, id="chat-1")
+    stream = await redis.create(client, Events, id="chat-1")
     assert stream.backend == "fake"
 
 
-async def test_client_without_plugin_has_no_transport(client: Client):
-    with pytest.raises(streams.StreamConfigError):
-        streams.StreamClient(client).get_handle(Events, id="chat-1")
+async def test_client_without_backend_has_no_transport(client: Client):
+    with pytest.raises(streams.StreamConfigError, match="no Stream backend"):
+        client.stream(Events, id="chat-1")
+    with pytest.raises(streams.StreamConfigError, match="no Redis Stream backend"):
+        await redis.create(client, Events, id="chat-1")
 
 
 async def test_decoded_client_stream_has_no_client(client: Client):
     client, _ = fake_client(client)
-    stream = await streams.StreamClient(client).create(Events, id="chat-2")
+    stream = await redis.create(client, Events, id="chat-2")
     converter = DataConverter.default.payload_converter
     decoded = converter.from_payload(
         converter.to_payload(stream), streams.ClientStream[Events]
     )
     assert decoded == stream
-    with pytest.raises(streams.StreamConfigError, match="get_handle"):
+    with pytest.raises(streams.StreamConfigError, match="Client.stream"):
         await decoded.get_offset()
 
 
@@ -94,28 +84,29 @@ async def test_handle_without_first_run_describes_once(client: Client):
         return Description()
 
     setattr(handle, "describe", describe)
-    stream_client = streams.StreamClient(client)
-    await stream_client.create(Events, id="agent-1:first:n")
-    stream = stream_client.workflow_stream(handle, streams.with_name(Events, "n"))
+    await redis.create(client, Events, id="agent-1:first:n")
+    stream = handle.stream(streams.with_name(Events, "n"))
     with pytest.raises(RuntimeError, match="not known yet"):
         stream.id
     assert await stream.get_offset() == 0
     assert stream.id == "agent-1:first:n"
     assert stream.first_execution_run_id == "first"
     assert await stream.get_offset() == 0
+    # The handle keeps the first run id, so its other Streams make no call.
+    other = handle.stream(streams.with_name(Events, "n"))
+    assert await other.get_offset() == 0
     assert calls == [1]
 
 
 @workflow.defn
 class WriteToStream:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> None:
+    async def run(self, stream: streams.WorkflowStream[Events]) -> None:
         await stream.topic(Events.turns).publish(Turn("workflow"))
 
 
 async def test_client_stream_takes_workflow_writes(stream_client: Client):
-    client = streams.StreamClient(stream_client)
-    stream = await client.create(Events, id=f"chat-{uuid.uuid4()}")
+    stream = await redis.create(stream_client, Events, id=f"chat-{uuid.uuid4()}")
     assert await stream.get_offset() == 0
     first = await stream.topic(Events.turns).publish(Turn("client"))
     last = await stream.topic(Events.tokens).publish("a", "b")
@@ -123,7 +114,7 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     async with new_worker(stream_client, WriteToStream) as worker:
         await stream_client.execute_workflow(
             WriteToStream.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -134,20 +125,20 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "bye"
 
     # Another handle of the same Stream reads it, from an offset and by Topic.
-    again = client.get_handle(Events, id=stream.id)
+    again = stream_client.stream(Events, id=stream.id)
     resumed = [
         item.data
-        async for item in again.subscribe(Events.tokens, from_offset=first + 1)
+        async for item in again.subscribe(Events.tokens, offset=first + 1)
         if isinstance(item, streams.Record)
     ]
     assert resumed == ["a", "b"]
     by_prefix = [
         item.data
-        async for item in again.subscribe(prefixes=["tok"])
+        async for item in again.subscribe(topic_prefixes=["tok"])
         if isinstance(item, streams.Record)
     ]
     assert by_prefix == ["a", "b"]
-    only_turns = [item async for item in again.topic(Events.turns).subscribe()]
+    only_turns = [item async for item in again.subscribe(again.topic(Events.turns))]
     assert [type(item) for item in only_turns] == [
         streams.Record,
         streams.Record,
@@ -160,8 +151,9 @@ class Agent:
     @workflow.run
     async def run(self, prompt: str) -> str:
         await workflow.sleep(timedelta(milliseconds=200))
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish(*prompt.split())
+        await stream.close(result=prompt.upper())
         return prompt.upper()
 
 
@@ -170,7 +162,7 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
         handle = await stream_client.start_workflow(
             Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        stream = streams.StreamClient(stream_client).workflow_stream(handle, Events)
+        stream = handle.stream(Events)
         # The Workflow creates its Stream later, so the read waits for the create.
         items = [
             item async for item in stream.subscribe(create_wait=timedelta(seconds=20))
@@ -186,18 +178,19 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
 
 
 async def test_async_with_closes_a_client_stream(stream_client: Client):
-    client = streams.StreamClient(stream_client)
-    async with client.create(Events, id=f"block-{uuid.uuid4()}") as done:
+    async with redis.create(stream_client, Events, id=f"block-{uuid.uuid4()}") as done:
         await done.topic(Events.tokens).publish("a")
-    failed = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    failed = stream_client.stream(Events, id=f"block-{uuid.uuid4()}")
     with pytest.raises(ValueError):
-        async with client.create(Events, id=failed.id):
+        async with redis.create(stream_client, Events, id=failed.id):
             raise ValueError("turn failed")
-    async with await client.create(Events, id=f"block-{uuid.uuid4()}") as early:
+    async with await redis.create(
+        stream_client, Events, id=f"block-{uuid.uuid4()}"
+    ) as early:
         await early.close(result="early")
-    cancelled = client.get_handle(Events, id=f"block-{uuid.uuid4()}")
+    cancelled = stream_client.stream(Events, id=f"block-{uuid.uuid4()}")
     with pytest.raises(asyncio.CancelledError):
-        async with client.create(Events, id=cancelled.id):
+        async with redis.create(stream_client, Events, id=cancelled.id):
             raise asyncio.CancelledError()
     for stream, result, failure, status in (
         (done, None, None, streams.CloseStatus.COMPLETED),
@@ -214,38 +207,34 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
 
 
 async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"resume-{uuid.uuid4()}"
-    )
+    stream = await redis.create(stream_client, Events, id=f"resume-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a")
     turn = await stream.topic(Events.turns).publish(Turn("model"))
-    tokens = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+    tokens = stream.subscribe(Events.tokens, wait_new_records=False)
     assert tokens.next_offset == 0
     assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
         "a"
     ]
     # The page ends past the Record that the Topic filter left out.
     assert tokens.next_offset == turn + 1
-    new = stream.subscribe(from_offset=streams.END, wait_new_records=False)
+    new = stream.subscribe(offset=streams.END, wait_new_records=False)
     assert new.next_offset is None
     assert [item async for item in new] == []
     assert new.next_offset == turn + 1
     await stream.topic(Events.tokens).publish("b")
-    resumed = stream.subscribe(from_offset=tokens.next_offset, wait_new_records=False)
+    resumed = stream.subscribe(offset=tokens.next_offset, wait_new_records=False)
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
     ] == ["b"]
 
 
 async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"last-{uuid.uuid4()}"
-    )
+    stream = await redis.create(stream_client, Events, id=f"last-{uuid.uuid4()}")
     tokens = stream.topic(Events.tokens)
     await tokens.publish("a", "b", "c")
     await stream.topic(Events.turns).publish(Turn("model"))
     # A chat view shows the last few Records first, then follows.
-    tail = tokens.subscribe(last=2)
+    tail = stream.subscribe(tokens, last=2)
     assert tail.next_offset is None
     shown = [await anext(tail), await anext(tail)]
     await tokens.publish("d")
@@ -260,14 +249,12 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
     assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
         "d"
     ]
-    with pytest.raises(ValueError, match="no from_offset"):
-        stream.subscribe(last=2, from_offset=0)
+    with pytest.raises(ValueError, match="no offset"):
+        stream.subscribe(last=2, offset=0)
 
 
 async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"typed-{uuid.uuid4()}"
-    )
+    stream = await redis.create(stream_client, Events, id=f"typed-{uuid.uuid4()}")
     await stream.topic("extra", type=Turn).publish(Turn("extra"))
     await stream.topic(Events.tokens).publish("a")
 
@@ -280,9 +267,7 @@ async def test_read_type_decodes_topics_outside_the_definition(stream_client: Cl
 
 
 async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"buffered-{uuid.uuid4()}"
-    )
+    stream = await redis.create(stream_client, Events, id=f"buffered-{uuid.uuid4()}")
     async with streams.BufferedPublisher(stream) as publisher:
         publisher.publish(Events.turns, Turn("user"))
         publisher.publish(Events.tokens, "a", "b")
@@ -303,9 +288,7 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
 
 
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"named-{uuid.uuid4()}"
-    )
+    stream = await redis.create(stream_client, Events, id=f"named-{uuid.uuid4()}")
     # A server that restarts writes as one name with a higher epoch, so the zombie it
     # replaces can't write after it.
     before = stream.producer("ingest", epoch=1)
@@ -321,26 +304,12 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
         stream.producer("ingest", epoch=0)
 
 
-async def test_auto_close_of_a_client_stream(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)
-    )
-    await stream.topic(Events.tokens).publish("only")
-    await asyncio.sleep(1.5)
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == ["only"]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result is None
-    with pytest.raises(streams.StreamClosedError):
-        await stream.topic(Events.tokens).publish("late")
-
-
 async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     client, _ = fake_client(client)
-    stream_client = streams.StreamClient(client)
     handle = client.get_workflow_handle("agent-2")
-    first = stream_client.workflow_stream(handle, Events)
-    same = stream_client.workflow_stream(handle, Events)
-    other = stream_client.workflow_stream(handle, streams.with_name(Events, "other"))
+    first = handle.stream(Events)
+    same = handle.stream(Events)
+    other = handle.stream(streams.with_name(Events, "other"))
     key = hash(first)
     assert first == same and first != other
     describes = []
@@ -354,7 +323,7 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
         )
 
     setattr(handle, "describe", describe)
-    await stream_client.create(Events, id="agent-2:run-2:events")
+    await redis.create(client, Events, id="agent-2:run-2:events")
     # Calls that start together share one Describe call.
     assert await asyncio.gather(first.get_offset(), first.get_offset()) == [0, 0]
     assert describes == [1]
@@ -362,58 +331,99 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     assert hash(first) == key
 
 
-async def test_default_plugin_is_the_default_backend(client: Client):
+async def test_registration_rules(client: Client):
     config = client.config()
-    config["plugins"] = [
-        MemoryStreamPlugin(),
-        MemoryStreamPlugin(name="b", default=True),
+    config["stream_backends"] = [
+        MemoryStreamBackend(),
+        MemoryStreamBackend(name="b", default=True),
     ]
-    stream = await streams.StreamClient(Client(**config)).create(Events, id="d-1")
-    assert stream.backend == "b"
+    two = Client(**config)
+    assert (await redis.create(two, Events, id="d-1")).backend == "b"
+    assert two.stream(Events, id="d-1").backend == "b"
     # The default is part of Workflow code, so it must not follow the order of the list.
-    for plugins in (
-        [MemoryStreamPlugin(), MemoryStreamPlugin(name="b")],
-        [MemoryStreamPlugin(default=True), MemoryStreamPlugin(name="b", default=True)],
+    for backends in (
+        [MemoryStreamBackend(), MemoryStreamBackend(name="b")],
+        [
+            MemoryStreamBackend(default=True),
+            MemoryStreamBackend(name="b", default=True),
+        ],
     ):
-        config["plugins"] = plugins
+        config["stream_backends"] = backends
         with pytest.raises(streams.StreamConfigError, match="exactly one"):
             Client(**config)
-    config["plugins"] = [MemoryStreamPlugin()]
-    with pytest.raises(streams.StreamConfigError, match="Worker has"):
-        new_worker(Client(**config), Agent, plugins=[RedisStreamPlugin("redis://-")])
-
-
-async def test_handle_looks_in_each_backend_during_a_move(client: Client):
-    config = client.config()
-    config["plugins"] = [
-        MemoryStreamPlugin(name="a", default=True),
-        MemoryStreamPlugin(name="b"),
+    config["stream_backends"] = [MemoryStreamBackend(), MemoryStreamBackend()]
+    with pytest.raises(streams.StreamConfigError, match="two Stream backends"):
+        Client(**config)
+    # A Worker serves every backend of its client.
+    config["stream_backends"] = [
+        MemoryStreamBackend(),
+        MemoryStreamBackend(name="b", default=True),
     ]
-    stream_client = streams.StreamClient(Client(**config))
-    created = await stream_client.create(Events, id="moving", backend="b")
+    new_worker(Client(**config), Agent)
+
+
+async def test_backend_is_not_a_plugin(client: Client):
+    config = client.config()
+    config["plugins"] = [MemoryStreamBackend()]
+    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+        Client(**config)
+    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+        new_worker(client, Agent, plugins=[RedisStreamBackend("redis://-")])
+    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+        Replayer(workflows=[Agent], plugins=[MemoryStreamBackend()])
+
+
+async def test_default_is_native_with_no_default_backend(client: Client):
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend()]
+    one = Client(**config)
+    with pytest.raises(streams.StreamConfigError, match="default is native"):
+        one.stream(Events, id="d-2")
+    with pytest.raises(streams.StreamConfigError, match="default is native"):
+        one.get_workflow_handle("agent-3").stream(Events)
+    assert one.stream(Events, id="d-2", backend="memory").backend == "memory"
+    # The Redis create picks the client's only Redis backend, and memory stands in for it.
+    assert (await redis.create(one, Events, id="d-2")).backend == "memory"
+
+
+async def test_stream_takes_the_handle_backend_or_the_default(client: Client):
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(name="a", default=True),
+        MemoryStreamBackend(name="b"),
+    ]
+    two = Client(**config)
+    created = await redis.create(two, Events, id="moving", backend="b")
     await created.topic(Events.tokens).publish("on b")
-    moving = stream_client.get_handle(Events, id="moving", backend=("a", "b"))
-    assert await moving.get_offset() > 0
-    assert moving.backend == "b"
-    nowhere = stream_client.get_handle(Events, id="nowhere", backend=("a", "b"))
-    with pytest.raises(streams.StreamNotFoundError):
-        await nowhere.get_offset()
-    # A handle with no backend name is ambiguous when the client has two backends.
-    with pytest.raises(streams.StreamConfigError):
-        stream_client.get_handle(Events, stream=streams.ClientStream(id="moving"))
+    assert await two.stream(Events, stream=created).get_offset() > 0
+    # A handle with no backend name is of the default backend.
+    assert two.stream(Events, stream=streams.ClientStream(id="moving")).backend == "a"
+    with pytest.raises(ValueError):
+        two.stream(Events, stream=created, backend="a")
+    with pytest.raises(TypeError):
+        two.stream(Events)
 
 
-async def test_only_the_native_backend_keeps_a_standalone_activitys_stream(
-    stream_client: Client,
-):
-    # Nothing closes a Redis Stream when its Activity ends, so it would stay open.
-    handle = stream_client.get_activity_handle("activity", run_id="run")
-    stream_client_ = streams.StreamClient(stream_client)
-    if any(
-        isinstance(p, NativeStreamPlugin) for p in stream_client.config()["plugins"]
-    ):
-        stream = stream_client_.activity_stream(handle, Events)
-        assert (stream.activity_id, stream.activity_run_id) == ("activity", "run")
-        return
-    with pytest.raises(streams.StreamConfigError, match="native backend"):
-        stream_client_.activity_stream(handle, Events)
+@workflow.defn
+class CreatesAndCloses:
+    @workflow.run
+    async def run(self) -> None:
+        stream = await workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("from the environment")
+        await stream.close()
+
+
+async def test_workflow_environment_takes_stream_backends():
+    async with await WorkflowEnvironment.start_local(
+        stream_backends=[MemoryStreamBackend(default=True)]
+    ) as env:
+        async with new_worker(env.client, CreatesAndCloses) as worker:
+            handle = await env.client.start_workflow(
+                CreatesAndCloses.run,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            await handle.result()
+        items = [item async for item in handle.stream(Events).subscribe()]
+    data = [item.data for item in items if isinstance(item, streams.Record)]
+    assert data == ["from the environment"]
