@@ -577,13 +577,23 @@ class WorkflowStream(StreamHandle[E]):
         """Close the Stream, with the exception as its failure if there is one.
 
         A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
-        an eviction, leaves it open, since the block did not end in Workflow code.
+        an eviction, leaves it open, since the block did not end in Workflow code. The Stream
+        also stays open in a cron run, since it spans the cron chain, and on a failure of a run
+        with a retry policy, since a retry run writes on to it. An explicit :py:meth:`close`
+        always closes.
         """
         if _state().stream(self._model_ref()).closed:
             return
         close, failure = exit_failure(exc)
-        if close:
-            await self.close(failure=failure)
+        if not close:
+            return
+        info = temporalio.workflow.info()
+        if info.cron_schedule:
+            return
+        retried = exc is not None and not isinstance(exc, asyncio.CancelledError)
+        if retried and info.retry_policy is not None:
+            return
+        await self.close(failure=failure)
 
 
 def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:
