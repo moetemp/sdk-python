@@ -166,7 +166,7 @@ class Stream:
     async def describe(
         self,
     ) -> DescribeStreamResponse:
-        """Describe the Stream: its status, newest offset, Retention and auto-close."""
+        """Describe the Stream: its status, newest offset and Retention."""
         request = DescribeStreamRequest(
             stream=self.stream,
         )

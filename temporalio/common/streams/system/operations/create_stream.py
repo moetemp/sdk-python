@@ -47,7 +47,6 @@ async def create_stream(
     stream_id: str,
     retention: datetime.timedelta | None = None,
     withdraw_run: str | None = None,
-    auto_close: datetime.timedelta | None = None,
     owner: Producer | None = None,
     close_with_run: bool | None = None,
     ref: StreamRef | None = None,
@@ -58,8 +57,6 @@ async def create_stream(
             id.
         retention: The age after which a Record is dropped. Empty is the Store default.
         withdraw_run: Retry run only. The previous run, whose Records this withdraws.
-        auto_close: Close with no result after this long with no append. Empty never
-            auto-closes.
         owner: The Workflow run that owns the Stream. The Workflow transport sets it.
         close_with_run: Close with the owner run chain's result when it closes. Native
             only.
@@ -69,7 +66,6 @@ async def create_stream(
         stream_id=stream_id,
         retention=retention,
         withdraw_run=withdraw_run,
-        auto_close=auto_close,
         owner=owner,
         close_with_run=close_with_run,
         ref=ref,

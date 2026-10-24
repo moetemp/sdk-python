@@ -517,9 +517,7 @@ class StreamRecord(google.protobuf.message.Message):
 global___StreamRecord = StreamRecord
 
 class CreateStreamRequest(google.protobuf.message.Message):
-    """Idempotent for one id, one Retention and one auto_close. ALREADY_EXISTS for another
-    Retention or another auto_close.
-    """
+    """Idempotent for one id and one Retention. ALREADY_EXISTS for another Retention."""
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -527,7 +525,6 @@ class CreateStreamRequest(google.protobuf.message.Message):
     STREAM_ID_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
     WITHDRAW_RUN_FIELD_NUMBER: builtins.int
-    AUTO_CLOSE_FIELD_NUMBER: builtins.int
     OWNER_FIELD_NUMBER: builtins.int
     CLOSE_WITH_RUN_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
@@ -540,13 +537,6 @@ class CreateStreamRequest(google.protobuf.message.Message):
         """The age after which a Record is dropped. Empty is the Store default."""
     withdraw_run: builtins.str
     """Workflow only. A retry run's first create: the previous run, whose Records it withdraws."""
-    @property
-    def auto_close(self) -> google.protobuf.duration_pb2.Duration:
-        """Close the Stream with no result when no Record was appended for this long, counted from
-        the create. Empty never closes on its own. It is separate from Retention and the safety
-        TTL. The Store applies it on the next access, so no call sees the Stream open after the
-        period. UNIMPLEMENTED (detail stream_unsupported) on a Store that can't.
-        """
     @property
     def owner(self) -> global___Producer:
         """The Workflow run that owns the Stream. Workflow kind, with its run_id and epoch."""
@@ -570,7 +560,6 @@ class CreateStreamRequest(google.protobuf.message.Message):
         stream_id: builtins.str = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
         withdraw_run: builtins.str = ...,
-        auto_close: google.protobuf.duration_pb2.Duration | None = ...,
         owner: global___Producer | None = ...,
         close_with_run: builtins.bool = ...,
         ref: global___StreamRef | None = ...,
@@ -579,21 +568,12 @@ class CreateStreamRequest(google.protobuf.message.Message):
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "auto_close",
-            b"auto_close",
-            "owner",
-            b"owner",
-            "ref",
-            b"ref",
-            "retention",
-            b"retention",
+            "owner", b"owner", "ref", b"ref", "retention", b"retention"
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "auto_close",
-            b"auto_close",
             "close_with_run",
             b"close_with_run",
             "namespace",
@@ -1072,34 +1052,24 @@ class DescribeStreamResponse(google.protobuf.message.Message):
     STATUS_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
-    AUTO_CLOSE_FIELD_NUMBER: builtins.int
     status: global___StreamStatus.ValueType
     last_offset: builtins.int
     """Zero when the Stream has no Record."""
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration: ...
-    @property
-    def auto_close(self) -> google.protobuf.duration_pb2.Duration:
-        """The auto_close of the create. Empty when the Stream has none."""
     def __init__(
         self,
         *,
         status: global___StreamStatus.ValueType = ...,
         last_offset: builtins.int = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
-        auto_close: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "auto_close", b"auto_close", "retention", b"retention"
-        ],
+        self, field_name: typing_extensions.Literal["retention", b"retention"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "auto_close",
-            b"auto_close",
             "last_offset",
             b"last_offset",
             "retention",
