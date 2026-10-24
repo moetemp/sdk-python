@@ -9,6 +9,10 @@ Register it on the client. :py:func:`create` makes a Stream that the client owns
         "localhost:7233", stream_backends=[redis.RedisStreamBackend("redis://localhost")]
     )
 
+A Workflow's close is a regular Activity on the Workflow's task queue. So a Worker with a Redis
+backend polls Activities on its task queue for the close Activity, and Workers that share a task
+queue must all register the Redis backend.
+
 .. warning::
     This package is experimental.
 """
