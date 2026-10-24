@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 import temporalio.runtime
-from temporalio.contrib.streams.proto import v1 as ext_pb
-from temporalio.contrib.streams.redis import _ExtensionStreamPlugin
+from temporalio.common.streams.proto import v1 as ext_pb
+from temporalio.common.streams.redis import _ExtensionStreamPlugin
 
 
 class MemoryStreamPlugin(_ExtensionStreamPlugin):

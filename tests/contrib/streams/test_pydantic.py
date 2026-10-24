@@ -5,10 +5,10 @@ import pydantic
 
 from temporalio import activity, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
+from temporalio.common import streams
+from temporalio.common.streams import workflow as stream_workflow
+from temporalio.common.streams.testing import MemoryStreamPlugin
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
 from tests.helpers import new_worker
 
 

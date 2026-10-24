@@ -9,11 +9,11 @@ import pytest
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams._backend import _ExtensionStreamBackend
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common import streams
+from temporalio.common.streams import workflow as stream_workflow
+from temporalio.common.streams._backend import _ExtensionStreamBackend
+from temporalio.common.streams.redis import RedisStreamPlugin
+from temporalio.common.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter
 from tests.contrib.streams.fake_extension import FakeExtension
 from tests.helpers import new_worker

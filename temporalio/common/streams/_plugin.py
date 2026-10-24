@@ -7,8 +7,8 @@ from typing import Any
 
 import temporalio.client
 import temporalio.worker
-from temporalio.contrib.streams import _errors
-from temporalio.contrib.streams._backend import StreamBackend
+from temporalio.common.streams import _errors
+from temporalio.common.streams._backend import StreamBackend
 from temporalio.plugin import SimplePlugin
 
 

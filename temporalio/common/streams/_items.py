@@ -9,7 +9,7 @@ from typing import Any, Generic, TypeVar
 
 from temporalio.api.streamservice.v1 import CloseStatus as _CloseStatus
 from temporalio.api.streamservice.v1 import ProducerKind
-from temporalio.contrib.streams.system import models
+from temporalio.common.streams.system import models
 from temporalio.exceptions import CancelledError
 
 T = TypeVar("T")

@@ -3,7 +3,7 @@
 import uuid
 
 from temporalio.client import Client
-from temporalio.contrib import streams
+from temporalio.common import streams
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
     agent_publishes_turns,

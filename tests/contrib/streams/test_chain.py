@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from temporalio.common import RetryPolicy
-from temporalio.contrib.streams.redis import chain_continues
+from temporalio.common.streams.redis import chain_continues
 from temporalio.exceptions import ApplicationError
 
 START = datetime(2026, 10, 21, tzinfo=timezone.utc)

@@ -9,9 +9,9 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common.streams import StreamPlugin
+from temporalio.common.streams.redis import RedisStreamPlugin
+from temporalio.common.streams.testing import MemoryStreamPlugin
 
 # Ports that other local services own.
 _RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}

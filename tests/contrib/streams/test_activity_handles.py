@@ -13,10 +13,9 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import RetryPolicy
-from temporalio.contrib import streams
-from temporalio.contrib.streams import _activity
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import RetryPolicy, streams
+from temporalio.common.streams import _activity
+from temporalio.common.streams import workflow as stream_workflow
 from temporalio.exceptions import CancelledError
 from tests.helpers import new_worker
 

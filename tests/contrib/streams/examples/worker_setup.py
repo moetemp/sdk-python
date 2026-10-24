@@ -11,10 +11,10 @@ import uuid
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common import streams
+from temporalio.common.streams import workflow as stream_workflow
+from temporalio.common.streams.redis import RedisStreamPlugin
+from temporalio.common.streams.testing import MemoryStreamPlugin
 from temporalio.worker import Worker
 
 

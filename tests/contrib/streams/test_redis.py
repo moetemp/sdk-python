@@ -13,16 +13,15 @@ import pytest
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.client import Client, Interceptor, WorkflowFailureError, WorkflowHandle
-from temporalio.common import RawValue, RetryPolicy
-from temporalio.contrib import streams
-from temporalio.contrib.streams import StreamPlugin
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.redis import (
+from temporalio.common import RawValue, RetryPolicy, streams
+from temporalio.common.streams import StreamPlugin
+from temporalio.common.streams import workflow as stream_workflow
+from temporalio.common.streams.redis import (
     RedisStreamPlugin,
     _ExtensionStreamPlugin,
     _WorkflowInbound,
 )
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common.streams.testing import MemoryStreamPlugin
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import (

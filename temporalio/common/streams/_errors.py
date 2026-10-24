@@ -1,10 +1,10 @@
-"""Errors of temporalio.contrib.streams."""
+"""Errors of temporalio.common.streams."""
 
 from __future__ import annotations
 
 import temporalio.exceptions
 import temporalio.service
-from temporalio.contrib.streams.proto.v1 import StreamErrorDetails
+from temporalio.common.streams.proto.v1 import StreamErrorDetails
 
 
 class StreamError(temporalio.exceptions.ApplicationError):

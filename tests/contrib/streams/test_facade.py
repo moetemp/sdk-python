@@ -10,12 +10,11 @@ import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
-from temporalio.common import RawValue
-from temporalio.contrib import streams
-from temporalio.contrib.streams import _errors
-from temporalio.contrib.streams._backend import _ExtensionStreamBackend
-from temporalio.contrib.streams.proto import v1 as ext_pb
-from temporalio.contrib.streams.system import models
+from temporalio.common import RawValue, streams
+from temporalio.common.streams import _errors
+from temporalio.common.streams._backend import _ExtensionStreamBackend
+from temporalio.common.streams.proto import v1 as ext_pb
+from temporalio.common.streams.system import models
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 from tests.contrib.streams.fake_extension import FakeExtension

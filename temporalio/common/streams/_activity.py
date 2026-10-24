@@ -9,8 +9,8 @@ from typing import Any
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
-from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams._writer import StreamWriter
+from temporalio.common.streams._backend import StreamBackend
+from temporalio.common.streams._writer import StreamWriter
 
 
 @dataclass

@@ -13,22 +13,22 @@ from typing import Any, TypeVar, cast, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
-from temporalio.contrib.streams import _backend, _errors, _ids
-from temporalio.contrib.streams._access import (
+from temporalio.common.streams import _backend, _errors, _ids
+from temporalio.common.streams._access import (
     Access,
     ReadSpec,
     _AsyncTopic,
     read_spec,
     subscription,
 )
-from temporalio.contrib.streams._backend import StreamBackend
-from temporalio.contrib.streams._defn import TopicDefinition, definition_of
-from temporalio.contrib.streams._handle import Creating, StreamHandle, exit_failure
-from temporalio.contrib.streams._items import End
-from temporalio.contrib.streams._plugin import client_backend
-from temporalio.contrib.streams._reader import Item, Position, Subscription
-from temporalio.contrib.streams._writer import StreamWriter
-from temporalio.contrib.streams.system import models
+from temporalio.common.streams._backend import StreamBackend
+from temporalio.common.streams._defn import TopicDefinition, definition_of
+from temporalio.common.streams._handle import Creating, StreamHandle, exit_failure
+from temporalio.common.streams._items import End
+from temporalio.common.streams._plugin import client_backend
+from temporalio.common.streams._reader import Item, Position, Subscription
+from temporalio.common.streams._writer import StreamWriter
+from temporalio.common.streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")

@@ -14,8 +14,8 @@ from datetime import timedelta
 
 from temporalio import activity, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
+from temporalio.common.streams import workflow as stream_workflow
 from temporalio.worker import Worker
 
 

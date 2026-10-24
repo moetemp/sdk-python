@@ -17,10 +17,10 @@ from temporalio.client import (
     WorkflowFailureError,
     WorkflowHandle,
 )
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams._backend import _ExtensionStreamBackend
-from temporalio.contrib.streams._defn import definition_of
+from temporalio.common import streams
+from temporalio.common.streams import workflow as stream_workflow
+from temporalio.common.streams._backend import _ExtensionStreamBackend
+from temporalio.common.streams._defn import definition_of
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer

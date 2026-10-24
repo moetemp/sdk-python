@@ -42,7 +42,7 @@ RedisStreamConfig = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _REDISSTREAMCONFIG,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.RedisStreamConfig)
     },
 )
@@ -53,7 +53,7 @@ OpenWriterRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _OPENWRITERREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.OpenWriterRequest)
     },
 )
@@ -64,7 +64,7 @@ OpenWriterResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _OPENWRITERRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.OpenWriterResponse)
     },
 )
@@ -75,7 +75,7 @@ WriteRecordsRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _WRITERECORDSREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.WriteRecordsRequest)
     },
 )
@@ -86,7 +86,7 @@ WriteRecordsResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _WRITERECORDSRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.WriteRecordsResponse)
     },
 )
@@ -97,7 +97,7 @@ CloseWriterRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _CLOSEWRITERREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.CloseWriterRequest)
     },
 )
@@ -108,7 +108,7 @@ CloseWriterResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _CLOSEWRITERRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.CloseWriterResponse)
     },
 )
@@ -119,7 +119,7 @@ FreeWriterRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _FREEWRITERREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.FreeWriterRequest)
     },
 )
@@ -130,7 +130,7 @@ FreeWriterResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _FREEWRITERRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.FreeWriterResponse)
     },
 )
@@ -141,7 +141,7 @@ CloseWritersRequest = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _CLOSEWRITERSREQUEST,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.CloseWritersRequest)
     },
 )
@@ -152,7 +152,7 @@ CloseWritersResponse = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _CLOSEWRITERSRESPONSE,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.CloseWritersResponse)
     },
 )
@@ -163,7 +163,7 @@ StreamErrorDetails = _reflection.GeneratedProtocolMessageType(
     (_message.Message,),
     {
         "DESCRIPTOR": _STREAMERRORDETAILS,
-        "__module__": "temporalio.contrib.streams.proto.v1.extension_pb2",
+        "__module__": "temporalio.common.streams.proto.v1.extension_pb2",
         # @@protoc_insertion_point(class_scope:temporal.sdk.streams.v1.StreamErrorDetails)
     },
 )

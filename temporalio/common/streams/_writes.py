@@ -13,10 +13,10 @@ from typing import Any
 import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
-from temporalio.contrib.streams import _activity, _errors
-from temporalio.contrib.streams.system import client as service_client
-from temporalio.contrib.streams.system import models
-from temporalio.contrib.streams.workflow import (
+from temporalio.common.streams import _activity, _errors
+from temporalio.common.streams.system import client as service_client
+from temporalio.common.streams.system import models
+from temporalio.common.streams.workflow import (
     APPEND_ACTIVITY,
     CLOSE_ACTIVITY,
     CREATE_ACTIVITY,
