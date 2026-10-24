@@ -27,7 +27,6 @@ from temporalio.common.streams import (
     _errors,
     _ids,
     _workflow_reader,
-    _writes,
 )
 from temporalio.common.streams import _workflow as streams_workflow
 from temporalio.common.streams._backend import BackendCalls, _ExtensionCalls
@@ -178,14 +177,8 @@ class ExtensionStreamBackend(StreamBackend):
     def _configure_worker(
         self, config: temporalio.worker.WorkerConfig
     ) -> temporalio.worker.WorkerConfig:
-        # Add the backend's Activities, and its interceptor when the client has none.
+        # Add the backend's interceptor when the client has none.
         config = super()._configure_worker(config)
-        # The write Local Activities route by the backend in each request, so every backend of
-        # the Worker shares one set.
-        activities: list[Callable[..., Any]] = list(config.get("activities", []))
-        writes = cast(list[Callable[..., Any]], _writes.ACTIVITIES)
-        activities.extend(write for write in writes if write not in activities)
-        config["activities"] = [*activities, *self._activities()]
         client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
         interceptors = [
             *client.config(active_config=True)["interceptors"],
@@ -201,7 +194,7 @@ class ExtensionStreamBackend(StreamBackend):
             config["interceptors"] = [*config.get("interceptors", []), mine]
         mine.converter = client.data_converter
         runner = config.get("workflow_runner")
-        if isinstance(runner, SandboxedWorkflowRunner):
+        if config.get("workflows") and isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and the facade must share the run's Stream state, also when the
             # restrictions don't pass temporalio through.
             config["workflow_runner"] = dataclasses.replace(

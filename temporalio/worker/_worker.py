@@ -504,12 +504,21 @@ class Worker:
             or temporalio.runtime.Runtime.default()
         )
         activities = config.get("activities")
+        # The Local Activities that the Worker's Workflows run for Streams. They are the SDK's
+        # own, so they enable no polling of the task queue's Activities.
+        internal_activities: Sequence[Callable[..., Any]] = []
+        if config.get("workflows"):
+            from temporalio.common.streams import _plugin as _stream_plugin
+
+            internal_activities = _stream_plugin.local_activities(config)
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
+        if activities or internal_activities:
             self._activity_worker = _ActivityWorker(
                 bridge_worker=lambda: self._bridge_worker,
                 task_queue=config["task_queue"],  # type: ignore[reportTypedDictNotRequiredAccess]
-                activities=activities,
+                activities=activities or [],
+                internal_activities=internal_activities,
                 activity_executor=config.get("activity_executor"),
                 shared_state_manager=config.get("shared_state_manager"),
                 data_converter=client_config["data_converter"],
@@ -677,7 +686,7 @@ class Worker:
                     enable_workflows=self._workflow_worker is not None,
                     enable_local_activities=self._activity_worker is not None
                     and self._workflow_worker is not None,
-                    enable_remote_activities=self._activity_worker is not None
+                    enable_remote_activities=bool(config.get("activities"))
                     and not config.get("no_remote_activities"),
                     enable_nexus=self._nexus_worker is not None,
                 ),

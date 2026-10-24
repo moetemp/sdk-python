@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 import temporalio.client
 import temporalio.converter
@@ -197,6 +197,24 @@ def configure_worker(
     for backend in with_native(client_backends(client)):
         config = backend._configure_worker(config)
     return config
+
+
+def local_activities(
+    config: temporalio.worker.WorkerConfig,
+) -> list[Callable[..., Any]]:
+    """The Local Activities that a Worker's Workflows run for Streams.
+
+    The write Local Activities route by the backend in each request, so every backend of the
+    Worker shares one set. Each backend reads with its own.
+    """
+    from temporalio.common.streams import _extension, _writes
+
+    client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    activities = list(cast(list[Callable[..., Any]], _writes.ACTIVITIES))
+    for backend in with_native(client_backends(client)):
+        if isinstance(backend, _extension.ExtensionStreamBackend):
+            activities.extend(backend._activities())
+    return activities
 
 
 def replayer_backends(config: temporalio.worker.ReplayerConfig) -> list[StreamBackend]:
