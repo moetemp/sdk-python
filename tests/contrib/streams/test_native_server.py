@@ -13,12 +13,13 @@ from typing import Any, cast
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.native import POSITIONS_TYPE, NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
+from temporalio.common import streams
+from temporalio.common.streams import _native, _plugin
+from temporalio.common.streams._native import POSITIONS_TYPE
+from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.contrib.streams import test_redis
+from tests.contrib.streams._support import create_owned
 from tests.contrib.streams.test_workflow_reads import (
     Events,
     Reader,
@@ -42,8 +43,8 @@ def write_native_sync(stream: streams.SyncActivityStream[Events]) -> None:
 class WritesNativeAndRedis:
     @workflow.run
     async def run(self) -> list[str | None]:
-        on_redis = await stream_workflow.create_stream(streams.with_name(Events, "old"))
-        on_native = await stream_workflow.create_stream(
+        on_redis = await workflow.create_stream(streams.with_name(Events, "old"))
+        on_native = await workflow.create_stream(
             streams.with_name(Events, "new"), backend="native"
         )
         await on_redis.topic(Events.tokens).publish("redis")
@@ -64,9 +65,7 @@ class WritesNativeAndRedis:
 
 
 async def test_native_client_round_trip(native_client: Client):
-    stream = await streams.StreamClient(native_client).create(
-        Events, id=f"native-{uuid.uuid4()}", auto_close=timedelta(minutes=5)
-    )
+    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
     assert await stream.topic(Events.tokens).publish("a", "b")
     await stream.close(result="done")
     items = [item async for item in stream.subscribe()]
@@ -82,10 +81,10 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         writer = await native_client.start_workflow(
             Writer.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        stream = streams.StreamClient(native_client).workflow_stream(writer, Events)
+        stream = writer.stream(Events)
         reader = await native_client.start_workflow(
             Reader.run,
-            ReadInput(stream_workflow.WorkflowStream.from_handle(stream)),
+            ReadInput(streams.WorkflowStream.from_handle(stream)),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -108,24 +107,22 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         if event.HasField("nexus_operation_completed_event_attributes")
     ]
     assert wakes and not any(wake.records for wake in wakes)
-    # The plugin of the client has the connection that a replay reads over. A replay reads
-    # each page again once the cache is gone.
-    [plugin] = native_client.config()["plugins"]
-    assert isinstance(plugin, NativeStreamPlugin)
-    replayer = Replayer(workflows=[Writer, Reader], plugins=[plugin])
+    # A replay reads each page again on the connection of its stream_client, once the cache
+    # is gone.
+    replayer = Replayer(workflows=[Writer, Reader], stream_client=native_client)
     await replayer.replay_workflow(await writer.fetch_history())
     await replayer.replay_workflow(history)
-    plugin._pages.clear()
+    _native._pages.clear()
     await replayer.replay_workflow(history)
 
 
 async def test_redis_and_native_on_a_native_server(
     native_client: Client, redis_url: str
 ):
+    # The client registers only Redis, and has the native backend with no registration.
     config = native_client.config()
-    config["plugins"] = [
-        RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
-        NativeStreamPlugin(),
+    config["stream_backends"] = [
+        RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
     ]
     two = Client(**config)
     async with new_worker(
@@ -140,9 +137,7 @@ async def test_redis_and_native_on_a_native_server(
             task_queue=worker.task_queue,
         )
         assert await handle.result() == ["redis", "native"]
-    new = streams.StreamClient(two).workflow_stream(
-        handle, streams.with_name(Events, "new"), backend="native"
-    )
+    new = handle.stream(streams.with_name(Events, "new"), backend="native")
     items = [item async for item in new.subscribe()]
     assert [item.data for item in items if isinstance(item, streams.Record)] == [
         "workflow 1",
@@ -151,15 +146,43 @@ async def test_redis_and_native_on_a_native_server(
         "sync activity",
         "last",
     ]
+    # The server closes a native Stream when its run chain ends, with the run's result.
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == ["redis", "native"]
+
+
+@workflow.defn
+class LeavesItsStreamOpen:
+    @workflow.run
+    async def run(self) -> str:
+        stream = await workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("a")
+        return "done"
+
+
+async def test_the_server_closes_a_stream_when_its_run_chain_ends(
+    native_client: Client,
+):
+    # A Workflow's create asks the server to close the Stream when the run chain ends, with
+    # the result of its last run.
+    async with new_worker(native_client, LeavesItsStreamOpen) as worker:
+        handle = await native_client.start_workflow(
+            LeavesItsStreamOpen.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "done"
+    items = [item async for item in handle.stream(Events).subscribe()]
+    assert [item.data for item in items if isinstance(item, streams.Record)] == ["a"]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+    assert items[-1].status == streams.CloseStatus.COMPLETED
 
 
 @workflow.defn
 class WritesByBareId:
     @workflow.run
     async def run(self, stream_id: str) -> str:
-        stream = stream_workflow.WorkflowStream[Events](id=stream_id, backend="native")
+        stream = streams.WorkflowStream[Events](id=stream_id, backend="native")
         try:
             await stream.topic(Events.tokens).publish("lost")
         except streams.StreamNotFoundError as err:
@@ -202,9 +225,7 @@ async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: C
             task_queue=worker.task_queue,
         )
         await handle.result()
-        items = await test_redis.read_all(
-            test_redis.workflow_stream(native_client, handle)
-        )
+        items = await test_redis.read_all(test_redis.workflow_stream(handle))
     withdrawn = [item for item in items if isinstance(item, streams.Superseded)]
     visible = [
         item.data
@@ -217,8 +238,8 @@ async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: C
 @workflow.defn
 class ReadsNewTokens:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
-        items = stream.topic(Events.tokens).subscribe(from_offset=streams.END)
+    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+        items = stream.subscribe(Events.tokens, offset=streams.END)
         return [
             item.data if isinstance(item, streams.Record) else "closed"
             async for item in items
@@ -243,14 +264,12 @@ async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
 ):
     # The server resolves END on each call, so the wait and the read after it start where the
     # first page ended. Else the Record that wakes the reader is behind its start.
-    stream = await streams.StreamClient(native_client).create(
-        Events, id=f"native-{uuid.uuid4()}", auto_close=timedelta(minutes=5)
-    )
+    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("old")
     async with new_worker(native_client, ReadsNewTokens) as worker:
         reader = await native_client.start_workflow(
             ReadsNewTokens.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -266,8 +285,8 @@ class ClosesItsRead:
         self._stop = False
 
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> str:
-        items = stream.subscribe(from_offset=streams.END)
+    async def run(self, stream: streams.WorkflowStream[Events]) -> str:
+        items = stream.subscribe(offset=streams.END)
         reading = asyncio.create_task(items.__anext__())
         await workflow.wait_condition(lambda: self._stop)
         await items.aclose()
@@ -284,13 +303,11 @@ class ClosesItsRead:
 
 async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
     # A wake may park for days, so a read that its code closed must not keep it.
-    stream = await streams.StreamClient(native_client).create(
-        Events, id=f"native-{uuid.uuid4()}", auto_close=timedelta(minutes=5)
-    )
+    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
     async with new_worker(native_client, ClosesItsRead) as worker:
         reader = await native_client.start_workflow(
             ClosesItsRead.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -307,8 +324,8 @@ async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
 @workflow.defn
 class ReadsUntilHalfRetention:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
-        items = stream.topic(Events.tokens).subscribe()
+    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+        items = stream.subscribe(Events.tokens)
         seen = [item.data async for item in items if isinstance(item, streams.Record)]
         return [seen, items.continue_as_new_suggested, items.next_offset]
 
@@ -318,14 +335,17 @@ async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
 ):
     # Retention trims a Stream that no Workflow owns under its readers, and a replay reads the
     # Stream again. So the read ends in time for the run to continue as new.
-    stream = await streams.StreamClient(native_client).create(
-        Events, id=f"native-{uuid.uuid4()}", retention=timedelta(seconds=6)
+    stream = await create_owned(
+        native_client,
+        Events,
+        id=f"native-{uuid.uuid4()}",
+        retention=timedelta(seconds=6),
     )
     offset = await stream.topic(Events.tokens).publish("a")
     async with new_worker(native_client, ReadsUntilHalfRetention) as worker:
         seen, suggested, next_offset = await native_client.execute_workflow(
             ReadsUntilHalfRetention.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -334,14 +354,14 @@ async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
 
 @activity.defn
 async def streams_its_tokens() -> str:
-    async with streams.activity.create_stream(Events) as stream:
+    async with activity.create_stream(Events) as stream:
         await stream.topic(Events.tokens).publish("a", "b")
     return "done"
 
 
 @activity.defn
 async def leaves_its_stream_open() -> str:
-    stream = await streams.activity.create_stream(Events)
+    stream = await activity.create_stream(Events)
     await stream.topic(Events.tokens).publish("a")
     return "done"
 
@@ -369,36 +389,35 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
         )
         assert await closed.result() == "done"
         assert await left_open.result() == "done"
-    stream_client = streams.StreamClient(native_client)
-    items = [
-        item async for item in stream_client.activity_stream(closed, Events).subscribe()
-    ]
+    items = [item async for item in closed.stream(Events).subscribe()]
     assert [item.data for item in items if isinstance(item, streams.Record)] == [
         "a",
         "b",
     ]
     # The Activity's own close got past the early owner check, so its close has no result.
     assert isinstance(items[-1], streams.Closed) and items[-1].result is None
-    left = [
-        item
-        async for item in stream_client.activity_stream(left_open, Events).subscribe()
-    ]
+    left = [item async for item in left_open.stream(Events).subscribe()]
     assert [item.data for item in left if isinstance(item, streams.Record)] == ["a"]
     assert isinstance(left[-1], streams.Closed) and left[-1].result == "done"
     assert left[-1].status == streams.CloseStatus.COMPLETED
 
 
-async def test_each_client_of_a_native_plugin_calls_on_its_own_connection():
-    # One plugin on two clients gives each its own runtime, so a call doesn't go on the
+async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
+    # One backend on two clients gives each its own runtime, so a call doesn't go on the
     # connection of the client that came last.
-    plugin = NativeStreamPlugin()
-    first = await Client.connect("127.0.0.1:1", lazy=True, plugins=[plugin])
-    second = await Client.connect("127.0.0.1:2", lazy=True, plugins=[plugin])
+    native = streams.NativeStreamBackend()
+    first = await Client.connect("127.0.0.1:1", lazy=True, stream_backends=[native])
+    second = await Client.connect("127.0.0.1:2", lazy=True, stream_backends=[native])
     runtimes = [
-        cast(Any, plugin.backend_for(client))._runtime for client in (first, second)
+        cast(Any, native._backend_for(client))._runtime for client in (first, second)
     ]
     assert runtimes[0] is not runtimes[1]
     assert [runtime._service for runtime in runtimes] == [
         first.service_client,
         second.service_client,
     ]
+    # The native backend that no client registers works the same, and makes no call.
+    plain = await Client.connect("127.0.0.1:3", lazy=True)
+    _, calls = _plugin.client_backend(plain, None)
+    assert cast(Any, calls)._runtime._service is plain.service_client
+    assert _plugin.client_backend(plain, None)[1] is calls

@@ -14,8 +14,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -28,24 +27,27 @@ class Events:
 class Agent:
     @workflow.run
     async def run(self, prompt: str) -> str:
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         for word in prompt.split():
             # Each word goes out in its own Workflow Task, so the follower waits for some.
             await workflow.sleep(timedelta(milliseconds=200))
             await stream.topic(Events.tokens).publish(word)
-        return prompt.upper()
+        # The server would close a native Stream when the run chain ends. A Redis Stream
+        # stays open, so the agent closes it with its answer.
+        answer = prompt.upper()
+        await stream.close(result=answer)
+        return answer
 
 
 @workflow.defn
 class Follower:
     @workflow.run
-    async def run(self, agent: stream_workflow.WorkflowStream[Events]) -> list[str]:
+    async def run(self, agent: streams.WorkflowStream[Events]) -> list[str]:
         seen = []
         async for item in agent.subscribe(create_wait=timedelta(seconds=30)):
             if isinstance(item, streams.Record):
                 seen.append(item.data)
             elif isinstance(item, streams.Closed):
-                # The agent's Stream closes with the agent's result.
                 seen.append(f"agent said {item.result}")
         return seen
 
@@ -59,10 +61,10 @@ async def main(client: Client, task_queue: str) -> list[str]:
             task_queue=task_queue,
         )
         # The handle has the first run id, so the client builds the Stream with no call.
-        stream = streams.StreamClient(client).workflow_stream(agent, Events)
+        stream = agent.stream(Events)
         return await client.execute_workflow(
             Follower.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"follower-{uuid.uuid4()}",
             task_queue=task_queue,
         )

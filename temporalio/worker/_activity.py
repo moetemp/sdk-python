@@ -63,6 +63,7 @@ class _ActivityWorker:
         metric_meter: temporalio.common.MetricMeter,
         client: temporalio.client.Client,
         encode_headers: bool,
+        internal_activities: Sequence[Callable] = (),
     ) -> None:
         self._bridge_worker = bridge_worker
         self._task_queue = task_queue
@@ -82,7 +83,13 @@ class _ActivityWorker:
         # Validate and build activity dict
         self._activities: dict[str, temporalio.activity._Definition] = {}
         self._dynamic_activity: temporalio.activity._Definition | None = None
-        for activity in activities:
+        # The SDK's own Local Activities, such as those of Streams, which the errors about
+        # the user's activities leave out.
+        self._internal_activities = {
+            temporalio.activity._Definition.must_from_callable(activity).name
+            for activity in internal_activities
+        }
+        for activity in [*activities, *internal_activities]:
             # Get definition
             defn = temporalio.activity._Definition.must_from_callable(activity)
             # Confirm name unique
@@ -727,7 +734,14 @@ class _ActivityWorker:
             return
         activity_def = self._activities.get(activity)
         if not activity_def:
-            activity_names = ", ".join(sorted(self._activities.keys()))
+            activity_names = ", ".join(
+                sorted(set(self._activities) - self._internal_activities)
+            )
+            if not activity_names:
+                raise ValueError(
+                    f"Activity function {activity} "
+                    f"is not registered on this worker, no available activities.",
+                )
             raise ValueError(
                 f"Activity function {activity} "
                 f"is not registered on this worker, available activities: {activity_names}",

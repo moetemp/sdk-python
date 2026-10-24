@@ -186,9 +186,9 @@ exclude = [
   'temporalio/api',
   'temporalio/bridge/proto',
   'temporalio/nexus/system/workflow_service',
-  'temporalio/contrib/streams/proto',
-  'temporalio/contrib/streams/system',
-  'temporalio/contrib/streams/writer_system',
+  'temporalio/common/streams/proto',
+  'temporalio/common/streams/system',
+  'temporalio/common/streams/writer_system',
 ]
 
 [[tool.mypy.overrides]]
@@ -197,9 +197,9 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [
-  "temporalio.contrib.streams.proto.*",
-  "temporalio.contrib.streams.system.*",
-  "temporalio.contrib.streams.writer_system.*",
+  "temporalio.common.streams.proto.*",
+  "temporalio.common.streams.system.*",
+  "temporalio.common.streams.writer_system.*",
 ]
 ignore_errors = true
 
@@ -272,7 +272,7 @@ exclude = [
   "temporalio/api",
   "temporalio/bridge/proto",
   "temporalio/bridge/_visitor.py",
-  "temporalio/contrib/streams/proto",
+  "temporalio/common/streams/proto",
   "tests/worker/workflow_sandbox/testmodules/proto",
 ]
 

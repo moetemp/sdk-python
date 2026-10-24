@@ -21,6 +21,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     NoReturn,
+    TypeVar,
     overload,
 )
 
@@ -37,6 +38,9 @@ from .types import CallableType
 
 if TYPE_CHECKING:
     from temporalio.client import Client
+    from temporalio.common.streams import ActivityStream, Creating
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 @overload
@@ -513,6 +517,46 @@ def metric_meter() -> temporalio.common.MetricMeter:
             synchronous activity.
     """
     return _Context.current().metric_meter
+
+
+def create_stream(
+    definition: type[_StreamDefinitionT],
+    *,
+    retention: timedelta | None = None,
+    backend: str | None = None,
+) -> Creating[ActivityStream[_StreamDefinitionT]]:
+    """Create a Stream that this Standalone Activity owns, on the native backend.
+
+    Its id is ``<activity id>:<activity run id>:<name>``, so a client finds it from the
+    Activity handle with :py:meth:`temporalio.client.ActivityHandle.stream` and no call. The
+    Stream goes on across the Activity's retries, and the server closes it when the Activity
+    ends, with its status and result. Await the call for the handle, or use it in
+    ``async with``, which closes the Stream at the end of the block::
+
+        async with activity.create_stream(Events) as stream:
+            await stream.topic(Events.tokens).publish("hi")
+
+    Only the native backend keeps the Stream of a Standalone Activity, since nothing else
+    would close it when the Activity ends.
+
+    .. warning::
+        This API is experimental.
+
+    Args:
+        definition: The Stream definition class. Its name is the Stream name.
+        retention: How long the Records stay after the close. Defaults to the backend's.
+        backend: The name of a native backend. Defaults to ``native``.
+
+    Raises:
+        StreamConfigError: The Activity runs for a Workflow, which owns its Streams, or the
+            backend is not native. No call is made.
+        StreamClosedError: The Stream was created and closed before.
+    """
+    from temporalio.common.streams import _activity_stream
+
+    return _activity_stream.create_stream(
+        definition, retention=retention, backend=backend
+    )
 
 
 class LoggerAdapter(logging.LoggerAdapter):

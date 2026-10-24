@@ -11,14 +11,14 @@ import pytest
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import workflow
 from temporalio.client import Client, WorkflowFailureError
-from temporalio.contrib import streams
-from temporalio.contrib.streams import _errors, _workflow_reader
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.native import NativeStreamPlugin, _DirectReadCodec
+from temporalio.common import streams
+from temporalio.common.streams import _errors, _workflow_reader
+from temporalio.common.streams._native import _DirectReadCodec
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
 from temporalio.workflow import NondeterminismError
+from tests.contrib.streams._support import create_owned, on_native
 from tests.contrib.streams.test_redis import _Rot13Codec
 from tests.helpers import new_worker
 
@@ -39,18 +39,19 @@ class Events:
 class Writer:
     @workflow.run
     async def run(self, backend: str | None) -> str:
-        stream = await stream_workflow.create_stream(Events, backend=backend)
+        stream = await workflow.create_stream(Events, backend=backend)
         await stream.topic(Events.turns).publish(Turn("user", "hi"))
         for token in ("a", "b", "c"):
             # Each token goes out in its own Workflow Task, so the reader waits for some.
             await workflow.sleep(0.3)
             await stream.topic(Events.tokens).publish(token)
+        await stream.close(result="written")
         return "written"
 
 
 @dataclass
 class ReadInput:
-    stream: stream_workflow.WorkflowStream[Events]
+    stream: streams.WorkflowStream[Events]
     tokens_only: bool = False
     wait_new_records: bool = True
 
@@ -61,7 +62,8 @@ class Reader:
     async def run(self, input: ReadInput) -> list[Any]:
         seen: list[Any] = []
         items = (
-            input.stream.topic(Events.tokens).subscribe(
+            input.stream.subscribe(
+                Events.tokens,
                 wait_new_records=input.wait_new_records,
                 create_wait=timedelta(seconds=20),
             )
@@ -82,14 +84,6 @@ class Reader:
         return seen
 
 
-def plugins_of(client: Client) -> list[Any]:
-    return [
-        plugin
-        for plugin in client.config()["plugins"]
-        if isinstance(plugin, streams.StreamPlugin)
-    ]
-
-
 async def write_and_read(
     client: Client, backend: str | None, **read_options: Any
 ) -> tuple[list[Any], Any]:
@@ -100,14 +94,10 @@ async def write_and_read(
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-        stream = streams.StreamClient(client).workflow_stream(
-            writer, Events, backend=backend
-        )
+        stream = writer.stream(Events, backend=backend)
         reader = await client.start_workflow(
             Reader.run,
-            ReadInput(
-                stream_workflow.WorkflowStream.from_handle(stream), **read_options
-            ),
+            ReadInput(streams.WorkflowStream.from_handle(stream), **read_options),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -120,7 +110,7 @@ async def test_workflow_reads_another_workflows_stream(stream_client: Client):
     seen, reader = await write_and_read(stream_client, None)
     assert seen == ["turn user hi", "a", "b", "c", "closed written"]
     # Each page is in History, so a replay reads the same items.
-    replayer = Replayer(workflows=[Reader], plugins=plugins_of(stream_client))
+    replayer = Replayer(workflows=[Reader], stream_client=stream_client)
     await replayer.replay_workflow(await reader.fetch_history())
 
 
@@ -133,7 +123,7 @@ async def test_workflow_reads_one_topic(stream_client: Client):
 class ReadsMissing:
     @workflow.run
     async def run(self, stream_id: str) -> str:
-        stream = stream_workflow.WorkflowStream[Events](id=stream_id)
+        stream = streams.WorkflowStream[Events](id=stream_id)
         try:
             async for _ in stream.subscribe():
                 pass
@@ -157,7 +147,7 @@ async def test_a_missing_stream_raises_in_workflow_code(stream_client: Client):
 class ReadsOwnWrites:
     @workflow.run
     async def run(self) -> list[Any]:
-        stream = await stream_workflow.create_stream(Events, close_with_run=False)
+        stream = await workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish("mine")
         # A read's Local Activity first writes the run's buffer, so the read sees it.
         return [
@@ -179,12 +169,12 @@ async def test_a_redis_read_sees_the_runs_own_writes(stream_client: Client):
 @workflow.defn
 class ReadsInQuery:
     def __init__(self) -> None:
-        self._stream: stream_workflow.WorkflowStream[Events] | None = None
+        self._stream: streams.WorkflowStream[Events] | None = None
 
     @workflow.run
     async def run(self) -> None:
         # Set in the first task, since a query may come before a create's Local Activity ends.
-        self._stream = stream_workflow.create_stream_nowait(Events)
+        self._stream = workflow.create_stream_nowait(Events)
         await workflow.wait_condition(lambda: False)
 
     @workflow.query
@@ -214,7 +204,7 @@ async def test_a_read_in_a_query_raises(stream_client: Client):
 class FailsOnStreamError:
     @workflow.run
     async def run(self, stream_id: str) -> None:
-        stream = stream_workflow.WorkflowStream[Events](id=stream_id)
+        stream = streams.WorkflowStream[Events](id=stream_id)
         async for _ in stream.subscribe():
             pass
 
@@ -249,7 +239,7 @@ async def test_workflow_reads_go_through_the_codec(stream_client: Client):
 class WritesAndWaits:
     @workflow.run
     async def run(self) -> None:
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish("a")
         await workflow.wait_condition(lambda: False)
 
@@ -257,7 +247,7 @@ class WritesAndWaits:
 @workflow.defn
 class ReadsUntilItEnds:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> list[Any]:
+    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
         items = stream.subscribe(create_wait=timedelta(seconds=20))
         seen = [item.data async for item in items if isinstance(item, streams.Record)]
         return [seen, items.owner_ended, items.next_offset is not None]
@@ -273,10 +263,10 @@ async def test_a_read_ends_when_the_owner_ended_with_no_close(
         writer = await stream_client.start_workflow(
             WritesAndWaits.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        stream = streams.StreamClient(stream_client).workflow_stream(writer, Events)
+        stream = writer.stream(Events)
         reader = await stream_client.start_workflow(
             ReadsUntilItEnds.run,
-            stream_workflow.WorkflowStream.from_handle(stream),
+            streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -284,33 +274,28 @@ async def test_a_read_ends_when_the_owner_ended_with_no_close(
             if isinstance(item, streams.Record):
                 break
         await writer.terminate()
-        native = any(
-            isinstance(p, NativeStreamPlugin) for p in plugins_of(stream_client)
-        )
-        assert await reader.result() == [["a"], not native, True]
+        assert await reader.result() == [["a"], not on_native(stream_client), True]
 
 
 @workflow.defn
 class CountsTokens:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> int:
-        items = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+    async def run(self, stream: streams.WorkflowStream[Events]) -> int:
+        items = stream.subscribe(Events.tokens, wait_new_records=False)
         return len([item async for item in items if isinstance(item, streams.Record)])
 
 
 async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Client):
     # A Redis page is a History marker, and the server terminates a run whose marker is over
     # 2 MiB. So a page of large Records splits.
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"big-{uuid.uuid4()}"
-    )
+    stream = await create_owned(stream_client, Events, id=f"big-{uuid.uuid4()}")
     for _ in range(25):
         await stream.topic(Events.tokens).publish("x" * 100_000)
     async with new_worker(stream_client, CountsTokens) as worker:
         assert (
             await stream_client.execute_workflow(
                 CountsTokens.run,
-                stream_workflow.WorkflowStream.from_handle(stream),
+                streams.WorkflowStream.from_handle(stream),
                 id=f"wf-{uuid.uuid4()}",
                 task_queue=worker.task_queue,
             )
@@ -333,9 +318,8 @@ def test_a_server_failure_maps_by_its_reason():
 async def test_a_native_replay_checks_the_range_it_reads_again():
     # A replay reads a recorded range again. Other Records there mean other code ran, and
     # fewer mean the Store lost the range, which a retry of the task can't fix.
-    plugin = NativeStreamPlugin()
     backend = SimpleNamespace()
-    codec = _DirectReadCodec(plugin, lambda: cast(Any, backend), None, None)
+    codec = _DirectReadCodec(lambda: cast(Any, backend), None, None)
 
     def record(topic: str) -> stream_pb.StreamRecord:
         return stream_pb.StreamRecord(
@@ -349,7 +333,9 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
     )
     live = stream_pb.ReadRecordsResponse(records=[record("tokens")], next_offset=6)
     positions = (
-        await plugin._read_result("run", request, live, False, DataConverter.default)
+        await streams.NativeStreamBackend()._read_result(
+            "run", request, live, False, DataConverter.default
+        )
     ).payload
     reads: list[stream_pb.ReadRecordsRequest] = []
     answers: list[Any] = [

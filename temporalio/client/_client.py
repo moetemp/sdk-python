@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Concatenate,
+    TypeVar,
     cast,
     overload,
 )
@@ -110,8 +111,12 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
+    from temporalio.common.streams import ClientStream, StreamBackend, StreamHandle
+
     from ._interceptor import Interceptor
     from ._plugin import Plugin
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 class Client:
@@ -156,6 +161,7 @@ class Client:
         grpc_compression: GrpcCompression = GrpcCompression.GZIP,
         payload_limits: PayloadLimitsConfig = PayloadLimitsConfig(),
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ) -> Self:
         """Connect to a Temporal server.
 
@@ -225,6 +231,14 @@ class Client:
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
+            stream_backends: The Stream backends of this client and its Workers, such as
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The native backend
+                is there with no registration. Names are unique. With more than one, exactly
+                one has ``default=True``. With none marked, the default is ``native``. See
+                :py:class:`temporalio.common.streams.StreamBackend`.
+
+                .. warning::
+                    This API is experimental.
         """
         connect_config = temporalio.service.ConnectConfig(
             target_host=target_host,
@@ -262,6 +276,7 @@ class Client:
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
             plugins=plugins,
+            stream_backends=stream_backends,
         )
 
     def __init__(
@@ -275,6 +290,7 @@ class Client:
         default_workflow_query_reject_condition: None
         | (temporalio.common.QueryRejectCondition) = None,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ):
         """Create a Temporal client from a service client.
 
@@ -289,11 +305,17 @@ class Client:
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
+            stream_backends=list(stream_backends),
         )
         self._initial_config = config.copy()
 
         for plugin in plugins:
             config = plugin.configure_client(config)
+        if config.get("stream_backends"):
+            # Only a client with Stream backends loads the Streams package.
+            from temporalio.common.streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_client(config)
 
         self._init_from_config(config)
 
@@ -892,6 +914,39 @@ class Client:
             result_run_id=run_id,
             first_execution_run_id=first_execution_run_id,
             result_type=result_type,
+        )
+
+    def stream(
+        self,
+        definition: type[_StreamDefinitionT],
+        *,
+        id: str | None = None,
+        stream: StreamHandle[Any] | None = None,
+        backend: str | None = None,
+    ) -> ClientStream[_StreamDefinitionT]:
+        """A Stream by its id, or a handle that came as data, such as in a Record.
+
+        It makes no call. To create a Stream that the client owns, use the create of a
+        backend, such as :py:func:`temporalio.contrib.stream.create`.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class.
+            id: The Stream id.
+            stream: A handle of the Stream, such as one in a Record. Its id, owner and
+                backend stay.
+            backend: The name of the backend. Defaults to the handle's, else to the
+                registered backend with ``default=True``, else to ``native``.
+
+        Raises:
+            StreamConfigError: The client has no backend of that name.
+        """
+        from temporalio.common.streams import _stream_client
+
+        return _stream_client.client_stream(
+            self, definition, id=id, stream=stream, backend=backend
         )
 
     def get_workflow_handle_for(
@@ -3029,6 +3084,7 @@ class ClientConnectConfig(TypedDict, total=False):
     grpc_compression: GrpcCompression
     payload_limits: PayloadLimitsConfig
     header_codec_behavior: HeaderCodecBehavior
+    stream_backends: Sequence[StreamBackend]
 
 
 class ClientConfig(TypedDict, total=False):
@@ -3043,3 +3099,4 @@ class ClientConfig(TypedDict, total=False):
         temporalio.common.QueryRejectCondition | None
     ]
     header_codec_behavior: Required[HeaderCodecBehavior]
+    stream_backends: Required[Sequence[StreamBackend]]

@@ -13,8 +13,7 @@ from typing import Any
 
 from temporalio import activity, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -48,7 +47,7 @@ async def call_model(input: CallModelInput) -> str:
 class Agent:
     @workflow.run
     async def run(self, prompt: str) -> str:
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         turns = stream.topic(Events.turns)
         await turns.publish(Turn("model"))
         reply = await workflow.execute_activity(
@@ -57,6 +56,8 @@ class Agent:
             start_to_close_timeout=timedelta(minutes=5),
         )
         await turns.publish(Turn("done", reply))
+        # A run end closes nothing, so the Workflow closes its Stream before it returns.
+        await stream.close(result=reply)
         return reply
 
 
@@ -83,7 +84,7 @@ async def main(client: Client, task_queue: str) -> Screen:
         handle = await client.start_workflow(
             Agent.run, "hello there", id=f"agent-{uuid.uuid4()}", task_queue=task_queue
         )
-        stream = streams.StreamClient(client).workflow_stream(handle, Events)
+        stream = handle.stream(Events)
         screen = Screen()
         # The Workflow may not have created the Stream yet, so the read waits for it.
         async for item in stream.subscribe(

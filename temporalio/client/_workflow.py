@@ -21,6 +21,7 @@ from typing import (
     Any,
     Concatenate,
     Generic,
+    TypeVar,
     cast,
     overload,
 )
@@ -78,8 +79,12 @@ from ._interceptor import (
 )
 
 if TYPE_CHECKING:
+    from temporalio.common.streams import ClientStream
+
     from ._client import Client
     from ._interceptor import ListWorkflowsInput
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 class WorkflowHistoryEventFilterType(IntEnum):
@@ -186,6 +191,30 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
         :py:meth:`Client.get_workflow_handle` must be used instead.
         """
         return self._first_execution_run_id
+
+    def stream(
+        self, definition: type[_StreamDefinitionT], *, backend: str | None = None
+    ) -> ClientStream[_StreamDefinitionT]:
+        """A Stream that this Workflow created, by its definition.
+
+        It builds the Stream id from the Workflow id and the first run id, so it makes no
+        call. A handle with no first run id makes one Describe call on the first use of its
+        Streams, and keeps the answer.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class, renamed as the Workflow's create.
+            backend: The name of the backend. Defaults to the registered backend with
+                ``default=True``, else to ``native``.
+
+        Raises:
+            StreamConfigError: The client has no backend of that name.
+        """
+        from temporalio.common.streams import _stream_client
+
+        return _stream_client.workflow_stream(self, definition, backend=backend)
 
     async def result(
         self,

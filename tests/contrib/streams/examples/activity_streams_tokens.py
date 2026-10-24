@@ -14,8 +14,7 @@ from datetime import timedelta
 
 from temporalio import activity, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -60,7 +59,7 @@ def summarize(input: SummarizeInput) -> int:
 class Model:
     @workflow.run
     async def run(self, prompt: str) -> list[int]:
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         first = await workflow.execute_activity(
             call_model,
             CallModelInput(prompt, streams.ActivityStream.from_handle(stream)),
@@ -71,6 +70,7 @@ class Model:
             SummarizeInput(prompt, streams.SyncActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(minutes=5),
         )
+        await stream.close()
         return [first, summary]
 
 
@@ -92,7 +92,7 @@ async def main(
                 task_queue=task_queue,
             )
             offsets = await handle.result()
-    stream = streams.StreamClient(client).workflow_stream(handle, Events)
+    stream = handle.stream(Events)
     records = [
         item async for item in stream.subscribe() if isinstance(item, streams.Record)
     ]
