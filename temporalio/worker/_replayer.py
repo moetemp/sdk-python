@@ -61,6 +61,7 @@ class Replayer:
         disable_safe_workflow_eviction: bool = False,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
         stream_backends: Sequence[StreamBackend] = (),
+        stream_client: temporalio.client.Client | None = None,
     ) -> None:
         """Create a replayer to replay workflows from history.
 
@@ -70,8 +71,10 @@ class Replayer:
         ran. ``stream_backends`` are the Stream backends of the Worker's client,
         such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The
         native backend is there with no registration. A replay makes no Stream
-        call, except that it reads each page of a native Workflow read again on
-        the connection of a client of the native backend in this process.
+        call, except that it reads each page of a native Workflow read again.
+        It reads on the connection of ``stream_client``, a client of the server
+        that keeps the Streams, and takes that client's backends when
+        ``stream_backends`` is empty.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that
@@ -96,6 +99,7 @@ class Replayer:
             disable_safe_workflow_eviction=disable_safe_workflow_eviction,
             header_codec_behavior=header_codec_behavior,
             stream_backends=stream_backends,
+            stream_client=stream_client,
         )
         self._initial_config = self._config.copy()
         self._default_workflow_logic_flags = set(_DEFAULT_ENABLED_WORKFLOW_LOGIC_FLAGS)
@@ -454,6 +458,7 @@ class ReplayerConfig(TypedDict, total=False):
     disable_safe_workflow_eviction: bool
     header_codec_behavior: HeaderCodecBehavior
     stream_backends: Sequence[StreamBackend]
+    stream_client: temporalio.client.Client | None
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,7 @@ import temporalio.client
 import temporalio.converter
 import temporalio.worker
 from temporalio.common.streams import _errors, _ids
-from temporalio.common.streams._backend import BackendCalls
+from temporalio.common.streams._backend import BackendCalls, _ExtensionCalls
 from temporalio.plugin import SimplePlugin
 
 # The default backend when no registered backend has default=True. Every client, Worker and
@@ -199,12 +199,20 @@ def configure_worker(
     return config
 
 
+def replayer_backends(config: temporalio.worker.ReplayerConfig) -> list[StreamBackend]:
+    """The Replayer's backends, else those of its ``stream_client``, and the native one."""
+    backends = config.get("stream_backends") or ()
+    client = config.get("stream_client")
+    if not backends and client is not None:
+        backends = client_backends(client)
+    return with_native(check_backends(backends, "Replayer"))
+
+
 def configure_replayer(
     config: temporalio.worker.ReplayerConfig,
 ) -> temporalio.worker.ReplayerConfig:
     """Check the Replayer's backends, and add the parts of each and of the native one."""
-    backends = check_backends(config.get("stream_backends", ()), "Replayer")
-    for backend in with_native(backends):
+    for backend in replayer_backends(config):
         config = backend._configure_replayer(config)
     return config
 
@@ -229,17 +237,23 @@ def replayer_converter(
     converter: temporalio.converter.DataConverter,
 ) -> temporalio.converter.DataConverter:
     """The converter of a Replayer's Workflows, as :py:func:`worker_converter`. A replay
-    reads a native page again on a connection that the native backend served.
+    reads a native page again on the connection of the Replayer's ``stream_client``.
     """
     from temporalio.common.streams import _native
 
-    native = next(
-        b
-        for b in with_native(config.get("stream_backends", ()))
-        if b.backend_name == NATIVE
-    )
+    native = next(b for b in replayer_backends(config) if b.backend_name == NATIVE)
     assert isinstance(native, _native.NativeStreamBackend)
-    return _native.wrap(native._any_backend, converter)
+    client = config.get("stream_client")
+
+    def backend() -> _ExtensionCalls:
+        if client is None:
+            raise _errors.StreamConfigError(
+                "A replay reads each page of a native Workflow read again, so pass the "
+                "Replayer a stream_client= of the server that keeps the Streams"
+            )
+        return native.backend_for(client)
+
+    return _native.wrap(backend, converter)
 
 
 def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:

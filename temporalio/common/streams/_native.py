@@ -25,7 +25,6 @@ import temporalio.workflow
 from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.common.streams import _errors, _workflow_reader
 from temporalio.common.streams._backend import _ExtensionCalls
-from temporalio.common.streams._errors import StreamConfigError
 from temporalio.common.streams._extension import (
     ExtensionStreamBackend,
     _activity_error,
@@ -92,8 +91,8 @@ class _DirectReadCodec(
         inner: temporalio.converter.PayloadCodec | None,
         records: temporalio.converter.PayloadCodec | None,
     ) -> None:
-        # The runtime that a replay reads again on: the client's, or for a Replayer, one of
-        # a client of the backend.
+        # The runtime that a replay reads again on: the Worker's client's, or the Replayer's
+        # stream_client's.
         self._backend = backend
         self._inner = inner
         # Writers encode Records with no serialization context, so a page decodes with the
@@ -300,7 +299,7 @@ class NativeStreamBackend(ExtensionStreamBackend):
     client calls go to the same service. Each client gets its own runtime on its own
     connection, built at the first call, and the client's Workers share it. A page of a
     Workflow read is a direct read in a Local Activity whose marker holds only its positions,
-    and a replay reads the page again on the connection of a client of the backend.
+    and a replay reads the page again, on the connection of the Replayer's ``stream_client``.
 
     .. warning::
         This API is experimental.
@@ -332,8 +331,7 @@ class NativeStreamBackend(ExtensionStreamBackend):
         config = ext_pb.NativeStreamConfig()
         if retention is not None:
             config.retention.FromTimedelta(retention)
-        # The calls of each connection. A client and its Workers share them, and a Replayer
-        # reads again on any of them.
+        # The calls of each connection, which a client and its Workers share.
         self._connections: weakref.WeakKeyDictionary[
             temporalio.service.ServiceClient, _ExtensionCalls
         ] = weakref.WeakKeyDictionary()
@@ -356,17 +354,6 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def backend_for(self, client: temporalio.client.Client) -> _ExtensionCalls:
         """The Stream runtime of ``client``'s connection."""
         return self._new_backend(client.service_client)
-
-    def _any_backend(self) -> _ExtensionCalls:
-        # A Replayer has no client, so a replay reads again on a connection of the backend.
-        for backend in list(self._connections.values()):
-            return backend
-        raise StreamConfigError(
-            "A native replay reads each page of a Workflow read again, so it needs a client "
-            "of the native backend in this process. Register the Replayer's "
-            "NativeStreamBackend on a client too, or run a Worker or a Stream call of a "
-            "client first."
-        )
 
     async def _read_result(
         self,
@@ -417,9 +404,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def _configure_client(
         self, config: temporalio.client.ClientConfig
     ) -> temporalio.client.ClientConfig:
-        # The calls come from the connection, not from an interceptor. Knowing the connection
-        # now lets a Replayer with this backend read on it.
-        self._new_backend(config["service_client"])
+        # The calls come from the client's connection at the first call, so the client needs
+        # no interceptor.
         return config
 
 
