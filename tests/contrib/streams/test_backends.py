@@ -87,7 +87,7 @@ class WritesBoth:
 
 
 async def read_all(
-    client: Client, handle: WorkflowHandle[Any, Any], name: str, backend: str
+    handle: WorkflowHandle[Any, Any], name: str, backend: str
 ) -> list[object]:
     stream = handle.stream(streams.with_name(Events, name), backend=backend)
     return [item async for item in stream.subscribe(wait_new_records=False)]
@@ -104,8 +104,8 @@ async def test_one_worker_serves_two_backends(client: Client, redis_url: str):
             WritesBoth.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == ["redis", "memory"]
-    on_redis = await read_all(two, handle, "a", "redis")
-    on_memory = await read_all(two, handle, "b", "memory")
+    on_redis = await read_all(handle, "a", "redis")
+    on_memory = await read_all(handle, "b", "memory")
     assert any(isinstance(item, streams.Superseded) for item in on_redis)
     assert any(isinstance(item, streams.Superseded) for item in on_memory)
     assert data(on_redis)[-1] == "redis activity 2"
@@ -118,7 +118,7 @@ async def test_one_worker_serves_two_backends(client: Client, redis_url: str):
         assert closed.result == ["redis", "memory"]
     # Each Stream is only in its own backend.
     with pytest.raises(streams.StreamNotFoundError):
-        await read_all(two, handle, "b", "redis")
+        await read_all(handle, "b", "redis")
 
 
 @workflow.defn
@@ -137,7 +137,7 @@ async def test_default_marks_the_worker_default(client: Client, redis_url: str):
             CreatesDefault.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == "memory"
-    assert data(await read_all(two, handle, "events", "memory")) == ["default"]
+    assert data(await read_all(handle, "events", "memory")) == ["default"]
 
 
 @activity.defn
@@ -214,6 +214,6 @@ async def test_continued_run_closes_each_backend(client: Client, redis_url: str)
         )
         assert await handle.result() == "last run"
     for name, backend in (("a", "redis"), ("b", "memory")):
-        items = await read_all(two, handle, name, backend)
+        items = await read_all(handle, name, backend)
         assert isinstance(items[-1], streams.Closed)
         assert items[-1].result == "last run"

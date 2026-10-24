@@ -189,8 +189,8 @@ def subscription(
     return Subscription(items(position), position, options)
 
 
-class _AsyncTopic(TopicBase[T]):
-    # A Topic of an Activity or client handle. Each publish writes before it returns.
+class AsyncTopicBase(TopicBase[T]):
+    """Base of a Topic of an Activity or client handle. A publish writes before it returns."""
 
     async def publish(self, *values: T) -> int:
         """Write one Record for each value, in order, and return the last Record's offset.

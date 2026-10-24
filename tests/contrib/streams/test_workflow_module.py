@@ -286,9 +286,7 @@ class CreatesOn:
         await workflow.create_stream(Events, backend=backend)
 
 
-async def test_worker_config_errors_fail_the_task(
-    client: Client, stream_client: Client
-):
+async def test_worker_config_errors_fail_the_task(stream_client: Client):
     # Every Worker has the native backend, so only a backend that the Worker lacks fails the
     # Workflow Task, and a Worker with the right config can take the run on.
     async with new_worker(stream_client, CreatesOn) as worker:

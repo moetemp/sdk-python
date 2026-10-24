@@ -16,8 +16,8 @@ import temporalio.client
 from temporalio.common.streams import _backend, _errors, _ids
 from temporalio.common.streams._access import (
     Access,
+    AsyncTopicBase,
     ReadSpec,
-    _AsyncTopic,
     read_spec,
     subscription,
 )
@@ -64,7 +64,7 @@ def _client_producer(
     )
 
 
-class ClientTopic(_AsyncTopic[T]):
+class ClientTopic(AsyncTopicBase[T]):
     """One Topic of a :py:class:`ClientStream`. All Topics of a Stream share one order.
 
     .. warning::

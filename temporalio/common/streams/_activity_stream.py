@@ -14,8 +14,8 @@ import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.common.streams import _activity, _backend, _errors, _ids
 from temporalio.common.streams._access import (
     Access,
+    AsyncTopicBase,
     SyncTopicBase,
-    _AsyncTopic,
     read_spec,
     subscription,
 )
@@ -98,7 +98,7 @@ def _access(handle: StreamHandle[Any]) -> Access:
     )
 
 
-class ActivityTopic(_AsyncTopic[T]):
+class ActivityTopic(AsyncTopicBase[T]):
     """One Topic of an :py:class:`ActivityStream`. All Topics of a Stream share one order.
 
     .. warning::

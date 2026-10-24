@@ -108,7 +108,7 @@ async def test_worker_setup_on_redis(client: Client, redis_url: str):
 # The Jetty v2 examples. The Workflow reader runs on one backend: the memory Store, Redis or
 # the native server. The others need the native server, with Redis, or a memory Store named
 # `redis` in its place, so they run only when TEMPORAL_STREAMS_NATIVE_TARGET is set.
-async def native_server(client: Client, *backends: streams.StreamBackend) -> Client:
+async def native_server(*backends: streams.StreamBackend) -> Client:
     if not NATIVE_TARGET:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
@@ -130,8 +130,8 @@ def redis_stand_in(
 
 
 @pytest.mark.parametrize("lane", ["memory", "redis"])
-async def test_two_backends(lane: str, client: Client, request: pytest.FixtureRequest):
-    two = await native_server(client, redis_stand_in(lane, request))
+async def test_two_backends(lane: str, request: pytest.FixtureRequest):
+    two = await native_server(redis_stand_in(lane, request))
     assert await two_backends.main(two, task_queue()) == {
         "audit": ["started", "summarized"],
         "live": ["hello", "there", "summary"],
@@ -143,7 +143,7 @@ async def test_workflow_reader(
     lane: str, client: Client, request: pytest.FixtureRequest
 ):
     if lane == "native":
-        one = await native_server(client)
+        one = await native_server()
     else:
         config = client.config()
         config["stream_backends"] = [redis_stand_in(lane, request, default=True)]
@@ -157,10 +157,8 @@ async def test_workflow_reader(
 
 
 @pytest.mark.parametrize("lane", ["memory", "redis"])
-async def test_migrate_redis_to_native(
-    lane: str, client: Client, request: pytest.FixtureRequest
-):
-    moving = await native_server(client, redis_stand_in(lane, request, default=True))
+async def test_migrate_redis_to_native(lane: str, request: pytest.FixtureRequest):
+    moving = await native_server(redis_stand_in(lane, request, default=True))
     assert await migrate_redis_to_native.main(moving, task_queue()) == [
         "redis: hello",
         "redis: old chat goes on",
@@ -169,8 +167,8 @@ async def test_migrate_redis_to_native(
     ]
 
 
-async def test_standalone_activity_stream(client: Client):
-    native = await native_server(client)
+async def test_standalone_activity_stream():
+    native = await native_server()
     assert await standalone_activity_stream.main(native, task_queue()) == [
         "find",
         "the",
