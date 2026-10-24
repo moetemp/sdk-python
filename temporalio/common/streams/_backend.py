@@ -102,8 +102,8 @@ def longest_wait(longest: timedelta) -> timedelta:
     return min(longest, max(timeout - timedelta(seconds=1), timeout / 2))
 
 
-class StreamBackend(Protocol):
-    """What a Stream plugin gives the handles. Not public. Each backend has its own class."""
+class BackendCalls(Protocol):
+    """The calls that a Stream backend gives the handles of one client."""
 
     def service(
         self,
@@ -136,7 +136,7 @@ class StreamRuntime(Protocol):
         ...
 
 
-class _ExtensionStreamBackend:
+class _ExtensionCalls:
     """Carries Stream calls to the crate's runtime object, which serves one client.
 
     The five Stream service operations go through the generated client, and the writer
@@ -200,7 +200,7 @@ class _ExtensionStreamBackend:
 class _ExtensionTransport:
     # The generated client takes a transport, so the five operations reach the runtime as they
     # would reach a server later.
-    def __init__(self, backend: _ExtensionStreamBackend, namespace: str) -> None:
+    def __init__(self, backend: _ExtensionCalls, namespace: str) -> None:
         self._backend = backend
         self._namespace = namespace
 

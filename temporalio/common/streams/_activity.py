@@ -9,20 +9,22 @@ from typing import Any
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
-from temporalio.common.streams._backend import StreamBackend
+from temporalio.common.streams._backend import BackendCalls
 from temporalio.common.streams._writer import StreamWriter
 
 
 @dataclass
 class ActivityStreams:
-    """What a Stream plugin gives the Activity handles for one Activity attempt."""
+    """What a Stream backend gives the Activity handles for one Activity attempt."""
 
-    backend: StreamBackend
+    backend: BackendCalls
     converter: temporalio.converter.DataConverter
     namespace: str
     producer: stream_pb.Producer
     loop: asyncio.AbstractEventLoop
     backend_name: str = ""
+    # Whether the Worker's backend is the default, which a handle with no backend name uses.
+    default: bool = False
     # The Workflow of the attempt, so a close checks that the Stream is its run chain's.
     workflow_id: str | None = None
     # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.

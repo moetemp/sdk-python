@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import temporalio.exceptions
 import temporalio.service
 from temporalio.common.streams.proto.v1 import StreamErrorDetails
@@ -12,7 +14,7 @@ class StreamError(temporalio.exceptions.ApplicationError):
 
     It is an application error that is not retryable, except
     :py:class:`StreamStorageError`. So in Workflow code, where only
-    :py:class:`StreamClosedError` and the plugin errors are raised, an uncaught one fails the
+    :py:class:`StreamClosedError` and the backend errors are raised, an uncaught one fails the
     Workflow and does not fail the Workflow Task again and again.
 
     .. warning::
@@ -98,10 +100,21 @@ class StreamSeqDivergentError(StreamError):
 
 
 class StreamConfigError(RuntimeError):
-    """No Stream plugin, or no backend of a given name. It is config, not a Store error.
+    """No Stream backend, or no backend of a given name. It is config, not a Store error.
 
     ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
     """
+
+
+def no_default_backend(
+    owner: str, names: Sequence[str], hint: str
+) -> StreamConfigError:
+    """The error of a call with no backend name when no backend has ``default=True``."""
+    return StreamConfigError(
+        f"No Stream backend of the {owner} ({', '.join(names)}) has default=True, so the "
+        "default is native, which this SDK does not have. Mark a backend with "
+        f"default=True, or name one, such as with {hint}."
+    )
 
 
 class ReadOnlyContextError(StreamError):

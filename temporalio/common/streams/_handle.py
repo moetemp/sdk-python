@@ -272,10 +272,6 @@ class StreamHandle(Generic[E]):
         topics = definition_of(self._definition).topics
         return {name: topic.type for name, topic in topics.items()}
 
-    async def _ready(self) -> None:
-        # A handle that must look up its backend first does it here.
-        pass
-
     def _fields(self) -> dict[str, str]:
         # The fields that name the Stream. They need no call, so a handle whose id is not known
         # yet still compares, hashes and prints.

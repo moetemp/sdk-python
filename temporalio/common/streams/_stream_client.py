@@ -21,7 +21,7 @@ from temporalio.common.streams._access import (
     read_spec,
     subscription,
 )
-from temporalio.common.streams._backend import StreamBackend
+from temporalio.common.streams._backend import BackendCalls
 from temporalio.common.streams._defn import TopicDefinition, definition_of
 from temporalio.common.streams._handle import Creating, StreamHandle, exit_failure
 from temporalio.common.streams._items import End
@@ -115,7 +115,11 @@ class ClientTopic(_AsyncTopic[T]):
 
 
 class ClientStream(StreamHandle[E]):
-    """A Stream that a client writes, reads and closes. Get one from :py:class:`StreamClient`.
+    """A Stream that a client writes, reads and closes.
+
+    Get one from :py:meth:`temporalio.client.Client.stream`,
+    :py:meth:`temporalio.client.WorkflowHandle.stream` or a backend's create, such as
+    :py:func:`temporalio.contrib.stream.create`.
 
     Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. The
     handles of one client and Stream write as one Producer, and :py:meth:`producer` gives a
@@ -135,7 +139,7 @@ class ClientStream(StreamHandle[E]):
         backend: str | None = None,
         definition: type[E] | None = None,
     ) -> None:
-        """Create a handle. Use :py:class:`StreamClient` instead."""
+        """Create a handle. Use :py:meth:`temporalio.client.Client.stream` instead."""
         super().__init__(
             id=id,
             workflow_id=workflow_id,
@@ -144,14 +148,12 @@ class ClientStream(StreamHandle[E]):
             definition=definition,
         )
         self._client: temporalio.client.Client | None = None
-        self._stream_backend: StreamBackend | None = None
+        self._stream_backend: BackendCalls | None = None
         self._find_first_run: Callable[[], Awaitable[str]] | None = None
         self._writer: StreamWriter | None = None
         # The Stream name of a Workflow's Stream whose first run id is not known yet.
         self._stream_name = ""
         self._finding: asyncio.Future[str] | None = None
-        # The backends to look in, in order, until one has the Stream.
-        self._probe: list[tuple[str, StreamBackend]] = []
         self._closed = False
         # The name and the epoch of a named Producer.
         self._named: tuple[str, int] | None = None
@@ -159,39 +161,13 @@ class ClientStream(StreamHandle[E]):
     def _bind(
         self,
         client: temporalio.client.Client,
-        backend: StreamBackend,
+        backend: BackendCalls,
         find_first_run: Callable[[], Awaitable[str]] | None = None,
-        probe: list[tuple[str, StreamBackend]] | None = None,
     ) -> ClientStream[E]:
         self._client = client
         self._stream_backend = backend
         self._find_first_run = find_first_run
-        self._probe = probe or []
         return self
-
-    @property
-    def backend(self) -> str | None:
-        """Name of the backend. A handle that looks in many backends knows it after a call."""
-        return None if self._probe else self._backend
-
-    async def _ready(self) -> None:
-        # The first backend that has the Stream keeps it. Two first calls may both look.
-        for name, backend in self._probe:
-            assert self._client is not None
-            request = models.DescribeStreamRequest(
-                stream=models.StreamRef(id=await self._stream_id())
-            )
-            try:
-                await backend.service(self._client.namespace).describe_stream(request)
-            except _errors.StreamNotFoundError:
-                continue
-            self._backend, self._stream_backend, self._probe = name, backend, []
-            return
-        if self._probe:
-            raise _errors.StreamNotFoundError(
-                f"No backend of {[name for name, _ in self._probe]} has the Stream {self._id}",
-                reason="stream_not_found",
-            )
 
     @property
     def id(self) -> str:
@@ -234,7 +210,7 @@ class ClientStream(StreamHandle[E]):
         if client is None or backend is None:
             raise _errors.StreamConfigError(
                 "This ClientStream came from a payload, so it has no client. "
-                "Use StreamClient.get_handle."
+                "Use Client.stream(definition, stream=handle)."
             )
 
         def writer() -> StreamWriter:
@@ -280,9 +256,7 @@ class ClientStream(StreamHandle[E]):
         handle._stream_name = self._stream_name
         handle._named = (name, epoch)
         if self._client is not None and self._stream_backend is not None:
-            handle._bind(
-                self._client, self._stream_backend, self._find_first_run, self._probe
-            )
+            handle._bind(self._client, self._stream_backend, self._find_first_run)
         return handle
 
     @overload
@@ -365,7 +339,6 @@ class ClientStream(StreamHandle[E]):
     async def _items(
         self, read: ReadSpec, position: Position
     ) -> AsyncGenerator[Item, None]:
-        await self._ready()
         items = self._access().items(read, position)
         try:
             async for item in items:
@@ -388,7 +361,6 @@ class ClientStream(StreamHandle[E]):
                 ``DEADLINE_EXCEEDED``.
         """
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            await self._ready()
             return await self._access().get_offset()
 
     async def close(
@@ -418,7 +390,6 @@ class ClientStream(StreamHandle[E]):
             )
         self._closed = True
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            await self._ready()
             await self._access().close(result, failure)
 
     async def __aenter__(self) -> ClientStream[E]:
@@ -443,160 +414,120 @@ class ClientStream(StreamHandle[E]):
             await self.close(failure=failure)
 
 
-class StreamClient:
-    """Creates and gets Streams over a Temporal client with a Stream plugin.
-
-    .. warning::
-        This API is experimental.
+def create(
+    client: temporalio.client.Client,
+    definition: type[E],
+    *,
+    id: str,
+    retention: timedelta | None,
+    backend: str,
+) -> Creating[ClientStream[E]]:
+    """Create a Stream that this client owns on a registered backend. See
+    :py:func:`temporalio.contrib.stream.create`.
     """
 
-    def __init__(self, client: temporalio.client.Client) -> None:
-        """Create a Stream client. It makes no call."""
-        self._client = client
-
-    def create(
-        self,
-        definition: type[E],
-        *,
-        id: str,
-        retention: timedelta | None = None,
-        backend: str | None = None,
-        rpc_metadata: Mapping[str, str | bytes] = {},
-        rpc_timeout: timedelta | None = None,
-    ) -> Creating[ClientStream[E]]:
-        """Create a Stream that this client owns, so only a client closes it.
-
-        It is idempotent for one id and one Retention. Await the call for the handle, or use
-        it in ``async with``, which closes the Stream at the end of the block.
-
-        Args:
-            definition: The Stream definition class.
-            id: The Stream id, as a Workflow takes a Workflow id.
-            retention: How long the Records stay after the close. Defaults to the backend's.
-            backend: The name of the backend. Defaults to the client's default backend.
-            rpc_metadata: Headers of the call. See :py:meth:`ClientStream.get_offset`.
-            rpc_timeout: The deadline of the call.
-
-        Raises:
-            StreamConfigError: The client has no backend of that name. No call is made.
-            StreamClosedError: A Stream of that id was created and closed before.
-            StreamError: The Stream exists with another Retention, with the reason
-                ``stream_already_exists``.
-        """
-
-        async def create() -> ClientStream[E]:
-            definition_of(definition)
-            backend_name, stream_backend = client_backend(self._client, backend)
-            service = stream_backend.service(self._client.namespace)
-            with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-                response = await service.create_stream(
-                    models.CreateStreamRequest(stream_id=id, retention=retention)
-                )
-            if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
-                raise _errors.StreamClosedError(
-                    f"The Stream {id} was created and closed before",
-                    reason="stream_closed",
-                )
-            stream = ClientStream(
-                id=id, backend=backend_name or None, definition=definition
-            )
-            return stream._bind(self._client, stream_backend)
-
-        return Creating(create)
-
-    def get_handle(
-        self,
-        definition: type[E],
-        *,
-        id: str | None = None,
-        stream: StreamHandle[Any] | None = None,
-        backend: str | tuple[str, ...] | None = None,
-    ) -> ClientStream[E]:
-        """A Stream by its id, or a handle that came as data, such as in a Record. No call.
-
-        Args:
-            definition: The Stream definition class.
-            id: The Stream id.
-            stream: A handle of the Stream, such as one in a Record. Its id, owner and
-                backend stay.
-            backend: The name of the backend. Defaults to the client's default backend. A
-                tuple, such as ``("native", "redis")`` during a move, looks in each in order
-                on first use and keeps the first that has the Stream.
-        """
+    async def create() -> ClientStream[E]:
         definition_of(definition)
-        if stream is not None:
-            # An empty name is of any backend, so it needs a client with one.
-            backend_name, stream_backend = client_backend(
-                self._client, stream.backend, only=True
-            )
-            probe: list[tuple[str, StreamBackend]] = []
-        elif id is not None:
-            backend_name, stream_backend, probe = self._backends(backend)
-        else:
-            raise TypeError("get_handle takes id= or stream=")
-        handle = ClientStream(
-            id=stream.id if stream else id or "",
-            workflow_id=stream.workflow_id if stream else None,
-            first_execution_run_id=stream.first_execution_run_id if stream else None,
-            backend=backend_name or None,
-            definition=definition,
+        backend_name, calls = client_backend(client, backend)
+        response = await calls.service(client.namespace).create_stream(
+            models.CreateStreamRequest(stream_id=id, retention=retention)
         )
-        return handle._bind(self._client, stream_backend, probe=probe)
-
-    def _backends(
-        self, backend: str | tuple[str, ...] | None
-    ) -> tuple[str, StreamBackend, list[tuple[str, StreamBackend]]]:
-        if not isinstance(backend, tuple):
-            return (*client_backend(self._client, backend), [])
-        probe = [client_backend(self._client, name) for name in backend]
-        return (*probe[0], probe if len(probe) > 1 else [])
-
-    def workflow_stream(
-        self,
-        handle: temporalio.client.WorkflowHandle[Any, Any],
-        definition: type[E],
-        *,
-        backend: str | tuple[str, ...] | None = None,
-    ) -> ClientStream[E]:
-        """A Stream that a Workflow created, by the Workflow handle and the definition.
-
-        It builds the id from the Workflow id and the first run id, so it makes no call. A
-        handle with no first run id makes one Describe call on the Stream's first use.
-
-        Args:
-            handle: A handle of the Workflow, best the one that ``start_workflow`` returned.
-            definition: The Stream definition class, renamed as the Workflow's create.
-            backend: The name of the backend, or a tuple of names to look in, as for
-                :py:meth:`get_handle`. Defaults to the client's default backend.
-        """
-        stream_name = definition_of(definition).name
-        backend_name, stream_backend, probe = self._backends(backend)
-        first_run = handle.first_execution_run_id
-        stream = ClientStream(
-            id=_ids.scoped_stream_id(handle.id, first_run, stream_name)
-            if first_run
-            else "",
-            workflow_id=handle.id,
-            first_execution_run_id=first_run,
-            backend=backend_name or None,
-            definition=definition,
-        )
-        if first_run:
-            return stream._bind(self._client, stream_backend, probe=probe)
-
-        async def find_first_run() -> str:
-            # The first call that needs the id gives its own call options.
-            options = _backend.call_options.get()
-            description = await handle.describe(
-                rpc_metadata=options.metadata if options else {},
-                rpc_timeout=options.timeout if options else None,
+        if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
+            raise _errors.StreamClosedError(
+                f"The Stream {id} was created and closed before",
+                reason="stream_closed",
             )
-            first = description.raw_description.workflow_execution_info.first_run_id
-            if not first:
-                raise ValueError(
-                    "The server gave no first run id, so the Stream id is unknown"
-                )
-            return first
+        stream = ClientStream(id=id, backend=backend_name, definition=definition)
+        return stream._bind(client, calls)
 
-        stream._stream_name = stream_name
-        return stream._bind(self._client, stream_backend, find_first_run, probe)
+    return Creating(create)
+
+
+def client_stream(
+    client: temporalio.client.Client,
+    definition: type[E],
+    *,
+    id: str | None,
+    stream: StreamHandle[Any] | None,
+    backend: str | None,
+) -> ClientStream[E]:
+    """A Stream by its id, or a handle that came as data. See
+    :py:meth:`temporalio.client.Client.stream`.
+    """
+    definition_of(definition)
+    if (id is None) == (stream is None):
+        raise TypeError("stream takes one of id= and stream=")
+    if stream is not None:
+        if backend and stream.backend and backend != stream.backend:
+            raise ValueError(
+                f"The handle is of the backend {stream.backend}, not {backend}"
+            )
+        backend = backend or stream.backend
+    backend_name, calls = client_backend(client, backend)
+    handle = ClientStream(
+        id=stream.id if stream else id or "",
+        workflow_id=stream.workflow_id if stream else None,
+        first_execution_run_id=stream.first_execution_run_id if stream else None,
+        backend=backend_name,
+        definition=definition,
+    )
+    return handle._bind(client, calls)
+
+
+# The first run id that one Describe call found for a Workflow handle, so the Streams of one
+# handle share the call.
+_FIRST_RUNS: weakref.WeakKeyDictionary[
+    temporalio.client.WorkflowHandle[Any, Any], asyncio.Future[str]
+] = weakref.WeakKeyDictionary()
+
+
+async def _describe_first_run(
+    handle: temporalio.client.WorkflowHandle[Any, Any],
+) -> str:
+    # The first call that needs the id gives its own call options.
+    options = _backend.call_options.get()
+    description = await handle.describe(
+        rpc_metadata=options.metadata if options else {},
+        rpc_timeout=options.timeout if options else None,
+    )
+    first = description.raw_description.workflow_execution_info.first_run_id
+    if not first:
+        raise ValueError("The server gave no first run id, so the Stream id is unknown")
+    return first
+
+
+async def _first_run(handle: temporalio.client.WorkflowHandle[Any, Any]) -> str:
+    finding = _FIRST_RUNS.get(handle)
+    if finding is None or (finding.done() and finding.exception() is not None):
+        # A failed call does not stay, so a later call tries again.
+        finding = asyncio.ensure_future(_describe_first_run(handle))
+        _FIRST_RUNS[handle] = finding
+    return await asyncio.shield(finding)
+
+
+def workflow_stream(
+    handle: temporalio.client.WorkflowHandle[Any, Any],
+    definition: type[E],
+    *,
+    backend: str | None,
+) -> ClientStream[E]:
+    """A Stream that a Workflow created. See
+    :py:meth:`temporalio.client.WorkflowHandle.stream`.
+    """
+    stream_name = definition_of(definition).name
+    client = handle._client
+    backend_name, calls = client_backend(client, backend)
+    first_run = handle.first_execution_run_id
+    stream = ClientStream(
+        id=_ids.scoped_stream_id(handle.id, first_run, stream_name)
+        if first_run
+        else "",
+        workflow_id=handle.id,
+        first_execution_run_id=first_run,
+        backend=backend_name,
+        definition=definition,
+    )
+    if first_run:
+        return stream._bind(client, calls)
+    stream._stream_name = stream_name
+    return stream._bind(client, calls, lambda: _first_run(handle))

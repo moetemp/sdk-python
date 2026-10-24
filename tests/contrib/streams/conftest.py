@@ -9,9 +9,9 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 
 from temporalio.client import Client
-from temporalio.common.streams import StreamPlugin
-from temporalio.common.streams.redis import RedisStreamPlugin
-from temporalio.common.streams.testing import MemoryStreamPlugin
+from temporalio.common.streams import StreamBackend
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 
 # Ports that other local services own.
 _RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}
@@ -60,13 +60,15 @@ async def stream_client(
     client: Client, request: pytest.FixtureRequest
 ) -> AsyncIterator[Client]:
     # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules.
-    plugin: StreamPlugin
+    # rules. The backend is the default, so a create with no backend name uses it.
+    backend: StreamBackend
     if request.param == "memory":
-        plugin = MemoryStreamPlugin()
+        backend = MemoryStreamBackend(default=True)
     else:
         redis_url = request.getfixturevalue("redis_url")
-        plugin = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+        backend = RedisStreamBackend(
+            redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True
+        )
     config = client.config()
-    config["plugins"] = [plugin]
+    config["stream_backends"] = [backend]
     yield Client(**config)

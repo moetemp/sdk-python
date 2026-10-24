@@ -1,24 +1,23 @@
 """Streams of Records that Workflows, Activities and clients write and read.
 
 A Stream definition, a class with ``@streams.defn``, gives the Stream name and the type of each
-Topic. Workflow code creates a Stream with
-:py:func:`temporalio.common.streams.workflow.create_stream`. A client creates and gets Streams
-with :py:class:`StreamClient`. A Stream is data: a Workflow passes it to an Activity, a child
-Workflow or the next run as an argument, and the parameter's type gives the handle class of
-that context, such as :py:class:`ActivityStream`.
+Topic. Workflow code creates a Stream with :py:func:`temporalio.workflow.create_stream`. A
+client gets a Workflow's Stream with :py:meth:`temporalio.client.WorkflowHandle.stream`, and
+any Stream with :py:meth:`temporalio.client.Client.stream`. A Stream is data: a Workflow
+passes it to an Activity, a child Workflow or the next run as an argument, and the
+parameter's type gives the handle class of that context, such as :py:class:`ActivityStream`.
 
-A Stream plugin carries the calls and registers a backend name with ``name=``, such as
-:py:class:`temporalio.common.streams.redis.RedisStreamPlugin` (``redis``) and
-:py:class:`temporalio.common.streams.testing.MemoryStreamPlugin` (``memory``). A handle
-carries the name of its backend. A client may have two plugins, and exactly one of them has
-``default=True``, the one that a create with no ``backend=`` uses. For now a Worker has one
-Stream plugin, so it serves one backend.
+A :py:class:`StreamBackend` carries the calls and registers a backend name, such as
+:py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
+:py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). Register
+backends with ``Client.connect(..., stream_backends=[...])``. A handle carries the name of its
+backend. With more than one registered backend, exactly one has ``default=True``, the one
+that a create with no ``backend=`` uses. For now a Worker serves one backend.
 
 .. warning::
     This package is experimental.
 """
 
-from temporalio.common.streams import workflow
 from temporalio.common.streams._activity_stream import (
     ActivityStream,
     ActivityTopic,
@@ -48,7 +47,7 @@ from temporalio.common.streams._errors import (
     StreamStorageError,
     StreamUnsupportedError,
 )
-from temporalio.common.streams._handle import StreamHandle
+from temporalio.common.streams._handle import Creating, StreamHandle
 from temporalio.common.streams._items import (
     END,
     Closed,
@@ -56,14 +55,10 @@ from temporalio.common.streams._items import (
     Record,
     Superseded,
 )
-from temporalio.common.streams._plugin import StreamPlugin
+from temporalio.common.streams._plugin import StreamBackend
 from temporalio.common.streams._reader import Subscription
-from temporalio.common.streams._stream_client import (
-    ClientStream,
-    ClientTopic,
-    StreamClient,
-)
-from temporalio.common.streams.workflow import WorkflowStream, WorkflowTopic
+from temporalio.common.streams._stream_client import ClientStream, ClientTopic
+from temporalio.common.streams._workflow import WorkflowStream, WorkflowTopic
 
 __all__ = [
     "END",
@@ -74,12 +69,13 @@ __all__ = [
     "ClientTopic",
     "CloseStatus",
     "Closed",
+    "Creating",
     "ReadOnlyContextError",
     "Record",
-    "StreamClient",
     "StreamClosedError",
     "StreamConfigError",
     "StreamDefinition",
+    "StreamBackend",
     "StreamError",
     "StreamExpiredError",
     "StreamFencedError",
@@ -87,7 +83,6 @@ __all__ = [
     "StreamNotFoundError",
     "StreamNotOwnerError",
     "StreamOffsetError",
-    "StreamPlugin",
     "StreamSeqDivergentError",
     "StreamStorageError",
     "StreamUnsupportedError",
@@ -102,5 +97,4 @@ __all__ = [
     "defn",
     "topic",
     "with_name",
-    "workflow",
 ]

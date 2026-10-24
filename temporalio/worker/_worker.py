@@ -407,6 +407,14 @@ class Worker:
         plugins = plugins_from_client + list(plugins)
         self._initial_config = config.copy()
 
+        # The Worker takes its client's Stream backends, before the plugins as a client's
+        # plugins come first.
+        stream_backends = client.config(active_config=True).get("stream_backends")
+        if stream_backends:
+            from temporalio.common.streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_worker(stream_backends, config)
+
         self._plugins = plugins
         for plugin in plugins:
             config = plugin.configure_worker(config)

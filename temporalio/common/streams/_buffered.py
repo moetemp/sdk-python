@@ -219,7 +219,6 @@ class BufferedPublisher(Generic[T]):
         if self._topic is not None:
             return await self._topic.publish(*(value for _, value in batch))
         assert self._stream is not None
-        await self._stream._ready()
         return await self._stream._access().publish_records(batch)
 
     @property

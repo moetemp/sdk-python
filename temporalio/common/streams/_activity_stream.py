@@ -34,12 +34,17 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
     streams = _activity.current.get()
     if streams is None:
         raise _errors.StreamConfigError(
-            "No Stream plugin runs this Activity, such as RedisStreamPlugin"
+            "No Stream backend runs this Activity. Register one on the Worker's client "
+            "with stream_backends=."
         )
     if handle.backend and handle.backend != streams.backend_name:
         raise _errors.StreamConfigError(
             f"The Stream {handle.id} is of the backend {handle.backend}. The Worker has only "
             f"{streams.backend_name}."
+        )
+    if not handle.backend and not streams.default:
+        raise _errors.no_default_backend(
+            "Worker", [streams.backend_name], "a handle that carries its backend name"
         )
     return streams
 

@@ -14,7 +14,6 @@ from datetime import timedelta
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.common import streams
-from temporalio.common.streams import workflow as stream_workflow
 from temporalio.worker import Worker
 
 
@@ -59,9 +58,7 @@ async def run_tool(call: str) -> str:
 class AgentTurns:
     @workflow.run
     async def run(self, messages: list[str]) -> str:
-        stream = await stream_workflow.create_stream(
-            Events, retention=timedelta(days=1)
-        )
+        stream = await workflow.create_stream(Events, retention=timedelta(days=1))
         turns = stream.topic(Events.turns)
         while True:
             # The publish is one Local Activity. History keeps its offset, not the Turn.
@@ -100,7 +97,7 @@ async def main(
             task_queue=task_queue,
         )
         await handle.result()
-        stream = streams.StreamClient(client).workflow_stream(handle, Events)
+        stream = handle.stream(Events)
         return [
             item
             async for item in stream.subscribe()

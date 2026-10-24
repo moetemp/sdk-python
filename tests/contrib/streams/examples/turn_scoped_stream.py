@@ -14,7 +14,6 @@ from datetime import timedelta
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.common import streams
-from temporalio.common.streams import workflow as stream_workflow
 from temporalio.worker import Worker
 
 
@@ -51,20 +50,20 @@ class ChatTurnsInput:
     # The first turn number of this run. A Stream name must be unique in the run chain.
     next: int = 0
     # From the run before continue-as-new.
-    index: stream_workflow.WorkflowStream[TurnIndex] | None = None
+    index: streams.WorkflowStream[TurnIndex] | None = None
 
 
 @workflow.defn
 class ChatTurns:
     @workflow.run
     async def run(self, input: ChatTurnsInput) -> None:
-        index = input.index or await stream_workflow.create_stream(
+        index = input.index or await workflow.create_stream(
             TurnIndex, retention=timedelta(days=1)
         )
         started = index.topic(TurnIndex.started)
         batch = input.prompts[:2]
         for i, prompt in enumerate(batch):
-            async with stream_workflow.create_stream(
+            async with workflow.create_stream(
                 streams.with_name(Events, f"turn-{input.next + i}"),
                 retention=timedelta(days=1),
             ) as turn:
@@ -99,14 +98,13 @@ async def main(client: Client, task_queue: str) -> dict[int, list[str]]:
             task_queue=task_queue,
         )
         await handle.result()
-    stream_client = streams.StreamClient(client)
-    index = stream_client.workflow_stream(handle, TurnIndex)
+    index = handle.stream(TurnIndex)
     turns = {}
     async for item in index.subscribe():
         if not isinstance(item, streams.Record):
             continue
         # A Stream from a payload has no client, so the reader binds it to this one.
-        turn = stream_client.get_handle(Events, stream=item.data.stream)
+        turn = client.stream(Events, stream=item.data.stream)
         turns[item.data.n] = [
             token.data
             async for token in turn.subscribe()

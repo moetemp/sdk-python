@@ -1,16 +1,14 @@
 """Streams in Workflow code.
 
-Workflow code creates a Stream with :py:func:`create_stream` and gets one again with
-:py:func:`stream_handle`. A Stream that the Workflow receives as an argument, such as a
-:py:class:`WorkflowStream` that a run passes on through continue-as-new, works the same.
+Workflow code creates a Stream with :py:func:`temporalio.workflow.create_stream` and gets one
+again with :py:func:`temporalio.workflow.stream_handle`. A Stream that the Workflow receives as
+an argument, such as a :py:class:`WorkflowStream` that a run passes on through continue-as-new,
+works the same.
 
 Each create, publish and close is a Local Activity, so it has a place in the run's commands,
 as an Activity call has. To add, remove or move one in a Workflow that has open runs, gate the
 change with ``workflow.patched``, else the replay of those runs fails as nondeterministic.
 Publishes that wait behind a write to the same Stream go as one Local Activity.
-
-.. warning::
-    This module is experimental.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, TypeVar, overload
+from typing import Any, NamedTuple, TypeVar, overload
 
 import google.protobuf.message
 
@@ -41,7 +39,7 @@ from temporalio.common.streams.system import models
 E = TypeVar("E")
 T = TypeVar("T")
 
-# The plugin's Local Activities that write for Workflow code. The marker keeps the answer only,
+# The backend's Local Activities that write for Workflow code. The marker keeps the answer only,
 # since a Local Activity's input is not in History.
 CREATE_ACTIVITY = "__temporal_streams_create"
 APPEND_ACTIVITY = "__temporal_streams_append"
@@ -52,14 +50,6 @@ _WRITE_TIMEOUT = timedelta(seconds=30)
 # Store's 4 MiB batch limit. Half of it leaves room for most codecs.
 _MERGE_RECORDS = 1000
 _MERGE_BYTES = 2 * 1024 * 1024
-
-__all__ = [
-    "WorkflowStream",
-    "WorkflowTopic",
-    "create_stream",
-    "create_stream_nowait",
-    "stream_handle",
-]
 
 
 @dataclass
@@ -130,31 +120,56 @@ def _state() -> _RunState:
     return state
 
 
-def _backend_name() -> str | None:
-    # A Stream plugin marks its outbound interceptor with its backend name. With none, the
-    # call would go to the server as a System Nexus command, which only native Streams serve.
+class WorkerBackend(NamedTuple):
+    """The Stream backend of the Worker that runs the Workflow."""
+
+    name: str
+    default: bool
+    kind: str
+
+
+def worker_backend() -> WorkerBackend | None:
+    """The Worker's backend, which marks the run's outbound interceptor, or None."""
     outbound = getattr(temporalio.workflow._Runtime.current(), "_outbound", None)
     while outbound is not None:
         if getattr(outbound, "_temporal_stream_transport", False):
-            return getattr(outbound, "_temporal_stream_backend_name", "")
+            return WorkerBackend(
+                getattr(outbound, "_temporal_stream_backend_name", ""),
+                getattr(outbound, "_temporal_stream_default", False),
+                getattr(outbound, "_temporal_stream_kind", ""),
+            )
         outbound = getattr(outbound, "next", None)
     return None
+
+
+def no_worker_backend() -> _errors.StreamConfigError:
+    """The error of Workflow code on a Worker with no Stream backend."""
+    return _errors.StreamConfigError(
+        "No Stream backend is on the Worker. Register one on its client with "
+        "stream_backends=."
+    )
 
 
 def _check_backend(backend: str | None, action: str) -> str:
     # The Worker's config gives these errors, not the history, so they fail the Workflow Task
     # and a Worker with the right config retries it. An ApplicationError would fail the run.
-    worker_backend = _backend_name()
-    if worker_backend is None:
-        raise _errors.StreamConfigError(
-            "No Stream plugin is on the Worker, such as RedisStreamPlugin"
-        )
-    if backend and backend != worker_backend:
+    worker = worker_backend()
+    if worker is None:
+        raise no_worker_backend()
+    if not backend:
+        if not worker.default:
+            raise _errors.no_default_backend(
+                "Worker",
+                [worker.name],
+                "temporalio.contrib.stream.workflow.create_stream",
+            )
+        return worker.name
+    if backend != worker.name:
         raise _errors.StreamConfigError(
             f"Can't {action} a Stream of the backend {backend}. The Worker has only "
-            f"{worker_backend}."
+            f"{worker.name}."
         )
-    return worker_backend
+    return worker.name
 
 
 def _records(request: google.protobuf.message.Message) -> int:
@@ -273,7 +288,7 @@ async def drain() -> None:
 
 
 def _payload(value: Any) -> Any:
-    # The Workflow's converter runs here, in the sandbox. The plugin runs only the codec.
+    # The Workflow's converter runs here, in the sandbox. The backend runs only the codec.
     return temporalio.workflow.payload_converter().to_payload(value)
 
 
@@ -297,7 +312,7 @@ class WorkflowTopic(TopicBase[T]):
                 Stream that something else closed.
             StreamClosedError: This run closed the Stream.
             ReadOnlyContextError: The code must not change state, such as a query handler.
-            StreamConfigError: No Stream plugin is on the Worker, or the Stream is of a
+            StreamConfigError: No Stream backend is on the Worker, or the Stream is of a
                 backend that the Worker does not have. It fails the Workflow Task, not the run.
         """
         return await self._stream._append(self._name, values)
@@ -483,33 +498,8 @@ def create_stream(
     retention: timedelta | None = None,
     backend: str | None = None,
 ) -> Creating[WorkflowStream[E]]:
-    """Create a Stream that this run chain owns.
-
-    Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
-    handle with no call. The create is one Local Activity, and its error raises here. Only the
-    run chain closes the Stream. On Redis, the end of the run chain closes nothing, so a Stream
-    that nobody closes stays open until its ``safety_ttl``.
-
-    Await the call for the handle, or use it in ``async with``, which closes the Stream at the
-    end of the block::
-
-        async with create_stream(streams.with_name(Events, "turn-3")) as turn:
-            await turn.topic(Events.tokens).publish("hi")
-
-    Args:
-        definition: The Stream definition class. Its name is the Stream name. For one Stream
-            per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
-        retention: How long the Records stay after the close. Defaults to the backend's.
-        backend: The name of the backend. Defaults to the Worker's. The default is part of
-            the Workflow's code, since a replay must create on the same backend. To move a
-            Workflow to another backend, gate it with a patch, for example
-            ``backend="native" if workflow.patched("streams-native") else "redis"``.
-
-    Raises:
-        StreamError: The backend refused the create, such as for another Retention.
-        ReadOnlyContextError: The code must not change state, such as a query handler.
-        StreamConfigError: No Stream plugin is on the Worker, or it has no backend of that name.
-            It fails the Workflow Task, not the run.
+    """Create a Stream that this run chain owns. See
+    :py:func:`temporalio.workflow.create_stream`.
     """
 
     async def create() -> WorkflowStream[E]:
@@ -526,11 +516,8 @@ def create_stream_nowait(
     retention: timedelta | None = None,
     backend: str | None = None,
 ) -> WorkflowStream[E]:
-    """Create a Stream that this run chain owns, with no await.
-
-    It is for sync Workflow code, such as ``@workflow.init``, as ``asyncio.Queue.put_nowait``
-    is for code that can't await ``put``. It takes the options of :py:func:`create_stream`. A
-    backend error fails the Workflow Task.
+    """Create a Stream that this run chain owns, with no await. See
+    :py:func:`temporalio.workflow.create_stream_nowait`.
     """
     stream, task = _create(definition, retention, backend)
     _write_nowait(task)
@@ -565,18 +552,13 @@ def _create(
 def stream_handle(
     definition: type[E], *, backend: str | None = None
 ) -> WorkflowStream[E]:
-    """A Stream that this run chain created, by its definition. It makes no call.
-
-    A later run of the chain, such as one after continue-as-new, uses it to write the Stream
-    again.
-
-    Args:
-        definition: The Stream definition class, renamed as for the create.
-        backend: The backend of the Stream. Defaults to the one that the run chain created it
-            on, and else to the Worker's.
+    """A Stream that this run chain created, by its definition. See
+    :py:func:`temporalio.workflow.stream_handle`.
     """
     stream = _own_handle(definition, backend)
     if backend is None:
         known = _state().streams.get(stream.id)
-        stream._backend = (known.backend if known else None) or _backend_name() or None
+        stream._backend = (known.backend if known else None) or _check_backend(
+            None, "get"
+        )
     return stream

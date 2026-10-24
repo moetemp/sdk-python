@@ -6,6 +6,9 @@ import asyncio
 
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.bridge.streams import StreamCallError
+from temporalio.client import Client
+from temporalio.common.streams import StreamBackend
+from temporalio.common.streams._backend import _ExtensionCalls
 from temporalio.common.streams.proto import v1 as ext_pb
 from temporalio.service import RPCStatusCode
 
@@ -146,3 +149,22 @@ class FakeExtension:
                 await asyncio.wait_for(stream.changed.wait(), left)
             except asyncio.TimeoutError:
                 pass
+
+
+class _FakeBackend(StreamBackend):
+    # The fake keeps Redis's rules, so the Redis calls take it.
+    _kind = "redis"
+
+
+def fake_client(client: Client) -> tuple[Client, FakeExtension]:
+    """A copy of ``client`` whose one Stream backend, ``fake``, is a fake runtime."""
+    extension = FakeExtension()
+    backend = _FakeBackend(
+        "fake-streams",
+        backend_name="fake",
+        default=True,
+        calls=_ExtensionCalls(extension),
+    )
+    config = client.config()
+    config["stream_backends"] = [backend]
+    return Client(**config), extension

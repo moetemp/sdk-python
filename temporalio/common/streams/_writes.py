@@ -14,19 +14,19 @@ import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
 from temporalio.common.streams import _activity, _errors
-from temporalio.common.streams.system import client as service_client
-from temporalio.common.streams.system import models
-from temporalio.common.streams.workflow import (
+from temporalio.common.streams._workflow import (
     APPEND_ACTIVITY,
     CLOSE_ACTIVITY,
     CREATE_ACTIVITY,
 )
+from temporalio.common.streams.system import client as service_client
+from temporalio.common.streams.system import models
 
 
 def _context() -> tuple[_activity.ActivityStreams, service_client.StreamServiceClient]:
     streams = _activity.current.get()
     if streams is None:
-        raise _errors.StreamConfigError("No Stream plugin runs this Local Activity")
+        raise _errors.StreamConfigError("No Stream backend runs this Local Activity")
     return streams, streams.backend.service(streams.namespace, streams.converter)
 
 

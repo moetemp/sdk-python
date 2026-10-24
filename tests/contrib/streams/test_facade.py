@@ -12,31 +12,18 @@ from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
 from temporalio.common import RawValue, streams
 from temporalio.common.streams import _errors
-from temporalio.common.streams._backend import _ExtensionStreamBackend
 from temporalio.common.streams.proto import v1 as ext_pb
 from temporalio.common.streams.system import models
+from temporalio.contrib import stream as redis
 from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
-from tests.contrib.streams.fake_extension import FakeExtension
+from tests.contrib.streams.fake_extension import fake_client
 
 
 @dataclass
 class Turn:
     kind: str
     text: str = ""
-
-
-def fake_client(client: Client) -> tuple[Client, FakeExtension]:
-    extension = FakeExtension()
-    plugin = streams.StreamPlugin(
-        "fake-streams",
-        backend_name="fake",
-        default=False,
-        stream_backend=_ExtensionStreamBackend(extension),
-    )
-    config = client.config()
-    config["plugins"] = [plugin]
-    return Client(**config), extension
 
 
 def test_runtime_errors_map_to_stream_errors():
@@ -83,7 +70,7 @@ class Events:
 
 async def test_client_writes_reads_and_closes(client: Client):
     client, extension = fake_client(client)
-    stream = await streams.StreamClient(client).create(Events, id="chat-42")
+    stream = await redis.create(client, Events, id="chat-42")
     first = await stream.topic(Events.turns).publish(Turn("model"))
     second = await stream.topic("tokens").publish("hello")
     assert second == first + 1
@@ -111,15 +98,14 @@ async def test_client_writes_reads_and_closes(client: Client):
 
 async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
-    stream_client = streams.StreamClient(client)
     handle = client.get_workflow_handle("wf-1", first_execution_run_id="run-1")
-    stream = stream_client.workflow_stream(handle, Events)
+    stream = handle.stream(Events)
     with pytest.raises(streams.StreamNotFoundError):
         async for _ in stream.subscribe():
             pass
 
     async def create_later() -> None:
-        created = await stream_client.create(Events, id=stream.id)
+        created = await redis.create(client, Events, id=stream.id)
         await created.topic(Events.tokens).publish("five")
         await created.close()
 
@@ -144,9 +130,8 @@ def test_stream_errors_fail_the_workflow_not_the_task():
 
 async def test_handles_of_one_client_share_a_producer_and_free_it(client: Client):
     client, extension = fake_client(client)
-    stream_client = streams.StreamClient(client)
-    stream = await stream_client.create(Events, id="two-writers")
-    other = stream_client.get_handle(Events, id="two-writers")
+    stream = await redis.create(client, Events, id="two-writers")
+    other = client.stream(Events, id="two-writers")
     await stream.topic(Events.tokens).publish("1")
     await other.topic(Events.tokens).publish("2")
     items = [item async for item in stream.subscribe(wait_new_records=False)]
@@ -165,7 +150,7 @@ async def test_handles_of_one_client_share_a_producer_and_free_it(client: Client
 
 async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
     client, extension = fake_client(client)
-    stream = await streams.StreamClient(client).create(Events, id="slow")
+    stream = await redis.create(client, Events, id="slow")
     call = extension.call
 
     async def slow_describe(method: str, input: bytes) -> bytes:

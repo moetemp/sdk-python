@@ -9,7 +9,7 @@ from typing import Any, TypeVar, cast
 
 import temporalio.converter
 from temporalio.common.streams import _convert, _reader
-from temporalio.common.streams._backend import CallOptions, StreamBackend
+from temporalio.common.streams._backend import BackendCalls, CallOptions
 from temporalio.common.streams._defn import TopicDefinition
 from temporalio.common.streams._handle import StreamHandle, TopicBase
 from temporalio.common.streams._items import End, close_status
@@ -24,7 +24,7 @@ T = TypeVar("T")
 class Access:
     """The calls of one Stream handle, bound to a backend."""
 
-    backend: StreamBackend
+    backend: BackendCalls
     converter: temporalio.converter.DataConverter
     namespace: str
     stream_id: Callable[[], Awaitable[str]]
@@ -188,7 +188,6 @@ class _AsyncTopic(TopicBase[T]):
 
         A list is one value.
         """
-        await self._stream._ready()
         return await self._stream._access().publish(self._name, values)
 
     def subscribe(

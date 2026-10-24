@@ -13,7 +13,6 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import streams
-from temporalio.common.streams import workflow as stream_workflow
 from temporalio.worker import Worker
 
 
@@ -33,7 +32,7 @@ class Turns:
 
     @workflow.run
     async def run(self, first: list[str]) -> None:
-        turn = await stream_workflow.create_stream(Turn3)
+        turn = await workflow.create_stream(Turn3)
         tokens = turn.topic(Events.tokens)
         await tokens.publish(*first)
         await workflow.wait_condition(lambda: bool(self.more) or self.done)
@@ -58,9 +57,9 @@ class OffsetStore:
 
 
 async def read_some(
-    client: Client, handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
+    handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
 ) -> list[str]:
-    turn3 = streams.StreamClient(client).workflow_stream(handle, Turn3)
+    turn3 = handle.stream(Turn3)
     tokens = turn3.topic(Events.tokens)
     seen = []
     read = tokens.subscribe(
@@ -80,9 +79,9 @@ async def read_some(
     return seen
 
 
-async def read_new(client: Client, handle: WorkflowHandle[Turns, None]) -> list[str]:
+async def read_new(handle: WorkflowHandle[Turns, None]) -> list[str]:
     # A view that shows only what comes next starts after the newest Record.
-    turn3 = streams.StreamClient(client).workflow_stream(handle, Turn3)
+    turn3 = handle.stream(Turn3)
     return [
         item.data
         async for item in turn3.topic(Events.tokens).subscribe(
@@ -100,9 +99,9 @@ async def main(
             Turns.run, ["a", "b"], id=f"turns-{uuid.uuid4()}", task_queue=task_queue
         )
         store = OffsetStore()
-        before = await read_some(client, handle, store, 2)
-        new = await read_new(client, handle)
+        before = await read_some(handle, store, 2)
+        new = await read_new(handle)
         await handle.signal(Turns.add, ["c", "d"])
-        after = await read_some(client, handle, store, 2)
+        after = await read_some(handle, store, 2)
         await handle.result()
         return before, new, after
