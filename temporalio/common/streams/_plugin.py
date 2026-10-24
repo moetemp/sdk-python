@@ -247,10 +247,8 @@ def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:
     return list(client.config(active_config=True).get("stream_backends", ()))
 
 
-def client_backend(
-    client: temporalio.client.Client, name: str | None
-) -> tuple[str, BackendCalls]:
-    """The name and the calls of a client's backend. None picks the default backend.
+def backend_of(client: temporalio.client.Client, name: str | None) -> StreamBackend:
+    """A client's backend. None picks the default backend.
 
     Raises:
         StreamConfigError: The client has no backend of that name.
@@ -259,8 +257,20 @@ def client_backend(
     wanted = name or default_name(backends)
     for backend in backends:
         if backend.backend_name == wanted:
-            return wanted, backend.backend_for(client)
+            return backend
     raise _errors.StreamConfigError(
         f"The client has no Stream backend {wanted}. It has "
         f"{', '.join(b.backend_name for b in backends)}."
     )
+
+
+def client_backend(
+    client: temporalio.client.Client, name: str | None
+) -> tuple[str, BackendCalls]:
+    """The name and the calls of a client's backend. None picks the default backend.
+
+    Raises:
+        StreamConfigError: The client has no backend of that name.
+    """
+    backend = backend_of(client, name)
+    return backend.backend_name, backend.backend_for(client)

@@ -385,11 +385,11 @@ def create_stream(
             "the Streams that it receives."
         )
     attempt = _activity.current.get()
-    streams = attempt.get(backend) if attempt is not None else None
+    # Only a native backend keeps the Stream, so the default rule doesn't apply.
+    name = backend or _ids.NATIVE_BACKEND
+    streams = attempt.backends.get(name) if attempt is not None else None
     if streams is None:
-        raise _errors.StreamConfigError(
-            f"No Stream backend {backend or 'by default'} runs this Activity"
-        )
+        raise _errors.StreamConfigError(f"No Stream backend {name} runs this Activity")
     if not streams.activity_streams:
         raise _errors.StreamConfigError(
             f"The backend {streams.backend_name} keeps no Stream of a Standalone Activity, "

@@ -607,3 +607,34 @@ def test_sync_call_stops_when_the_thread_is_cancelled():
     assert stopped.wait(5)
     assert errors and isinstance(errors[0], CancelledError)
     loop.call_soon_threadsafe(loop.stop)
+
+
+@activity.defn
+async def creates_its_own() -> str:
+    try:
+        await activity.create_stream(Events)
+    except streams.StreamConfigError as err:
+        return str(err)
+    return "created"
+
+
+@workflow.defn
+class RunsCreatesItsOwn:
+    @workflow.run
+    async def run(self) -> str:
+        return await workflow.execute_activity(
+            creates_its_own, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+async def test_only_a_standalone_activity_creates_a_stream(stream_client: Client):
+    # A Workflow owns the Streams of its Activities, so its Activity creates none.
+    async with new_worker(
+        stream_client, RunsCreatesItsOwn, activities=[creates_its_own]
+    ) as worker:
+        message = await stream_client.execute_workflow(
+            RunsCreatesItsOwn.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    assert "Only a Standalone Activity" in message

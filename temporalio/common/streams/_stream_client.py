@@ -25,7 +25,7 @@ from temporalio.common.streams._backend import BackendCalls
 from temporalio.common.streams._defn import TopicDefinition, definition_of
 from temporalio.common.streams._handle import Creating, StreamHandle, exit_failure
 from temporalio.common.streams._items import End
-from temporalio.common.streams._plugin import client_backend
+from temporalio.common.streams._plugin import backend_of, client_backend
 from temporalio.common.streams._reader import Item, Position, Subscription
 from temporalio.common.streams._writer import StreamWriter
 from temporalio.common.streams.system import models
@@ -517,3 +517,36 @@ def workflow_stream(
         return stream._bind(client, calls)
     stream._stream_name = stream_name
     return stream._bind(client, calls, lambda: _first_run(handle))
+
+
+def activity_stream(
+    handle: temporalio.client.ActivityHandle[Any],
+    definition: type[E],
+    *,
+    backend: str | None,
+) -> ClientStream[E]:
+    """A Stream that a Standalone Activity created. See
+    :py:meth:`temporalio.client.ActivityHandle.stream`.
+    """
+    stream_name = definition_of(definition).name
+    client = handle._client
+    # Only a native backend keeps the Stream, so the default rule doesn't apply.
+    stream_backend = backend_of(client, backend or _ids.NATIVE_BACKEND)
+    if not stream_backend._activity_streams:
+        raise _errors.StreamConfigError(
+            f"The backend {stream_backend.backend_name} keeps no Stream of a Standalone "
+            "Activity. Use the native backend."
+        )
+    if not handle.run_id:
+        raise ValueError(
+            "The Activity handle has no run id, so the Stream id is unknown. Use the "
+            "handle that start_activity returns."
+        )
+    stream = ClientStream(
+        id=_ids.scoped_stream_id(handle.id, handle.run_id, stream_name),
+        backend=stream_backend.backend_name,
+        definition=definition,
+        activity_id=handle.id,
+        activity_run_id=handle.run_id,
+    )
+    return stream._bind(client, stream_backend.backend_for(client))

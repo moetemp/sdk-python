@@ -10,6 +10,7 @@ import pytest
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import streams
+from temporalio.common.streams import _plugin
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
@@ -435,3 +436,20 @@ async def test_workflow_environment_takes_stream_backends():
         items = [item async for item in handle.stream(Events).subscribe()]
     data = [item.data for item in items if isinstance(item, streams.Record)]
     assert data == ["from the environment"]
+
+
+async def test_only_the_native_backend_keeps_a_standalone_activitys_stream(
+    stream_client: Client,
+):
+    # Nothing closes a Redis Stream when its Activity ends, so it would stay open. So an
+    # Activity's Stream is native unless the call names another native backend.
+    handle = stream_client.get_activity_handle("activity", run_id="run")
+    stream = handle.stream(Events)
+    assert stream.backend == "native"
+    assert (stream.activity_id, stream.activity_run_id) == ("activity", "run")
+    lane, _ = _plugin.client_backend(stream_client, None)
+    if lane != "native":
+        with pytest.raises(streams.StreamConfigError, match="native backend"):
+            handle.stream(Events, backend=lane)
+    with pytest.raises(ValueError, match="no run id"):
+        stream_client.get_activity_handle("activity").stream(Events)
