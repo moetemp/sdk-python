@@ -14,7 +14,7 @@ import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import streams
-from temporalio.common.streams import _native
+from temporalio.common.streams import _native, _plugin
 from temporalio.common.streams._native import POSITIONS_TYPE
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
@@ -107,12 +107,9 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         if event.HasField("nexus_operation_completed_event_attributes")
     ]
     assert wakes and not any(wake.records for wake in wakes)
-    # A replay reads over the connection of a client of the native backend. It reads each page
-    # again once the cache is gone.
-    replayer = Replayer(
-        workflows=[Writer, Reader],
-        stream_backends=native_client.config()["stream_backends"],
-    )
+    # A replay reads each page again on the connection of its stream_client, once the cache
+    # is gone.
+    replayer = Replayer(workflows=[Writer, Reader], stream_client=native_client)
     await replayer.replay_workflow(await writer.fetch_history())
     await replayer.replay_workflow(history)
     _native._pages.clear()
@@ -122,10 +119,10 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
 async def test_redis_and_native_on_a_native_server(
     native_client: Client, redis_url: str
 ):
+    # The client registers only Redis, and has the native backend with no registration.
     config = native_client.config()
     config["stream_backends"] = [
         RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
-        streams.NativeStreamBackend(),
     ]
     two = Client(**config)
     async with new_worker(
@@ -419,3 +416,8 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
         first.service_client,
         second.service_client,
     ]
+    # The native backend that no client registers works the same, and makes no call.
+    plain = await Client.connect("127.0.0.1:3", lazy=True)
+    _, calls = _plugin.client_backend(plain, None)
+    assert cast(Any, calls)._runtime._service is plain.service_client
+    assert _plugin.client_backend(plain, None)[1] is calls

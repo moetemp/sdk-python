@@ -84,10 +84,6 @@ class Reader:
         return seen
 
 
-def backends_of(client: Client) -> list[Any]:
-    return list(client.config()["stream_backends"])
-
-
 async def write_and_read(
     client: Client, backend: str | None, **read_options: Any
 ) -> tuple[list[Any], Any]:
@@ -114,7 +110,7 @@ async def test_workflow_reads_another_workflows_stream(stream_client: Client):
     seen, reader = await write_and_read(stream_client, None)
     assert seen == ["turn user hi", "a", "b", "c", "closed written"]
     # Each page is in History, so a replay reads the same items.
-    replayer = Replayer(workflows=[Reader], stream_backends=backends_of(stream_client))
+    replayer = Replayer(workflows=[Reader], stream_client=stream_client)
     await replayer.replay_workflow(await reader.fetch_history())
 
 

@@ -4,12 +4,12 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 
 import pytest
 
 from temporalio.client import Client
-from temporalio.common.streams import NativeStreamBackend, StreamBackend
+from temporalio.common.streams import StreamBackend
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 
@@ -61,22 +61,12 @@ NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
 NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
 
 
-@pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
-async def stream_client(
-    client: Client, request: pytest.FixtureRequest
-) -> AsyncIterator[Client]:
-    # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules, and on the native server when one is given. The backend is the default, so a
-    # create with no backend name uses it.
-    if request.param == "native":
-        yield await Client.connect(
-            NATIVE_TARGET,
-            namespace=NATIVE_NAMESPACE,
-            stream_backends=[NativeStreamBackend()],
-        )
-        return
+async def _brook_client(
+    client: Client, request: pytest.FixtureRequest, lane: str
+) -> Client:
+    # The memory Store or Redis, as the default, so a create with no backend name uses it.
     backend: StreamBackend
-    if request.param == "memory":
+    if lane == "memory":
         backend = MemoryStreamBackend(default=True)
     else:
         redis_url = request.getfixturevalue("redis_url")
@@ -85,7 +75,24 @@ async def stream_client(
         )
     config = client.config()
     config["stream_backends"] = [backend]
-    yield Client(**config)
+    return Client(**config)
+
+
+@pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
+async def stream_client(client: Client, request: pytest.FixtureRequest) -> Client:
+    # Every live test runs on the memory Store and on Redis, since both must keep one set of
+    # rules, and on the native server when one is given. The native backend is every
+    # client's with no registration, and the default when no backend has default=True.
+    if request.param == "native":
+        return await Client.connect(NATIVE_TARGET, namespace=NATIVE_NAMESPACE)
+    return await _brook_client(client, request, request.param)
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def redis_client(client: Client, request: pytest.FixtureRequest) -> Client:
+    # A test of the Redis calls, such as temporalio.contrib.stream.create, which the memory
+    # Store keeps the rules of.
+    return await _brook_client(client, request, request.param)
 
 
 @pytest.fixture
@@ -94,8 +101,4 @@ async def native_client() -> Client:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
-    return await Client.connect(
-        NATIVE_TARGET,
-        namespace=NATIVE_NAMESPACE,
-        stream_backends=[NativeStreamBackend()],
-    )
+    return await Client.connect(NATIVE_TARGET, namespace=NATIVE_NAMESPACE)

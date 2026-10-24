@@ -16,10 +16,11 @@ The proposal's Nexus examples are a later stage, so they have no file here.
 
 ## Jetty v2
 
-These add Workflow reads, the native backend, and two backends in one Worker to the same API. `test_examples.py` runs each one on three lanes. The memory and Redis lanes use a memory Store with the backend name `native` in place of the server. The native lane uses `NativeStreamPlugin` against a server with the Stream service, and it runs only when `TEMPORAL_STREAMS_NATIVE_TARGET` is set.
+These add Workflow reads, the native backend, two backends in one Worker, and Standalone Activity Streams to the same API. Every client has the native backend with no registration, and it is the default unless a registered backend has `default=True`. `test_examples.py` runs the Workflow reader on the memory Store, on Redis and on the native server. The others need the native server, with Redis or a memory Store named `redis` in place of Redis. The native runs happen only when `TEMPORAL_STREAMS_NATIVE_TARGET` is set.
 
 | Section | File |
 |---|---|
 | One Worker with Redis and native, one Stream on each | [`two_backends.py`](two_backends.py) |
 | A Workflow reads another Workflow's Stream | [`workflow_reader.py`](workflow_reader.py) |
 | Old Streams stay on Redis, new ones go to native | [`migrate_redis_to_native.py`](migrate_redis_to_native.py) |
+| A Standalone Activity streams its progress | [`standalone_activity_stream.py`](standalone_activity_stream.py) |

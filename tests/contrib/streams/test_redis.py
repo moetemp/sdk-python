@@ -14,6 +14,7 @@ from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.client import Client, Interceptor, WorkflowFailureError, WorkflowHandle
 from temporalio.common import RawValue, RetryPolicy, streams
+from temporalio.common.streams import _plugin
 from temporalio.common.streams._extension import (
     ExtensionStreamBackend,
     _WorkflowInbound,
@@ -35,7 +36,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.contrib.streams._support import on_native
+from tests.contrib.streams._support import create_owned, on_native
 from tests.helpers import new_worker
 
 
@@ -597,9 +598,9 @@ async def test_client_close_goes_through_the_payload_codec(stream_client: Client
         DataConverter.default, payload_codec=_Rot13Codec()
     )
     codec_client = Client(**config)
-    done = await redis.create(codec_client, Events, id=f"done-{uuid.uuid4()}")
+    done = await create_owned(codec_client, Events, id=f"done-{uuid.uuid4()}")
     await done.close(result=Turn("done"))
-    failed = await redis.create(codec_client, Events, id=f"failed-{uuid.uuid4()}")
+    failed = await create_owned(codec_client, Events, id=f"failed-{uuid.uuid4()}")
     await failed.close(failure=ApplicationError("bad turn"))
     [closed] = [item async for item in done.subscribe()]
     assert isinstance(closed, streams.Closed)
@@ -674,9 +675,9 @@ async def test_backend_replays_a_history_made_without_it(
 
 
 async def test_backend_shutdown_after_client_writes(stream_client: Client):
-    [backend] = stream_client.config()["stream_backends"]
+    backend = _plugin.backend_of(stream_client, None)
     assert isinstance(backend, ExtensionStreamBackend)
-    stream = await redis.create(stream_client, Events, id=f"shutdown-{uuid.uuid4()}")
+    stream = await create_owned(stream_client, Events, id=f"shutdown-{uuid.uuid4()}")
     async with streams.BufferedPublisher(stream.topic(Events.tokens)) as tokens:
         tokens.publish("buffered")
     await backend.shutdown()
@@ -776,8 +777,9 @@ async def test_final_failure_under_a_retry_policy(
         items = [item async for item in stream.subscribe(wait_new_records=False)]
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    # The end of the chain closes nothing.
-    assert not any(isinstance(item, streams.Closed) for item in items)
+    # The end of the chain closes only a native Stream, with the last run's failure.
+    closes = [item for item in items if isinstance(item, streams.Closed)]
+    assert len(closes) == (1 if on_native(stream_client) else 0)
     if non_retryable:
         # A non-retryable failure ends the chain on attempt 1.
         assert [r.data for r in written] == ["run-1"]
@@ -792,7 +794,7 @@ async def test_final_failure_under_a_retry_policy(
 
 
 async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
-    stream = await redis.create(stream_client, Events, id=f"timer-{uuid.uuid4()}")
+    stream = await create_owned(stream_client, Events, id=f"timer-{uuid.uuid4()}")
     first = await stream.topic(Events.tokens).publish("one")
     seen: list[streams.Record[Any]] = []
 
@@ -926,7 +928,7 @@ async def test_write_to_a_missing_stream_raises_at_the_await(stream_client: Clie
 
 
 async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Client):
-    stream = await redis.create(stream_client, Events, id=f"closed-{uuid.uuid4()}")
+    stream = await create_owned(stream_client, Events, id=f"closed-{uuid.uuid4()}")
     await stream.close()
     async with new_worker(stream_client, WritesToStream) as worker:
         assert (

@@ -363,7 +363,10 @@ async def test_store_refuses_another_chains_close(stream_client: Client):
         ) == ("stream_not_found" if native else "stream_not_owner")
     stream = owner.stream(Events)
     items = [item async for item in stream.subscribe(wait_new_records=False)]
-    assert [type(item) for item in items] == ([] if native else [streams.Record])
+    # The server closed the native Stream when its run chain ended.
+    assert [type(item) for item in items] == (
+        [streams.Closed] if native else [streams.Record]
+    )
 
 
 @dataclass

@@ -25,7 +25,7 @@ from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
-from tests.contrib.streams._support import on_native
+from tests.contrib.streams._support import create_owned, on_native
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -235,7 +235,7 @@ class ClosesAReceivedStream:
 
 
 async def test_workflow_closes_only_its_own_streams(stream_client: Client):
-    stream = await redis.create(stream_client, Events, id=f"owned-{uuid.uuid4()}")
+    stream = await create_owned(stream_client, Events, id=f"owned-{uuid.uuid4()}")
     async with new_worker(stream_client, ClosesAReceivedStream) as worker:
         assert (
             await stream_client.execute_workflow(
@@ -260,7 +260,7 @@ class Failing:
         raise ApplicationError("run failed", non_retryable=True)
 
 
-async def test_run_end_closes_nothing(stream_client: Client):
+async def test_run_end_closes_only_a_native_stream(stream_client: Client):
     async with new_worker(stream_client, Failing) as worker:
         handle = await stream_client.start_workflow(
             Failing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
@@ -268,9 +268,15 @@ async def test_run_end_closes_nothing(stream_client: Client):
         with pytest.raises(WorkflowFailureError):
             await handle.result()
         items = await read(handle)
-    # The Stream stays open, so a later reader still waits for a close.
     assert data(items) == ["before"]
-    assert not any(isinstance(item, streams.Closed) for item in items)
+    if not on_native(stream_client):
+        # The Stream stays open, so a later reader still waits for a close.
+        assert not any(isinstance(item, streams.Closed) for item in items)
+        return
+    # The server closes the Stream when the run chain ends, with the run's failure.
+    closed = items[-1]
+    assert isinstance(closed, streams.Closed) and closed.failure is not None
+    assert closed.status == streams.CloseStatus.FAILED
 
 
 @workflow.defn
