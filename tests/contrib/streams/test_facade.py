@@ -92,7 +92,7 @@ async def test_client_writes_reads_and_closes(client: Client):
 
     raw = stream.topic("raw", type=RawValue)
     assert raw.type is RawValue
-    resumed = [item async for item in stream.subscribe(from_offset=token.offset)]
+    resumed = [item async for item in stream.subscribe(offset=token.offset)]
     assert [item.offset for item in resumed] == [token.offset, closed.offset]
 
 
@@ -168,9 +168,7 @@ async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
         await stream.topic(Events.tokens).publish("late")
 
     # Each call of a read that waits answers before the deadline, so the read goes on.
-    reader = stream.topic(Events.tokens).subscribe(
-        rpc_timeout=timedelta(milliseconds=300)
-    )
+    reader = stream.subscribe(Events.tokens, rpc_timeout=timedelta(milliseconds=300))
     publisher = asyncio.create_task(publish_later())
     item = await anext(reader)
     await reader.aclose()

@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 from collections.abc import Coroutine, Generator, Sequence
 from datetime import timedelta
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import Any, Generic, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.common.streams import _activity, _errors
@@ -123,10 +123,10 @@ class ActivityStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | ActivityTopic[Any],
-        from_offset: int | End | None = None,
+        offset: int | End | None = None,
         last: int | None = None,
         wait_new_records: bool = True,
-        prefixes: Sequence[str] = (),
+        topic_prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
         type: Any = None,
     ) -> Subscription[Any]:
@@ -134,9 +134,9 @@ class ActivityStream(StreamHandle[E]):
         read = read_spec(
             self,
             topics,
-            prefixes=prefixes,
+            topic_prefixes=topic_prefixes,
             default_type=type,
-            from_offset=from_offset,
+            offset=offset,
             last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
@@ -147,7 +147,7 @@ class ActivityStream(StreamHandle[E]):
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
 
-        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
         return await self._access().get_offset()
@@ -183,30 +183,6 @@ class SyncActivityTopic(SyncTopicBase[T]):
         stream = self._stream
         assert isinstance(stream, SyncActivityStream)
         return stream._run(stream._access().publish(self._name, values))
-
-    def subscribe(
-        self,
-        *,
-        from_offset: int | End | None = None,
-        last: int | None = None,
-        wait_new_records: bool = True,
-        create_wait: timedelta | None = None,
-    ) -> SyncSubscription[T]:
-        """Read this Topic only. Its Records have the Topic's type. See the Stream's
-        ``subscribe``.
-        """
-        stream = self._stream
-        assert isinstance(stream, SyncActivityStream)
-        return cast(
-            SyncSubscription[T],
-            stream.subscribe(
-                self,
-                from_offset=from_offset,
-                last=last,
-                wait_new_records=wait_new_records,
-                create_wait=create_wait,
-            ),
-        )
 
 
 class SyncSubscription(Generic[T]):
@@ -300,10 +276,10 @@ class SyncActivityStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | SyncActivityTopic[Any],
-        from_offset: int | End | None = None,
+        offset: int | End | None = None,
         last: int | None = None,
         wait_new_records: bool = True,
-        prefixes: Sequence[str] = (),
+        topic_prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
         type: Any = None,
     ) -> SyncSubscription[Any]:
@@ -311,9 +287,9 @@ class SyncActivityStream(StreamHandle[E]):
         read = read_spec(
             self,
             topics,
-            prefixes=prefixes,
+            topic_prefixes=topic_prefixes,
             default_type=type,
-            from_offset=from_offset,
+            offset=offset,
             last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
@@ -339,7 +315,7 @@ class SyncActivityStream(StreamHandle[E]):
     def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
 
-        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
         return self._run(self._access().get_offset())

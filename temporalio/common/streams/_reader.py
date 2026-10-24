@@ -69,7 +69,7 @@ class Subscription(Generic[T]):
 
         After a ``Superseded`` item it is that item's own offset, since the first Record of its
         batch has the same offset and comes next. A read from there gives the ``Superseded``
-        item again, which withdraws nothing new. Pass it as ``from_offset`` to a later read. It
+        item again, which withdraws nothing new. Pass it as ``offset`` to a later read. It
         is None only before the first page of a read from ``END``.
         """
         return self._position.next_offset

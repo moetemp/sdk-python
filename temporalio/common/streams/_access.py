@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 import temporalio.converter
 from temporalio.common.streams import _convert, _reader
@@ -55,10 +55,10 @@ class Access:
             await self.stream_id(),
             position=position,
             topics=read.topics,
-            topic_prefixes=read.prefixes,
+            topic_prefixes=read.topic_prefixes,
             types=read.types,
             default_type=read.default_type,
-            from_offset=read.from_offset,
+            from_offset=read.offset,
             last=read.last,
             wait_new_records=read.wait_new_records,
             create_wait=read.create_wait,
@@ -72,7 +72,7 @@ class Access:
     async def get_offset(self) -> int:
         """The next offset of the Stream, the newest offset plus one.
 
-        It is 0 for a Stream with no Record, and ``from_offset=0`` reads from the start.
+        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
         Offsets are sparse and above zero, so 0 is never a Record's offset.
         """
         response = await self.backend.service(self.namespace).describe_stream(
@@ -110,10 +110,10 @@ class ReadSpec:
     """What one read asks for."""
 
     topics: list[str] | None
-    prefixes: Sequence[str]
+    topic_prefixes: Sequence[str]
     types: dict[str, Any]
     default_type: Any
-    from_offset: int | End | None
+    offset: int | End | None
     last: int | None
     wait_new_records: bool
     create_wait: timedelta | None
@@ -125,9 +125,9 @@ def read_spec(
         str | TopicDefinition[Any] | _AsyncTopic[Any] | SyncTopicBase[Any]
     ],
     *,
-    prefixes: Sequence[str],
+    topic_prefixes: Sequence[str],
     default_type: Any,
-    from_offset: int | End | None,
+    offset: int | End | None,
     last: int | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
@@ -135,10 +135,10 @@ def read_spec(
     """The Topic names of a read, the decode type of each known Topic, and its options.
 
     Raises:
-        ValueError: ``last`` is not above zero, or it comes with ``from_offset``.
+        ValueError: ``last`` is not above zero, or it comes with ``offset``.
     """
-    if last is not None and (last < 1 or from_offset is not None):
-        raise ValueError("last takes a count above zero and no from_offset")
+    if last is not None and (last < 1 or offset is not None):
+        raise ValueError("last takes a count above zero and no offset")
     types = handle._known_types()
     names = []
     for topic in topics:
@@ -155,10 +155,10 @@ def read_spec(
             types[name] = topic_type
     return ReadSpec(
         topics=names or None,
-        prefixes=prefixes,
+        topic_prefixes=topic_prefixes,
         types=types,
         default_type=default_type,
-        from_offset=from_offset,
+        offset=offset,
         last=last,
         wait_new_records=wait_new_records,
         create_wait=create_wait,
@@ -173,10 +173,10 @@ def subscription(
     """A read over the items that ``items`` gives."""
     # Before its first page, a read from the start resumes at 0, and a read from END or of the
     # last Records has no offset yet.
-    if read.last is not None or read.from_offset is End.END:
+    if read.last is not None or read.offset is End.END:
         position = Position(None)
     else:
-        position = Position(read.from_offset or 0)
+        position = Position(read.offset or 0)
     return Subscription(items(position), position, options)
 
 
@@ -189,28 +189,6 @@ class _AsyncTopic(TopicBase[T]):
         A list is one value.
         """
         return await self._stream._access().publish(self._name, values)
-
-    def subscribe(
-        self,
-        *,
-        from_offset: int | End | None = None,
-        last: int | None = None,
-        wait_new_records: bool = True,
-        create_wait: timedelta | None = None,
-    ) -> Subscription[T]:
-        """Read this Topic only. Its Records have the Topic's type. See the Stream's
-        ``subscribe``.
-        """
-        return cast(
-            Subscription[T],
-            self._stream.subscribe(
-                self,
-                from_offset=from_offset,
-                last=last,
-                wait_new_records=wait_new_records,
-                create_wait=create_wait,
-            ),
-        )
 
 
 class SyncTopicBase(TopicBase[T]):

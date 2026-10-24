@@ -16,7 +16,7 @@ T = TypeVar("T")
 
 
 class End(enum.Enum):
-    """A ``from_offset`` after the newest Record, for new Records only. Use ``END``."""
+    """An ``offset`` after the newest Record, for new Records only. Use ``END``."""
 
     END = "END"
 

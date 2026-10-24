@@ -235,8 +235,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         shown[key].set()
         live_items = [first, *[item async for item in live]]
         resumed = [
-            item
-            async for item in stream.subscribe(Events.tokens, from_offset=resume_at)
+            item async for item in stream.subscribe(Events.tokens, offset=resume_at)
         ]
     assert isinstance(first, streams.Record) and first.data == "attempt-1"
     assert isinstance(before, streams.Record) and before.offset == first.offset

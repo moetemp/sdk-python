@@ -9,7 +9,7 @@ import weakref
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import timedelta
 from types import TracebackType
-from typing import Any, TypeVar, cast, overload
+from typing import Any, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
@@ -84,34 +84,6 @@ class ClientTopic(_AsyncTopic[T]):
         """
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             return await super().publish(*values)
-
-    def subscribe(
-        self,
-        *,
-        from_offset: int | End | None = None,
-        last: int | None = None,
-        wait_new_records: bool = True,
-        create_wait: timedelta | None = None,
-        rpc_metadata: Mapping[str, str | bytes] = {},
-        rpc_timeout: timedelta | None = None,
-    ) -> Subscription[T]:
-        """Read this Topic only. Its Records have the Topic's type. See
-        :py:meth:`ClientStream.subscribe`.
-        """
-        stream = self._stream
-        assert isinstance(stream, ClientStream)
-        return cast(
-            Subscription[T],
-            stream.subscribe(
-                self,
-                from_offset=from_offset,
-                last=last,
-                wait_new_records=wait_new_records,
-                create_wait=create_wait,
-                rpc_metadata=rpc_metadata,
-                rpc_timeout=rpc_timeout,
-            ),
-        )
 
 
 class ClientStream(StreamHandle[E]):
@@ -285,10 +257,10 @@ class ClientStream(StreamHandle[E]):
     def subscribe(
         self,
         *topics: str | TopicDefinition[Any] | ClientTopic[Any],
-        from_offset: int | End | None = None,
+        offset: int | End | None = None,
         last: int | None = None,
         wait_new_records: bool = True,
-        prefixes: Sequence[str] = (),
+        topic_prefixes: Sequence[str] = (),
         create_wait: timedelta | None = None,
         type: Any = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
@@ -298,24 +270,25 @@ class ClientStream(StreamHandle[E]):
 
         The read ends after a ``Closed`` item, or at the newest Record when
         ``wait_new_records`` is False. A reader that wants to stop after a quiet time sets its
-        own timer, and resumes later with ``from_offset=`` the read's ``next_offset``. A
+        own timer, and resumes later with ``offset=`` the read's ``next_offset``. A
         ``Superseded`` item withdraws earlier Records of a failed attempt, and it passes every
         Topic filter.
 
         Args:
-            topics: Read these Topics. With no Topics and no prefixes, read every Topic.
-            from_offset: Start at this offset, inclusive, or at ``streams.END`` for new
+            topics: Read these Topics, by Topic of the definition, name or Topic object.
+                With no Topics and no ``topic_prefixes``, read every Topic.
+            offset: Start at this offset, inclusive, or at ``streams.END`` for new
                 Records only. Defaults to the first Record.
             last: Start with the newest this many Records that pass the filter, oldest
-                first, such as the first view of a chat. Not with ``from_offset``. A Record
+                first, such as the first view of a chat. Not with ``offset``. A Record
                 that a later ``Superseded`` item withdraws doesn't count. At most 1000.
             wait_new_records: Wait for new Records at the end of the Stream.
-            prefixes: Also read the Topics whose names start with one of these.
+            topic_prefixes: Also read the Topics whose names start with one of these.
             create_wait: How long to wait for a Stream that nobody created yet, such as the
                 Stream of a Workflow that just started. Defaults to no wait.
             type: The type of the values of Topics outside the definition, such as Topics that
-                ``prefixes`` match. Topics of the definition keep their own types. Defaults to
-                no type, so the values decode as the converter gives them.
+                ``topic_prefixes`` match. Topics of the definition keep their own types.
+                Defaults to no type, so the values decode as the converter gives them.
             rpc_metadata: Headers of each call of the read. See :py:meth:`get_offset`.
             rpc_timeout: The deadline of each call of the read, not of the whole read. A call
                 that waits for new Records answers before it.
@@ -323,9 +296,9 @@ class ClientStream(StreamHandle[E]):
         read = read_spec(
             self,
             topics,
-            prefixes=prefixes,
+            topic_prefixes=topic_prefixes,
             default_type=type,
-            from_offset=from_offset,
+            offset=offset,
             last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,

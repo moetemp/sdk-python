@@ -128,17 +128,17 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     again = stream_client.stream(Events, id=stream.id)
     resumed = [
         item.data
-        async for item in again.subscribe(Events.tokens, from_offset=first + 1)
+        async for item in again.subscribe(Events.tokens, offset=first + 1)
         if isinstance(item, streams.Record)
     ]
     assert resumed == ["a", "b"]
     by_prefix = [
         item.data
-        async for item in again.subscribe(prefixes=["tok"])
+        async for item in again.subscribe(topic_prefixes=["tok"])
         if isinstance(item, streams.Record)
     ]
     assert by_prefix == ["a", "b"]
-    only_turns = [item async for item in again.topic(Events.turns).subscribe()]
+    only_turns = [item async for item in again.subscribe(again.topic(Events.turns))]
     assert [type(item) for item in only_turns] == [
         streams.Record,
         streams.Record,
@@ -210,19 +210,19 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"resume-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a")
     turn = await stream.topic(Events.turns).publish(Turn("model"))
-    tokens = stream.topic(Events.tokens).subscribe(wait_new_records=False)
+    tokens = stream.subscribe(Events.tokens, wait_new_records=False)
     assert tokens.next_offset == 0
     assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
         "a"
     ]
     # The page ends past the Record that the Topic filter left out.
     assert tokens.next_offset == turn + 1
-    new = stream.subscribe(from_offset=streams.END, wait_new_records=False)
+    new = stream.subscribe(offset=streams.END, wait_new_records=False)
     assert new.next_offset is None
     assert [item async for item in new] == []
     assert new.next_offset == turn + 1
     await stream.topic(Events.tokens).publish("b")
-    resumed = stream.subscribe(from_offset=tokens.next_offset, wait_new_records=False)
+    resumed = stream.subscribe(offset=tokens.next_offset, wait_new_records=False)
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
     ] == ["b"]
@@ -234,7 +234,7 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
     await tokens.publish("a", "b", "c")
     await stream.topic(Events.turns).publish(Turn("model"))
     # A chat view shows the last few Records first, then follows.
-    tail = tokens.subscribe(last=2)
+    tail = stream.subscribe(tokens, last=2)
     assert tail.next_offset is None
     shown = [await anext(tail), await anext(tail)]
     await tokens.publish("d")
@@ -249,8 +249,8 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
     assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
         "d"
     ]
-    with pytest.raises(ValueError, match="no from_offset"):
-        stream.subscribe(last=2, from_offset=0)
+    with pytest.raises(ValueError, match="no offset"):
+        stream.subscribe(last=2, offset=0)
 
 
 async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):

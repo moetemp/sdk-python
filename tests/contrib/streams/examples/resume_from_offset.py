@@ -2,7 +2,7 @@
 
 The Workflow writes one Stream per turn, a renamed definition from ``streams.with_name``. The
 Reader saves the read's ``next_offset`` after each Record, stops, and later resumes from it with
-``from_offset``. A view that wants only new Records starts at ``streams.END``.
+``offset``. A view that wants only new Records starts at ``streams.END``.
 """
 
 from __future__ import annotations
@@ -60,10 +60,9 @@ async def read_some(
     handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
 ) -> list[str]:
     turn3 = handle.stream(Turn3)
-    tokens = turn3.topic(Events.tokens)
     seen = []
-    read = tokens.subscribe(
-        from_offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
+    read = turn3.subscribe(
+        Events.tokens, offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
     )
     async for item in read:
         if isinstance(item, streams.Closed):
@@ -84,8 +83,8 @@ async def read_new(handle: WorkflowHandle[Turns, None]) -> list[str]:
     turn3 = handle.stream(Turn3)
     return [
         item.data
-        async for item in turn3.topic(Events.tokens).subscribe(
-            from_offset=streams.END, wait_new_records=False
+        async for item in turn3.subscribe(
+            Events.tokens, offset=streams.END, wait_new_records=False
         )
         if isinstance(item, streams.Record)
     ]

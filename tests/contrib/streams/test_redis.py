@@ -195,9 +195,7 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
     assert resume_at == shared.offset
     resumed = [
         item
-        async for item in stream.subscribe(
-            from_offset=resume_at, wait_new_records=False
-        )
+        async for item in stream.subscribe(offset=resume_at, wait_new_records=False)
     ]
     assert [r.data for r in records(resumed) if r.offset == shared.offset] == ["after"]
 
@@ -518,12 +516,13 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
         await handle.result()
         stream = workflow_stream(handle)
         decoded = await read_all(stream)
-        # A Stream with no definition reads the raw Payloads.
+        # A Topic outside the definition reads the raw Payloads.
+        plain = codec_client.stream(Plain, id=stream.id)
         raw = [
             item
-            async for item in codec_client.stream(Plain, id=stream.id)
-            .topic("tokens", type=RawValue)
-            .subscribe(wait_new_records=False)
+            async for item in plain.subscribe(
+                plain.topic("tokens", type=RawValue), wait_new_records=False
+            )
         ]
     assert [item.data for item in records(decoded)] == [
         Turn("model"),
@@ -754,7 +753,7 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
     resumed = [
         item.data
         async for item in stream.subscribe(
-            from_offset=seen[-1].offset + 1, wait_new_records=False
+            offset=seen[-1].offset + 1, wait_new_records=False
         )
         if isinstance(item, streams.Record)
     ]
