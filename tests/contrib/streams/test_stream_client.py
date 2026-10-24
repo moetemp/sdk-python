@@ -10,6 +10,7 @@ import pytest
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import streams
+from temporalio.common.streams import _stream_client
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
@@ -96,6 +97,63 @@ async def test_handle_without_first_run_describes_once(client: Client):
     other = handle.stream(streams.with_name(Events, "n"))
     assert await other.get_offset() == 0
     assert calls == [1]
+
+
+async def test_failed_first_run_lookup_is_tried_again(client: Client):
+    client, _ = fake_client(client)
+    handle = client.get_workflow_handle("agent-4")
+    describes = []
+
+    async def describe(**_: Any) -> Any:
+        describes.append(1)
+        if len(describes) == 1:
+            raise RuntimeError("the Workflow has not started yet")
+        info = SimpleNamespace(first_run_id="run-4")
+        return SimpleNamespace(
+            raw_description=SimpleNamespace(workflow_execution_info=info)
+        )
+
+    setattr(handle, "describe", describe)
+    await redis.create(client, Events, id="agent-4:run-4:events")
+    stream = handle.stream(Events)
+    with pytest.raises(RuntimeError, match="not started"):
+        await stream.get_offset()
+    assert await stream.get_offset() == 0
+    assert stream.id == "agent-4:run-4:events"
+    # The handle keeps the id it found, so its other Streams make no call.
+    assert await handle.stream(Events).get_offset() == 0
+    assert describes == [1, 1]
+
+
+async def test_cancelled_first_run_lookup_is_tried_again(client: Client):
+    client, _ = fake_client(client)
+    handle = client.get_workflow_handle("agent-5")
+    started = asyncio.Event()
+
+    async def hangs(**_: Any) -> Any:
+        started.set()
+        await asyncio.Event().wait()
+
+    setattr(handle, "describe", hangs)
+    stream = handle.stream(Events)
+    offset = asyncio.ensure_future(stream.get_offset())
+    await started.wait()
+    # The Describe call is cancelled, such as when the loop that ran it stops.
+    lookup = _stream_client._FIRST_RUNS[handle]
+    assert isinstance(lookup, asyncio.Future)
+    lookup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await offset
+
+    async def describe(**_: Any) -> Any:
+        info = SimpleNamespace(first_run_id="run-5")
+        return SimpleNamespace(
+            raw_description=SimpleNamespace(workflow_execution_info=info)
+        )
+
+    setattr(handle, "describe", describe)
+    await redis.create(client, Events, id="agent-5:run-5:events")
+    assert await stream.get_offset() == 0
 
 
 @workflow.defn
