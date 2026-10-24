@@ -50,8 +50,8 @@ def create_stream(
         retention: How long the Records stay after the close. Defaults to the backend's.
         backend: The name of the backend. Defaults to the registered backend with
             ``default=True``. The default is part of the Workflow's code, since a replay must
-            create on the same backend. To move a Workflow to another backend, gate it with a
-            patch, for example ``backend="redis-b" if workflow.patched("move") else "redis"``.
+            create on the same backend. For now a Worker serves one backend, so the name is
+            that of the Worker's backend.
 
     Raises:
         StreamError: The backend refused the create, such as for another Retention.
@@ -93,7 +93,9 @@ def stream_handle(
     """A Stream that this run chain created, by its definition. It makes no call.
 
     A later run of the chain, such as one after continue-as-new, uses it to write or close the
-    Stream again.
+    Stream again. In ``@workflow.init`` of a run that continued as new, the run has not read
+    the backends of the chain's Streams yet, so pass ``backend=`` there, or call it in the run
+    method.
 
     .. warning::
         This API is experimental.
