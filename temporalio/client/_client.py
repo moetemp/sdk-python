@@ -305,7 +305,7 @@ class Client:
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
-            stream_backends=stream_backends,
+            stream_backends=list(stream_backends),
         )
         self._initial_config = config.copy()
 

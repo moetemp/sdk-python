@@ -3,20 +3,22 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.common import streams
-from temporalio.common.streams import _plugin
+from temporalio.common.streams import _plugin, _stream_client
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
+from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 from tests.contrib.streams._support import create_owned
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
@@ -97,6 +99,63 @@ async def test_handle_without_first_run_describes_once(client: Client):
     other = handle.stream(streams.with_name(Events, "n"))
     assert await other.get_offset() == 0
     assert calls == [1]
+
+
+async def test_failed_first_run_lookup_is_tried_again(client: Client):
+    client, _ = fake_client(client)
+    handle = client.get_workflow_handle("agent-4")
+    describes = []
+
+    async def describe(**_: Any) -> Any:
+        describes.append(1)
+        if len(describes) == 1:
+            raise RuntimeError("the Workflow has not started yet")
+        info = SimpleNamespace(first_run_id="run-4")
+        return SimpleNamespace(
+            raw_description=SimpleNamespace(workflow_execution_info=info)
+        )
+
+    setattr(handle, "describe", describe)
+    await redis.create(client, Events, id="agent-4:run-4:events")
+    stream = handle.stream(Events)
+    with pytest.raises(RuntimeError, match="not started"):
+        await stream.get_offset()
+    assert await stream.get_offset() == 0
+    assert stream.id == "agent-4:run-4:events"
+    # The handle keeps the id it found, so its other Streams make no call.
+    assert await handle.stream(Events).get_offset() == 0
+    assert describes == [1, 1]
+
+
+async def test_cancelled_first_run_lookup_is_tried_again(client: Client):
+    client, _ = fake_client(client)
+    handle = client.get_workflow_handle("agent-5")
+    started = asyncio.Event()
+
+    async def hangs(**_: Any) -> Any:
+        started.set()
+        await asyncio.Event().wait()
+
+    setattr(handle, "describe", hangs)
+    stream = handle.stream(Events)
+    offset = asyncio.ensure_future(stream.get_offset())
+    await started.wait()
+    # The Describe call is cancelled, such as when the loop that ran it stops.
+    lookup = _stream_client._FIRST_RUNS[handle]
+    assert isinstance(lookup, asyncio.Future)
+    lookup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await offset
+
+    async def describe(**_: Any) -> Any:
+        info = SimpleNamespace(first_run_id="run-5")
+        return SimpleNamespace(
+            raw_description=SimpleNamespace(workflow_execution_info=info)
+        )
+
+    setattr(handle, "describe", describe)
+    await redis.create(client, Events, id="agent-5:run-5:events")
+    assert await stream.get_offset() == 0
 
 
 @workflow.defn
@@ -355,15 +414,28 @@ async def test_registration_rules(client: Client):
     config["stream_backends"] = [MemoryStreamBackend(), MemoryStreamBackend()]
     with pytest.raises(streams.StreamConfigError, match="two Stream backends"):
         Client(**config)
-    # A Worker serves every backend of its client.
+    # A Worker serves every backend of its client, and so does a Replayer.
     config["stream_backends"] = [
         MemoryStreamBackend(),
         MemoryStreamBackend(name="b", default=True),
     ]
     new_worker(Client(**config), Agent)
+    Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
+    # A generator of backends works too, and a copy of the client keeps them.
+    config["stream_backends"] = cast(
+        Any, (b for b in [MemoryStreamBackend(default=True)])
+    )
+    from_generator = Client(**config)
+    assert from_generator.stream(Events, id="d-3").backend == "memory"
+    assert (
+        Client(**from_generator.config()).stream(Events, id="d-3").backend == "memory"
+    )
 
 
 async def test_backend_is_not_a_plugin(client: Client):
+    # The connect refuses it before it connects, so the unreachable target doesn't matter.
+    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+        await Client.connect("localhost:1", plugins=[MemoryStreamBackend()])
     config = client.config()
     config["plugins"] = [MemoryStreamBackend()]
     with pytest.raises(streams.StreamConfigError, match="not a plugin"):
@@ -372,6 +444,18 @@ async def test_backend_is_not_a_plugin(client: Client):
         new_worker(client, Agent, plugins=[RedisStreamBackend("redis://-")])
     with pytest.raises(streams.StreamConfigError, match="not a plugin"):
         Replayer(workflows=[Agent], plugins=[MemoryStreamBackend()])
+
+
+async def test_worker_plugin_keeps_the_streams_passthrough(client: Client):
+    # The backends configure the Worker after its plugins, so a plugin that replaces the
+    # Workflow runner doesn't drop the passthrough.
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    plugin = SimplePlugin("replaces-runner", workflow_runner=SandboxedWorkflowRunner())
+    worker = new_worker(Client(**config), Agent, plugins=[plugin])
+    runner = worker.config(active_config=True).get("workflow_runner")
+    assert isinstance(runner, SandboxedWorkflowRunner)
+    assert "temporalio.common.streams" in runner.restrictions.passthrough_modules
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):

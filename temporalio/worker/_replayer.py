@@ -98,7 +98,7 @@ class Replayer:
             runtime=runtime,
             disable_safe_workflow_eviction=disable_safe_workflow_eviction,
             header_codec_behavior=header_codec_behavior,
-            stream_backends=stream_backends,
+            stream_backends=list(stream_backends),
             stream_client=stream_client,
         )
         self._initial_config = self._config.copy()

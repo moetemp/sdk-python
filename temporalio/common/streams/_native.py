@@ -382,8 +382,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
             self._backends.add(backend)
         return backend
 
-    def backend_for(self, client: temporalio.client.Client) -> _ExtensionCalls:
-        """The Stream runtime of ``client``'s connection."""
+    def _backend_for(self, client: temporalio.client.Client) -> _ExtensionCalls:
+        # The Stream runtime of the client's connection.
         return self._new_backend(client.service_client)
 
     async def _read_result(
@@ -428,6 +428,14 @@ class NativeStreamBackend(ExtensionStreamBackend):
     ) -> bool:
         # The server closes a Workflow's Stream when its run chain ends.
         return False
+
+    async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> int:
+        # The close is a System Nexus command of the Workflow Task, which the server carries
+        # out once the task commits, so the Worker polls no Activities for it.
+        await _workflow_reader.reader_of(self.backend_name)._temporal_stream_close(
+            request
+        )
+        return 0
 
     def _activities(self) -> list[Any]:
         return [*super()._activities(), _describe_activity(self)]

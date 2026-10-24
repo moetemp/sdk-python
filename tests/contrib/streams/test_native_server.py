@@ -409,7 +409,7 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
     first = await Client.connect("127.0.0.1:1", lazy=True, stream_backends=[native])
     second = await Client.connect("127.0.0.1:2", lazy=True, stream_backends=[native])
     runtimes = [
-        cast(Any, native.backend_for(client))._runtime for client in (first, second)
+        cast(Any, native._backend_for(client))._runtime for client in (first, second)
     ]
     assert runtimes[0] is not runtimes[1]
     assert [runtime._service for runtime in runtimes] == [

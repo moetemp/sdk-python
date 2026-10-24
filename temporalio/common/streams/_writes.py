@@ -1,7 +1,8 @@
-"""The Local Activities that write for Workflow code.
+"""The Activities that write for Workflow code.
 
-Each Workflow ``create_stream`` and ``close`` is one of them, and the publishes that wait
-behind a write to the same Stream share one. History has the answer and not the values.
+Each Workflow ``create_stream`` is a Local Activity, and the publishes that wait behind a write
+to the same Stream share one. History has the answer and not the values. Each Workflow
+``close`` is a regular Activity, so it runs only once its Workflow Task completed.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from typing import Any
 import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
-from temporalio.common.streams import _activity, _errors
+from temporalio.common.streams import _activity, _errors, _ids
 from temporalio.common.streams._workflow import (
     APPEND_ACTIVITY,
     CLOSE_ACTIVITY,
@@ -238,8 +239,16 @@ async def append_records(
 
 @temporalio.activity.defn(name=CLOSE_ACTIVITY)
 async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
-    """Close a Workflow's Stream."""
+    """Close a Workflow's Stream, as the run chain that owns it."""
     streams, service = _context(request.stream)
+    # The Store refuses an Activity Producer's close of a Workflow's Stream, so the Activity
+    # writes the close as the run that scheduled it, and only for that run's chain.
+    if request.stream.workflow_id != streams.workflow_id:
+        raise _errors.StreamNotOwnerError(
+            f"Can't close the Stream {request.stream.id} for another Workflow",
+            reason="stream_not_owner",
+        )
+    run_id = streams.producer.run_id
     failure: Any = None
     if request.HasField("failure"):
         failure = streams.converter.failure_converter.from_failure(
@@ -248,16 +257,20 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
     await service.close_stream(
         models.CloseStreamRequest(
             stream=_ref(request.stream),
-            producer=_producer(streams),
+            producer=models.Producer(
+                kind=stream_pb.ProducerKind.PRODUCER_KIND_WORKFLOW,
+                id=_ids.workflow_producer_id(run_id),
+                run_id=run_id,
+            ),
             result=temporalio.common.RawValue(request.result)
             if request.HasField("result")
             else None,
             failure=failure,
             status=request.status or None,
-            **_history(streams),
         )
     )
     return 0
 
 
-ACTIVITIES = [create_stream, append_records, close_stream]
+# The Local Activities of every backend. The close is a regular Activity of the Redis backend.
+LOCAL_ACTIVITIES = [create_stream, append_records]

@@ -155,16 +155,21 @@ class _FakeBackend(StreamBackend):
     # The fake keeps Redis's rules, so the Redis calls take it.
     _kind = "redis"
 
+    def __init__(self, calls: _ExtensionCalls) -> None:
+        super().__init__("fake-streams", backend_name="fake", default=True)
+        self._calls = calls
+
+    def _backend_for(
+        self,
+        client: Client,  # pyright: ignore[reportUnusedParameter]
+    ) -> _ExtensionCalls:
+        return self._calls
+
 
 def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     """A copy of ``client`` whose one Stream backend, ``fake``, is a fake runtime."""
     extension = FakeExtension()
-    backend = _FakeBackend(
-        "fake-streams",
-        backend_name="fake",
-        default=True,
-        calls=_ExtensionCalls(extension),
-    )
+    backend = _FakeBackend(_ExtensionCalls(extension))
     config = client.config()
     config["stream_backends"] = [backend]
     return Client(**config), extension

@@ -20,7 +20,8 @@ class MemoryStreamBackend(ExtensionStreamBackend):
     shares one backend shares its Streams, and they go when the process ends. It registers the
     backend name ``memory``. It keeps Redis's rules, so the calls of
     :py:mod:`temporalio.contrib.stream` take it as a Redis backend, and tests swap the Store
-    with no change to Workflow code.
+    with no change to Workflow code. As on Redis, a Workflow's close is a regular Activity, so
+    Workers that share a task queue all register the backend.
 
     .. warning::
         This API is experimental.

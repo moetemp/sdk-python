@@ -412,8 +412,9 @@ class Worker:
             config = plugin.configure_worker(config)
 
         # Workflows and Activities may use Streams with no registration, on the native backend,
-        # so the Worker takes the native backend and its client's others. A Worker of only
-        # Nexus services loads nothing of Streams.
+        # so the Worker takes the native backend and its client's others. It does so after the
+        # plugins, as the client does, so a plugin that replaces the Workflow runner keeps the
+        # Streams passthrough. A Worker of only Nexus services loads nothing of Streams.
         if config.get("workflows") or config.get("activities"):
             from temporalio.common.streams import _plugin as _stream_plugin
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import itertools
 import uuid
 import weakref
@@ -161,8 +162,9 @@ class ClientStream(StreamHandle[E]):
 
     async def _stream_id(self) -> str:
         if not self._id:
-            # Calls that start together share one Describe call.
-            if self._finding is None:
+            # Calls that start together share one Describe call. A failed call does not
+            # stay, so a later call tries again.
+            if self._finding is None or _failed(self._finding):
                 assert self._find_first_run is not None
                 self._finding = asyncio.ensure_future(self._find_first_run())
             first_run = await asyncio.shield(self._finding)
@@ -460,11 +462,15 @@ def client_stream(
     return handle._bind(client, calls)
 
 
-# The first run id that one Describe call found for a Workflow handle, so the Streams of one
-# handle share the call.
+# The first run id of a Workflow handle, or the Describe call that looks for it, so the
+# Streams of one handle share the call.
 _FIRST_RUNS: weakref.WeakKeyDictionary[
-    temporalio.client.WorkflowHandle[Any, Any], asyncio.Future[str]
+    temporalio.client.WorkflowHandle[Any, Any], asyncio.Future[str] | str
 ] = weakref.WeakKeyDictionary()
+
+
+def _failed(future: asyncio.Future[Any]) -> bool:
+    return future.done() and (future.cancelled() or future.exception() is not None)
 
 
 async def _describe_first_run(
@@ -483,12 +489,29 @@ async def _describe_first_run(
 
 
 async def _first_run(handle: temporalio.client.WorkflowHandle[Any, Any]) -> str:
-    finding = _FIRST_RUNS.get(handle)
-    if finding is None or (finding.done() and finding.exception() is not None):
-        # A failed call does not stay, so a later call tries again.
-        finding = asyncio.ensure_future(_describe_first_run(handle))
-        _FIRST_RUNS[handle] = finding
-    return await asyncio.shield(finding)
+    known = _FIRST_RUNS.get(handle)
+    if isinstance(known, str):
+        return known
+    if known is None:
+        known = asyncio.ensure_future(_describe_first_run(handle))
+        _FIRST_RUNS[handle] = known
+        known.add_done_callback(functools.partial(_settle, weakref.ref(handle)))
+    return await asyncio.shield(known)
+
+
+def _settle(
+    handle_ref: weakref.ref[temporalio.client.WorkflowHandle[Any, Any]],
+    finding: asyncio.Future[str],
+) -> None:
+    # A found id stays as text. A failed call goes, so a later call tries again, and the
+    # failure's traceback does not keep the handle in the map.
+    handle = handle_ref()
+    if handle is None or _FIRST_RUNS.get(handle) is not finding:
+        return
+    if _failed(finding):
+        del _FIRST_RUNS[handle]
+    else:
+        _FIRST_RUNS[handle] = finding.result()
 
 
 def workflow_stream(
@@ -549,4 +572,4 @@ def activity_stream(
         activity_id=handle.id,
         activity_run_id=handle.run_id,
     )
-    return stream._bind(client, stream_backend.backend_for(client))
+    return stream._bind(client, stream_backend._backend_for(client))

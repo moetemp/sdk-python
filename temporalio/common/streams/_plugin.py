@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
 import temporalio.client
 import temporalio.converter
+import temporalio.service
 import temporalio.worker
 from temporalio.common.streams import _errors, _ids
 from temporalio.common.streams._backend import BackendCalls, _ExtensionCalls
@@ -52,16 +53,11 @@ class StreamBackend(SimplePlugin):
         *,
         backend_name: str,
         default: bool,
-        calls: BackendCalls | None = None,
         **options: Any,
     ) -> None:
-        """Create the backend. ``options`` go to :py:class:`temporalio.plugin.SimplePlugin`.
-
-        A backend with no ``calls`` gives each client its own in :py:meth:`backend_for`.
-        """
+        """Create the backend. ``options`` go to :py:class:`temporalio.plugin.SimplePlugin`."""
         self._backend_name = backend_name
         self._default = default
-        self._calls = calls
         super().__init__(name, **options)
 
     @property
@@ -74,14 +70,23 @@ class StreamBackend(SimplePlugin):
         """Whether a create with no backend name uses this backend."""
         return self._default
 
-    def backend_for(
+    def _backend_for(
         self,
         client: temporalio.client.Client,  # pyright: ignore[reportUnusedParameter]
     ) -> BackendCalls:
-        """The calls of this backend for ``client`` and its Workers."""
-        if self._calls is None:
-            raise NotImplementedError(f"{type(self).__name__} gives no calls")
-        return self._calls
+        # The calls of this backend for the client and its Workers. Each backend gives its own.
+        raise NotImplementedError(f"{type(self).__name__} gives no calls")
+
+    async def connect_service_client(
+        self,
+        config: temporalio.service.ConnectConfig,
+        next: Callable[
+            [temporalio.service.ConnectConfig],
+            Awaitable[temporalio.service.ServiceClient],
+        ],
+    ) -> temporalio.service.ServiceClient:
+        """Refuse a backend in ``plugins=``, before the client connects."""
+        raise _not_a_plugin(self)
 
     def configure_client(
         self, config: temporalio.client.ClientConfig
@@ -184,7 +189,9 @@ def configure_client(
     config: temporalio.client.ClientConfig,
 ) -> temporalio.client.ClientConfig:
     """Check the client's backends, and add the parts of each to the client."""
-    for backend in check_backends(config.get("stream_backends", ()), "client"):
+    backends = check_backends(config.get("stream_backends", ()), "client")
+    config["stream_backends"] = backends
+    for backend in backends:
         config = backend._configure_client(config)
     return config
 
@@ -210,7 +217,7 @@ def local_activities(
     from temporalio.common.streams import _extension, _writes
 
     client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
-    activities = list(cast(list[Callable[..., Any]], _writes.ACTIVITIES))
+    activities = list(cast(list[Callable[..., Any]], _writes.LOCAL_ACTIVITIES))
     for backend in with_native(client_backends(client)):
         if isinstance(backend, _extension.ExtensionStreamBackend):
             activities.extend(backend._activities())
@@ -247,7 +254,7 @@ def worker_converter(
         b for b in with_native(client_backends(client)) if b.backend_name == NATIVE
     )
     assert isinstance(native, _native.NativeStreamBackend)
-    return _native.wrap(lambda: native.backend_for(client), converter)
+    return _native.wrap(lambda: native._backend_for(client), converter)
 
 
 def replayer_converter(
@@ -269,7 +276,7 @@ def replayer_converter(
                 "A replay reads each page of a native Workflow read again, so pass the "
                 "Replayer a stream_client= of the server that keeps the Streams"
             )
-        return native.backend_for(client)
+        return native._backend_for(client)
 
     return _native.wrap(backend, converter)
 
@@ -305,4 +312,4 @@ def client_backend(
         StreamConfigError: The client has no backend of that name.
     """
     backend = backend_of(client, name)
-    return backend.backend_name, backend.backend_for(client)
+    return backend.backend_name, backend._backend_for(client)
