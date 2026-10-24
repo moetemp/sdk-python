@@ -881,13 +881,15 @@ class PublishesClosesAndReturns:
 async def close_activity_events(
     handle: WorkflowHandle[Any, Any],
 ) -> list[EventType.ValueType]:
-    # The events of the close Activity, from its schedule on.
+    # The events of the close command, from its schedule on: the Activity on Redis, and the
+    # System Nexus operation on native.
     history = await handle.fetch_history()
     scheduled = {
         event.event_id
         for event in history.events
         if event.activity_task_scheduled_event_attributes.activity_type.name
         == "__temporal_streams_close"
+        or event.nexus_operation_scheduled_event_attributes.operation == "CloseStream"
     }
     return [
         event.event_type
@@ -895,6 +897,10 @@ async def close_activity_events(
         if event.event_id in scheduled
         or event.activity_task_started_event_attributes.scheduled_event_id in scheduled
         or event.activity_task_completed_event_attributes.scheduled_event_id
+        in scheduled
+        or event.nexus_operation_started_event_attributes.scheduled_event_id
+        in scheduled
+        or event.nexus_operation_completed_event_attributes.scheduled_event_id
         in scheduled
     ]
 
@@ -925,11 +931,18 @@ async def test_close_survives_a_failed_last_task(stream_client: Client, cache: i
     assert len(closes) == 1 and items[-1] is closes[0]
     assert closes[0].result == "done"
     assert closes[0].status == streams.CloseStatus.COMPLETED
-    assert await close_activity_events(handle) == [
-        EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
-        EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED,
-        EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED,
-    ]
+    assert await close_activity_events(handle) == (
+        [
+            EventType.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED,
+            EventType.EVENT_TYPE_NEXUS_OPERATION_COMPLETED,
+        ]
+        if on_native(stream_client)
+        else [
+            EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_STARTED,
+            EventType.EVENT_TYPE_ACTIVITY_TASK_COMPLETED,
+        ]
+    )
 
 
 @workflow.defn

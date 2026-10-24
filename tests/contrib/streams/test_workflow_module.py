@@ -335,9 +335,10 @@ async def test_block_end_leaves_a_cron_stream_open(stream_client: Client):
         first = await asyncio.wait_for(anext(reader), 20)
         second = await asyncio.wait_for(anext(reader), 20)
         await reader.aclose()
+        # Read before the terminate, since a native server closes the Stream with it.
+        items = await read(handle)
         await handle.terminate()
     assert isinstance(first, streams.Record) and isinstance(second, streams.Record)
-    items = await read(handle)
     assert not any(isinstance(item, streams.Closed) for item in items)
 
 
@@ -374,16 +375,22 @@ async def test_failed_task_writes_no_close(stream_client: Client):
     closes = [item for item in items if isinstance(item, streams.Closed)]
     assert len(closes) == 1 and closes[0].result == "closed"
     history = await handle.fetch_history()
-    # The failed task's close never went out, so History has one close Activity.
-    scheduled = [
-        event
+    # The failed task's close never went out, so History has one close: an Activity on
+    # Redis, and a System Nexus operation on native.
+    activities = [
+        event.activity_task_scheduled_event_attributes.activity_type.name
         for event in history.events
         if event.event_type == EventType.EVENT_TYPE_ACTIVITY_TASK_SCHEDULED
     ]
-    assert [
-        event.activity_task_scheduled_event_attributes.activity_type.name
-        for event in scheduled
-    ] == ["__temporal_streams_close"]
+    operations = [
+        event.nexus_operation_scheduled_event_attributes.operation
+        for event in history.events
+        if event.event_type == EventType.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED
+    ]
+    if on_native(stream_client):
+        assert (activities, operations) == ([], ["CloseStream"])
+    else:
+        assert (activities, operations) == (["__temporal_streams_close"], [])
 
 
 @workflow.defn
