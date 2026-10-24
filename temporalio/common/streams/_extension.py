@@ -7,6 +7,7 @@ import dataclasses
 import logging
 import weakref
 from collections.abc import Mapping, Sequence
+from datetime import timedelta
 from typing import Any, NoReturn
 
 import temporalio.activity
@@ -14,6 +15,7 @@ import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.streams
 import temporalio.client
+import temporalio.common
 import temporalio.converter
 import temporalio.runtime
 import temporalio.service
@@ -36,6 +38,11 @@ logger = logging.getLogger(__name__)
 _KEY_HEADER = "__temporal_stream_key"
 # Continue-as-new passes the run chain's open Streams to the next run in this header.
 _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
+_CLOSE_TIMEOUT = timedelta(seconds=30)
+# A Store error is retryable and every other Stream error is not, as each one says itself.
+_CLOSE_RETRY = temporalio.common.RetryPolicy(
+    initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=30)
+)
 
 
 class ExtensionStreamBackend(StreamBackend):
@@ -180,6 +187,19 @@ class ExtensionStreamBackend(StreamBackend):
         ]
         return config
 
+    async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> int:
+        # Workflow code closes a Workflow's Stream here. The close must run only once the
+        # Workflow Task commits, so a task that fails before then leaves the Stream open for its
+        # retry. A regular Activity on the Workflow's task queue does that, and it closes as the
+        # run chain, the Stream's owner. A backend that closes another way overrides this.
+        return await temporalio.workflow.execute_activity(
+            streams_workflow.CLOSE_ACTIVITY,
+            request,
+            result_type=int,
+            start_to_close_timeout=_CLOSE_TIMEOUT,
+            retry_policy=_CLOSE_RETRY,
+        )
+
     async def shutdown(self) -> None:
         """Drop every open writer, including the client's. Call it once the process no longer
         writes Streams.
@@ -224,6 +244,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
             "_WorkflowInbound",
             (_WorkflowInbound,),
             {
+                "_backend": self.plugin,
                 "_backend_name": self.plugin.backend_name,
                 "_default": self.plugin.default,
                 "_kind": self.plugin._kind,
@@ -237,13 +258,17 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
 
 
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
+    _backend: ExtensionStreamBackend | None = None
     _backend_name = ""
     _default = False
     _kind = ""
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
+        assert self._backend is not None
         super().init(
-            _WorkflowOutbound(outbound, self._backend_name, self._default, self._kind)
+            _WorkflowOutbound(
+                outbound, self._backend, self._backend_name, self._default, self._kind
+            )
         )
 
     async def execute_workflow(
@@ -300,11 +325,13 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def __init__(
         self,
         next: temporalio.worker.WorkflowOutboundInterceptor,
+        backend: ExtensionStreamBackend,
         backend_name: str,
         default: bool,
         kind: str,
     ) -> None:
         super().__init__(next)
+        self._temporal_stream_backend = backend
         self._temporal_stream_backend_name = backend_name
         self._temporal_stream_default = default
         self._temporal_stream_kind = kind

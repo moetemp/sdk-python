@@ -25,10 +25,10 @@ def create_stream(
 
     Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
     handle with no call. The create and each publish are Local Activities, and the create's
-    error raises here. Only the run chain closes the Stream, with a regular Activity that runs
-    once its Workflow Task completed, so a task that fails before then leaves the Stream open
-    for its retry. On Redis, the end of the run chain closes nothing, so a Stream that nobody
-    closes stays open until its ``safety_ttl``.
+    error raises here. Only the run chain closes the Stream. A close runs once its Workflow
+    Task commits, as a regular Activity on Redis, so a task that fails before then leaves the
+    Stream open for its retry. On Redis, the end of the run chain closes nothing, so a Stream
+    that nobody closes stays open until its ``safety_ttl``.
 
     Await the call for the handle, or use it in ``async with``, which closes the Stream at the
     end of the block::

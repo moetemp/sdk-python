@@ -40,6 +40,10 @@ class RedisStreamBackend(ExtensionStreamBackend):
     name ``redis``, which the Stream handles it creates carry. For now a Worker serves one
     backend. A client may have more than one, and ``backend=`` picks one.
 
+    A Workflow's close is a regular Activity on the Workflow's task queue, which runs once the
+    Workflow Task commits. So a Worker with this backend polls Activities on its task queue, and
+    Workers that share a task queue all register the backend.
+
     .. warning::
         This API is experimental.
     """

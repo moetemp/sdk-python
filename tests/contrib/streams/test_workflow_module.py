@@ -709,3 +709,24 @@ async def test_default_is_native_with_no_default_backend(client: Client):
     items = [item async for item in stream.subscribe()]
     assert data(items) == ["on redis"]
     assert isinstance(items[-1], streams.Closed) and items[-1].result == "closed"
+
+
+class _RecordsCloses(MemoryStreamBackend):
+    # A backend that closes another way overrides the close of a Workflow's Stream.
+    closes: list[str] = []
+
+    async def _close_in_workflow(self, request: Any) -> int:
+        self.closes.append(request.stream.id)
+        return await super()._close_in_workflow(request)
+
+
+async def test_backend_carries_the_workflow_close(client: Client):
+    config = client.config()
+    config["stream_backends"] = [_RecordsCloses(default=True)]
+    recording = Client(**config)
+    async with new_worker(recording, Agent) as worker:
+        handle = await recording.start_workflow(
+            Agent.run, "hi", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await handle.result()
+    assert _RecordsCloses.closes == [handle.stream(Events).id]
