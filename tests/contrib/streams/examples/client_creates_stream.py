@@ -12,8 +12,8 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
+from temporalio.contrib import stream as redis
 from temporalio.worker import Worker
 
 
@@ -31,8 +31,8 @@ class Events:
 @workflow.defn
 class Chat:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> None:
-        # The Workflow only writes. The client, or auto-close, closes the Stream.
+    async def run(self, stream: streams.WorkflowStream[Events]) -> None:
+        # The Workflow only writes. The client closes the Stream.
         await stream.topic(Events.turns).publish(
             Turn("model", "hi"), Turn("last", "bye")
         )
@@ -42,16 +42,16 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
     async with Worker(client, task_queue=task_queue, workflows=[Chat]):
         turns = []
         # The block closes the Stream at its end, or with the error that ends it.
-        async with streams.StreamClient(client).create(
+        async with redis.create(
+            client,
             Events,
             id=f"chat-{uuid.uuid4()}",
             retention=timedelta(days=1),
-            auto_close=timedelta(hours=1),
         ) as chat_stream:
             await client.start_workflow(
                 Chat.run,
                 # A Stream is data, so the Workflow gets it as an argument.
-                stream_workflow.WorkflowStream.from_handle(chat_stream),
+                streams.WorkflowStream.from_handle(chat_stream),
                 id=f"chat-{uuid.uuid4()}",
                 task_queue=task_queue,
             )

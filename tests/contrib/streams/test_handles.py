@@ -5,10 +5,9 @@ from typing import Any, TypeVar
 import pydantic
 import pytest
 
-from temporalio.common import RawValue
-from temporalio.contrib import streams
+from temporalio.common import RawValue, streams
+from temporalio.common.streams._defn import definition_of
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.contrib.streams._defn import definition_of
 from temporalio.converter import DataConverter
 
 E = TypeVar("E")

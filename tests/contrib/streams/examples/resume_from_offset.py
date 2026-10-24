@@ -2,7 +2,7 @@
 
 The Workflow writes one Stream per turn, a renamed definition from ``streams.with_name``. The
 Reader saves the read's ``next_offset`` after each Record, stops, and later resumes from it with
-``from_offset``. A view that wants only new Records starts at ``streams.END``.
+``offset``. A view that wants only new Records starts at ``streams.END``.
 """
 
 from __future__ import annotations
@@ -12,8 +12,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -33,7 +32,7 @@ class Turns:
 
     @workflow.run
     async def run(self, first: list[str]) -> None:
-        turn = await stream_workflow.create_stream(Turn3)
+        turn = await workflow.create_stream(Turn3)
         tokens = turn.topic(Events.tokens)
         await tokens.publish(*first)
         await workflow.wait_condition(lambda: bool(self.more) or self.done)
@@ -58,13 +57,12 @@ class OffsetStore:
 
 
 async def read_some(
-    client: Client, handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
+    handle: WorkflowHandle[Turns, None], store: OffsetStore, count: int
 ) -> list[str]:
-    turn3 = streams.StreamClient(client).workflow_stream(handle, Turn3)
-    tokens = turn3.topic(Events.tokens)
+    turn3 = handle.stream(Turn3)
     seen = []
-    read = tokens.subscribe(
-        from_offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
+    read = turn3.subscribe(
+        Events.tokens, offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
     )
     async for item in read:
         if isinstance(item, streams.Closed):
@@ -80,13 +78,13 @@ async def read_some(
     return seen
 
 
-async def read_new(client: Client, handle: WorkflowHandle[Turns, None]) -> list[str]:
+async def read_new(handle: WorkflowHandle[Turns, None]) -> list[str]:
     # A view that shows only what comes next starts after the newest Record.
-    turn3 = streams.StreamClient(client).workflow_stream(handle, Turn3)
+    turn3 = handle.stream(Turn3)
     return [
         item.data
-        async for item in turn3.topic(Events.tokens).subscribe(
-            from_offset=streams.END, wait_new_records=False
+        async for item in turn3.subscribe(
+            Events.tokens, offset=streams.END, wait_new_records=False
         )
         if isinstance(item, streams.Record)
     ]
@@ -100,9 +98,9 @@ async def main(
             Turns.run, ["a", "b"], id=f"turns-{uuid.uuid4()}", task_queue=task_queue
         )
         store = OffsetStore()
-        before = await read_some(client, handle, store, 2)
-        new = await read_new(client, handle)
+        before = await read_some(handle, store, 2)
+        new = await read_new(handle)
         await handle.signal(Turns.add, ["c", "d"])
-        after = await read_some(client, handle, store, 2)
+        after = await read_some(handle, store, 2)
         await handle.result()
         return before, new, after

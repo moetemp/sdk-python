@@ -720,11 +720,6 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             workflow_id=init.workflow_id,
             workflow_type=init.workflow_type,
             priority=temporalio.common.Priority._from_proto(init.priority),
-            execution_expiration_time=init.workflow_execution_expiration_time.ToDatetime().replace(
-                tzinfo=timezone.utc
-            )
-            if init.HasField("workflow_execution_expiration_time")
-            else None,
         )
 
         last_failure = (
