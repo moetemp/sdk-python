@@ -68,8 +68,10 @@ class Replayer:
         most of the arguments. Most of the same arguments need to be passed to
         the replayer that were passed to the worker when the workflow originally
         ran. ``stream_backends`` are the Stream backends of the Worker's client,
-        such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`. A
-        replay makes no Stream call, so they need not reach their Store.
+        such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The
+        native backend is there with no registration. A replay makes no Stream
+        call, except that it reads each page of a native Workflow read again on
+        the connection of a client of the native backend in this process.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that
@@ -102,10 +104,11 @@ class Replayer:
         self.plugins = plugins
         for plugin in plugins:
             self._config = plugin.configure_replayer(self._config)
-        if self._config.get("stream_backends"):
-            from temporalio.common.streams import _plugin as _stream_plugin
+        # A replay of Workflow code that uses Streams needs the native backend and the
+        # others of the Worker's client.
+        from temporalio.common.streams import _plugin as _stream_plugin
 
-            self._config = _stream_plugin.configure_replayer(self._config)
+        self._config = _stream_plugin.configure_replayer(self._config)
 
         # Validate workflows after plugin configuration
         if not self._config.get("workflows"):
@@ -259,9 +262,14 @@ class Replayer:
             runtime = (
                 self._config.get("runtime") or temporalio.runtime.Runtime.default()
             )
-            data_converter = (
+            from temporalio.common.streams import _plugin as _stream_plugin
+
+            # A native Stream read's marker holds positions, which the codec step turns back
+            # into the page.
+            data_converter = _stream_plugin.replayer_converter(
+                self._config,
                 self._config.get("data_converter")
-                or temporalio.converter.DataConverter.default
+                or temporalio.converter.DataConverter.default,
             )
             workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: bridge_worker,

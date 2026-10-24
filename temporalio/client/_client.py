@@ -232,8 +232,9 @@ class Client:
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
             stream_backends: The Stream backends of this client and its Workers, such as
-                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names are unique.
-                With more than one, exactly one has ``default=True``. See
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The native backend
+                is there with no registration. Names are unique. With more than one, exactly
+                one has ``default=True``. With none marked, the default is ``native``. See
                 :py:class:`temporalio.common.streams.StreamBackend`.
 
                 .. warning::
@@ -936,12 +937,11 @@ class Client:
             id: The Stream id.
             stream: A handle of the Stream, such as one in a Record. Its id, owner and
                 backend stay.
-            backend: The name of the backend. Defaults to the handle's, and else to the
-                registered backend with ``default=True``.
+            backend: The name of the backend. Defaults to the handle's, else to the
+                registered backend with ``default=True``, else to ``native``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name, or none has
-                ``default=True`` for a call with no backend.
+            StreamConfigError: The client has no backend of that name.
         """
         from temporalio.common.streams import _stream_client
 

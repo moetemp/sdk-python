@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from datetime import timedelta
@@ -289,13 +290,17 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
 class NativeStreamBackend(ExtensionStreamBackend):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
 
+    Every client, Worker and Replayer has it with no registration, under the name
+    ``native``, and it is the default backend unless a registered backend has
+    ``default=True``. Register one only to configure it, such as for its Retention, or to
+    make it the default next to another backend.
+
     Workflow writes run as Local Activities, as on Redis, and the client's Stream runtime
     writes them to the server's ``temporal.api.streamservice.v1.StreamService``. Activity and
-    client calls go to the same service. Each client of the backend gets its own runtime on
-    its own connection, and the client's Workers share it. A page of a Workflow read is a
-    direct read in a Local Activity whose marker holds only its positions, and a replay reads
-    the page again. It registers the backend name ``native``. Register it next to
-    ``RedisStreamBackend`` to keep old Streams on Redis and create new ones on the server.
+    client calls go to the same service. Each client gets its own runtime on its own
+    connection, built at the first call, and the client's Workers share it. A page of a
+    Workflow read is a direct read in a Local Activity whose marker holds only its positions,
+    and a replay reads the page again on the connection of a client of the backend.
 
     .. warning::
         This API is experimental.
@@ -328,6 +333,11 @@ class NativeStreamBackend(ExtensionStreamBackend):
         config = ext_pb.NativeStreamConfig()
         if retention is not None:
             config.retention.FromTimedelta(retention)
+        # The calls of each connection. A client and its Workers share them, and a Replayer
+        # reads again on any of them.
+        self._connections: weakref.WeakKeyDictionary[
+            temporalio.service.ServiceClient, _ExtensionCalls
+        ] = weakref.WeakKeyDictionary()
         super().__init__(
             "temporalio.NativeStreamBackend", False, config, None, name, default
         )
@@ -335,19 +345,28 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def _new_backend(
         self, service: temporalio.service.ServiceClient
     ) -> _ExtensionCalls:
-        # Each client gets its own runtime on its own connection, so a call goes on the
-        # connection of the client that makes it.
-        backend = _ExtensionCalls(_ConnectionRuntime(service, self._config))
-        self._backends.add(backend)
+        # Each connection gets its own runtime, so a call goes on the connection of the
+        # client that makes it. The runtime comes at the first call.
+        backend = self._connections.get(service)
+        if backend is None:
+            backend = _ExtensionCalls(_ConnectionRuntime(service, self._config))
+            self._connections[service] = backend
+            self._backends.add(backend)
         return backend
 
+    def backend_for(self, client: temporalio.client.Client) -> _ExtensionCalls:
+        """The Stream runtime of ``client``'s connection."""
+        return self._new_backend(client.service_client)
+
     def _any_backend(self) -> _ExtensionCalls:
-        # A Replayer has no client, so a replay reads again on a client of the backend.
-        for backend in self._backends:
+        # A Replayer has no client, so a replay reads again on a connection of the backend.
+        for backend in list(self._connections.values()):
             return backend
         raise StreamConfigError(
-            "A native replay reads the Stream again, so register the backend on a client "
-            "that connected"
+            "A native replay reads each page of a Workflow read again, so it needs a client "
+            "of the native backend in this process. Register the Replayer's "
+            "NativeStreamBackend on a client too, or run a Worker or a Stream call of a "
+            "client first."
         )
 
     async def _read_result(
@@ -392,29 +411,9 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def _configure_client(
         self, config: temporalio.client.ClientConfig
     ) -> temporalio.client.ClientConfig:
-        # Wrap the client's codec, so a Workflow read's positions turn back into its page.
-        config = super()._configure_client(config)
-        interceptor = self._interceptor_of(config.get("interceptors", []))
-        backend = interceptor.backend if interceptor is not None else None
-        converter = (
-            config.get("data_converter") or temporalio.converter.DataConverter.default
-        )
-        config["data_converter"] = _wrap(
-            (lambda: backend) if backend is not None else self._any_backend,
-            converter,
-        )
-        return config
-
-    def _configure_replayer(
-        self, config: temporalio.worker.ReplayerConfig
-    ) -> temporalio.worker.ReplayerConfig:
-        # Wrap the Replayer's codec, as the client's. A replay reads again on the connection
-        # of a client of the backend.
-        config = super()._configure_replayer(config)
-        converter = (
-            config.get("data_converter") or temporalio.converter.DataConverter.default
-        )
-        config["data_converter"] = _wrap(self._any_backend, converter)
+        # The calls come from the connection, not from an interceptor. Knowing the connection
+        # now lets a Replayer with this backend read on it.
+        self._new_backend(config["service_client"])
         return config
 
 
@@ -438,13 +437,27 @@ def _describe_activity(backend: NativeStreamBackend) -> Any:
     return describe
 
 
-def _wrap(
+def wrap(
     backend: Callable[[], _ExtensionCalls],
     converter: temporalio.converter.DataConverter,
 ) -> temporalio.converter.DataConverter:
+    """The converter with a codec step that turns a native read's positions back into its
+    page, reading it again with ``backend`` when the page is not in the cache.
+    """
     if isinstance(converter.payload_codec, _DirectReadCodec):
         return converter
     codec = converter.payload_codec
     return dataclasses.replace(
         converter, payload_codec=_DirectReadCodec(backend, codec, codec)
     )
+
+
+_implicit: NativeStreamBackend | None = None
+
+
+def implicit() -> NativeStreamBackend:
+    """The native backend of the clients, Workers and Replayers that register none."""
+    global _implicit
+    if _implicit is None:
+        _implicit = NativeStreamBackend()
+    return _implicit

@@ -167,13 +167,8 @@ def _check_backend(backend: str | None, action: str) -> str:
         raise no_worker_backend()
     names = [b.name for b in backends]
     if not backend:
-        # The default is the backend with default=True, else native.
-        backend = next((b.name for b in backends if b.default), _ids.NATIVE_BACKEND)
-        if backend not in names:
-            raise _errors.no_default_backend(
-                "Worker", names, "temporalio.contrib.stream.workflow.create_stream"
-            )
-        return backend
+        # The default is the backend with default=True, else native, which every Worker has.
+        return next((b.name for b in backends if b.default), _ids.NATIVE_BACKEND)
     if backend not in names:
         raise _errors.StreamConfigError(
             f"Can't {action} a Stream of the backend {backend}. The Worker has "

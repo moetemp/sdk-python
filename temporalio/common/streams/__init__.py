@@ -7,13 +7,15 @@ any Stream with :py:meth:`temporalio.client.Client.stream`. A Stream is data: a 
 passes it to an Activity, a child Workflow or the next run as an argument, and the
 parameter's type gives the handle class of that context, such as :py:class:`ActivityStream`.
 
-A :py:class:`StreamBackend` carries the calls and registers a backend name, such as
-:py:class:`NativeStreamBackend` (``native``), whose Streams the Temporal server keeps,
+A :py:class:`StreamBackend` carries the calls and registers a backend name. Every client,
+Worker and Replayer has :py:class:`NativeStreamBackend` (``native``), whose Streams the
+Temporal server keeps, with no registration. Register others with
+``Client.connect(..., stream_backends=[...])``, such as
 :py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
-:py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). Register
-backends with ``Client.connect(..., stream_backends=[...])``. A handle carries the name of its
-backend. With more than one registered backend, exactly one has ``default=True``, the one
-that a create with no ``backend=`` uses. A Worker serves every backend of its client.
+:py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). A handle
+carries the name of its backend. With more than one registered backend, exactly one has
+``default=True``. A create with no ``backend=`` uses the one with ``default=True``, else
+``native``. A Worker serves every backend of its client.
 
 .. warning::
     This package is experimental.

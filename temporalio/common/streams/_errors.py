@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import temporalio.exceptions
 import temporalio.service
 from temporalio.common.streams.proto.v1 import StreamErrorDetails
@@ -104,17 +102,6 @@ class StreamConfigError(RuntimeError):
 
     ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
     """
-
-
-def no_default_backend(
-    owner: str, names: Sequence[str], hint: str
-) -> StreamConfigError:
-    """The error of a call with no backend name when no backend has ``default=True``."""
-    return StreamConfigError(
-        f"No Stream backend of the {owner} ({', '.join(names)}) has default=True, so the "
-        f"default is native, which the {owner} does not have. Mark a backend with "
-        f"default=True, or name one, such as with {hint}."
-    )
 
 
 class ReadOnlyContextError(StreamError):

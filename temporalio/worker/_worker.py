@@ -407,17 +407,17 @@ class Worker:
         plugins = plugins_from_client + list(plugins)
         self._initial_config = config.copy()
 
-        # The Worker takes its client's Stream backends, before the plugins as a client's
-        # plugins come first.
-        stream_backends = client.config(active_config=True).get("stream_backends")
-        if stream_backends:
-            from temporalio.common.streams import _plugin as _stream_plugin
-
-            config = _stream_plugin.configure_worker(stream_backends, config)
-
         self._plugins = plugins
         for plugin in plugins:
             config = plugin.configure_worker(config)
+
+        # Workflows and Activities may use Streams with no registration, on the native backend,
+        # so the Worker takes the native backend and its client's others. A Worker of only
+        # Nexus services loads nothing of Streams.
+        if config.get("workflows") or config.get("activities"):
+            from temporalio.common.streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_worker(config)
 
         self._init_from_config(client, config)
 
@@ -554,6 +554,8 @@ class Worker:
                     )
                 self._activity_worker.assert_activity_valid(activity)
 
+            from temporalio.common.streams import _plugin as _stream_plugin
+
             self._workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: self._bridge_worker,
                 namespace=config["client"].namespace,  # type: ignore[reportTypedDictNotRequiredAccess]
@@ -565,7 +567,12 @@ class Worker:
                 ),
                 workflow_runner=config["workflow_runner"],  # type: ignore[reportTypedDictNotRequiredAccess]
                 unsandboxed_workflow_runner=config["unsandboxed_workflow_runner"],  # type: ignore[reportTypedDictNotRequiredAccess]
-                data_converter=client_config["data_converter"],
+                # A native Stream read's marker holds positions, which the codec step turns
+                # back into the page.
+                data_converter=_stream_plugin.worker_converter(
+                    config["client"],  # type: ignore[reportTypedDictNotRequiredAccess]
+                    client_config["data_converter"],
+                ),
                 interceptors=interceptors,
                 workflow_failure_exception_types=config[
                     "workflow_failure_exception_types"

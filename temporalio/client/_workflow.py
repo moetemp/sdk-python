@@ -207,11 +207,10 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
         Args:
             definition: The Stream definition class, renamed as the Workflow's create.
             backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``.
+                ``default=True``, else to ``native``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name, or none has
-                ``default=True`` for a call with no backend.
+            StreamConfigError: The client has no backend of that name.
         """
         from temporalio.common.streams import _stream_client
 

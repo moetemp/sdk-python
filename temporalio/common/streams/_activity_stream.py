@@ -41,10 +41,6 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
             "with stream_backends=."
         )
     streams = attempt.get(handle.backend)
-    if streams is None and not handle.backend:
-        raise _errors.no_default_backend(
-            "Worker", list(attempt.backends), "a handle that carries its backend name"
-        )
     if streams is None:
         raise _errors.StreamConfigError(
             f"The Stream {handle.id} is of the backend {handle.backend}. The Worker has "

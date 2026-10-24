@@ -6,12 +6,14 @@ from collections.abc import Sequence
 from typing import Any
 
 import temporalio.client
+import temporalio.converter
 import temporalio.worker
 from temporalio.common.streams import _errors, _ids
 from temporalio.common.streams._backend import BackendCalls
 from temporalio.plugin import SimplePlugin
 
-# The default backend when no registered backend has default=True.
+# The default backend when no registered backend has default=True. Every client, Worker and
+# Replayer has it with no registration.
 NATIVE = _ids.NATIVE_BACKEND
 
 
@@ -20,11 +22,11 @@ class StreamBackend(SimplePlugin):
 
     Register backends on the client with ``Client.connect(..., stream_backends=[...])``. A
     Worker takes its client's backends, and a ``Replayer`` takes ``stream_backends=`` too.
-    Names are unique. With more than one registered backend, exactly one has ``default=True``.
-    With none marked, the default is ``native``, so a create with no backend needs a
-    registered ``NativeStreamBackend``, else it raises ``StreamConfigError``. Mark a backend
-    with ``default=True``, or use the calls of its package, such as
-    ``temporalio.contrib.stream.workflow.create_stream``.
+    Every client, Worker and Replayer also has the native backend, named ``native``, with no
+    registration. Register a ``NativeStreamBackend`` only to configure it, such as for its
+    Retention. Names are unique, and only the native backend is named ``native``. With more
+    than one registered backend, exactly one has ``default=True``. With none marked, the
+    default is ``native``.
 
     A backend is not a plugin, so passing it in ``plugins=`` raises ``StreamConfigError``.
 
@@ -133,8 +135,9 @@ def check_backends(backends: Sequence[object], owner: str) -> list[StreamBackend
 
     Raises:
         TypeError: An entry is not a ``StreamBackend``.
-        StreamConfigError: Two backends have one name, or more than one backend and not
-            exactly one with ``default=True``.
+        StreamConfigError: Two backends have one name, a backend that is not native has the
+            name ``native``, or more than one backend and not exactly one with
+            ``default=True``.
     """
     checked: list[StreamBackend] = []
     for backend in backends:
@@ -143,6 +146,11 @@ def check_backends(backends: Sequence[object], owner: str) -> list[StreamBackend
         if any(other.backend_name == backend.backend_name for other in checked):
             raise _errors.StreamConfigError(
                 f"The {owner} has two Stream backends named {backend.backend_name}"
+            )
+        if backend.backend_name == NATIVE and backend._kind != NATIVE:
+            raise _errors.StreamConfigError(
+                f"The name {NATIVE} is the native backend's, so {type(backend).__name__} "
+                "takes another name"
             )
         checked.append(backend)
     if len(checked) < 2:
@@ -163,6 +171,15 @@ def default_name(backends: Sequence[StreamBackend]) -> str:
     return next((b.backend_name for b in backends if b.default), NATIVE)
 
 
+def with_native(backends: Sequence[StreamBackend]) -> list[StreamBackend]:
+    """The registered backends, and the native one when none of them is named ``native``."""
+    from temporalio.common.streams import _native
+
+    if any(b.backend_name == NATIVE for b in backends):
+        return list(backends)
+    return [*backends, _native.implicit()]
+
+
 def configure_client(
     config: temporalio.client.ClientConfig,
 ) -> temporalio.client.ClientConfig:
@@ -173,10 +190,11 @@ def configure_client(
 
 
 def configure_worker(
-    backends: Sequence[StreamBackend], config: temporalio.worker.WorkerConfig
+    config: temporalio.worker.WorkerConfig,
 ) -> temporalio.worker.WorkerConfig:
-    """Add the parts of the client's backends to a Worker."""
-    for backend in backends:
+    """Add the parts of the client's backends and of the native one to a Worker."""
+    client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
+    for backend in with_native(client_backends(client)):
         config = backend._configure_worker(config)
     return config
 
@@ -184,10 +202,44 @@ def configure_worker(
 def configure_replayer(
     config: temporalio.worker.ReplayerConfig,
 ) -> temporalio.worker.ReplayerConfig:
-    """Check the Replayer's backends, and add the parts of each to it."""
-    for backend in check_backends(config.get("stream_backends", ()), "Replayer"):
+    """Check the Replayer's backends, and add the parts of each and of the native one."""
+    backends = check_backends(config.get("stream_backends", ()), "Replayer")
+    for backend in with_native(backends):
         config = backend._configure_replayer(config)
     return config
+
+
+def worker_converter(
+    client: temporalio.client.Client, converter: temporalio.converter.DataConverter
+) -> temporalio.converter.DataConverter:
+    """The converter of a Worker's Workflows, whose codec step turns a native read's
+    positions back into its page.
+    """
+    from temporalio.common.streams import _native
+
+    native = next(
+        b for b in with_native(client_backends(client)) if b.backend_name == NATIVE
+    )
+    assert isinstance(native, _native.NativeStreamBackend)
+    return _native.wrap(lambda: native.backend_for(client), converter)
+
+
+def replayer_converter(
+    config: temporalio.worker.ReplayerConfig,
+    converter: temporalio.converter.DataConverter,
+) -> temporalio.converter.DataConverter:
+    """The converter of a Replayer's Workflows, as :py:func:`worker_converter`. A replay
+    reads a native page again on a connection that the native backend served.
+    """
+    from temporalio.common.streams import _native
+
+    native = next(
+        b
+        for b in with_native(config.get("stream_backends", ()))
+        if b.backend_name == NATIVE
+    )
+    assert isinstance(native, _native.NativeStreamBackend)
+    return _native.wrap(native._any_backend, converter)
 
 
 def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:
@@ -196,29 +248,19 @@ def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:
 
 
 def client_backend(
-    client: temporalio.client.Client, name: str | None, *, hint: str = "backend="
+    client: temporalio.client.Client, name: str | None
 ) -> tuple[str, BackendCalls]:
     """The name and the calls of a client's backend. None picks the default backend.
 
     Raises:
-        StreamConfigError: The client has no backend of that name, or none has
-            ``default=True`` for a call with no name.
+        StreamConfigError: The client has no backend of that name.
     """
-    backends = client_backends(client)
+    backends = with_native(client_backends(client))
     wanted = name or default_name(backends)
     for backend in backends:
         if backend.backend_name == wanted:
             return wanted, backend.backend_for(client)
-    if not backends:
-        raise _errors.StreamConfigError(
-            "The client has no Stream backend. Register one with "
-            "Client.connect(..., stream_backends=[...])."
-        )
-    if not name:
-        raise _errors.no_default_backend(
-            "client", [b.backend_name for b in backends], hint
-        )
     raise _errors.StreamConfigError(
-        f"The client has no Stream backend {name}. It has "
+        f"The client has no Stream backend {wanted}. It has "
         f"{', '.join(b.backend_name for b in backends)}."
     )

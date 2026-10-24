@@ -45,9 +45,8 @@ async def test_unknown_backend_raises_before_any_call(client: Client):
     assert stream.backend == "fake"
 
 
-async def test_client_without_backend_has_no_transport(client: Client):
-    with pytest.raises(streams.StreamConfigError, match="no Stream backend"):
-        client.stream(Events, id="chat-1")
+async def test_client_without_backend_has_only_native(client: Client):
+    assert client.stream(Events, id="chat-1").backend == "native"
     with pytest.raises(streams.StreamConfigError, match="no Redis Stream backend"):
         await redis.create(client, Events, id="chat-1")
 
@@ -374,16 +373,25 @@ async def test_backend_is_not_a_plugin(client: Client):
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):
+    # Every client has the native backend with no registration, and makes no call for it.
+    assert client.stream(Events, id="d-2").backend == "native"
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend()]
     one = Client(**config)
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
-        one.stream(Events, id="d-2")
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
-        one.get_workflow_handle("agent-3").stream(Events)
+    assert one.stream(Events, id="d-2").backend == "native"
+    assert one.get_workflow_handle("agent-3").stream(Events).backend == "native"
     assert one.stream(Events, id="d-2", backend="memory").backend == "memory"
     # The Redis create picks the client's only Redis backend, and memory stands in for it.
     assert (await redis.create(one, Events, id="d-2")).backend == "memory"
+    # A registered NativeStreamBackend configures native, and only it takes that name.
+    config["stream_backends"] = [
+        streams.NativeStreamBackend(default=True),
+        MemoryStreamBackend(),
+    ]
+    assert Client(**config).stream(Events, id="d-2").backend == "native"
+    config["stream_backends"] = [MemoryStreamBackend(name="native")]
+    with pytest.raises(streams.StreamConfigError, match="native backend's"):
+        Client(**config)
 
 
 async def test_stream_takes_the_handle_backend_or_the_default(client: Client):

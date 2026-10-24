@@ -283,21 +283,17 @@ class CreatesOn:
 async def test_worker_config_errors_fail_the_task(
     client: Client, stream_client: Client
 ):
-    # A Worker with no plugin, or with another backend, fails the Workflow Task, so a Worker
-    # with the right config can take the run on.
-    for task_client, backend, message in (
-        (client, None, "No Stream backend"),
-        (stream_client, "elsewhere", "backend elsewhere"),
-    ):
-        async with new_worker(task_client, CreatesOn) as worker:
-            handle = await task_client.start_workflow(
-                CreatesOn.run,
-                backend,
-                id=f"wf-{uuid.uuid4()}",
-                task_queue=worker.task_queue,
-            )
-            await assert_task_fail_eventually(handle, message_contains=message)
-            await handle.terminate()
+    # Every Worker has the native backend, so only a backend that the Worker lacks fails the
+    # Workflow Task, and a Worker with the right config can take the run on.
+    async with new_worker(stream_client, CreatesOn) as worker:
+        handle = await stream_client.start_workflow(
+            CreatesOn.run,
+            "elsewhere",
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await assert_task_fail_eventually(handle, message_contains="backend elsewhere")
+        await handle.terminate()
 
 
 @workflow.defn
@@ -568,8 +564,8 @@ async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Cl
 @workflow.defn
 class CreatesOnTheDefault:
     @workflow.run
-    async def run(self) -> None:
-        await workflow.create_stream(Events)
+    async def run(self) -> str:
+        return workflow.stream_handle(Events).backend or ""
 
 
 @workflow.defn
@@ -583,25 +579,26 @@ class CreatesOnRedis:
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):
-    # With no backend marked default=True, the default is native, which this SDK lacks. The
-    # Redis calls still pick the registered Redis backend, and the memory one stands in for it.
+    # With no backend marked default=True, the default is native, which every Worker has.
+    # The Redis calls still pick the registered Redis backend, and the memory one stands in
+    # for it.
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend()]
     memory_client = Client(**config)
     async with new_worker(memory_client, CreatesOnTheDefault, CreatesOnRedis) as worker:
-        handle = await memory_client.start_workflow(
-            CreatesOnTheDefault.run,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
+        assert (
+            await memory_client.execute_workflow(
+                CreatesOnTheDefault.run,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "native"
         )
-        await assert_task_fail_eventually(handle, message_contains="default is native")
-        await handle.terminate()
         on_redis = await memory_client.start_workflow(
             CreatesOnRedis.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await on_redis.result() == "memory"
-    with pytest.raises(streams.StreamConfigError, match="default=True"):
-        on_redis.stream(Events)
+    assert on_redis.stream(Events).backend == "native"
     stream = on_redis.stream(Events, backend="memory")
     items = [item async for item in stream.subscribe()]
     assert data(items) == ["on redis"]

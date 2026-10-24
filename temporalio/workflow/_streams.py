@@ -25,8 +25,9 @@ def create_stream(
 
     Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
     handle with no call. The create is one Local Activity, and its error raises here. Only the
-    run chain closes the Stream. On Redis, the end of the run chain closes nothing, so a Stream
-    that nobody closes stays open until its ``safety_ttl``.
+    run chain closes the Stream. The native server closes it when the run chain ends, with the
+    result or the failure of its last run. On Redis, the end of the run chain closes nothing,
+    so a Stream that nobody closes stays open until its ``safety_ttl``.
 
     Await the call for the handle, or use it in ``async with``, which closes the Stream at the
     end of the block::
@@ -42,16 +43,16 @@ def create_stream(
             per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
         retention: How long the Records stay after the close. Defaults to the backend's.
         backend: The name of the backend. Defaults to the registered backend with
-            ``default=True``. The default is part of the Workflow's code, since a replay must
-            create on the same backend. To move a Workflow to another backend, gate it with a
-            patch, for example ``backend="redis-b" if workflow.patched("move") else "redis"``.
+            ``default=True``, else to ``native``. The default is part of the Workflow's code,
+            since a replay must create on the same backend. To move a Workflow to another
+            backend, gate it with a patch, for example
+            ``backend="native" if workflow.patched("move") else "redis"``.
 
     Raises:
         StreamError: The backend refused the create, such as for another Retention.
         ReadOnlyContextError: The code must not change state, such as a query handler.
-        StreamConfigError: No Stream backend is on the Worker, none of that name, or none
-            has ``default=True`` for a create with no backend. It fails the Workflow Task,
-            not the run.
+        StreamConfigError: The Worker has no backend of that name. It fails the Workflow
+            Task, not the run.
     """
     from temporalio.common.streams import _workflow
 
@@ -94,10 +95,10 @@ def stream_handle(
     Args:
         definition: The Stream definition class, renamed as for the create.
         backend: The backend of the Stream. Defaults to the one that the run chain created it
-            on, and else to the registered backend with ``default=True``.
+            on, else to the registered backend with ``default=True``, else to ``native``.
 
     Raises:
-        StreamConfigError: No backend is given, known or marked as the default.
+        StreamConfigError: The Worker has no backend of that name.
     """
     from temporalio.common.streams import _workflow
 
