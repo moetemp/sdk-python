@@ -50,7 +50,7 @@ async def read(
     stream = streams.StreamClient(client).workflow_stream(
         handle, streams.with_name(Events, name)
     )
-    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
+    return [item async for item in stream.subscribe(wait_new_records=False)]
 
 
 def records(items: Sequence[object]) -> list[streams.Record[Any]]:
@@ -107,6 +107,7 @@ class Agent:
             streams.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
+        await stream.close()
         return [offsets, last, read]
 
 
@@ -210,6 +211,7 @@ class ShownThenWithdrawn:
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
+        await stream.close()
 
 
 async def test_reader_withdraws_a_shown_record_after_a_reconnect(
@@ -277,7 +279,7 @@ async def close_it(stream: streams.ActivityStream[Events]) -> str:
 class Closing:
     @workflow.run
     async def run(self) -> list[str]:
-        stream = await stream_workflow.create_stream(Events, close_with_run=False)
+        stream = await stream_workflow.create_stream(Events)
         backend = await workflow.execute_activity(
             wrong_backend,
             streams.ActivityStream(id=stream.id, backend="elsewhere"),
@@ -316,7 +318,7 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
 class CreatesAndLeavesOpen:
     @workflow.run
     async def run(self) -> str:
-        stream = await stream_workflow.create_stream(Events, close_with_run=False)
+        stream = await stream_workflow.create_stream(Events)
         return stream.id
 
 
@@ -441,6 +443,7 @@ class LocalOrder:
             start_to_close_timeout=timedelta(seconds=30),
         )
         await tokens.publish("after")
+        await stream.close()
         return seen
 
 

@@ -57,6 +57,8 @@ class Agent:
             start_to_close_timeout=timedelta(minutes=5),
         )
         await turns.publish(Turn("done", reply))
+        # A run end closes nothing, so the Workflow closes its Stream before it returns.
+        await stream.close(result=reply)
         return reply
 
 

@@ -45,6 +45,7 @@ class TurnWorkflow:
             ),
             start_to_close_timeout=timedelta(seconds=30),
         )
+        await stream.close(result=prompt.upper())
         return TurnResult(
             text=prompt.upper(), stream=streams.ClientStream.from_handle(stream)
         )

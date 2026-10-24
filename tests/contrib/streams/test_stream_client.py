@@ -161,6 +161,7 @@ class Agent:
         await workflow.sleep(timedelta(milliseconds=200))
         stream = await stream_workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish(*prompt.split())
+        await stream.close(result=prompt.upper())
         return prompt.upper()
 
 
@@ -318,19 +319,6 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
     assert [type(item) for item in items] == [streams.Record, streams.Record]
     with pytest.raises(ValueError):
         stream.producer("ingest", epoch=0)
-
-
-async def test_auto_close_of_a_client_stream(stream_client: Client):
-    stream = await streams.StreamClient(stream_client).create(
-        Events, id=f"quiet-{uuid.uuid4()}", auto_close=timedelta(seconds=1)
-    )
-    await stream.topic(Events.tokens).publish("only")
-    await asyncio.sleep(1.5)
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == ["only"]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result is None
-    with pytest.raises(streams.StreamClosedError):
-        await stream.topic(Events.tokens).publish("late")
 
 
 async def test_unresolved_workflow_stream_compares_and_prints(client: Client):

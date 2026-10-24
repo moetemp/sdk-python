@@ -94,6 +94,7 @@ class Agent:
             start_to_close_timeout=timedelta(seconds=30),
         )
         await turns.publish(Turn("done", reply))
+        await stream.close(result=reply)
         return reply
 
 
@@ -129,13 +130,15 @@ attempts: dict[str, int] = {}
 class PublishThenFailTask:
     @workflow.run
     async def run(self, key: str) -> None:
-        turns = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        stream = await stream_workflow.create_stream(Events)
+        turns = stream.topic(Events.tokens)
         await turns.publish("before")
         await workflow.sleep(timedelta(milliseconds=10))
         await turns.publish("after")
         if attempts.setdefault(key, 0) == 0:
             attempts[key] = 1
             raise RuntimeError("fail this Workflow Task once")
+        await stream.close()
 
 
 async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
@@ -239,10 +242,11 @@ class WritesThenContinues:
             stream = await stream_workflow.create_stream(Events)
             await stream.topic(Events.tokens).publish("first run")
             workflow.continue_as_new(False)
+        await stream_workflow.stream_handle(Events).close(result="second run")
         return "second run"
 
 
-async def test_last_run_closes_a_stream_it_did_not_write(stream_client: Client):
+async def test_later_run_closes_a_stream_it_did_not_write(stream_client: Client):
     async with new_worker(stream_client, WritesThenContinues) as worker:
         handle = await stream_client.start_workflow(
             WritesThenContinues.run,
@@ -262,7 +266,7 @@ class CancelledBlock:
     @workflow.run
     async def run(self) -> None:
         async with await stream_workflow.create_stream(
-            streams.with_name(Events, "turn"), close_with_run=False
+            streams.with_name(Events, "turn")
         ) as turn:
             await turn.topic(Events.tokens).publish("started")
             await workflow.wait_condition(lambda: False)
@@ -297,9 +301,10 @@ class PlainWriter:
         stream = await stream_workflow.create_stream(Plain)
         await stream.topic(Plain.t).publish("plain")
         async with await stream_workflow.create_stream(
-            streams.with_name(Plain, "scoped"), close_with_run=False
+            streams.with_name(Plain, "scoped")
         ) as scoped:
             await scoped.topic(Plain.t).publish("scoped")
+        await stream.close(result="done")
         return "done"
 
 
@@ -343,6 +348,7 @@ class LocalWriter:
             CallModelInput("0 1", streams.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
+        await stream.close()
 
 
 async def test_local_activity_writes_with_the_task_epoch(stream_client: Client):
@@ -377,6 +383,7 @@ class LocalThenFailTask:
         if first:
             attempts[key] = 1
             raise RuntimeError("fail this Workflow Task once")
+        await stream.close()
 
 
 async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Client):
@@ -422,6 +429,7 @@ class LocalOnlyInFailedTask:
             )
             raise RuntimeError("fail this Workflow Task once")
         await stream.topic(Events.tokens).publish("other")
+        await stream.close()
 
 
 async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Client):
@@ -452,11 +460,12 @@ async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Cli
 class FailingRun:
     @workflow.run
     async def run(self) -> str:
-        turns = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        stream = await stream_workflow.create_stream(Events)
         info = workflow.info()
-        await turns.publish(f"run-{info.attempt}")
+        await stream.topic(Events.tokens).publish(f"run-{info.attempt}")
         if info.attempt == 1:
             raise ApplicationError("first run fails")
+        await stream.close(result="done")
         return "done"
 
 
@@ -477,7 +486,6 @@ async def test_retry_run_withdraws_the_failed_run(stream_client: Client):
     assert [record.data for record in written] == ["run-1", "run-2"]
     assert len(superseded) == 1
     assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
-    # The failed run had retries left, so only the last run closes the Stream.
     closed = items[-1]
     assert isinstance(closed, streams.Closed) and closed.result == "done"
 
@@ -559,14 +567,16 @@ class WaitsForSignal:
 
     @workflow.run
     async def run(self) -> str:
-        turns = (await stream_workflow.create_stream(Events)).topic(Events.tokens)
+        stream = await stream_workflow.create_stream(Events)
+        turns = stream.topic(Events.tokens)
         await turns.publish("before restart")
         async with await stream_workflow.create_stream(
-            streams.with_name(Events, "scoped"), close_with_run=False
+            streams.with_name(Events, "scoped")
         ) as scoped:
             await scoped.topic(Events.tokens).publish("scoped")
         await workflow.wait_condition(lambda: self.go)
         await turns.publish("after restart")
+        await stream.close()
         return "done"
 
     @workflow.signal
@@ -615,31 +625,6 @@ async def test_plugin_replays_a_history_made_without_it(
         ],
     )
     await replayer.replay_workflow(history)
-
-
-@workflow.defn
-class QuickWriter:
-    @workflow.run
-    async def run(self) -> str:
-        stream = await stream_workflow.create_stream(Events)
-        await stream.topic(Events.tokens).publish("quick")
-        return "done"
-
-
-async def test_worker_shutdown_drains_closes(stream_client: Client):
-    async with new_worker(stream_client, QuickWriter) as worker:
-        handle = await stream_client.start_workflow(
-            QuickWriter.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        await handle.result()
-    # Calls after the Worker exits still work, and the drain waited for the run's close.
-    items = [
-        item
-        async for item in workflow_stream(stream_client, handle).subscribe(
-            wait_new_records=False
-        )
-    ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
 
 
 async def test_plugin_shutdown_after_client_writes(stream_client: Client):
@@ -748,20 +733,18 @@ async def test_final_failure_under_a_retry_policy(
         )
         with pytest.raises(WorkflowFailureError):
             await handle.result()
-        items = await read_all(workflow_stream(stream_client, handle))
+        stream = workflow_stream(stream_client, handle)
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    closes = [item for item in items if isinstance(item, streams.Closed)]
-    # Only the run that ends the chain closes the Stream, with its failure, and it is last.
-    assert len(closes) == 1 and items[-1] is closes[0]
-    assert closes[0].failure is not None
+    # The end of the chain closes nothing.
+    assert not any(isinstance(item, streams.Closed) for item in items)
     if non_retryable:
-        # A non-retryable failure ends the chain on attempt 1, so it closes at once.
+        # A non-retryable failure ends the chain on attempt 1.
         assert [r.data for r in written] == ["run-1"]
         assert superseded == []
         return
-    # Attempts 1 and 2 left the Stream open, so attempts 2 and 3 could write. Each retry run
-    # withdraws the run before it.
+    # Each retry run withdraws the run before it.
     assert [r.data for r in written] == ["run-1", "run-2", "run-3"]
     assert len(superseded) == 2
     assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
@@ -826,7 +809,7 @@ failed_last_task: set[str] = set()
 
 class _FailsTheLastTaskOnce(Interceptor, WorkerInterceptor):
     # On the client before the Stream plugin, so it is the outer Workflow interceptor and
-    # fails the task after the plugin's part of the run end.
+    # fails the task after the plugin drained the run's writes.
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> type[WorkflowInboundInterceptor]:
@@ -853,11 +836,9 @@ class PublishesAndReturns:
 
 
 @pytest.mark.parametrize("cache", [0, 10])
-async def test_failed_last_task_leaves_the_close_to_its_retry(
+async def test_failed_last_task_is_withdrawn_by_its_retry(
     stream_client: Client, cache: int
 ):
-    # The close with the run goes out once the server accepted the run's completion. A close
-    # in the failed task would make the retry's create raise StreamClosedError.
     config = stream_client.config()
     config["interceptors"] = [_FailsTheLastTaskOnce()]
     client = Client(**config)
@@ -873,14 +854,12 @@ async def test_failed_last_task_leaves_the_close_to_its_retry(
             task_queue=worker.task_queue,
         )
         assert await handle.result() == "done"
-        items = await asyncio.wait_for(read_all(workflow_stream(client, handle)), 20)
+        stream = workflow_stream(client, handle)
+        items = [item async for item in stream.subscribe(wait_new_records=False)]
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
     assert [r.data for r in visible] == ["token"]
-    closes = [item for item in items if isinstance(item, streams.Closed)]
-    assert len(closes) == 1 and closes[0].result == "done"
-    assert closes[0].status == streams.CloseStatus.COMPLETED
 
 
 @workflow.defn
@@ -969,10 +948,11 @@ class ContinuesThenRetries:
         await stream.topic(Events.tokens).publish(f"attempt-{info.attempt}")
         if info.attempt == 1:
             raise ApplicationError("the continued run fails once")
+        await stream.close(result="done")
         return "done"
 
 
-async def test_retry_of_a_continued_run_keeps_the_close_with_run(stream_client: Client):
+async def test_retry_of_a_continued_run_writes_the_same_stream(stream_client: Client):
     async with new_worker(stream_client, ContinuesThenRetries) as worker:
         handle = await stream_client.start_workflow(
             ContinuesThenRetries.run,

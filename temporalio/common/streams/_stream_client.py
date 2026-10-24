@@ -460,23 +460,19 @@ class StreamClient:
         *,
         id: str,
         retention: timedelta | None = None,
-        auto_close: timedelta | None = None,
         backend: str | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
     ) -> Creating[ClientStream[E]]:
         """Create a Stream that this client owns, so only a client closes it.
 
-        It is idempotent for one id, one Retention and one ``auto_close``. Await the call for
-        the handle, or use it in ``async with``, which closes the Stream at the end of the
-        block.
+        It is idempotent for one id and one Retention. Await the call for the handle, or use
+        it in ``async with``, which closes the Stream at the end of the block.
 
         Args:
             definition: The Stream definition class.
             id: The Stream id, as a Workflow takes a Workflow id.
             retention: How long the Records stay after the close. Defaults to the backend's.
-            auto_close: Close the Stream with no result when no Record was appended for this
-                long, so a Stream that nobody closes does not stay open. Defaults to never.
             backend: The name of the backend. Defaults to the client's default backend.
             rpc_metadata: Headers of the call. See :py:meth:`ClientStream.get_offset`.
             rpc_timeout: The deadline of the call.
@@ -484,8 +480,8 @@ class StreamClient:
         Raises:
             StreamConfigError: The client has no backend of that name. No call is made.
             StreamClosedError: A Stream of that id was created and closed before.
-            StreamError: The Stream exists with another Retention or ``auto_close``, with
-                the reason ``stream_already_exists``.
+            StreamError: The Stream exists with another Retention, with the reason
+                ``stream_already_exists``.
         """
 
         async def create() -> ClientStream[E]:
@@ -494,9 +490,7 @@ class StreamClient:
             service = stream_backend.service(self._client.namespace)
             with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
                 response = await service.create_stream(
-                    models.CreateStreamRequest(
-                        stream_id=id, retention=retention, auto_close=auto_close
-                    )
+                    models.CreateStreamRequest(stream_id=id, retention=retention)
                 )
             if response.status == stream_pb.StreamStatus.STREAM_STATUS_CLOSED:
                 raise _errors.StreamClosedError(

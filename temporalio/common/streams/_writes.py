@@ -85,9 +85,6 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
             retention=request.retention.ToTimedelta()
             if request.HasField("retention")
             else None,
-            auto_close=request.auto_close.ToTimedelta()
-            if request.HasField("auto_close")
-            else None,
             withdraw_run=request.withdraw_run or None,
             owner=models.Producer(
                 kind=request.owner.kind,

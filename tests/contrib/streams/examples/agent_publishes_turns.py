@@ -1,8 +1,8 @@
 """Brook API proposal, "An agent Workflow publishes its turns".
 
 The Workflow creates its Stream, publishes each turn with an awaited ``publish``, and passes the
-Stream to the model Activity in its one input object. ``close_with_run`` closes the Stream with
-the result of the run chain.
+Stream to the model Activity in its one input object. It closes the Stream with its result
+before it returns, since a run end closes nothing.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ class AgentTurns:
     @workflow.run
     async def run(self, messages: list[str]) -> str:
         stream = await stream_workflow.create_stream(
-            Events, retention=timedelta(days=1), auto_close=timedelta(hours=1)
+            Events, retention=timedelta(days=1)
         )
         turns = stream.topic(Events.turns)
         while True:
@@ -73,6 +73,8 @@ class AgentTurns:
             )
             if not reply.tool_calls:
                 await turns.publish(Turn("done", reply.text))
+                # A run end closes nothing, so the Workflow closes its Stream.
+                await stream.close(result=reply.text)
                 return reply.text
             for call in reply.tool_calls:
                 messages.append(

@@ -32,7 +32,7 @@ class Events:
 class Chat:
     @workflow.run
     async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> None:
-        # The Workflow only writes. The client, or auto-close, closes the Stream.
+        # The Workflow only writes. The client closes the Stream.
         await stream.topic(Events.turns).publish(
             Turn("model", "hi"), Turn("last", "bye")
         )
@@ -46,7 +46,6 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
             Events,
             id=f"chat-{uuid.uuid4()}",
             retention=timedelta(days=1),
-            auto_close=timedelta(hours=1),
         ) as chat_stream:
             await client.start_workflow(
                 Chat.run,

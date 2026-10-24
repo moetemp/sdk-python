@@ -71,6 +71,7 @@ class Model:
             SummarizeInput(prompt, streams.SyncActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(minutes=5),
         )
+        await stream.close()
         return [first, summary]
 
 

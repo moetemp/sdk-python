@@ -67,7 +67,6 @@ class ChatTurns:
             async with stream_workflow.create_stream(
                 streams.with_name(Events, f"turn-{input.next + i}"),
                 retention=timedelta(days=1),
-                close_with_run=False,
             ) as turn:
                 # A Stream is data, so the index Record carries the turn's Stream.
                 await started.publish(
@@ -82,6 +81,8 @@ class ChatTurns:
             workflow.continue_as_new(
                 ChatTurnsInput(input.prompts[2:], input.next + len(batch), index)
             )
+        # The last run closes the index, since a run end closes nothing.
+        await index.close()
 
 
 async def main(client: Client, task_queue: str) -> dict[int, list[str]]:

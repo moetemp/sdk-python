@@ -34,6 +34,7 @@ class Greeter:
     @workflow.run
     async def run(self, name: str) -> str:
         await self.stream.topic(Events.tokens).publish(f"bye {name}")
+        await self.stream.close()
         return name
 
 

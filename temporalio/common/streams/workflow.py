@@ -66,7 +66,6 @@ __all__ = [
 class _RunStream:
     # What this run knows about one Stream. Many handles may name it, so it is kept by id.
     ref: models.StreamRef
-    close_with_run: bool = False
     closed: bool = False
     # Set for a Stream that the run chain created, which continue-as-new passes on.
     backend: str | None = None
@@ -482,14 +481,14 @@ def create_stream(
     definition: type[E],
     *,
     retention: timedelta | None = None,
-    auto_close: timedelta | None = None,
-    close_with_run: bool = True,
     backend: str | None = None,
 ) -> Creating[WorkflowStream[E]]:
     """Create a Stream that this run chain owns.
 
     Its id is ``<workflow id>:<first run id>:<name>``, so a client finds it from the Workflow
-    handle with no call. The create is one Local Activity, and its error raises here.
+    handle with no call. The create is one Local Activity, and its error raises here. Only the
+    run chain closes the Stream. On Redis, the end of the run chain closes nothing, so a Stream
+    that nobody closes stays open until its ``safety_ttl``.
 
     Await the call for the handle, or use it in ``async with``, which closes the Stream at the
     end of the block::
@@ -501,10 +500,6 @@ def create_stream(
         definition: The Stream definition class. Its name is the Stream name. For one Stream
             per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
         retention: How long the Records stay after the close. Defaults to the backend's.
-        auto_close: Close the Stream with no result when no Record was appended for this
-            long, so a Stream that nobody closes does not stay open. Defaults to never.
-        close_with_run: Close the Stream when the run chain closes, with the result or the
-            failure of its last run. A run that continues as new passes it on.
         backend: The name of the backend. Defaults to the Worker's. The default is part of
             the Workflow's code, since a replay must create on the same backend. To move a
             Workflow to another backend, gate it with a patch, for example
@@ -515,14 +510,10 @@ def create_stream(
         ReadOnlyContextError: The code must not change state, such as a query handler.
         StreamConfigError: No Stream plugin is on the Worker, or it has no backend of that name.
             It fails the Workflow Task, not the run.
-        ValueError: ``close_with_run=False`` for a Stream that already closes with the run
-            chain.
     """
 
     async def create() -> WorkflowStream[E]:
-        stream, task = _create(
-            definition, retention, auto_close, close_with_run, backend
-        )
+        stream, task = _create(definition, retention, backend)
         await task
         return stream
 
@@ -533,8 +524,6 @@ def create_stream_nowait(
     definition: type[E],
     *,
     retention: timedelta | None = None,
-    auto_close: timedelta | None = None,
-    close_with_run: bool = True,
     backend: str | None = None,
 ) -> WorkflowStream[E]:
     """Create a Stream that this run chain owns, with no await.
@@ -543,7 +532,7 @@ def create_stream_nowait(
     is for code that can't await ``put``. It takes the options of :py:func:`create_stream`. A
     backend error fails the Workflow Task.
     """
-    stream, task = _create(definition, retention, auto_close, close_with_run, backend)
+    stream, task = _create(definition, retention, backend)
     _write_nowait(task)
     return stream
 
@@ -551,17 +540,10 @@ def create_stream_nowait(
 def _create(
     definition: type[E],
     retention: timedelta | None,
-    auto_close: timedelta | None,
-    close_with_run: bool,
     backend: str | None,
 ) -> tuple[WorkflowStream[E], asyncio.Future[int]]:
     stream = _own_handle(definition, _check_backend(backend, "create"))
     run_stream = stream._check("create", backend_checked=True)
-    if run_stream.close_with_run and not close_with_run:
-        raise ValueError(
-            f"The Stream {stream.id} already closes with the run chain, and "
-            "close_with_run=False can't turn that off"
-        )
     run_id = temporalio.workflow.info().run_id
     # The owner makes the Stream the run chain's, and names a retry run's withdrawal.
     # The ref names the run chain, which the Store keeps for its owner check of a close.
@@ -576,9 +558,6 @@ def _create(
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)
-    if auto_close is not None:
-        request.auto_close.FromTimedelta(auto_close)
-    run_stream.close_with_run = close_with_run
     run_stream.backend = stream.backend
     return stream, _write(stream.id, CREATE_ACTIVITY, request)
 
