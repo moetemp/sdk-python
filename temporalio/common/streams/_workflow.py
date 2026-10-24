@@ -5,16 +5,18 @@ again with :py:func:`temporalio.workflow.stream_handle`. A Stream that the Workf
 an argument, such as a :py:class:`WorkflowStream` that a run passes on through continue-as-new,
 works the same.
 
-Each create, publish and close is a Local Activity, so it has a place in the run's commands,
-as an Activity call has. To add, remove or move one in a Workflow that has open runs, gate the
-change with ``workflow.patched``, else the replay of those runs fails as nondeterministic.
-Publishes that wait behind a write to the same Stream go as one Local Activity.
+Each create and publish is a Local Activity, so it has a place in the run's commands, as an
+Activity call has. A close on the native backend is a System Nexus command, which the server
+carries out once the Workflow Task commits. To add, remove or move one in a Workflow that has
+open runs, gate the change with ``workflow.patched``, else the replay of those runs fails as
+nondeterministic. Publishes that wait behind a write to the same Stream go as one Local
+Activity.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import TracebackType
@@ -230,7 +232,12 @@ def _write(
         if state.waiting.get(stream_id) is write:
             del state.waiting[stream_id]
         try:
-            if isinstance(write.request, stream_pb.AppendRecordsRequest):
+            if isinstance(write.request, stream_pb.CloseStreamRequest) and (
+                closer := _closer(backend)
+            ):
+                await closer(write.request)
+                answers: list[Any] = [0]
+            elif isinstance(write.request, stream_pb.AppendRecordsRequest):
                 # The Local Activity answers each merged call with its last offset or its error.
                 counts = [
                     count - before
@@ -279,6 +286,14 @@ def _write(
     state.tails[stream_id] = task
     state.waiting[stream_id] = write
     return future
+
+
+def _closer(
+    backend: str,
+) -> Callable[[stream_pb.CloseStreamRequest], Awaitable[None]] | None:
+    # A backend whose server takes a close as a command of the Workflow Task closes the Stream
+    # only once the task commits. The others close with a Local Activity.
+    return getattr(_workflow_reader.reader_of(backend), "_temporal_stream_close", None)
 
 
 def _write_nowait(future: asyncio.Future[int]) -> None:
@@ -500,11 +515,13 @@ class WorkflowStream(StreamHandle[E]):
     async def close(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        """Close the Stream with one Local Activity, after the writes before it.
+        """Close the Stream, after the writes before it.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
         ``failure``. A ``CancelledError`` failure closes it as canceled. Later writes in this run
-        raise :py:class:`StreamClosedError`.
+        raise :py:class:`StreamClosedError`. On the native backend the close is a System Nexus
+        command, which the server carries out once this Workflow Task commits, so a task that
+        fails after the close leaves the Stream open for its retry to close.
 
         Raises:
             StreamNotOwnerError: This run chain didn't create the Stream.

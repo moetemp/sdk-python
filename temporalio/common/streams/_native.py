@@ -40,6 +40,8 @@ _SERVICE = "temporal.api.streamservice.v1.StreamService"
 
 # Nothing waits for the answer of a wake that the reader dropped, so its cancel ends it at once.
 _TRY_CANCEL = temporalio.workflow.NexusOperationCancellationType.TRY_CANCEL
+# A close goes on when the run is cancelled, since the cancel may be what the close records.
+_ABANDON = temporalio.workflow.NexusOperationCancellationType.ABANDON
 # How long a wake parks on the server. A parked wake adds nothing to History, so an idle reader
 # costs nothing. The server caps it at `stream.maxWakeWait`, and an older server at 60 s.
 _WAKE_WAIT = timedelta(days=7)
@@ -268,6 +270,35 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
                 summary=None,
             )
         )
+
+    async def _temporal_stream_close(
+        self, request: stream_pb.CloseStreamRequest
+    ) -> None:
+        # A System Nexus command, which the server carries out once the Workflow Task commits.
+        # A task that fails after the close leaves the Stream open, and its retry closes it. The
+        # server takes the closing run from the operation's links.
+        close = stream_pb.CloseStreamRequest()
+        close.CopyFrom(request)
+        close.stream.ClearField("backend")
+        handle = await self.next.start_system_nexus_operation(
+            temporalio.worker.StartNexusOperationInput(
+                endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
+                service=_SERVICE,
+                operation="CloseStream",
+                input=close,
+                output_type=stream_pb.CloseStreamResponse,
+                schedule_to_close_timeout=None,
+                schedule_to_start_timeout=None,
+                start_to_close_timeout=None,
+                cancellation_type=_ABANDON,
+                headers=None,
+                summary=None,
+            )
+        )
+        try:
+            await handle
+        except temporalio.exceptions.NexusOperationError as err:
+            raise _workflow_reader.error_of(err) from None
 
     async def _temporal_stream_describe(
         self, request: stream_pb.DescribeStreamRequest
