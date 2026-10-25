@@ -420,6 +420,15 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
     assert not ran
 
 
+async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
+    # Nothing withdraws a client's Records, so a long UI read of them keeps no state.
+    stream = await redis.create(stream_client, Events, id=f"chat-{uuid.uuid4()}")
+    await stream.topic(Events.tokens).publish("a", "b", "c")
+    read = stream.subscribe(wait_new_records=False)
+    assert [item.data async for item in read] == ["a", "b", "c"]
+    assert read._shown == {}
+
+
 async def test_empty_stream_id_raises_with_no_call(client: Client):
     client, extension = fake_client(client)
     with pytest.raises(ValueError, match="id is empty"):

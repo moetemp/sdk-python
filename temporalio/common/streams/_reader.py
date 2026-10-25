@@ -9,7 +9,7 @@ from datetime import timedelta
 from typing import Any, Generic, TypeVar
 
 import temporalio.converter
-from temporalio.api.streamservice.v1 import ReadStart, StreamRecordKind
+from temporalio.api.streamservice.v1 import ProducerKind, ReadStart, StreamRecordKind
 from temporalio.common.streams import _backend, _convert, _errors
 from temporalio.common.streams._items import (
     Closed,
@@ -95,7 +95,12 @@ class Subscription(Generic[T]):
             self._position.next_offset = max(
                 self._position.next_offset or 0, item.offset + 1
             )
-        if isinstance(item, Record) and item.producer is not None:
+        if (
+            isinstance(item, Record)
+            and item.producer is not None
+            # Nothing withdraws a client's Records, so a long read of them keeps no offsets.
+            and item.producer.kind != ProducerKind.PRODUCER_KIND_CLIENT
+        ):
             key = producer_key(item.producer)
             self._shown.setdefault(key, (item.producer, []))[1].append(item.offset)
         elif isinstance(item, Superseded):
