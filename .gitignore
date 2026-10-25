@@ -15,3 +15,6 @@ temporalio/bridge/temporal_sdk_bridge*
 tags
 /.claude
 tmpclaude-*
+
+# nexgen builds that scripts/gen_stream_service.py installs
+/.nexgen-streams/

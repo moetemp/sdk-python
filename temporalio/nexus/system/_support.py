@@ -1,4 +1,5 @@
 import collections.abc
+import dataclasses
 import typing
 from datetime import timedelta
 
@@ -298,3 +299,47 @@ def versioning_override_from_proto(
     if proto.auto_upgrade:
         return temporalio.common.AutoUpgradeVersioningOverride()
     raise ValueError("unknown versioning override proto shape")
+
+
+class _ReadRequest(typing.Protocol):
+    __dataclass_fields__: typing.ClassVar[dict[str, typing.Any]]
+
+    @property
+    def from_offset(self) -> int | None: ...
+
+    @property
+    def wait(self) -> timedelta | None: ...
+
+
+class _ReadResponse(typing.Protocol):
+    @property
+    def records(self) -> collections.abc.Sized | None: ...
+
+    @property
+    def next_offset(self) -> int | None: ...
+
+    @property
+    def done(self) -> bool | None: ...
+
+
+_ReadRequestT = typing.TypeVar("_ReadRequestT", bound=_ReadRequest)
+
+
+def next_read_request(
+    request: _ReadRequestT, response: _ReadResponse
+) -> _ReadRequestT | None:
+    """The request after one page of a Stream read, or None to stop.
+
+    A read ends at a close. A read with no wait also ends at an empty page that didn't move,
+    since the Store had nothing past the newest Record.
+    """
+    if response.done or response.next_offset is None:
+        return None
+    moved = response.next_offset > (request.from_offset or 0)
+    if not response.records and not moved and request.wait is None:
+        return None
+    # The next page starts where this one ended, so the first page's start and last no longer
+    # apply.
+    return dataclasses.replace(
+        request, from_offset=response.next_offset, start=None, last=None
+    )
