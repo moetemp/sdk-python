@@ -6,6 +6,7 @@ mod client_rpc_generated;
 mod envconfig;
 mod metric;
 mod runtime;
+mod streams;
 mod testing;
 mod worker;
 
@@ -69,6 +70,12 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<worker::LocalActivitySlotInfo>()?;
     m.add_function(wrap_pyfunction!(new_worker, m)?)?;
     m.add_function(wrap_pyfunction!(new_replay_worker, m)?)?;
+    m.add("StreamCallError", py.get_type::<streams::StreamCallError>())?;
+    #[cfg(feature = "streams")]
+    {
+        m.add_class::<streams::StreamRuntimeRef>()?;
+        m.add_function(wrap_pyfunction!(new_stream_runtime, m)?)?;
+    }
 
     // envconfig
     let envconfig_module = PyModule::new(py, "envconfig")?;
@@ -129,6 +136,16 @@ fn new_worker(
     config: worker::WorkerConfig,
 ) -> PyResult<worker::WorkerRef> {
     worker::new_worker(runtime_ref, client, config)
+}
+
+#[cfg(feature = "streams")]
+#[pyfunction]
+fn new_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    memory: bool,
+    config: Vec<u8>,
+) -> PyResult<streams::StreamRuntimeRef> {
+    streams::new_stream_runtime(runtime_ref, memory, config)
 }
 
 #[pyfunction]
