@@ -88,8 +88,8 @@ class WorkflowItems(Subscription[Any]):
 
     It ends at a close, or at the newest Record when ``wait_new_records`` is False. It also
     ends when this run should continue as new, after at least one page, and then
-    :py:attr:`continue_as_new_suggested` is True. Pass :py:attr:`next_offset` to the next run,
-    which reads on from there.
+    :py:attr:`continue_as_new_suggested` is True. Pass
+    :py:attr:`Subscription.next_offset` to the next run, which reads on from there.
 
     .. warning::
         This API is experimental.
