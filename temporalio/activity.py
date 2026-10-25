@@ -530,11 +530,11 @@ def create_stream(
     Its id is ``<activity id>:<activity run id>:<name>``, so a client finds it from the
     Activity handle with :py:meth:`temporalio.client.ActivityHandle.stream` and no call. The
     Stream goes on across the Activity's retries, and the server closes it when the Activity
-    ends, with its status and result. Await the call for the handle, or use it in
-    ``async with``, which closes the Stream at the end of the block::
+    ends, with its status and result. So the end of an ``async with`` block doesn't close it.
+    Await the call for the handle::
 
-        async with activity.create_stream(Events) as stream:
-            await stream.topic(Events.tokens).publish("hi")
+        stream = await activity.create_stream(Events)
+        await stream.topic(Events.tokens).publish("hi")
 
     Only the native backend keeps the Stream of a Standalone Activity, since nothing else
     would close it when the Activity ends.

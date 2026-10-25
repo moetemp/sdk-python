@@ -184,7 +184,9 @@ class ActivityStream(StreamHandle[E]):
         await self._access().close(result, failure)
 
     async def __aenter__(self) -> ActivityStream[E]:
-        """Use the Stream in ``async with``, which closes it at the end."""
+        """Use the Stream in ``async with``, which closes it at the end, except a Standalone
+        Activity's Stream.
+        """
         return self
 
     async def __aexit__(
@@ -196,8 +198,11 @@ class ActivityStream(StreamHandle[E]):
         """Close the Stream, with the exception as its failure if there is one.
 
         A cancel closes it with a ``CancelledError`` failure. Another ``BaseException`` leaves
-        it open.
+        it open. A Standalone Activity's Stream stays open, since the server closes it when the
+        Activity ends, with its status and result, and a retry of the Activity writes on to it.
         """
+        if self.activity_id:
+            return
         close, failure = exit_failure(exc)
         if close:
             await self.close(failure=failure)

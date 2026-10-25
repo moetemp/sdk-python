@@ -13,7 +13,7 @@ from typing import Any, cast
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import streams
+from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams import _native, _plugin
 from temporalio.common.streams._native import POSITIONS_TYPE
 from temporalio.contrib.stream import RedisStreamBackend
@@ -351,9 +351,10 @@ async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
 
 
 @activity.defn
-async def streams_its_tokens() -> str:
-    async with activity.create_stream(Events) as stream:
-        await stream.topic(Events.tokens).publish("a", "b")
+async def closes_its_stream() -> str:
+    stream = await activity.create_stream(Events)
+    await stream.topic(Events.tokens).publish("a", "b")
+    await stream.close()
     return "done"
 
 
@@ -370,11 +371,11 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
     task_queue = f"tq-{uuid.uuid4()}"
     async with new_worker(
         native_client,
-        activities=[streams_its_tokens, leaves_its_stream_open],
+        activities=[closes_its_stream, leaves_its_stream_open],
         task_queue=task_queue,
     ):
         closed = await native_client.start_activity(
-            streams_its_tokens,
+            closes_its_stream,
             id=f"act-{uuid.uuid4()}",
             task_queue=task_queue,
             start_to_close_timeout=timedelta(seconds=30),
@@ -398,6 +399,44 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
     assert [item.data for item in left if isinstance(item, streams.Record)] == ["a"]
     assert isinstance(left[-1], streams.Closed) and left[-1].result == "done"
     assert left[-1].status == streams.CloseStatus.COMPLETED
+
+
+@activity.defn
+async def streams_in_a_block() -> str:
+    attempt = activity.info().attempt
+    async with activity.create_stream(Events) as stream:
+        await stream.topic(Events.tokens).publish(f"attempt {attempt}")
+        if attempt == 1:
+            raise RuntimeError("transient")
+    return f"done on attempt {attempt}"
+
+
+async def test_a_block_end_leaves_a_standalone_activitys_stream_open(
+    native_client: Client,
+):
+    # A retry of the Activity creates its Stream again, so a close at the end of the failed
+    # attempt's block would fail every retry.
+    task_queue = f"tq-{uuid.uuid4()}"
+    async with new_worker(
+        native_client, activities=[streams_in_a_block], task_queue=task_queue
+    ):
+        handle = await native_client.start_activity(
+            streams_in_a_block,
+            id=f"act-{uuid.uuid4()}",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(milliseconds=100), maximum_attempts=2
+            ),
+        )
+        assert await handle.result() == "done on attempt 2"
+    items = [item async for item in handle.stream(Events).subscribe()]
+    assert "attempt 2" in [
+        item.data for item in items if isinstance(item, streams.Record)
+    ]
+    # The server's close carries the result of the attempt that ended the Activity.
+    assert isinstance(items[-1], streams.Closed)
+    assert items[-1].result == "done on attempt 2"
 
 
 async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
