@@ -277,7 +277,9 @@ def _write(
         ) as err:
             for _, call in write.calls:
                 if not call.done():
-                    call.set_exception(_errors.from_activity_error(err))
+                    call.set_exception(
+                        _errors.in_workflow(_errors.from_activity_error(err))
+                    )
             return
         except BaseException:
             for _, call in write.calls:
@@ -288,7 +290,11 @@ def _write(
                 continue
             if isinstance(answer, dict):
                 call.set_exception(
-                    _errors.from_reason(str(answer["reason"]), str(answer["message"]))
+                    _errors.in_workflow(
+                        _errors.from_reason(
+                            str(answer["reason"]), str(answer["message"])
+                        )
+                    )
                 )
             else:
                 call.set_result(int(answer))

@@ -77,7 +77,10 @@ class StreamOffsetError(StreamError):
 
 
 class StreamUnsupportedError(StreamError):
-    """The Store lacks a capability that the call needs. The message ends with its name."""
+    """The Store lacks a capability that the call needs. The message ends with its name.
+
+    Workflow code gets :py:class:`StreamConfigError` for it, since it is setup.
+    """
 
 
 class StreamNotOwnerError(StreamError):
@@ -100,7 +103,9 @@ class StreamSeqDivergentError(StreamError):
 class StreamConfigError(RuntimeError):
     """No Stream backend, or no backend of a given name. It is config, not a Store error.
 
-    ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
+    Workflow code also gets it for a backend that lacks a capability, such as a native server
+    with ``frontend.enableDirectNexusCalls`` off. ``except StreamError`` does not catch it. It
+    fails a Workflow Task, and an Activity retries.
     """
 
 
@@ -187,6 +192,17 @@ def from_activity_error(err: Exception) -> Exception:
     ):
         reason = str(cause.details[0]) if cause.details else ""
         return _BY_TYPE[cause.type](cause.message, reason=reason)
+    return err
+
+
+def in_workflow(err: BaseException) -> BaseException:
+    """The error that Workflow code raises for the Stream error of a failed call.
+
+    A missing capability is not in History, so it fails the Workflow Task, and a Worker or a
+    server with that capability retries it.
+    """
+    if isinstance(err, StreamUnsupportedError):
+        return StreamConfigError(err.message)
     return err
 
 

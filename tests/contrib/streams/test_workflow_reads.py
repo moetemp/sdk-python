@@ -12,7 +12,7 @@ import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import streams
-from temporalio.common.streams import _errors, _workflow_reader
+from temporalio.common.streams import _backend, _errors, _workflow_reader
 from temporalio.common.streams._native import _DirectReadCodec
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
@@ -301,6 +301,44 @@ async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Clien
             )
             == 25
         )
+
+
+async def test_a_backend_that_lacks_a_capability_fails_the_task(
+    stream_client: Client, monkeypatch: pytest.MonkeyPatch
+):
+    # Such as a native server with direct Nexus calls off. A Worker or a server with the
+    # capability can retry the task, while a failed run stays failed.
+    stream = await stream_client.create_stream(Events, id=f"cap-{uuid.uuid4()}")
+    await stream.topic(Events.tokens).publish("a")
+    call_async = _backend._ExtensionCalls.call_async
+    refused: list[str] = []
+
+    async def refuse_a_read(self: Any, method: str, request: Any, response: Any) -> Any:
+        if method == "WorkflowReadRecords" and not refused:
+            refused.append(method)
+            raise streams.StreamUnsupportedError(
+                "Direct Nexus calls are disabled", reason="stream_unsupported"
+            )
+        return await call_async(self, method, request, response)
+
+    monkeypatch.setattr(_backend._ExtensionCalls, "call_async", refuse_a_read)
+    async with new_worker(stream_client, CountsTokens) as worker:
+        handle = await stream_client.start_workflow(
+            CountsTokens.run,
+            streams.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == 1
+    failures = [
+        event.workflow_task_failed_event_attributes.failure
+        async for event in handle.fetch_history_events()
+        if event.HasField("workflow_task_failed_event_attributes")
+    ]
+    assert [failure.application_failure_info.type for failure in failures] == [
+        "StreamConfigError"
+    ]
+    assert failures[0].message == "Direct Nexus calls are disabled"
 
 
 def test_a_server_failure_maps_by_its_reason():

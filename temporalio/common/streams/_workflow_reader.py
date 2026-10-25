@@ -454,6 +454,6 @@ def error_of(err: BaseException) -> BaseException:
         if isinstance(cause, temporalio.exceptions.ApplicationError):
             stream_error = _errors.from_application_error(cause)
             if stream_error is not None:
-                return stream_error
+                return _errors.in_workflow(stream_error)
         cause = cause.__cause__
     return err
