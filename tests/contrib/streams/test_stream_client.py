@@ -9,10 +9,9 @@ from typing import Any, cast
 
 import pytest
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
-from temporalio.common.streams import _stream_client
+from temporalio.common._streams import _stream_client
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
@@ -32,19 +31,17 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
-    tokens = streams.topic(str)
+    turns = common.topic(Turn)
+    tokens = common.topic(str)
 
 
 async def test_unknown_backend_raises_before_any_call(client: Client):
     client, extension = fake_client(client)
-    with pytest.raises(
-        streams.StreamConfigError, match="no Redis Stream backend redis"
-    ):
+    with pytest.raises(common.StreamConfigError, match="no Redis Stream backend redis"):
         await redis.create(client, Events, id="chat-1", backend="redis")
-    with pytest.raises(streams.StreamConfigError, match="It has fake"):
+    with pytest.raises(common.StreamConfigError, match="It has fake"):
         client.stream(Events, id="chat-1", backend="redis")
     assert not extension.streams and not extension.namespaces
     stream = await redis.create(client, Events, id="chat-1")
@@ -52,9 +49,9 @@ async def test_unknown_backend_raises_before_any_call(client: Client):
 
 
 async def test_client_without_backend_has_no_transport(client: Client):
-    with pytest.raises(streams.StreamConfigError, match="no Stream backend"):
+    with pytest.raises(common.StreamConfigError, match="no Stream backend"):
         client.stream(Events, id="chat-1")
-    with pytest.raises(streams.StreamConfigError, match="no Redis Stream backend"):
+    with pytest.raises(common.StreamConfigError, match="no Redis Stream backend"):
         await redis.create(client, Events, id="chat-1")
 
 
@@ -63,10 +60,10 @@ async def test_decoded_client_stream_has_no_client(client: Client):
     stream = await redis.create(client, Events, id="chat-2")
     converter = DataConverter.default.payload_converter
     decoded = converter.from_payload(
-        converter.to_payload(stream), streams.ClientStream[Events]
+        converter.to_payload(stream), common.ClientStream[Events]
     )
     assert decoded == stream
-    with pytest.raises(streams.StreamConfigError, match="Client.stream"):
+    with pytest.raises(common.StreamConfigError, match="Client.stream"):
         await decoded.get_offset()
 
 
@@ -91,7 +88,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
 
     setattr(handle, "describe", describe)
     await redis.create(client, Events, id="agent-1:first:n")
-    stream = handle.stream(streams.with_name(Events, "n"))
+    stream = handle.stream(common.with_name(Events, "n"))
     with pytest.raises(RuntimeError, match="not known yet"):
         stream.id
     assert await stream.get_offset() == 0
@@ -99,7 +96,7 @@ async def test_handle_without_first_run_describes_once(client: Client):
     assert stream.first_execution_run_id == "first"
     assert await stream.get_offset() == 0
     # The handle keeps the first run id, so its other Streams make no call.
-    other = handle.stream(streams.with_name(Events, "n"))
+    other = handle.stream(common.with_name(Events, "n"))
     assert await other.get_offset() == 0
     assert calls == [1]
 
@@ -164,7 +161,7 @@ async def test_cancelled_first_run_lookup_is_tried_again(client: Client):
 @workflow.defn
 class WriteToStream:
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> None:
+    async def run(self, stream: common.WorkflowStream[Events]) -> None:
         await stream.topic(Events.turns).publish(Turn("workflow"))
 
 
@@ -177,35 +174,35 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     async with new_worker(stream_client, WriteToStream) as worker:
         await stream_client.execute_workflow(
             WriteToStream.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
     await stream.close(result="bye")
     items = [item async for item in stream.subscribe()]
-    data = [item.data for item in items if isinstance(item, streams.Record)]
+    data = [item.data for item in items if isinstance(item, common.Record)]
     assert data == [Turn("client"), "a", "b", Turn("workflow")]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "bye"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "bye"
 
     # Another handle of the same Stream reads it, from an offset and by Topic.
     again = stream_client.stream(Events, id=stream.id)
     resumed = [
         item.data
         async for item in again.subscribe(Events.tokens, offset=first + 1)
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
     assert resumed == ["a", "b"]
     by_prefix = [
         item.data
         async for item in again.subscribe(topic_prefixes=["tok"])
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
     assert by_prefix == ["a", "b"]
     only_turns = [item async for item in again.subscribe(again.topic(Events.turns))]
     assert [type(item) for item in only_turns] == [
-        streams.Record,
-        streams.Record,
-        streams.Closed,
+        common.Record,
+        common.Record,
+        common.Closed,
     ]
 
 
@@ -230,13 +227,13 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
         items = [
             item async for item in stream.subscribe(create_wait=timedelta(seconds=20))
         ]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+    assert [item.data for item in items if isinstance(item, common.Record)] == [
         "hi",
         "there",
     ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "HI THERE"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "HI THERE"
     assert stream.workflow_id == handle.id
-    with pytest.raises(streams.StreamNotOwnerError):
+    with pytest.raises(common.StreamNotOwnerError):
         await stream.close()
 
 
@@ -256,13 +253,13 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
         async with redis.create(stream_client, Events, id=cancelled.id):
             raise asyncio.CancelledError()
     for stream, result, failure, status in (
-        (done, None, None, streams.CloseStatus.COMPLETED),
-        (failed, None, "turn failed", streams.CloseStatus.FAILED),
-        (early, "early", None, streams.CloseStatus.COMPLETED),
-        (cancelled, None, "Cancelled", streams.CloseStatus.CANCELED),
+        (done, None, None, common.CloseStatus.COMPLETED),
+        (failed, None, "turn failed", common.CloseStatus.FAILED),
+        (early, "early", None, common.CloseStatus.COMPLETED),
+        (cancelled, None, "Cancelled", common.CloseStatus.CANCELED),
     ):
         items = [item async for item in stream.subscribe()]
-        closes = [item for item in items if isinstance(item, streams.Closed)]
+        closes = [item for item in items if isinstance(item, common.Closed)]
         assert len(closes) == 1 and closes[0].result == result
         assert closes[0].status == status
         assert (failure is None) == (closes[0].failure is None)
@@ -275,20 +272,20 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     turn = await stream.topic(Events.turns).publish(Turn("model"))
     tokens = stream.subscribe(Events.tokens, wait_new_records=False)
     assert tokens.next_offset == 0
-    assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
+    assert [item.data async for item in tokens if isinstance(item, common.Record)] == [
         "a"
     ]
     # The page ends past the Record that the Topic filter left out.
     assert tokens.next_offset == turn + 1
-    new = stream.subscribe(offset=streams.END, wait_new_records=False)
+    new = stream.subscribe(offset=common.END, wait_new_records=False)
     assert new.next_offset is None
     assert [item async for item in new] == []
     assert new.next_offset == turn + 1
     await stream.topic(Events.tokens).publish("b")
     resumed = stream.subscribe(offset=tokens.next_offset, wait_new_records=False)
-    assert [
-        item.data async for item in resumed if isinstance(item, streams.Record)
-    ] == ["b"]
+    assert [item.data async for item in resumed if isinstance(item, common.Record)] == [
+        "b"
+    ]
 
 
 class _EncodesCommonAttributes(DefaultFailureConverter):
@@ -308,7 +305,7 @@ async def test_closed_failure_decodes_with_the_clients_converter(stream_client: 
         failure=ApplicationError("tool failed", "detail", {"k": 1}, type="Tool")
     )
     [closed] = [item async for item in stream.subscribe()]
-    assert isinstance(closed, streams.Closed)
+    assert isinstance(closed, common.Closed)
     assert isinstance(closed.failure, ApplicationError)
     assert closed.failure.message == "tool failed" and closed.failure.type == "Tool"
     assert closed.failure.details == ("detail", {"k": 1})
@@ -321,7 +318,7 @@ async def test_no_wait_read_goes_past_records_of_other_topics(stream_client: Cli
         await stream.topic(Events.tokens).publish(*["x"] * 1000)
     turn = await stream.topic(Events.turns).publish(Turn("model"))
     turns = stream.subscribe(Events.turns, wait_new_records=False)
-    assert [item.data async for item in turns if isinstance(item, streams.Record)] == [
+    assert [item.data async for item in turns if isinstance(item, common.Record)] == [
         Turn("model")
     ]
     assert turns.next_offset == turn + 1
@@ -339,13 +336,13 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
     await tokens.publish("d")
     shown.append(await anext(tail))
     await tail.aclose()
-    assert [item.data for item in shown if isinstance(item, streams.Record)] == [
+    assert [item.data for item in shown if isinstance(item, common.Record)] == [
         "b",
         "c",
         "d",
     ]
     newest = stream.subscribe(last=1, wait_new_records=False)
-    assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
+    assert [item.data async for item in newest if isinstance(item, common.Record)] == [
         "d"
     ]
     with pytest.raises(ValueError, match="no offset"):
@@ -359,7 +356,7 @@ async def test_read_type_decodes_topics_outside_the_definition(stream_client: Cl
 
     async def read(**options: Any) -> list[object]:
         items = stream.subscribe(wait_new_records=False, **options)
-        return [item.data async for item in items if isinstance(item, streams.Record)]
+        return [item.data async for item in items if isinstance(item, common.Record)]
 
     assert await read() == [{"kind": "extra", "text": ""}, "a"]
     assert await read(type=Turn) == [Turn("extra"), "a"]
@@ -367,16 +364,16 @@ async def test_read_type_decodes_topics_outside_the_definition(stream_client: Cl
 
 async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"buffered-{uuid.uuid4()}")
-    async with streams.BufferedPublisher(stream) as publisher:
+    async with common.BufferedPublisher(stream) as publisher:
         publisher.publish(Events.turns, Turn("user"))
         publisher.publish(Events.tokens, "a", "b")
         publisher.publish("turns", Turn("model"))
-        with pytest.raises(streams.StreamError, match="no Topic"):
+        with pytest.raises(common.StreamError, match="no Topic"):
             publisher.publish("turn", Turn("typo"))
     written = [
         (item.topic, item.data)
         async for item in stream.subscribe(wait_new_records=False)
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
     assert written == [
         ("turns", Turn("user")),
@@ -386,10 +383,10 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
     ]
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class LooseEvents:
-    turns = streams.topic(str)
-    tokens = streams.topic(str)
+    turns = common.topic(str)
+    tokens = common.topic(str)
 
 
 async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
@@ -401,13 +398,13 @@ async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
     await writer.topic(LooseEvents.tokens).publish("after")
     reader = stream_client.stream(Events, id=stream_id)
     read = reader.subscribe(wait_new_records=False)
-    with pytest.raises(streams.StreamError, match=f"offset {bad} of the Topic turns"):
+    with pytest.raises(common.StreamError, match=f"offset {bad} of the Topic turns"):
         await anext(read)
     assert read.next_offset == bad + 1
     resumed = reader.subscribe(offset=read.next_offset, wait_new_records=False)
-    assert [
-        item.data async for item in resumed if isinstance(item, streams.Record)
-    ] == ["after"]
+    assert [item.data async for item in resumed if isinstance(item, common.Record)] == [
+        "after"
+    ]
 
 
 async def test_async_with_refuses_a_workflow_stream_before_the_block(
@@ -418,7 +415,7 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
         "agent-1", first_execution_run_id="run-1"
     )
     ran = False
-    with pytest.raises(streams.StreamNotOwnerError):
+    with pytest.raises(common.StreamNotOwnerError):
         async with handle.stream(Events):
             ran = True
     assert not ran
@@ -427,7 +424,7 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
 async def test_record_over_the_store_limit_raises_too_large(stream_client: Client):
     # The client's writer splits a batch at the Store's limit, so only a Record can be over.
     stream = await redis.create(stream_client, Events, id=f"large-{uuid.uuid4()}")
-    with pytest.raises(streams.StreamTooLargeError) as refused:
+    with pytest.raises(common.StreamTooLargeError) as refused:
         await stream.topic(Events.tokens).publish("x" * 2_000_000)
     assert refused.value.reason == "stream_too_large" and refused.value.non_retryable
     assert await stream.get_offset() == 0
@@ -438,7 +435,7 @@ async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"chat-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a", "b", "c")
     read = stream.subscribe(wait_new_records=False)
-    assert [item.data async for item in read if isinstance(item, streams.Record)] == [
+    assert [item.data async for item in read if isinstance(item, common.Record)] == [
         "a",
         "b",
         "c",
@@ -451,7 +448,7 @@ async def test_empty_stream_id_raises_with_no_call(client: Client):
     with pytest.raises(ValueError, match="id is empty"):
         client.stream(Events, id="")
     with pytest.raises(ValueError, match="id is empty"):
-        client.stream(Events, stream=streams.WorkflowStream(id=""))
+        client.stream(Events, stream=common.WorkflowStream(id=""))
     assert not extension.namespaces
 
 
@@ -464,7 +461,7 @@ async def test_create_of_an_expired_stream_raises(stream_client: Client):
     )
     await stream.topic(Events.tokens).publish("old")
     await asyncio.sleep(0.5)
-    with pytest.raises(streams.StreamExpiredError):
+    with pytest.raises(common.StreamExpiredError):
         await redis.create(stream_client, Events, id=stream_id, retention=retention)
 
 
@@ -476,11 +473,11 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
     await before.topic(Events.tokens).publish("before restart")
     after = stream.producer("ingest", epoch=2)
     await after.topic(Events.tokens).publish("after restart")
-    with pytest.raises(streams.StreamFencedError):
+    with pytest.raises(common.StreamFencedError):
         await before.topic(Events.tokens).publish("zombie")
     # The earlier epoch's Records are real messages, so nothing withdraws them.
     items = [item async for item in stream.subscribe(wait_new_records=False)]
-    assert [type(item) for item in items] == [streams.Record, streams.Record]
+    assert [type(item) for item in items] == [common.Record, common.Record]
     with pytest.raises(ValueError):
         stream.producer("ingest", epoch=0)
 
@@ -490,7 +487,7 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
     handle = client.get_workflow_handle("agent-2")
     first = handle.stream(Events)
     same = handle.stream(Events)
-    other = handle.stream(streams.with_name(Events, "other"))
+    other = handle.stream(common.with_name(Events, "other"))
     key = hash(first)
     assert first == same and first != other
     describes = []
@@ -530,19 +527,19 @@ async def test_registration_rules(client: Client):
         ],
     ):
         config["stream_backends"] = backends
-        with pytest.raises(streams.StreamConfigError, match="exactly one"):
+        with pytest.raises(common.StreamConfigError, match="exactly one"):
             Client(**config)
     config["stream_backends"] = [MemoryStreamBackend(), MemoryStreamBackend()]
-    with pytest.raises(streams.StreamConfigError, match="two Stream backends"):
+    with pytest.raises(common.StreamConfigError, match="two Stream backends"):
         Client(**config)
     # For now a Worker serves one backend, and so does a Replayer.
     config["stream_backends"] = [
         MemoryStreamBackend(),
         MemoryStreamBackend(name="b", default=True),
     ]
-    with pytest.raises(streams.StreamConfigError, match="one backend"):
+    with pytest.raises(common.StreamConfigError, match="one backend"):
         new_worker(Client(**config), Agent)
-    with pytest.raises(streams.StreamConfigError, match="one backend"):
+    with pytest.raises(common.StreamConfigError, match="one backend"):
         Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
     # A generator of backends works too, and a copy of the client keeps them.
     config["stream_backends"] = cast(
@@ -561,7 +558,7 @@ async def test_worker_that_polls_no_activities_warns_of_the_close(
     # The close of a Workflow's Stream is a regular Activity, which another Worker may run.
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend(default=True)]
-    with caplog.at_level(logging.WARNING, logger="temporalio.common.streams"):
+    with caplog.at_level(logging.WARNING, logger="temporalio.common._streams"):
         async with new_worker(Client(**config), Agent, no_remote_activities=True):
             pass
     assert "polls no Activities" in caplog.text
@@ -569,15 +566,15 @@ async def test_worker_that_polls_no_activities_warns_of_the_close(
 
 async def test_backend_is_not_a_plugin(client: Client):
     # The connect refuses it before it connects, so the unreachable target doesn't matter.
-    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+    with pytest.raises(common.StreamConfigError, match="not a plugin"):
         await Client.connect("localhost:1", plugins=[MemoryStreamBackend()])
     config = client.config()
     config["plugins"] = [MemoryStreamBackend()]
-    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+    with pytest.raises(common.StreamConfigError, match="not a plugin"):
         Client(**config)
-    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+    with pytest.raises(common.StreamConfigError, match="not a plugin"):
         new_worker(client, Agent, plugins=[RedisStreamBackend("redis://-")])
-    with pytest.raises(streams.StreamConfigError, match="not a plugin"):
+    with pytest.raises(common.StreamConfigError, match="not a plugin"):
         Replayer(workflows=[Agent], plugins=[MemoryStreamBackend()])
 
 
@@ -590,16 +587,16 @@ async def test_worker_plugin_keeps_the_streams_passthrough(client: Client):
     worker = new_worker(Client(**config), Agent, plugins=[plugin])
     runner = worker.config(active_config=True).get("workflow_runner")
     assert isinstance(runner, SandboxedWorkflowRunner)
-    assert "temporalio.common.streams" in runner.restrictions.passthrough_modules
+    assert "temporalio.common._streams" in runner.restrictions.passthrough_modules
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend()]
     one = Client(**config)
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
+    with pytest.raises(common.StreamConfigError, match="default is native"):
         one.stream(Events, id="d-2")
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
+    with pytest.raises(common.StreamConfigError, match="default is native"):
         one.get_workflow_handle("agent-3").stream(Events)
     assert one.stream(Events, id="d-2", backend="memory").backend == "memory"
     # The Redis create picks the client's only Redis backend, and memory stands in for it.
@@ -617,7 +614,7 @@ async def test_stream_takes_the_handle_backend_or_the_default(client: Client):
     await created.topic(Events.tokens).publish("on b")
     assert await two.stream(Events, stream=created).get_offset() > 0
     # A handle with no backend name is of the default backend.
-    assert two.stream(Events, stream=streams.ClientStream(id="moving")).backend == "a"
+    assert two.stream(Events, stream=common.ClientStream(id="moving")).backend == "a"
     with pytest.raises(ValueError):
         two.stream(Events, stream=created, backend="a")
     with pytest.raises(TypeError):
@@ -645,5 +642,5 @@ async def test_workflow_environment_takes_stream_backends():
             )
             await handle.result()
         items = [item async for item in handle.stream(Events).subscribe()]
-    data = [item.data for item in items if isinstance(item, streams.Record)]
+    data = [item.data for item in items if isinstance(item, common.Record)]
     assert data == ["from the environment"]

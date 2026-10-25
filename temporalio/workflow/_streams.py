@@ -1,7 +1,7 @@
 """Streams in Workflow code.
 
-The calls load :py:mod:`temporalio.common.streams` on first use, so a Workflow with no Stream
-never loads it.
+The calls load the Streams API of :py:mod:`temporalio.common` on first use, so a Workflow with
+no Stream never loads it.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import Creating, WorkflowStream
+    from temporalio.common import Creating, WorkflowStream
 
 D = TypeVar("D")
 
@@ -33,20 +33,20 @@ def create_stream(
     Await the call for the handle, or use it in ``async with``, which closes the Stream at the
     end of the block::
 
-        async with workflow.create_stream(streams.with_name(Events, "turn-3")) as turn:
+        async with workflow.create_stream(common.with_name(Events, "turn-3")) as turn:
             await turn.topic(Events.tokens).publish("hi")
 
     An exception closes the Stream with that exception as the failure. When a retry run may
     follow, the close waits for the run's end, and the Stream stays open only for a retry run
     or for the retry of a Workflow Task that failed. A cron run leaves the Stream open. See
-    :py:meth:`temporalio.common.streams.WorkflowStream.__aexit__`.
+    :py:meth:`temporalio.common.WorkflowStream.__aexit__`.
 
     .. warning::
         This API is experimental.
 
     Args:
         definition: The Stream definition class. Its name is the Stream name. For one Stream
-            per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
+            per turn, for example, pass ``common.with_name(Events, f"turn-{n}")``.
         retention: The age after which a Record is dropped, also while the Stream is open.
             A closed Stream stays one Retention after its close. Defaults to the backend's.
         backend: The name of the backend. Defaults to the registered backend with
@@ -63,7 +63,7 @@ def create_stream(
             has ``default=True`` for a create with no backend. It fails the Workflow Task,
             not the run.
     """
-    from temporalio.common.streams import _workflow
+    from temporalio.common._streams import _workflow
 
     return _workflow.create_stream(definition, retention=retention, backend=backend)
 
@@ -83,7 +83,7 @@ def create_stream_nowait(
     .. warning::
         This API is experimental.
     """
-    from temporalio.common.streams import _workflow
+    from temporalio.common._streams import _workflow
 
     return _workflow.create_stream_nowait(
         definition, retention=retention, backend=backend
@@ -111,6 +111,6 @@ def stream_handle(
     Raises:
         StreamConfigError: No backend is given, known or marked as the default.
     """
-    from temporalio.common.streams import _workflow
+    from temporalio.common._streams import _workflow
 
     return _workflow.stream_handle(definition, backend=backend)

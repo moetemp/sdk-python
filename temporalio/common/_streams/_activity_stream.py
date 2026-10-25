@@ -9,18 +9,18 @@ from datetime import timedelta
 from typing import Any, Generic, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.common.streams import _activity, _errors
-from temporalio.common.streams._access import (
+from temporalio.common._streams import _activity, _errors
+from temporalio.common._streams._access import (
     Access,
     SyncTopicBase,
     _AsyncTopic,
     read_spec,
     subscription,
 )
-from temporalio.common.streams._defn import TopicDefinition
-from temporalio.common.streams._handle import StreamHandle
-from temporalio.common.streams._items import Closed, End, Record, Superseded
-from temporalio.common.streams._reader import Subscription
+from temporalio.common._streams._defn import TopicDefinition
+from temporalio.common._streams._handle import StreamHandle
+from temporalio.common._streams._items import Closed, End, Record, Superseded
+from temporalio.common._streams._reader import Subscription
 
 E = TypeVar("E")
 T = TypeVar("T")

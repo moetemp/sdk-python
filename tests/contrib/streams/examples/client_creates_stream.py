@@ -10,9 +10,8 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.contrib import stream as redis
 from temporalio.worker import Worker
 
@@ -23,15 +22,15 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
+    turns = common.topic(Turn)
 
 
 @workflow.defn
 class Chat:
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> None:
+    async def run(self, stream: common.WorkflowStream[Events]) -> None:
         # The Workflow only writes. The client closes the Stream.
         await stream.topic(Events.turns).publish(
             Turn("model", "hi"), Turn("last", "bye")
@@ -51,12 +50,12 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
             await client.start_workflow(
                 Chat.run,
                 # A Stream is data, so the Workflow gets it as an argument.
-                streams.WorkflowStream.from_handle(chat_stream),
+                common.WorkflowStream.from_handle(chat_stream),
                 id=f"chat-{uuid.uuid4()}",
                 task_queue=task_queue,
             )
             async for item in chat_stream.subscribe():
-                if not isinstance(item, streams.Record):
+                if not isinstance(item, common.Record):
                     continue
                 turns.append(item.data)
                 if item.data.kind == "last":

@@ -111,7 +111,7 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import ClientStream, StreamBackend, StreamHandle
+    from temporalio.common import ClientStream, StreamBackend, StreamHandle
 
     from ._interceptor import Interceptor
     from ._plugin import Plugin
@@ -234,7 +234,7 @@ class Client:
             stream_backends: The Stream backends of this client and its Workers, such as
                 :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names are unique.
                 With more than one, exactly one has ``default=True``. See
-                :py:class:`temporalio.common.streams.StreamBackend`.
+                :py:class:`temporalio.common.StreamBackend`.
 
                 .. warning::
                     This API is experimental.
@@ -312,7 +312,7 @@ class Client:
             config = plugin.configure_client(config)
         if config.get("stream_backends"):
             # Only a client with Stream backends loads the Streams package.
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             config = _stream_plugin.configure_client(config)
 
@@ -945,7 +945,7 @@ class Client:
             TypeError: Neither or both of ``id`` and ``stream`` are given.
             ValueError: The id is empty, or ``backend`` is not the handle's backend.
         """
-        from temporalio.common.streams import _stream_client
+        from temporalio.common._streams import _stream_client
 
         return _stream_client.client_stream(
             self, definition, id=id, stream=stream, backend=backend

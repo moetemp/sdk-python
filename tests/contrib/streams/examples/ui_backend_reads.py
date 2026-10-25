@@ -11,9 +11,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -23,16 +22,16 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
-    tokens = streams.topic(str)
+    turns = common.topic(Turn)
+    tokens = common.topic(str)
 
 
 @dataclass
 class CallModelInput:
     prompt: str
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -52,7 +51,7 @@ class Agent:
         await turns.publish(Turn("model"))
         reply = await workflow.execute_activity(
             call_model,
-            CallModelInput(prompt, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(prompt, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(minutes=5),
         )
         await turns.publish(Turn("done", reply))
@@ -67,10 +66,10 @@ class Screen:
     """
 
     def __init__(self) -> None:
-        self.shown: dict[int, streams.Record[Any]] = {}
+        self.shown: dict[int, common.Record[Any]] = {}
         self.result: Any = None
 
-    def render(self, record: streams.Record[Any]) -> None:
+    def render(self, record: common.Record[Any]) -> None:
         self.shown[record.offset] = record
 
     def unrender(self, offset: int) -> None:
@@ -90,9 +89,9 @@ async def main(client: Client, task_queue: str) -> Screen:
         async for item in stream.subscribe(
             Events.turns, Events.tokens, create_wait=timedelta(seconds=10)
         ):
-            if isinstance(item, streams.Closed):
+            if isinstance(item, common.Closed):
                 screen.result = item.result if item.failure is None else item.failure
-            elif isinstance(item, streams.Superseded):
+            elif isinstance(item, common.Superseded):
                 # The offsets of the Records that this read showed and the item withdraws.
                 for offset in item.withdrawn_offsets:
                     screen.unrender(offset)

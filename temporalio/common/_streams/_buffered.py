@@ -7,11 +7,11 @@ from datetime import timedelta
 from types import TracebackType
 from typing import Any, Generic, TypeVar, overload
 
-from temporalio.common.streams import _activity
-from temporalio.common.streams._activity_stream import ActivityStream, ActivityTopic
-from temporalio.common.streams._defn import TopicDefinition
-from temporalio.common.streams._handle import TopicBase
-from temporalio.common.streams._stream_client import ClientStream, ClientTopic
+from temporalio.common._streams import _activity
+from temporalio.common._streams._activity_stream import ActivityStream, ActivityTopic
+from temporalio.common._streams._defn import TopicDefinition
+from temporalio.common._streams._handle import TopicBase
+from temporalio.common._streams._stream_client import ClientStream, ClientTopic
 
 T = TypeVar("T")
 U = TypeVar("U")

@@ -4,7 +4,7 @@ import temporalio.api.common.v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 import temporalio.nexus.system as nexus_system
-from temporalio.common.streams.system import client, models
+from temporalio.common._streams.system import client, models
 
 
 class FakeTransport:

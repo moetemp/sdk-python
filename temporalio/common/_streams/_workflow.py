@@ -27,16 +27,16 @@ import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.workflow
-from temporalio.common.streams import _errors, _ids
-from temporalio.common.streams._defn import TopicDefinition, definition_of
-from temporalio.common.streams._handle import (
+from temporalio.common._streams import _errors, _ids
+from temporalio.common._streams._defn import TopicDefinition, definition_of
+from temporalio.common._streams._handle import (
     Creating,
     StreamHandle,
     TopicBase,
     exit_failure,
 )
-from temporalio.common.streams._items import close_status
-from temporalio.common.streams.system import models
+from temporalio.common._streams._items import close_status
+from temporalio.common._streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")

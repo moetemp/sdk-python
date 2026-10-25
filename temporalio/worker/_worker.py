@@ -414,7 +414,7 @@ class Worker:
         # so a plugin that replaces the Workflow runner keeps the Streams passthrough.
         stream_backends = client.config(active_config=True).get("stream_backends")
         if stream_backends:
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             config = _stream_plugin.configure_worker(stream_backends, config)
 

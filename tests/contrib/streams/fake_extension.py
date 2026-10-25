@@ -7,9 +7,9 @@ import asyncio
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
-from temporalio.common.streams import StreamBackend
-from temporalio.common.streams._backend import _ExtensionCalls
-from temporalio.common.streams.proto import v1 as ext_pb
+from temporalio.common import StreamBackend
+from temporalio.common._streams._backend import _ExtensionCalls
+from temporalio.common._streams.proto import v1 as ext_pb
 from temporalio.service import RPCStatusCode
 
 

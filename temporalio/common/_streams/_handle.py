@@ -12,8 +12,8 @@ from typing_extensions import Self
 
 import temporalio.converter
 import temporalio.exceptions
-from temporalio.common.streams import _errors
-from temporalio.common.streams._defn import TopicDefinition, definition_of
+from temporalio.common._streams import _errors
+from temporalio.common._streams._defn import TopicDefinition, definition_of
 
 E = TypeVar("E")
 T = TypeVar("T")

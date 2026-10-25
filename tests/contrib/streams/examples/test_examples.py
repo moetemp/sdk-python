@@ -2,8 +2,8 @@
 
 import uuid
 
+from temporalio import common
 from temporalio.client import Client
-from temporalio.common import streams
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
     agent_publishes_turns,
@@ -45,12 +45,12 @@ async def test_client_creates_stream(stream_client: Client):
 
 async def test_agent_publishes_turns(stream_client: Client):
     items = await agent_publishes_turns.main(stream_client, task_queue())
-    data = [item.data for item in items if isinstance(item, streams.Record)]
+    data = [item.data for item in items if isinstance(item, common.Record)]
     Turn = agent_publishes_turns.Turn
     assert data == [Turn("model"), "find", "it", Turn("model"), "search", "result"] + [
         Turn("done", "the answer")
     ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "the answer"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "the answer"
 
 
 async def test_activity_streams_tokens(stream_client: Client):

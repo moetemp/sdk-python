@@ -14,22 +14,22 @@ from typing import Any, TypeVar, overload
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.client
-from temporalio.common.streams import _backend, _errors, _ids
-from temporalio.common.streams._access import (
+from temporalio.common._streams import _backend, _errors, _ids
+from temporalio.common._streams._access import (
     Access,
     ReadSpec,
     _AsyncTopic,
     read_spec,
     subscription,
 )
-from temporalio.common.streams._backend import BackendCalls
-from temporalio.common.streams._defn import TopicDefinition, definition_of
-from temporalio.common.streams._handle import Creating, StreamHandle, exit_failure
-from temporalio.common.streams._items import End
-from temporalio.common.streams._plugin import client_backend
-from temporalio.common.streams._reader import Item, Position, Subscription
-from temporalio.common.streams._writer import StreamWriter
-from temporalio.common.streams.system import models
+from temporalio.common._streams._backend import BackendCalls
+from temporalio.common._streams._defn import TopicDefinition, definition_of
+from temporalio.common._streams._handle import Creating, StreamHandle, exit_failure
+from temporalio.common._streams._items import End
+from temporalio.common._streams._plugin import client_backend
+from temporalio.common._streams._reader import Item, Position, Subscription
+from temporalio.common._streams._writer import StreamWriter
+from temporalio.common._streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -279,7 +279,7 @@ class ClientStream(StreamHandle[E]):
         Args:
             topics: Read these Topics, by Topic of the definition, name or Topic object.
                 With no Topics and no ``topic_prefixes``, read every Topic.
-            offset: Start at this offset, inclusive, or at ``streams.END`` for new
+            offset: Start at this offset, inclusive, or at ``common.END`` for new
                 Records only. Defaults to the first Record.
             last: Start with the newest this many Records that pass the filter, oldest
                 first, such as the first view of a chat. Not with ``offset``. A Record

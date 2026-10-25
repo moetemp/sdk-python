@@ -8,8 +8,8 @@ from typing import Any
 import temporalio.client
 import temporalio.service
 import temporalio.worker
-from temporalio.common.streams import _errors
-from temporalio.common.streams._backend import BackendCalls
+from temporalio.common._streams import _errors
+from temporalio.common._streams._backend import BackendCalls
 from temporalio.plugin import SimplePlugin
 
 # The default backend when no registered backend has default=True. This SDK has no native

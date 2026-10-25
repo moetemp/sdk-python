@@ -21,14 +21,14 @@ import temporalio.runtime
 import temporalio.service
 import temporalio.worker
 import temporalio.workflow
-from temporalio.common.streams import _activity, _ids, _writes
-from temporalio.common.streams import _workflow as streams_workflow
-from temporalio.common.streams._backend import BackendCalls, _ExtensionCalls
-from temporalio.common.streams._errors import StreamConfigError
-from temporalio.common.streams._handle import StreamHandle
-from temporalio.common.streams._plugin import StreamBackend
-from temporalio.common.streams.proto import v1 as ext_pb
-from temporalio.common.streams.system import models
+from temporalio.common._streams import _activity, _ids, _writes
+from temporalio.common._streams import _workflow as streams_workflow
+from temporalio.common._streams._backend import BackendCalls, _ExtensionCalls
+from temporalio.common._streams._errors import StreamConfigError
+from temporalio.common._streams._handle import StreamHandle
+from temporalio.common._streams._plugin import StreamBackend
+from temporalio.common._streams.proto import v1 as ext_pb
+from temporalio.common._streams.system import models
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
@@ -170,7 +170,7 @@ class ExtensionStreamBackend(StreamBackend):
             config["workflow_runner"] = dataclasses.replace(
                 runner,
                 restrictions=runner.restrictions.with_passthrough_modules(
-                    "temporalio.common.streams"
+                    "temporalio.common._streams"
                 ),
             )
         return config

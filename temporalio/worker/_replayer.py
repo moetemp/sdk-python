@@ -34,7 +34,7 @@ from ._workflow_instance import (
 from .workflow_sandbox import SandboxedWorkflowRunner
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import StreamBackend
+    from temporalio.common import StreamBackend
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,7 @@ class Replayer:
         for plugin in plugins:
             self._config = plugin.configure_replayer(self._config)
         if self._config.get("stream_backends"):
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             self._config = _stream_plugin.configure_replayer(self._config)
 

@@ -33,7 +33,7 @@ from temporalio.testing._timeskipping import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import StreamBackend
+    from temporalio.common import StreamBackend
 
 logger = logging.getLogger(__name__)
 

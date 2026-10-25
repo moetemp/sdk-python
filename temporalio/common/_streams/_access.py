@@ -8,14 +8,14 @@ from datetime import timedelta
 from typing import Any, TypeVar
 
 import temporalio.converter
-from temporalio.common.streams import _convert, _reader
-from temporalio.common.streams._backend import BackendCalls, CallOptions
-from temporalio.common.streams._defn import TopicDefinition
-from temporalio.common.streams._handle import StreamHandle, TopicBase
-from temporalio.common.streams._items import End, close_status
-from temporalio.common.streams._reader import Item, Position, Subscription
-from temporalio.common.streams._writer import StreamWriter
-from temporalio.common.streams.system import models
+from temporalio.common._streams import _convert, _reader
+from temporalio.common._streams._backend import BackendCalls, CallOptions
+from temporalio.common._streams._defn import TopicDefinition
+from temporalio.common._streams._handle import StreamHandle, TopicBase
+from temporalio.common._streams._items import End, close_status
+from temporalio.common._streams._reader import Item, Position, Subscription
+from temporalio.common._streams._writer import StreamWriter
+from temporalio.common._streams.system import models
 
 T = TypeVar("T")
 
