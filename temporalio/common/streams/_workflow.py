@@ -110,6 +110,10 @@ class _RunState:
     # Whether the run created, bound or received a Stream. Only then do its Activities carry
     # a Producer key, so a run with no Stream adds nothing to History.
     uses_streams: bool = False
+    # The block ends whose close waits for the run's outcome, with the block's failure.
+    deferred_closes: list[tuple[WorkflowStream[Any], BaseException | None]] = field(
+        default_factory=list
+    )
 
     def stream(self, ref: models.StreamRef) -> _RunStream:
         known = self.streams.get(ref.id)
@@ -371,8 +375,9 @@ class WorkflowStream(StreamHandle[E]):
 
     Pass it to an Activity, a child Workflow or the next run of continue-as-new as an
     argument. Use it in ``async with`` to close it at the end of the block. The native server
-    closes it when the run chain ends. On Redis a run end closes nothing, so a Stream that the
-    run chain never closes stays open until its ``safety_ttl``.
+    closes it when the run chain ends. On Redis a run end closes only a Stream whose block end
+    waited for it, so a Stream that the run chain never closes stays open until its
+    ``safety_ttl``.
 
     .. warning::
         This API is experimental.
@@ -536,10 +541,12 @@ class WorkflowStream(StreamHandle[E]):
         A task that fails before then, or a crash, leaves the Stream open, and the task's retry
         writes to it again. On Redis the close is a regular Activity on the Workflow's task
         queue, which closes as the run chain, the Stream's owner. So every Worker on that queue
-        registers the Redis backend. On the native backend it is a System Nexus command, which
-        the server carries out. Readers get the Records before it, then a ``Closed`` item with
-        ``result`` or ``failure``. A ``CancelledError`` failure closes it as canceled. Later
-        writes in this run raise :py:class:`StreamClosedError`.
+        registers the Redis backend, and one that polls Activities runs the close, since a
+        Worker with ``no_remote_activities=True`` runs none. On the native backend it is a
+        System Nexus command, which the server carries out. Readers get the Records before it,
+        then a ``Closed`` item with ``result`` or ``failure``. A cancel failure, such as a
+        ``CancelledError`` or an ``ActivityError`` that a cancel caused, closes it as canceled.
+        Later writes in this run raise :py:class:`StreamClosedError`.
 
         Raises:
             StreamNotOwnerError: This run chain didn't create the Stream.
@@ -556,7 +563,7 @@ class WorkflowStream(StreamHandle[E]):
         """
         _write_nowait(self._close(result, failure))
 
-    def _close(self, result: Any, failure: BaseException | None) -> asyncio.Future[int]:
+    def _closing(self) -> tuple[_RunStream, str]:
         info = temporalio.workflow.info()
         if (self.workflow_id, self.first_execution_run_id) != (
             info.workflow_id,
@@ -568,7 +575,10 @@ class WorkflowStream(StreamHandle[E]):
                 f"Can't close the Stream {self.id}, since this run chain didn't create it",
                 reason="stream_not_owner",
             )
-        run_stream, backend = self._check("close")
+        return self._check("close")
+
+    def _close(self, result: Any, failure: BaseException | None) -> asyncio.Future[int]:
+        run_stream, backend = self._closing()
         run_stream.closed = True
         request = stream_pb.CloseStreamRequest(stream=self._ref())
         if result is not None:
@@ -594,30 +604,93 @@ class WorkflowStream(StreamHandle[E]):
     ) -> None:
         """Close the Stream, with the exception as its failure if there is one.
 
-        A cancel closes it with a ``CancelledError`` failure. The block end leaves the Stream
-        open in a cron run, since the Stream spans the cron chain and the next run creates it
-        again. It also leaves it open on an exception that fails the run when the run has a
-        retry policy, since a retry run writes on to the same Stream, and on an exception that
-        fails only the Workflow Task, since the task's retry runs the block again. Another
-        ``BaseException``, such as an eviction, leaves it open, since the block did not end in
-        Workflow code. An explicit :py:meth:`close` always closes.
+        A cancel of the block or of the run closes it as canceled. An exception that fails the
+        run with no retry run to follow closes it too, such as one in a run with no retry
+        policy, a non-retryable ``ApplicationError``, or one on the last attempt. The close of
+        any other exception waits for the run's end. The Stream then closes with that exception
+        when the run returns or continues as new, or fails with no retry run to follow. It
+        stays open when a retry run follows, since that run writes on to the same Stream, and
+        when the exception fails only the Workflow Task, since the task's retry runs the block
+        again. In a cron run the block end leaves the Stream open, since the Stream spans the
+        cron chain and the next run creates it again. An eviction cancels the block, and the
+        Worker sends no command of an evicted run. An explicit :py:meth:`close` always closes.
         """
-        if _state().stream(self._model_ref()).closed:
+        state = _state()
+        if state.stream(self._model_ref()).closed:
             return
         close, failure = exit_failure(exc)
-        if close and _closes_at_block_end(exc):
+        if not close or temporalio.workflow.info().cron_schedule:
+            return
+        if _closes_at_block_end(exc):
             await self.close(failure=failure)
+        else:
+            # A refused close raises here, as it does for a close at the block end.
+            self._closing()
+            state.deferred_closes.append((self, failure))
 
 
 def _closes_at_block_end(exc: BaseException | None) -> bool:
-    info = temporalio.workflow.info()
-    if info.cron_schedule:
-        return False
-    if exc is None or isinstance(exc, asyncio.CancelledError):
+    # Else only the run's end tells whether a retry run writes on to the Stream.
+    if exc is None or isinstance(exc, asyncio.CancelledError) or _cancelled(exc):
         return True
-    if not temporalio.workflow._Runtime.current().workflow_is_failure_exception(exc):
+    runtime = temporalio.workflow._Runtime.current()
+    return runtime.workflow_is_failure_exception(exc) and not _retried(exc)
+
+
+def close_at_run_end(err: BaseException | None) -> None:
+    """Close the Streams whose block end waited for the run's outcome, unless a retry run
+    follows. ``err`` is the exception that ends the run, or None when the run returns.
+    """
+    state = _state()
+    runtime = temporalio.workflow._Runtime.current()
+    if (
+        isinstance(err, Exception)
+        and not _cancelled(err)
+        and runtime.workflow_is_failure_exception(err)
+        and _retried(err)
+    ):
+        return
+    for stream, failure in state.deferred_closes:
+        if not state.stream(stream._model_ref()).closed:
+            _write_nowait(stream._close(None, failure))
+
+
+def _retried(exc: BaseException) -> bool:
+    # Whether the server starts a retry run once the run fails with exc, by the server's rule.
+    info = temporalio.workflow.info()
+    policy = info.retry_policy
+    if policy is None or 0 < policy.maximum_attempts <= info.attempt:
         return False
-    return info.retry_policy is None
+    failure_type: str | None
+    if isinstance(exc, temporalio.exceptions.ApplicationError):
+        if exc.non_retryable:
+            return False
+        failure_type = exc.type
+    elif isinstance(
+        exc,
+        (temporalio.exceptions.CancelledError, temporalio.exceptions.TerminatedError),
+    ):
+        return False
+    elif isinstance(exc, temporalio.exceptions.TimeoutError):
+        return exc.type in (
+            temporalio.exceptions.TimeoutType.START_TO_CLOSE,
+            temporalio.exceptions.TimeoutType.HEARTBEAT,
+        )
+    elif isinstance(exc, temporalio.exceptions.FailureError):
+        return True
+    else:
+        # The run's failure carries any other exception as the type of its class name.
+        failure_type = type(exc).__name__
+    return failure_type not in (policy.non_retryable_error_types or ())
+
+
+def _cancelled(exc: BaseException) -> bool:
+    # A cancelled run ends as canceled with no retry, also when the cancel reached the block as
+    # the error of an Activity, a Local Activity or a child.
+    return (
+        temporalio.workflow.cancellation_reason() is not None
+        and temporalio.exceptions.is_cancelled_exception(exc)
+    )
 
 
 def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:

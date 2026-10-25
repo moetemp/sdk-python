@@ -24,7 +24,7 @@ def exit_failure(exc: BaseException | None) -> tuple[bool, BaseException | None]
     """Whether the end of an ``async with`` block closes the Stream, and with which failure.
 
     A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
-    an eviction, leaves it open, since the block did not end in the caller's code.
+    ``KeyboardInterrupt``, leaves it open, since the block did not end in the caller's code.
     """
     if isinstance(exc, asyncio.CancelledError):
         return True, temporalio.exceptions.CancelledError(str(exc) or "Cancelled")

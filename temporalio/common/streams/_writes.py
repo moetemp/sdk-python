@@ -108,6 +108,10 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
             f"The Stream {request.stream_id} was created and closed before",
             reason="stream_closed",
         )
+    if response.status == stream_pb.StreamStatus.STREAM_STATUS_EXPIRED:
+        raise _errors.StreamExpiredError(
+            f"The Stream {request.stream_id} expired", reason="stream_expired"
+        )
     return 0
 
 
@@ -121,14 +125,49 @@ class _Encoded:
     # The batches of one append and the calls of each, with the bodies after the codec, and
     # the answer of each batch that the Store took.
     batches: list[tuple[list[int], list[stream_pb.AppendRecord]]]
+    size: int
     answers: dict[int, Any] = dataclasses.field(default_factory=dict)
 
 
-# The appends that have not succeeded yet, by Producer and epoch. A retry of the Local Activity
-# in this process sends the same bytes, so the Store's dedupe of a resend matches them, also
-# when the codec adds random bytes. A rerun after a crash is a new epoch, so it needs none.
-_PENDING: OrderedDict[bytes, _Encoded] = OrderedDict()
-_PENDING_LIMIT = 1024
+_Key = tuple[str, str, str]
+_Epoch = tuple[int, int, int, int]
+
+
+class _Pending:
+    # The appends that have not succeeded, one for each Producer. A retry in this process sends
+    # the same bytes, so the Store's dedupe of a resend matches them, also with a random codec.
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._size = 0
+        self._entries: OrderedDict[_Key, tuple[_Epoch, _Encoded]] = OrderedDict()
+
+    def get(self, key: _Key, epoch: _Epoch) -> _Encoded | None:
+        found = self._entries.get(key)
+        return found[1] if found is not None and found[0] == epoch else None
+
+    def put(self, key: _Key, epoch: _Epoch, encoded: _Encoded) -> None:
+        found = self._entries.get(key)
+        if found is not None:
+            if found[0] > epoch:
+                # The Store fences this write, since the Producer has a later epoch.
+                return
+            self.pop(key, found[0])
+        self._entries[key] = (epoch, encoded)
+        self._size += encoded.size
+        while self._size > self._limit and len(self._entries) > 1:
+            _, (_, oldest) = self._entries.popitem(last=False)
+            self._size -= oldest.size
+
+    def pop(self, key: _Key, epoch: _Epoch) -> None:
+        found = self._entries.get(key)
+        if found is not None and found[0] == epoch:
+            del self._entries[key]
+            self._size -= found[1].size
+
+
+# A run that ends while its append retries leaves its entry, so the oldest go past this size.
+_PENDING = _Pending(64 * 1024 * 1024)
 
 
 async def _encode(
@@ -159,7 +198,7 @@ async def _encode(
         sum(sizes) <= streams.max_batch_bytes
         and max(sizes, default=0) <= _MAX_RECORD_BYTES
     ):
-        return _Encoded([(list(range(len(counts))), records)])
+        return _Encoded([(list(range(len(counts))), records)], sum(sizes))
     # The codec grew the merge past the Store's limit, so each call goes as its own batch, as
     # it would with no merge. A call that is too large alone fails alone.
     batches: list[tuple[list[int], list[stream_pb.AppendRecord]]] = []
@@ -167,7 +206,7 @@ async def _encode(
     for call, count in enumerate(counts):
         batches.append(([call], records[start : start + count]))
         start += count
-    return _Encoded(batches)
+    return _Encoded(batches, sum(sizes))
 
 
 @temporalio.activity.defn(name=APPEND_ACTIVITY)
@@ -182,19 +221,18 @@ async def append_records(
     streams, service = _context(request.stream)
     producer = _producer(streams)
     producer_pb = models._ProducerTransferTypeConverter().to_transfer_type(producer)
-    key = b"\n".join(
-        [
-            streams.namespace.encode(),
-            request.stream.id.encode(),
-            producer_pb.SerializeToString(deterministic=True),
-        ]
+    key = (streams.namespace, request.stream.id, producer_pb.id)
+    task = producer_pb.epoch
+    epoch = (
+        task.task_started_event_id,
+        task.task_attempt,
+        task.task_started_time.seconds,
+        task.task_started_time.nanos,
     )
-    encoded = _PENDING.get(key)
+    encoded = _PENDING.get(key, epoch)
     if encoded is None:
         encoded = await _encode(streams, request, counts, producer_pb)
-        _PENDING[key] = encoded
-        while len(_PENDING) > _PENDING_LIMIT:
-            _PENDING.popitem(last=False)
+        _PENDING.put(key, epoch, encoded)
     # The bodies went through the codec once already.
     service = streams.backend.service(
         streams.namespace, dataclasses.replace(streams.converter, payload_codec=None)
@@ -225,6 +263,8 @@ async def append_records(
                 answer = response.last_offset or 0
             except _errors.StreamError as err:
                 if err.reason != "stream_too_large":
+                    if err.non_retryable:
+                        _PENDING.pop(key, epoch)
                     raise
                 answer = {"reason": err.reason, "message": err.message}
             encoded.answers[index] = answer
@@ -234,7 +274,7 @@ async def append_records(
         for call in calls:
             after -= counts[call]
             answers[call] = answer - after if isinstance(answer, int) else answer
-    _PENDING.pop(key, None)
+    _PENDING.pop(key, epoch)
     return answers
 
 

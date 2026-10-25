@@ -52,8 +52,8 @@ _PAGE_BYTES = 2 * 1024 * 1024 - 64 * 1024
 # Set on a page of a Stream whose owner's run chain ended. Only a Store that doesn't close a
 # Stream with its owner sets it.
 _OWNER_ENDED_KEY = "temporal.io/stream-owner-ended"
-# The backend puts this key into the headers of each Activity and Local Activity that a Workflow
-# schedules. It keeps the Producer id the same across retries.
+# The backend puts this key into the headers of each Local Activity that a Workflow schedules,
+# and of each Activity of a run that uses Streams. It keeps the Producer id across retries.
 _KEY_HEADER = "__temporal_stream_key"
 # Continue-as-new passes the run chain's open Streams to the next run in this header.
 _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
@@ -204,6 +204,17 @@ class ExtensionStreamBackend(StreamBackend):
                 self, self._new_backend(client.service_client), None
             )
             config["interceptors"] = [*config.get("interceptors", []), mine]
+        if (
+            config.get("workflows")
+            and self._kind == "redis"
+            and config.get("no_remote_activities")
+        ):
+            # Another Worker on the queue may run the close Activity, so it is no error.
+            logger.warning(
+                "The Worker on the task queue %s polls no Activities, so the close of a "
+                "Workflow's Stream waits for another Worker on that queue with the backend",
+                config.get("task_queue"),
+            )
         # Records get no serialization context, so Workflows, Activities and clients encode
         # them alike.
         mine.converter = client.data_converter
@@ -430,9 +441,9 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
             result = await super().execute_workflow(input)
         except BaseException as err:
             if _ends_run(err):
-                await _end_run()
+                await _end_run(err)
             raise
-        await _end_run()
+        await _end_run(None)
         return result
 
     async def handle_signal(self, input: temporalio.worker.HandleSignalInput) -> None:
@@ -453,10 +464,11 @@ def _receive(args: Sequence[Any]) -> None:
         streams_workflow._state().uses_streams = True
 
 
-async def _end_run() -> None:
-    # The run's reads end with it, so the server drops their parked reads. Its writes that
-    # nobody awaits go out before its end.
+async def _end_run(err: BaseException | None) -> None:
+    # The run's reads end with it, so the server drops their parked reads. Its block-end closes
+    # settle from its outcome, and its writes that nobody awaits go out before its end.
     await _workflow_reader.cancel_wakes()
+    streams_workflow.close_at_run_end(err)
     await streams_workflow.drain()
 
 

@@ -50,10 +50,8 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
 
 
 def _check_close(handle: StreamHandle[Any]) -> None:
-    # A Workflow's Stream closes only from its run chain, a Standalone Activity's only from that
-    # Activity, and a client's only from a client. So only a Local Activity of the chain or the
-    # owning Activity may close here. The Store refuses the others too, and this error comes
-    # with no call.
+    # A Workflow's Stream closes only from Workflow code, a Standalone Activity's only from that
+    # Activity, and a client's only from a client. The Store refuses the others too.
     streams = _bound(handle)
     if handle.activity_id:
         owner = _ids.standalone_activity_producer_id(
@@ -65,14 +63,11 @@ def _check_close(handle: StreamHandle[Any]) -> None:
         ):
             return
     local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
-    if (
-        not local
-        or handle.activity_id
-        or (handle.workflow_id and handle.workflow_id != streams.workflow_id)
-    ):
+    if not local or handle.activity_id or handle.workflow_id:
         raise _errors.StreamNotOwnerError(
             f"Can't close the Stream {handle.id} from this Activity. A Workflow's Stream "
-            "closes only from its run chain, and a client's only from a client.",
+            "closes only from Workflow code, a Standalone Activity's only from that Activity, "
+            "and a client's only from a client.",
             reason="stream_not_owner",
         )
 
@@ -90,8 +85,8 @@ def _access(handle: StreamHandle[Any]) -> Access:
         ref=ref,
         writer=lambda: streams.writer(handle),
         # A handle with only an id names no chain, so the close names this Activity's own, and
-        # the Store refuses it when another chain owns the Stream. A Store that nests a
-        # Workflow's Stream finds none by such a handle, and the chain's id alone is no ref.
+        # the Store refuses it for a Workflow's Stream. A Store that nests a Workflow's Stream
+        # finds none by such a handle, and the chain's id alone is no ref.
         workflow_id=handle.workflow_id
         or (None if streams.nests_workflow_streams else streams.workflow_id),
         first_execution_run_id=handle.first_execution_run_id,
@@ -174,11 +169,14 @@ class ActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A ``CancelledError`` failure closes it as canceled.
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
 
-        Only a Local Activity of the run chain that created the Stream, or the Standalone
-        Activity that created it, may close it. Any other Activity gets
-        :py:class:`StreamNotOwnerError`, so it can't end the Stream for every reader.
+        Only the Standalone Activity that created a Stream closes it from Activity code. No
+        Activity closes a Workflow's Stream, also a Local Activity of the run chain that
+        created it, and no Activity closes a client's Stream. They get
+        :py:class:`StreamNotOwnerError`. A Local Activity writes before its Workflow Task
+        commits, so its close would stay when the task fails, and the task's retry could not
+        create the Stream again. Workflow code closes a Workflow's Stream.
         """
         _check_close(self)
         await self._access().close(result, failure)

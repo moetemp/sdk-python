@@ -1,4 +1,6 @@
 import asyncio
+import dataclasses
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -14,7 +16,8 @@ from temporalio.common.streams import _plugin, _stream_client, _writes
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
-from temporalio.converter import DataConverter
+from temporalio.converter import DataConverter, DefaultFailureConverter
+from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
@@ -314,6 +317,42 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     ] == ["b"]
 
 
+class _EncodesCommonAttributes(DefaultFailureConverter):
+    def __init__(self) -> None:
+        super().__init__(encode_common_attributes=True)
+
+
+async def test_closed_failure_decodes_with_the_clients_converter(stream_client: Client):
+    # The message goes into the encoded attributes, which only the payload converter reads.
+    config = stream_client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, failure_converter_class=_EncodesCommonAttributes
+    )
+    client = Client(**config)
+    stream = await client.create_stream(Events, id=f"failed-{uuid.uuid4()}")
+    await stream.close(
+        failure=ApplicationError("tool failed", "detail", {"k": 1}, type="Tool")
+    )
+    [closed] = [item async for item in stream.subscribe()]
+    assert isinstance(closed, streams.Closed)
+    assert isinstance(closed.failure, ApplicationError)
+    assert closed.failure.message == "tool failed" and closed.failure.type == "Tool"
+    assert closed.failure.details == ("detail", {"k": 1})
+
+
+async def test_no_wait_read_goes_past_records_of_other_topics(stream_client: Client):
+    # A Store scans at most 10,000 entries per call, so the first pages of this read are empty.
+    stream = await stream_client.create_stream(Events, id=f"scan-{uuid.uuid4()}")
+    for _ in range(11):
+        await stream.topic(Events.tokens).publish(*["x"] * 1000)
+    turn = await stream.topic(Events.turns).publish(Turn("model"))
+    turns = stream.subscribe(Events.turns, wait_new_records=False)
+    assert [item.data async for item in turns if isinstance(item, streams.Record)] == [
+        Turn("model")
+    ]
+    assert turns.next_offset == turn + 1
+
+
 async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
     stream = await stream_client.create_stream(Events, id=f"last-{uuid.uuid4()}")
     tokens = stream.topic(Events.tokens)
@@ -371,6 +410,88 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
         ("tokens", "b"),
         ("turns", Turn("model")),
     ]
+
+
+@streams.defn(name="events")
+class LooseEvents:
+    turns = streams.topic(str)
+    tokens = streams.topic(str)
+
+
+async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
+    stream_client: Client,
+):
+    stream_id = f"poison-{uuid.uuid4()}"
+    writer = await stream_client.create_stream(LooseEvents, id=stream_id)
+    bad = await writer.topic(LooseEvents.turns).publish("not a turn")
+    await writer.topic(LooseEvents.tokens).publish("after")
+    reader = stream_client.stream(Events, id=stream_id)
+    read = reader.subscribe(wait_new_records=False)
+    with pytest.raises(streams.StreamError, match=f"offset {bad} of the Topic turns"):
+        await anext(read)
+    assert read.next_offset == bad + 1
+    resumed = reader.subscribe(offset=read.next_offset, wait_new_records=False)
+    assert [
+        item.data async for item in resumed if isinstance(item, streams.Record)
+    ] == ["after"]
+
+
+async def test_async_with_refuses_a_workflow_stream_before_the_block(
+    stream_client: Client,
+):
+    # The close at the block end would raise and hide the block's own error.
+    handle = stream_client.get_workflow_handle(
+        "agent-1", first_execution_run_id="run-1"
+    )
+    ran = False
+    with pytest.raises(streams.StreamNotOwnerError):
+        async with handle.stream(Events):
+            ran = True
+    assert not ran
+
+
+async def test_record_over_the_store_limit_raises_too_large(stream_client: Client):
+    # The client's writer splits a batch at the Store's limit, so only a Record can be over.
+    stream = await stream_client.create_stream(Events, id=f"large-{uuid.uuid4()}")
+    with pytest.raises(streams.StreamTooLargeError) as refused:
+        await stream.topic(Events.tokens).publish("x" * 2_200_000)
+    assert refused.value.reason == "stream_too_large" and refused.value.non_retryable
+    assert await stream.get_offset() == 0
+
+
+async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
+    # Nothing withdraws a client's Records, so a long UI read of them keeps no state.
+    stream = await stream_client.create_stream(Events, id=f"chat-{uuid.uuid4()}")
+    await stream.topic(Events.tokens).publish("a", "b", "c")
+    read = stream.subscribe(wait_new_records=False)
+    assert [item.data async for item in read if isinstance(item, streams.Record)] == [
+        "a",
+        "b",
+        "c",
+    ]
+    assert read._shown == {}
+
+
+async def test_empty_stream_id_raises_with_no_call(client: Client):
+    client, extension = fake_client(client)
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Events, id="")
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Events, stream=streams.WorkflowStream(id=""))
+    assert not extension.namespaces
+
+
+async def test_create_of_an_expired_stream_raises(stream_client: Client):
+    # An open client Stream expires one Retention after its last write.
+    stream_id = f"expired-{uuid.uuid4()}"
+    retention = timedelta(milliseconds=200)
+    stream = await stream_client.create_stream(
+        Events, id=stream_id, retention=retention
+    )
+    await stream.topic(Events.tokens).publish("old")
+    await asyncio.sleep(0.5)
+    with pytest.raises(streams.StreamExpiredError):
+        await stream_client.create_stream(Events, id=stream_id, retention=retention)
 
 
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
@@ -475,6 +596,18 @@ async def test_only_a_redis_backend_polls_activities(client: Client):
         streams.NativeStreamBackend(retention=timedelta(days=1))
     ]
     assert polled(Client(**config)) == []
+
+
+async def test_worker_that_polls_no_activities_warns_of_the_close(
+    client: Client, caplog: pytest.LogCaptureFixture
+):
+    # The close of a Workflow's Stream is a regular Activity, which another Worker may run.
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    with caplog.at_level(logging.WARNING, logger="temporalio.common.streams"):
+        async with new_worker(Client(**config), Agent, no_remote_activities=True):
+            pass
+    assert "polls no Activities" in caplog.text
 
 
 async def test_backend_is_not_a_plugin(client: Client):

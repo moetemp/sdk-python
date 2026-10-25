@@ -59,7 +59,7 @@ class StreamClosedError(StreamError):
 
 
 class StreamExpiredError(StreamError):
-    """Retention removed the Stream."""
+    """Retention removed the Stream, or the Records at the offset that a read asked for."""
 
 
 class StreamFencedError(StreamError):
@@ -73,16 +73,16 @@ class StreamStorageError(StreamError):
 
 
 class StreamOffsetError(StreamError):
-    """The offset is past the newest one plus one, or Retention removed it."""
+    """The offset is below zero or past the newest one plus one."""
 
 
 class StreamTooLargeError(StreamError):
-    """A Record or a batch is over the Store's limit, or the Stream is full.
+    """A Record or a batch is over the Store's limit.
 
-    A native Stream keeps the Records that an open Workflow reader may read again on replay,
-    so an append that the Stream's size cap would make drop them fails. It passes once the
-    reader moves on, such as when it continues as new, which the server suggests to a reader
-    that keeps half of the cap.
+    A native Stream also keeps the Records that an open Workflow reader may read again on
+    replay, so an append that the Stream's size cap would make drop them fails. It passes once
+    the reader moves on, such as when it continues as new, which the server suggests to a
+    reader that keeps half of the cap.
     """
 
 
@@ -137,13 +137,6 @@ _BY_REASON: dict[str, type[StreamError]] = {
     # The native server's Workflow reader cap. Readers leave, so a retry may get in.
     "stream_exhausted": StreamStorageError,
 }
-
-
-# The details move to temporal.api.streamservice.v1. Both names carry the same message.
-_DETAILS_TYPES = (
-    "temporal.api.streamservice.v1.StreamErrorDetails",
-    StreamErrorDetails.DESCRIPTOR.full_name,
-)
 
 
 def from_call_error(err: Exception) -> StreamError:
@@ -214,15 +207,4 @@ def in_workflow(err: BaseException) -> BaseException:
     """
     if isinstance(err, StreamUnsupportedError):
         return StreamConfigError(err.message)
-    return err
-
-
-def from_rpc_error(err: temporalio.service.RPCError) -> Exception:
-    """The Stream error for a server failure with Stream error details, else ``err``."""
-    for detail in err.grpc_status.details:
-        if detail.type_url.rsplit("/", 1)[-1] in _DETAILS_TYPES:
-            reason = StreamErrorDetails.FromString(detail.value).reason
-            return _BY_REASON.get(reason, StreamError)(
-                err.message, reason=reason, code=err.status
-            )
     return err

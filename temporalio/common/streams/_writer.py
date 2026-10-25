@@ -59,11 +59,16 @@ class StreamWriter:
     async def withdraw_earlier_attempts(self) -> None:
         """Open the writer of a new attempt, which withdraws the Records of the earlier ones.
 
-        A Stream that does not exist has nothing to withdraw.
+        A Stream that does not exist has nothing to withdraw. A closed or expired Stream takes
+        no write, so the attempt goes on, and a later write raises the real error.
         """
         try:
             await self.open()
-        except _errors.StreamNotFoundError:
+        except (
+            _errors.StreamNotFoundError,
+            _errors.StreamClosedError,
+            _errors.StreamExpiredError,
+        ):
             pass
 
     async def open(self) -> writer_client.Writer:

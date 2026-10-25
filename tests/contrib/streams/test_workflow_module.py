@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
@@ -18,6 +18,7 @@ from temporalio.client import (
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy, streams
+from temporalio.common.streams import _writes
 from temporalio.common.streams._backend import _ExtensionCalls
 from temporalio.common.streams._defn import definition_of
 from temporalio.contrib import stream as redis
@@ -311,6 +312,133 @@ async def test_block_end_leaves_the_stream_open_for_a_retry_run(stream_client: C
     closes = [item for item in items if isinstance(item, streams.Closed)]
     assert len(closes) == 1 and items[-1] is closes[0]
     assert closes[0].failure is None
+
+
+@workflow.defn
+class EndsItsBlock:
+    @workflow.run
+    async def run(self, mode: str) -> str:
+        try:
+            async with workflow.create_stream(Events) as stream:
+                await stream.topic(Events.tokens).publish(mode)
+                if mode == "non_retryable":
+                    raise ApplicationError("block failed", non_retryable=True)
+                if mode == "listed_type":
+                    raise ApplicationError("block failed", type="Listed")
+                if mode == "caught_task_failure":
+                    raise ValueError("block failed")
+                raise ApplicationError("block failed")
+        except (ApplicationError, ValueError) as err:
+            if mode.startswith("caught"):
+                return "caught"
+            if mode == "then_non_retryable":
+                raise ApplicationError("run failed", non_retryable=True) from err
+            raise
+
+
+async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client):
+    # Each run ends with no retry run, so each block end closes its Stream, at once or at the
+    # run's end, with the block's exception.
+    retries = RetryPolicy(
+        initial_interval=timedelta(milliseconds=100), maximum_attempts=3
+    )
+    cases = {
+        "non_retryable": retries,
+        "last_attempt": RetryPolicy(maximum_attempts=1),
+        "listed_type": dataclasses.replace(
+            retries, non_retryable_error_types=["Listed"]
+        ),
+        "caught": retries,
+        "caught_task_failure": None,
+        "then_non_retryable": retries,
+    }
+    async with new_worker(stream_client, EndsItsBlock) as worker:
+        handles = {
+            mode: await stream_client.start_workflow(
+                EndsItsBlock.run,
+                mode,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+                retry_policy=policy,
+            )
+            for mode, policy in cases.items()
+        }
+        for mode, handle in handles.items():
+            if mode.startswith("caught"):
+                assert await handle.result() == "caught"
+            else:
+                with pytest.raises(WorkflowFailureError):
+                    await handle.result()
+            items = await read(handle)
+            assert data(items) == [mode]
+            closed = items[-1]
+            assert isinstance(closed, streams.Closed), mode
+            assert closed.status == streams.CloseStatus.FAILED
+            assert isinstance(closed.failure, ApplicationError)
+            assert closed.failure.message == "block failed"
+        # A close at the run's end is a command after the run's code, also on replay.
+        replayer = Replayer(
+            workflows=[EndsItsBlock],
+            stream_backends=stream_client.config()["stream_backends"],
+        )
+        for mode in ("caught", "then_non_retryable"):
+            await replayer.replay_workflow(await handles[mode].fetch_history())
+
+
+# Set by the Activity of a test's run once it runs, so the test cancels the run there.
+waiting: dict[str, asyncio.Event] = {}
+
+
+@activity.defn
+async def waits_for_cancel() -> None:
+    waiting[activity.info().workflow_id or ""].set()
+    while True:
+        activity.heartbeat()
+        await asyncio.sleep(0.1)
+
+
+@workflow.defn
+class CancelledInItsBlock:
+    @workflow.run
+    async def run(self, local: bool) -> None:
+        async with workflow.create_stream(Events) as stream:
+            await stream.topic(Events.tokens).publish("started")
+            if local:
+                await workflow.execute_local_activity(
+                    waits_for_cancel, start_to_close_timeout=timedelta(minutes=1)
+                )
+            else:
+                await workflow.execute_activity(
+                    waits_for_cancel,
+                    start_to_close_timeout=timedelta(minutes=1),
+                    heartbeat_timeout=timedelta(seconds=1),
+                )
+
+
+async def test_cancel_during_an_activity_closes_as_canceled(stream_client: Client):
+    # The cancel reaches the block as an ActivityError, and no retry follows a cancelled run.
+    async with new_worker(
+        stream_client, CancelledInItsBlock, activities=[waits_for_cancel]
+    ) as worker:
+        for local, policy in ((False, RetryPolicy(maximum_attempts=3)), (True, None)):
+            workflow_id = f"wf-{uuid.uuid4()}"
+            waiting[workflow_id] = asyncio.Event()
+            handle = await stream_client.start_workflow(
+                CancelledInItsBlock.run,
+                local,
+                id=workflow_id,
+                task_queue=worker.task_queue,
+                retry_policy=policy,
+            )
+            await asyncio.wait_for(waiting[workflow_id].wait(), 20)
+            await handle.cancel()
+            with pytest.raises(WorkflowFailureError):
+                await handle.result()
+            items = await read(handle)
+            assert data(items) == ["started"]
+            closed = items[-1]
+            assert isinstance(closed, streams.Closed), f"local={local}"
+            assert closed.status == streams.CloseStatus.CANCELED
 
 
 @workflow.defn
@@ -648,6 +776,51 @@ async def test_retried_write_goes_in_once(
 
 
 @workflow.defn
+class PublishesToAMissingStream:
+    @workflow.run
+    async def run(self) -> None:
+        # No create, so the Store refuses the append, and no retry sends it again.
+        stream = workflow.stream_handle(Events)
+        await stream.topic(Events.tokens).publish("x" * 100_000)
+
+
+async def test_refused_write_keeps_no_pending_bytes(stream_client: Client):
+    async with new_worker(stream_client, PublishesToAMissingStream) as worker:
+        handle = await stream_client.start_workflow(
+            PublishesToAMissingStream.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+    stream_id = handle.stream(Events).id
+    assert not [key for key in _writes._PENDING._entries if key[1] == stream_id]
+
+
+def _entry(size: int) -> Any:
+    return _writes._Encoded([], size)
+
+
+def test_pending_appends_keep_the_newest_epoch_and_a_bounded_size():
+    pending = _writes._Pending(100)
+    one, two = ("ns", "s", "la:1"), ("ns", "s", "la:2")
+    first, retried = _entry(10), _entry(10)
+    pending.put(one, (5, 1, 0, 0), first)
+    # A rerun under a later epoch takes the place of the earlier one.
+    pending.put(one, (9, 1, 0, 0), retried)
+    assert pending.get(one, (5, 1, 0, 0)) is None
+    assert pending.get(one, (9, 1, 0, 0)) is retried
+    # A write of an earlier epoch is fenced, so it leaves the later one, and so does its pop.
+    pending.put(one, (5, 1, 0, 0), first)
+    pending.pop(one, (5, 1, 0, 0))
+    assert pending.get(one, (9, 1, 0, 0)) is retried
+    # Past the size, the oldest entry goes.
+    pending.put(two, (9, 1, 0, 0), _entry(95))
+    assert pending.get(one, (9, 1, 0, 0)) is None
+    assert pending.get(two, (9, 1, 0, 0)) is not None
+
+
+@workflow.defn
 class PublishesLargeValues:
     @workflow.run
     async def run(self, size: int) -> list[int]:
@@ -680,6 +853,28 @@ async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Cl
 
 
 @workflow.defn
+class PublishesTooMuch:
+    @workflow.run
+    async def run(self) -> str:
+        tokens = (await workflow.create_stream(Events)).topic(Events.tokens)
+        try:
+            await tokens.publish(*["x" * 1_400_000] * 4)
+        except streams.StreamTooLargeError as err:
+            return err.reason
+        return "written"
+
+
+async def test_batch_over_the_store_limit_raises_too_large(stream_client: Client):
+    # Each Record is under the Store's Record limit, and the publish's batch is over 4 MiB.
+    async with new_worker(stream_client, PublishesTooMuch) as worker:
+        handle = await stream_client.start_workflow(
+            PublishesTooMuch.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        assert await handle.result() == "stream_too_large"
+        assert data(await read(handle)) == []
+
+
+@workflow.defn
 class CreatesOnTheDefault:
     @workflow.run
     async def run(self) -> str:
@@ -694,6 +889,37 @@ class CreatesOnRedis:
         await stream.topic(Events.tokens).publish("on redis")
         await redis.workflow.stream_handle(Events).close(result="closed")
         return stream.backend or ""
+
+
+@workflow.defn
+class CreatesAfterAnIdleTime:
+    @workflow.run
+    async def run(self) -> str:
+        await workflow.create_stream(Events)
+        await workflow.sleep(timedelta(seconds=1.5))
+        try:
+            await workflow.create_stream(Events)
+        except streams.StreamExpiredError as err:
+            return err.reason
+        return "created"
+
+
+async def test_create_of_an_expired_workflow_stream_raises(client: Client):
+    # An open Workflow Stream expires one safety TTL after its last write.
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(default=True, safety_ttl=timedelta(milliseconds=500))
+    ]
+    expiring = Client(**config)
+    async with new_worker(expiring, CreatesAfterAnIdleTime) as worker:
+        assert (
+            await expiring.execute_workflow(
+                CreatesAfterAnIdleTime.run,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_expired"
+        )
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):

@@ -58,6 +58,7 @@ from temporalio.common.streams._items import (
     END,
     Closed,
     CloseStatus,
+    End,
     Record,
     Superseded,
 )
@@ -78,6 +79,7 @@ __all__ = [
     "CloseStatus",
     "Closed",
     "Creating",
+    "End",
     "NativeStreamBackend",
     "ReadOnlyContextError",
     "Record",

@@ -350,6 +350,16 @@ class ClientStream(StreamHandle[E]):
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             return await self._access().get_offset()
 
+    def _check_close(self) -> None:
+        if self._workflow_id:
+            # A Workflow's Stream closes only from its run chain. The Store refuses a client's
+            # close too, and this error comes with no call.
+            raise _errors.StreamNotOwnerError(
+                f"Can't close the Stream {self._id or self._stream_name} from a client, since "
+                "a Workflow owns it",
+                reason="stream_not_owner",
+            )
+
     async def close(
         self,
         *,
@@ -361,26 +371,25 @@ class ClientStream(StreamHandle[E]):
         """Write this handle's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A ``CancelledError`` failure closes it as canceled. ``rpc_metadata`` and
-        ``rpc_timeout`` are as for :py:meth:`get_offset`.
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
+        ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
 
         Raises:
             StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
         """
-        if self._workflow_id:
-            # A Workflow's Stream closes only from its run chain. The Store refuses a client's
-            # close too, and this error comes with no call.
-            raise _errors.StreamNotOwnerError(
-                f"Can't close the Stream {self._id or self._stream_name} from a client, since "
-                "a Workflow owns it",
-                reason="stream_not_owner",
-            )
+        self._check_close()
         self._closed = True
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             await self._access().close(result, failure)
 
     async def __aenter__(self) -> ClientStream[E]:
-        """Use the Stream in ``async with``, which closes it at the end."""
+        """Use the Stream in ``async with``, which closes it at the end.
+
+        Raises:
+            StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
+        """
+        # The close at the end would raise and hide the block's own error.
+        self._check_close()
         return self
 
     async def __aexit__(
@@ -424,6 +433,10 @@ def create(
                 f"The Stream {id} was created and closed before",
                 reason="stream_closed",
             )
+        if response.status == stream_pb.StreamStatus.STREAM_STATUS_EXPIRED:
+            raise _errors.StreamExpiredError(
+                f"The Stream {id} expired", reason="stream_expired"
+            )
         stream = ClientStream(id=id, backend=backend_name, definition=definition)
         return stream._bind(client, calls)
 
@@ -450,9 +463,13 @@ def client_stream(
                 f"The handle is of the backend {stream.backend}, not {backend}"
             )
         backend = backend or stream.backend
+    stream_id = stream.id if stream else id
+    if not stream_id:
+        # An empty id would fail only at the first call, with no cause in it.
+        raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
     handle = ClientStream(
-        id=stream.id if stream else id or "",
+        id=stream_id,
         workflow_id=stream.workflow_id if stream else None,
         first_execution_run_id=stream.first_execution_run_id if stream else None,
         backend=backend_name,

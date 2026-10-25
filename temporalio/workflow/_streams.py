@@ -38,9 +38,9 @@ def create_stream(
         async with workflow.create_stream(streams.with_name(Events, "turn-3")) as turn:
             await turn.topic(Events.tokens).publish("hi")
 
-    The block end leaves the Stream open in a cron run, on an exception that fails the run when
-    the run has a retry policy, and on an exception that fails only the Workflow Task, since a
-    later run or the task's retry writes on to the same Stream. See
+    An exception closes the Stream with that exception as the failure. When a retry run may
+    follow, the close waits for the run's end, and the Stream stays open only for a retry run
+    or for the retry of a Workflow Task that failed. A cron run leaves the Stream open. See
     :py:meth:`temporalio.common.streams.WorkflowStream.__aexit__`.
 
     .. warning::
@@ -49,7 +49,8 @@ def create_stream(
     Args:
         definition: The Stream definition class. Its name is the Stream name. For one Stream
             per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
-        retention: How long the Records stay after the close. Defaults to the backend's.
+        retention: The age after which a Record is dropped, also while the Stream is open.
+            A closed Stream stays one Retention after its close. Defaults to the backend's.
         backend: The name of the backend. Defaults to the registered backend with
             ``default=True``, else to ``native``. The default is part of the Workflow's code,
             since a replay must create on the same backend. To move a Workflow to another
@@ -57,7 +58,9 @@ def create_stream(
             ``backend="native" if workflow.patched("move") else "redis"``.
 
     Raises:
-        StreamError: The backend refused the create, such as for another Retention.
+        StreamError: The backend refused the create, such as for another Retention, or
+            ``StreamClosedError`` and ``StreamExpiredError`` for a Stream of that id that
+            closed or expired.
         ReadOnlyContextError: The code must not change state, such as a query handler.
         StreamConfigError: The Worker has no backend of that name. It fails the Workflow
             Task, not the run.

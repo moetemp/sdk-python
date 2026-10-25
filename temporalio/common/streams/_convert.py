@@ -9,6 +9,7 @@ from typing import Any
 import temporalio.api.common.v1
 import temporalio.common
 import temporalio.converter
+import temporalio.exceptions
 
 
 class _RawPayloadConverter(temporalio.converter.PayloadConverter):
@@ -37,6 +38,22 @@ def raw(
 ) -> temporalio.converter.DataConverter:
     """The converter with Record bodies kept as RawValue. Its codec still runs on them."""
     return dataclasses.replace(converter, payload_converter_class=_RawPayloadConverter)
+
+
+def failure(
+    converter: temporalio.converter.DataConverter, failure: BaseException
+) -> BaseException:
+    """Convert a close failure that a read gave with RawValue payloads, after the codec, with
+    the user's payload converter.
+    """
+    if (
+        not isinstance(failure, temporalio.exceptions.FailureError)
+        or not failure.failure
+    ):
+        return failure
+    return converter.failure_converter.from_failure(
+        failure.failure, converter.payload_converter
+    )
 
 
 def decode(
