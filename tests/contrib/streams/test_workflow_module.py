@@ -18,6 +18,7 @@ from temporalio.client import (
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy, streams
+from temporalio.common.streams import _writes
 from temporalio.common.streams._backend import _ExtensionCalls
 from temporalio.common.streams._defn import definition_of
 from temporalio.contrib import stream as redis
@@ -764,6 +765,51 @@ async def test_retried_write_goes_in_once(
     # The retry sends the bytes of the first attempt, so the Store's dedupe takes it as the
     # same batch, though the codec adds random bytes.
     assert sent[0] == sent[1]
+
+
+@workflow.defn
+class PublishesToAMissingStream:
+    @workflow.run
+    async def run(self) -> None:
+        # No create, so the Store refuses the append, and no retry sends it again.
+        stream = workflow.stream_handle(Events)
+        await stream.topic(Events.tokens).publish("x" * 100_000)
+
+
+async def test_refused_write_keeps_no_pending_bytes(stream_client: Client):
+    async with new_worker(stream_client, PublishesToAMissingStream) as worker:
+        handle = await stream_client.start_workflow(
+            PublishesToAMissingStream.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+    stream_id = handle.stream(Events).id
+    assert not [key for key in _writes._PENDING._entries if key[1] == stream_id]
+
+
+def _entry(size: int) -> Any:
+    return _writes._Encoded([], size)
+
+
+def test_pending_appends_keep_the_newest_epoch_and_a_bounded_size():
+    pending = _writes._Pending(100)
+    one, two = ("ns", "s", "la:1"), ("ns", "s", "la:2")
+    first, retried = _entry(10), _entry(10)
+    pending.put(one, (5, 1, 0, 0), first)
+    # A rerun under a later epoch takes the place of the earlier one.
+    pending.put(one, (9, 1, 0, 0), retried)
+    assert pending.get(one, (5, 1, 0, 0)) is None
+    assert pending.get(one, (9, 1, 0, 0)) is retried
+    # A write of an earlier epoch is fenced, so it leaves the later one, and so does its pop.
+    pending.put(one, (5, 1, 0, 0), first)
+    pending.pop(one, (5, 1, 0, 0))
+    assert pending.get(one, (9, 1, 0, 0)) is retried
+    # Past the size, the oldest entry goes.
+    pending.put(two, (9, 1, 0, 0), _entry(95))
+    assert pending.get(one, (9, 1, 0, 0)) is None
+    assert pending.get(two, (9, 1, 0, 0)) is not None
 
 
 @workflow.defn
