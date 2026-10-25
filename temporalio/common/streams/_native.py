@@ -195,7 +195,9 @@ class _ConnectionRuntime:
     def __init__(
         self, service: temporalio.service.ServiceClient, config: bytes
     ) -> None:
-        self._service = service
+        # The backend keeps the runtime by the client in a weak map, so a strong ref here
+        # would keep every client alive.
+        self._service = weakref.ref(service)
         self._config = config
         self._streams: temporalio.bridge.streams.StreamRuntime | None = None
 
@@ -204,12 +206,15 @@ class _ConnectionRuntime:
             # A runtime that no call built has no writer, so a shutdown makes no connection.
             return ext_pb.CloseWritersResponse().SerializeToString()
         if self._streams is None:
-            bridge_client = await _bridge_client(self._service)
+            service = self._service()
+            if service is None:
+                raise RuntimeError("The client of the native Stream backend is gone")
+            bridge_client = await _bridge_client(service)
             # Two first calls may both wait for the connection. One runtime serves both, so
             # a writer that one opens is known to the other.
             if self._streams is None:
                 self._streams = temporalio.bridge.streams.StreamRuntime.on_client(
-                    _runtime_of(self._service)._core_runtime,
+                    _runtime_of(service)._core_runtime,
                     bridge_client,
                     self._config,
                 )

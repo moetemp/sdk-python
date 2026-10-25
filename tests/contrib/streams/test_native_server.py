@@ -6,8 +6,10 @@ Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 import asyncio
 import base64
 import concurrent.futures
+import gc
 import json
 import uuid
+import weakref
 from datetime import timedelta
 from typing import Any, cast
 
@@ -496,14 +498,34 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
         cast(Any, native._backend_for(client))._runtime for client in (first, second)
     ]
     assert runtimes[0] is not runtimes[1]
-    assert [runtime._service for runtime in runtimes] == [
+    assert [runtime._service() for runtime in runtimes] == [
         first.service_client,
         second.service_client,
     ]
     # The native backend that no client registers works the same, and makes no call.
     plain = await Client.connect("127.0.0.1:3", lazy=True)
     _, calls = _plugin.client_backend(plain, None)
-    assert cast(Any, calls)._runtime._service is plain.service_client
+    assert cast(Any, calls)._runtime._service() is plain.service_client
     assert _plugin.client_backend(plain, None)[1] is calls
     # No call built these runtimes, so a shutdown connects to none of them.
     await native.shutdown()
+
+
+async def test_a_native_backend_keeps_no_client_alive():
+    # The implicit backend lives as long as the process, and every Worker's client goes
+    # through it.
+    native = streams.NativeStreamBackend()
+    registered = await Client.connect(
+        "127.0.0.1:1", lazy=True, stream_backends=[native]
+    )
+    plain = await Client.connect("127.0.0.1:2", lazy=True)
+    native._backend_for(registered)
+    _plugin.client_backend(plain, None)
+    services = [
+        weakref.ref(registered.service_client),
+        weakref.ref(plain.service_client),
+    ]
+    del registered, plain
+    gc.collect()
+    assert [service() for service in services] == [None, None]
+    assert not native._connections
