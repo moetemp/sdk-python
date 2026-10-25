@@ -62,6 +62,7 @@ if TYPE_CHECKING:
         Record,
         Superseded,
     )
+    from temporalio.common._streams._plugin import StreamBackend
 
 __all__ = [
     "ActivityIDConflictPolicy",
@@ -102,6 +103,7 @@ __all__ = [
     "SearchAttributeValueType",
     "SearchAttributeValues",
     "SearchAttributes",
+    "StreamBackend",
     "StreamClosedError",
     "StreamConfigError",
     "StreamDefinition",
@@ -1589,6 +1591,7 @@ _STREAM_NAMES = frozenset(
         "END",
         "End",
         "Record",
+        "StreamBackend",
         "StreamClosedError",
         "StreamConfigError",
         "StreamDefinition",
