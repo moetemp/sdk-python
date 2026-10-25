@@ -406,6 +406,20 @@ async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
     assert [item.data async for item in resumed] == ["after"]
 
 
+async def test_async_with_refuses_a_workflow_stream_before_the_block(
+    stream_client: Client,
+):
+    # The close at the block end would raise and hide the block's own error.
+    handle = stream_client.get_workflow_handle(
+        "agent-1", first_execution_run_id="run-1"
+    )
+    ran = False
+    with pytest.raises(streams.StreamNotOwnerError):
+        async with handle.stream(Events):
+            ran = True
+    assert not ran
+
+
 async def test_create_of_an_expired_stream_raises(stream_client: Client):
     # An open client Stream expires one Retention after its last write.
     stream_id = f"expired-{uuid.uuid4()}"
