@@ -131,6 +131,7 @@ def create(
     Raises:
         StreamConfigError: The client has no Redis backend of that name. No call is made.
         StreamClosedError: A Stream of that id was created and closed before.
+        StreamExpiredError: A Stream of that id expired.
         StreamError: The Stream exists with another Retention, with the reason
             ``stream_already_exists``.
     """

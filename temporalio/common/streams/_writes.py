@@ -100,6 +100,10 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
             f"The Stream {request.stream_id} was created and closed before",
             reason="stream_closed",
         )
+    if response.status == stream_pb.StreamStatus.STREAM_STATUS_EXPIRED:
+        raise _errors.StreamExpiredError(
+            f"The Stream {request.stream_id} expired", reason="stream_expired"
+        )
     return 0
 
 

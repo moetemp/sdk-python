@@ -384,6 +384,19 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
     ]
 
 
+async def test_create_of_an_expired_stream_raises(stream_client: Client):
+    # An open client Stream expires one Retention after its last write.
+    stream_id = f"expired-{uuid.uuid4()}"
+    retention = timedelta(milliseconds=200)
+    stream = await redis.create(
+        stream_client, Events, id=stream_id, retention=retention
+    )
+    await stream.topic(Events.tokens).publish("old")
+    await asyncio.sleep(0.5)
+    with pytest.raises(streams.StreamExpiredError):
+        await redis.create(stream_client, Events, id=stream_id, retention=retention)
+
+
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"named-{uuid.uuid4()}")
     # A server that restarts writes as one name with a higher epoch, so the zombie it

@@ -859,6 +859,37 @@ class CreatesOnRedis:
         return stream.backend or ""
 
 
+@workflow.defn
+class CreatesAfterAnIdleTime:
+    @workflow.run
+    async def run(self) -> str:
+        await workflow.create_stream(Events)
+        await workflow.sleep(timedelta(seconds=1.5))
+        try:
+            await workflow.create_stream(Events)
+        except streams.StreamExpiredError as err:
+            return err.reason
+        return "created"
+
+
+async def test_create_of_an_expired_workflow_stream_raises(client: Client):
+    # An open Workflow Stream expires one safety TTL after its last write.
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(default=True, safety_ttl=timedelta(milliseconds=500))
+    ]
+    expiring = Client(**config)
+    async with new_worker(expiring, CreatesAfterAnIdleTime) as worker:
+        assert (
+            await expiring.execute_workflow(
+                CreatesAfterAnIdleTime.run,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+            )
+            == "stream_expired"
+        )
+
+
 async def test_default_is_native_with_no_default_backend(client: Client):
     # With no backend marked default=True, the default is native, which this SDK lacks. The
     # Redis calls still pick the registered Redis backend, and the memory one stands in for it.

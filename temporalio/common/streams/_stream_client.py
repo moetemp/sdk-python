@@ -412,6 +412,10 @@ def create(
                 f"The Stream {id} was created and closed before",
                 reason="stream_closed",
             )
+        if response.status == stream_pb.StreamStatus.STREAM_STATUS_EXPIRED:
+            raise _errors.StreamExpiredError(
+                f"The Stream {id} expired", reason="stream_expired"
+            )
         stream = ClientStream(id=id, backend=backend_name, definition=definition)
         return stream._bind(client, calls)
 

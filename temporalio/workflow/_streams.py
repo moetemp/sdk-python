@@ -54,7 +54,9 @@ def create_stream(
             that of the Worker's backend.
 
     Raises:
-        StreamError: The backend refused the create, such as for another Retention.
+        StreamError: The backend refused the create, such as for another Retention, or
+            ``StreamClosedError`` and ``StreamExpiredError`` for a Stream of that id that
+            closed or expired.
         ReadOnlyContextError: The code must not change state, such as a query handler.
         StreamConfigError: No Stream backend is on the Worker, none of that name, or none
             has ``default=True`` for a create with no backend. It fails the Workflow Task,
