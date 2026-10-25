@@ -451,9 +451,13 @@ def client_stream(
                 f"The handle is of the backend {stream.backend}, not {backend}"
             )
         backend = backend or stream.backend
+    stream_id = stream.id if stream else id
+    if not stream_id:
+        # An empty id would fail only at the first call, with no cause in it.
+        raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
     handle = ClientStream(
-        id=stream.id if stream else id or "",
+        id=stream_id,
         workflow_id=stream.workflow_id if stream else None,
         first_execution_run_id=stream.first_execution_run_id if stream else None,
         backend=backend_name,

@@ -420,6 +420,15 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
     assert not ran
 
 
+async def test_empty_stream_id_raises_with_no_call(client: Client):
+    client, extension = fake_client(client)
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Events, id="")
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Events, stream=streams.WorkflowStream(id=""))
+    assert not extension.namespaces
+
+
 async def test_create_of_an_expired_stream_raises(stream_client: Client):
     # An open client Stream expires one Retention after its last write.
     stream_id = f"expired-{uuid.uuid4()}"

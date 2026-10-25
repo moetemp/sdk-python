@@ -942,6 +942,8 @@ class Client:
         Raises:
             StreamConfigError: The client has no backend of that name, or none has
                 ``default=True`` for a call with no backend.
+            TypeError: Neither or both of ``id`` and ``stream`` are given.
+            ValueError: The id is empty, or ``backend`` is not the handle's backend.
         """
         from temporalio.common.streams import _stream_client
 
