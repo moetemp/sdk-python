@@ -187,7 +187,7 @@ async def _pages(
     wait_new_records: bool,
 ) -> AsyncGenerator[models.ReadRecordsResponse, None]:
     # A read that waits long-polls each page. A read with no wait reads pages until one has no
-    # Record.
+    # Record and moves no further.
     if request.last:
         # The newest Records come in one page that never waits. A read that follows goes on
         # after them.
@@ -206,7 +206,12 @@ async def _pages(
         yield page
         if page.done:
             return
-        if not wait_new_records and (not page.records or page.next_offset is None):
+        if not wait_new_records and (
+            page.next_offset is None
+            # A Store scans a limited number of entries per call, so an empty page that moved
+            # on stopped in Records that a Topic filter left out, not at the newest Record.
+            or (not page.records and page.next_offset <= (request.from_offset or 0))
+        ):
             return
         if page.next_offset is not None:
             request = dataclasses.replace(request, from_offset=page.next_offset)

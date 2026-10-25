@@ -288,6 +288,17 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     ] == ["b"]
 
 
+async def test_no_wait_read_goes_past_records_of_other_topics(stream_client: Client):
+    # A Store scans at most 10,000 entries per call, so the first pages of this read are empty.
+    stream = await redis.create(stream_client, Events, id=f"scan-{uuid.uuid4()}")
+    for _ in range(11):
+        await stream.topic(Events.tokens).publish(*["x"] * 1000)
+    turn = await stream.topic(Events.turns).publish(Turn("model"))
+    turns = stream.subscribe(Events.turns, wait_new_records=False)
+    assert [item.data async for item in turns] == [Turn("model")]
+    assert turns.next_offset == turn + 1
+
+
 async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"last-{uuid.uuid4()}")
     tokens = stream.topic(Events.tokens)
