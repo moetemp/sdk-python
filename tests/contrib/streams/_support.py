@@ -38,4 +38,4 @@ def crate_file(relative: str) -> Path:
 
 
 def vectors(name: str) -> object:
-    return json.loads(crate_file(f"testdata/{name}").read_text())
+    return json.loads(crate_file(f"testdata/{name}").read_text(encoding="utf-8"))

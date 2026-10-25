@@ -27,8 +27,8 @@ _SCRIPTS = Path(__file__).parents[3] / "scripts" / "_proto"
     ],
 )
 def test_vendored_protos_match_the_crate(relative: str):
-    crate = crate_file(f"protos/{relative}").read_text()
-    assert (_SCRIPTS / relative).read_text() == crate
+    crate = crate_file(f"protos/{relative}").read_text(encoding="utf-8")
+    assert (_SCRIPTS / relative).read_text(encoding="utf-8") == crate
 
 
 def test_stream_ids_match_the_crate():
