@@ -18,7 +18,7 @@ from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
 from temporalio.workflow import NondeterminismError
-from tests.contrib.streams._support import create_owned, on_native
+from tests.contrib.streams._support import on_native
 from tests.contrib.streams.test_redis import _Rot13Codec
 from tests.helpers import new_worker
 
@@ -288,7 +288,7 @@ class CountsTokens:
 async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Client):
     # A Redis page is a History marker, and the server terminates a run whose marker is over
     # 2 MiB. So a page of large Records splits.
-    stream = await create_owned(stream_client, Events, id=f"big-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"big-{uuid.uuid4()}")
     for _ in range(25):
         await stream.topic(Events.tokens).publish("x" * 100_000)
     async with new_worker(stream_client, CountsTokens) as worker:

@@ -25,7 +25,7 @@ from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
-from tests.contrib.streams._support import create_owned, on_native
+from tests.contrib.streams._support import on_native
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
@@ -235,7 +235,7 @@ class ClosesAReceivedStream:
 
 
 async def test_workflow_closes_only_its_own_streams(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"owned-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"owned-{uuid.uuid4()}")
     async with new_worker(stream_client, ClosesAReceivedStream) as worker:
         assert (
             await stream_client.execute_workflow(

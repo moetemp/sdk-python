@@ -1,9 +1,11 @@
 """Streams of Records that Workflows, Activities and clients write and read.
 
 A Stream definition, a class with ``@streams.defn``, gives the Stream name and the type of each
-Topic. Workflow code creates a Stream with :py:func:`temporalio.workflow.create_stream`. A
-client gets a Workflow's Stream with :py:meth:`temporalio.client.WorkflowHandle.stream`, and
-any Stream with :py:meth:`temporalio.client.Client.stream`. A Stream is data: a Workflow
+Topic. Workflow code creates a Stream with :py:func:`temporalio.workflow.create_stream`, a
+Standalone Activity with :py:func:`temporalio.activity.create_stream`, and a client with
+:py:meth:`temporalio.client.Client.create_stream`. A client gets a Workflow's Stream with
+:py:meth:`temporalio.client.WorkflowHandle.stream`, and any Stream with
+:py:meth:`temporalio.client.Client.stream`. A Stream is data: a Workflow
 passes it to an Activity, a child Workflow or the next run as an argument, and the
 parameter's type gives the handle class of that context, such as :py:class:`ActivityStream`.
 

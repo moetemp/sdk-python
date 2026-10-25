@@ -91,7 +91,8 @@ class ClientStream(StreamHandle[E]):
     """A Stream that a client writes, reads and closes.
 
     Get one from :py:meth:`temporalio.client.Client.stream`,
-    :py:meth:`temporalio.client.WorkflowHandle.stream` or a backend's create, such as
+    :py:meth:`temporalio.client.WorkflowHandle.stream`,
+    :py:meth:`temporalio.client.Client.create_stream`, or a backend's create, such as
     :py:func:`temporalio.contrib.stream.create`.
 
     Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. The
@@ -406,10 +407,10 @@ def create(
     *,
     id: str,
     retention: timedelta | None,
-    backend: str,
+    backend: str | None,
 ) -> Creating[ClientStream[E]]:
-    """Create a Stream that this client owns on a registered backend. See
-    :py:func:`temporalio.contrib.stream.create`.
+    """Create a Stream that this client owns. See
+    :py:meth:`temporalio.client.Client.create_stream`.
     """
 
     async def create() -> ClientStream[E]:

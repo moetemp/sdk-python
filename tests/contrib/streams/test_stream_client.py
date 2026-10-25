@@ -19,7 +19,6 @@ from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
-from tests.contrib.streams._support import create_owned
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
@@ -166,7 +165,7 @@ class WriteToStream:
 
 
 async def test_client_stream_takes_workflow_writes(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"chat-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"chat-{uuid.uuid4()}")
     assert await stream.get_offset() == 0
     first = await stream.topic(Events.turns).publish(Turn("client"))
     last = await stream.topic(Events.tokens).publish("a", "b")
@@ -237,20 +236,47 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
         await stream.close()
 
 
+async def test_client_creates_a_stream_on_its_default_backend(stream_client: Client):
+    # A client owns the Stream it creates, as a Workflow and a Standalone Activity own theirs.
+    # It goes on the default backend: native, unless a registered backend has default=True.
+    lane, _ = _plugin.client_backend(stream_client, None)
+    stream_id = f"own-{uuid.uuid4()}"
+    stream = await stream_client.create_stream(Events, id=stream_id)
+    assert (stream.backend, stream.workflow_id) == (lane, None)
+    await stream.topic(Events.tokens).publish("a", "b")
+    # A create of the same id and Retention finds the Stream.
+    again = await stream_client.create_stream(Events, id=stream_id, backend=lane)
+    await again.topic(Events.tokens).publish("c")
+    await again.close(result="done")
+    items = [
+        item async for item in stream_client.stream(Events, id=stream_id).subscribe()
+    ]
+    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+        "a",
+        "b",
+        "c",
+    ]
+    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+    with pytest.raises(streams.StreamClosedError):
+        await stream_client.create_stream(Events, id=stream_id)
+    with pytest.raises(streams.StreamConfigError, match="elsewhere"):
+        await stream_client.create_stream(Events, id=stream_id, backend="elsewhere")
+
+
 async def test_async_with_closes_a_client_stream(stream_client: Client):
-    async with create_owned(stream_client, Events, id=f"block-{uuid.uuid4()}") as done:
+    async with stream_client.create_stream(Events, id=f"block-{uuid.uuid4()}") as done:
         await done.topic(Events.tokens).publish("a")
     failed = stream_client.stream(Events, id=f"block-{uuid.uuid4()}")
     with pytest.raises(ValueError):
-        async with create_owned(stream_client, Events, id=failed.id):
+        async with stream_client.create_stream(Events, id=failed.id):
             raise ValueError("turn failed")
-    async with await create_owned(
-        stream_client, Events, id=f"block-{uuid.uuid4()}"
+    async with await stream_client.create_stream(
+        Events, id=f"block-{uuid.uuid4()}"
     ) as early:
         await early.close(result="early")
     cancelled = stream_client.stream(Events, id=f"block-{uuid.uuid4()}")
     with pytest.raises(asyncio.CancelledError):
-        async with create_owned(stream_client, Events, id=cancelled.id):
+        async with stream_client.create_stream(Events, id=cancelled.id):
             raise asyncio.CancelledError()
     for stream, result, failure, status in (
         (done, None, None, streams.CloseStatus.COMPLETED),
@@ -267,7 +293,7 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
 
 
 async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"resume-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"resume-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a")
     turn = await stream.topic(Events.turns).publish(Turn("model"))
     tokens = stream.subscribe(Events.tokens, wait_new_records=False)
@@ -289,7 +315,7 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
 
 
 async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"last-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"last-{uuid.uuid4()}")
     tokens = stream.topic(Events.tokens)
     await tokens.publish("a", "b", "c")
     await stream.topic(Events.turns).publish(Turn("model"))
@@ -314,7 +340,7 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
 
 
 async def test_read_type_decodes_topics_outside_the_definition(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"typed-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"typed-{uuid.uuid4()}")
     await stream.topic("extra", type=Turn).publish(Turn("extra"))
     await stream.topic(Events.tokens).publish("a")
 
@@ -327,7 +353,7 @@ async def test_read_type_decodes_topics_outside_the_definition(stream_client: Cl
 
 
 async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"buffered-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"buffered-{uuid.uuid4()}")
     async with streams.BufferedPublisher(stream) as publisher:
         publisher.publish(Events.turns, Turn("user"))
         publisher.publish(Events.tokens, "a", "b")
@@ -348,7 +374,7 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
 
 
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"named-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"named-{uuid.uuid4()}")
     # A server that restarts writes as one name with a higher epoch, so the zombie it
     # replaces can't write after it.
     before = stream.producer("ingest", epoch=1)

@@ -37,7 +37,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.contrib.streams._support import create_owned, on_native
+from tests.contrib.streams._support import on_native
 from tests.helpers import new_worker
 
 
@@ -599,9 +599,9 @@ async def test_client_close_goes_through_the_payload_codec(stream_client: Client
         DataConverter.default, payload_codec=_Rot13Codec()
     )
     codec_client = Client(**config)
-    done = await create_owned(codec_client, Events, id=f"done-{uuid.uuid4()}")
+    done = await codec_client.create_stream(Events, id=f"done-{uuid.uuid4()}")
     await done.close(result=Turn("done"))
-    failed = await create_owned(codec_client, Events, id=f"failed-{uuid.uuid4()}")
+    failed = await codec_client.create_stream(Events, id=f"failed-{uuid.uuid4()}")
     await failed.close(failure=ApplicationError("bad turn"))
     [closed] = [item async for item in done.subscribe()]
     assert isinstance(closed, streams.Closed)
@@ -678,7 +678,7 @@ async def test_backend_replays_a_history_made_without_it(
 async def test_backend_shutdown_after_client_writes(stream_client: Client):
     backend = _plugin.backend_of(stream_client, None)
     assert isinstance(backend, ExtensionStreamBackend)
-    stream = await create_owned(stream_client, Events, id=f"shutdown-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"shutdown-{uuid.uuid4()}")
     async with streams.BufferedPublisher(stream.topic(Events.tokens)) as tokens:
         tokens.publish("buffered")
     await backend.shutdown()
@@ -795,7 +795,7 @@ async def test_final_failure_under_a_retry_policy(
 
 
 async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"timer-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"timer-{uuid.uuid4()}")
     first = await stream.topic(Events.tokens).publish("one")
     seen: list[streams.Record[Any]] = []
 
@@ -970,7 +970,7 @@ async def test_write_to_a_missing_stream_raises_at_the_await(stream_client: Clie
 
 
 async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Client):
-    stream = await create_owned(stream_client, Events, id=f"closed-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(Events, id=f"closed-{uuid.uuid4()}")
     await stream.close()
     async with new_worker(stream_client, WritesToStream) as worker:
         assert (

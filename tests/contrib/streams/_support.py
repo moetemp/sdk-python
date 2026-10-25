@@ -50,23 +50,3 @@ def on_native(client: Any) -> bool:
 
     name, _ = _plugin.client_backend(client, None)
     return name == "native"
-
-
-def create_owned(
-    client: Any, definition: Any, *, id: str, retention: Any = None
-) -> Any:
-    """Create a Stream that the client owns, on the client's default backend.
-
-    ``temporalio.contrib.stream.create`` makes one on Redis. The native server keeps one too,
-    with no public create, so a native lane makes it through the internal call. Await the
-    result, or use it in ``async with``.
-    """
-    from temporalio.common.streams import _plugin, _stream_client
-    from temporalio.contrib import stream as redis
-
-    name, _ = _plugin.client_backend(client, None)
-    if name != "native":
-        return redis.create(client, definition, id=id, retention=retention)
-    return _stream_client.create(
-        client, definition, id=id, retention=retention, backend=name
-    )

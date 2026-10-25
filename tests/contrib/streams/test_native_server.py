@@ -19,7 +19,6 @@ from temporalio.common.streams._native import POSITIONS_TYPE
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.contrib.streams import test_redis
-from tests.contrib.streams._support import create_owned
 from tests.contrib.streams.test_workflow_reads import (
     Events,
     Reader,
@@ -65,7 +64,7 @@ class WritesNativeAndRedis:
 
 
 async def test_native_client_round_trip(native_client: Client):
-    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     assert await stream.topic(Events.tokens).publish("a", "b")
     await stream.close(result="done")
     items = [item async for item in stream.subscribe()]
@@ -264,7 +263,7 @@ async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
 ):
     # The server resolves END on each call, so the wait and the read after it start where the
     # first page ended. Else the Record that wakes the reader is behind its start.
-    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("old")
     async with new_worker(native_client, ReadsNewTokens) as worker:
         reader = await native_client.start_workflow(
@@ -303,7 +302,7 @@ class ClosesItsRead:
 
 async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
     # A wake may park for days, so a read that its code closed must not keep it.
-    stream = await create_owned(native_client, Events, id=f"native-{uuid.uuid4()}")
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     async with new_worker(native_client, ClosesItsRead) as worker:
         reader = await native_client.start_workflow(
             ClosesItsRead.run,
@@ -335,8 +334,7 @@ async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
 ):
     # Retention trims a Stream that no Workflow owns under its readers, and a replay reads the
     # Stream again. So the read ends in time for the run to continue as new.
-    stream = await create_owned(
-        native_client,
+    stream = await native_client.create_stream(
         Events,
         id=f"native-{uuid.uuid4()}",
         retention=timedelta(seconds=6),
