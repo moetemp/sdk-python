@@ -321,7 +321,9 @@ async def test_no_wait_read_goes_past_records_of_other_topics(stream_client: Cli
         await stream.topic(Events.tokens).publish(*["x"] * 1000)
     turn = await stream.topic(Events.turns).publish(Turn("model"))
     turns = stream.subscribe(Events.turns, wait_new_records=False)
-    assert [item.data async for item in turns] == [Turn("model")]
+    assert [item.data async for item in turns if isinstance(item, streams.Record)] == [
+        Turn("model")
+    ]
     assert turns.next_offset == turn + 1
 
 
@@ -403,7 +405,9 @@ async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
         await anext(read)
     assert read.next_offset == bad + 1
     resumed = reader.subscribe(offset=read.next_offset, wait_new_records=False)
-    assert [item.data async for item in resumed] == ["after"]
+    assert [
+        item.data async for item in resumed if isinstance(item, streams.Record)
+    ] == ["after"]
 
 
 async def test_async_with_refuses_a_workflow_stream_before_the_block(
@@ -425,7 +429,11 @@ async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
     stream = await redis.create(stream_client, Events, id=f"chat-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a", "b", "c")
     read = stream.subscribe(wait_new_records=False)
-    assert [item.data async for item in read] == ["a", "b", "c"]
+    assert [item.data async for item in read if isinstance(item, streams.Record)] == [
+        "a",
+        "b",
+        "c",
+    ]
     assert read._shown == {}
 
 

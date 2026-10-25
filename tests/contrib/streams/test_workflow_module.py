@@ -367,9 +367,8 @@ async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client)
             closed = items[-1]
             assert isinstance(closed, streams.Closed), mode
             assert closed.status == streams.CloseStatus.FAILED
-            assert (
-                closed.failure is not None and closed.failure.message == "block failed"
-            )
+            assert isinstance(closed.failure, ApplicationError)
+            assert closed.failure.message == "block failed"
         # A close at the run's end is a command after the run's code, also on replay.
         replayer = Replayer(
             workflows=[EndsItsBlock],
@@ -385,7 +384,7 @@ waiting: dict[str, asyncio.Event] = {}
 
 @activity.defn
 async def waits_for_cancel() -> None:
-    waiting[activity.info().workflow_id].set()
+    waiting[activity.info().workflow_id or ""].set()
     while True:
         activity.heartbeat()
         await asyncio.sleep(0.1)
