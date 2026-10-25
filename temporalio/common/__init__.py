@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from temporalio.common._streams._plugin import StreamBackend
     from temporalio.common._streams._reader import Subscription
     from temporalio.common._streams._stream_client import ClientStream
+    from temporalio.common._streams._workflow import WorkflowStream
 
 __all__ = [
     "ActivityIDConflictPolicy",
@@ -130,6 +131,7 @@ __all__ = [
     "WorkerDeploymentVersion",
     "WorkflowIDConflictPolicy",
     "WorkflowIDReusePolicy",
+    "WorkflowStream",
     "defn",
 ]
 
@@ -1614,6 +1616,7 @@ _STREAM_NAMES = frozenset(
         "StreamUnsupportedError",
         "Subscription",
         "Superseded",
+        "WorkflowStream",
         "defn",
     ]
 )

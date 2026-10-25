@@ -151,6 +151,11 @@ from ._sandbox import (
     logger,
     unsafe,
 )
+from ._streams import (
+    create_stream,
+    create_stream_nowait,
+    stream_handle,
+)
 from ._workflow_ops import (
     ChildWorkflowCancellationType,
     ChildWorkflowConfig,
@@ -258,6 +263,9 @@ __all__ = [
     "SandboxImportNotificationPolicy",
     "logger",
     "unsafe",
+    "create_stream",
+    "create_stream_nowait",
+    "stream_handle",
     "ChildWorkflowCancellationType",
     "ChildWorkflowConfig",
     "ChildWorkflowHandle",
