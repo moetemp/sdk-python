@@ -351,12 +351,12 @@ class ClientStream(StreamHandle[E]):
             return await self._access().get_offset()
 
     def _check_close(self) -> None:
-        if self._workflow_id:
-            # A Workflow's Stream closes only from its run chain. The Store refuses a client's
-            # close too, and this error comes with no call.
+        if self._workflow_id or self._activity_id:
+            # A Workflow's Stream closes only from its run chain, and a Standalone Activity's
+            # only from that Activity. The Store refuses a client's close too.
             raise _errors.StreamNotOwnerError(
                 f"Can't close the Stream {self._id or self._stream_name} from a client, since "
-                "a Workflow owns it",
+                f"{'a Workflow' if self._workflow_id else 'an Activity'} owns it",
                 reason="stream_not_owner",
             )
 
@@ -375,7 +375,8 @@ class ClientStream(StreamHandle[E]):
         ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
 
         Raises:
-            StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
+            StreamNotOwnerError: A Workflow or a Standalone Activity owns the Stream, so only
+                its run chain or that Activity closes it.
         """
         self._check_close()
         self._closed = True
@@ -386,7 +387,8 @@ class ClientStream(StreamHandle[E]):
         """Use the Stream in ``async with``, which closes it at the end.
 
         Raises:
-            StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
+            StreamNotOwnerError: A Workflow or a Standalone Activity owns the Stream, so only
+                its run chain or that Activity closes it.
         """
         # The close at the end would raise and hide the block's own error.
         self._check_close()

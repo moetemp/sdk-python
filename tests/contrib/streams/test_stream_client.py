@@ -450,6 +450,18 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
     assert not ran
 
 
+async def test_async_with_refuses_an_activity_stream_before_the_block(
+    stream_client: Client,
+):
+    # Only the Standalone Activity closes its Stream, so the block end would raise too.
+    handle = stream_client.get_activity_handle("tool-1", run_id="run-1")
+    ran = False
+    with pytest.raises(streams.StreamNotOwnerError, match="an Activity owns it"):
+        async with handle.stream(Events):
+            ran = True
+    assert not ran
+
+
 async def test_record_over_the_store_limit_raises_too_large(stream_client: Client):
     # The client's writer splits a batch at the Store's limit, so only a Record can be over.
     stream = await stream_client.create_stream(Events, id=f"large-{uuid.uuid4()}")
