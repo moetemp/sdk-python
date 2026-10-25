@@ -13,13 +13,14 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Concatenate,
+    TypeVar,
     cast,
     overload,
 )
 
 import nexusrpc
 from nexusrpc import OutputT
-from typing_extensions import Required, Self, TypedDict
+from typing_extensions import Required, Self, TypedDict, Unpack
 
 import temporalio.activity
 import temporalio.api.workflowservice.v1
@@ -110,10 +111,19 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.common import StreamBackend
+    from temporalio.common import (
+        ClientStream,
+        Creating,
+        StreamBackend,
+        StreamDefinition,
+        StreamHandle,
+        StreamOptions,
+    )
 
     from ._interceptor import Interceptor
     from ._plugin import Plugin
+
+_StreamPayloadT = TypeVar("_StreamPayloadT")
 
 
 class Client:
@@ -909,6 +919,83 @@ class Client:
             result_run_id=run_id,
             first_execution_run_id=first_execution_run_id,
             result_type=result_type,
+        )
+
+    def create_stream(
+        self,
+        definition: type[StreamDefinition[_StreamPayloadT]],
+        *,
+        id: str,
+        backend: str | None = None,
+        **options: Unpack[StreamOptions],
+    ) -> Creating[ClientStream[_StreamPayloadT]]:
+        """Create a Stream that the client owns, or get the one that exists.
+
+        A create is create-or-get by Stream id. On a Stream that exists, it ignores ``options``
+        and returns that Stream. A Stream must exist before its first publish. The client closes
+        a Stream that it owns, and a Workflow only writes to it. Await the call to get the
+        handle, or use it in ``async with``, which closes the Stream at the end of the block::
+
+            async with client.create_stream(Turns, id="chat-42") as stream:
+                await stream.publish(Turn("user", "hi"))
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class.
+            id: The Stream id, which the caller picks, as for a Workflow id.
+            backend: The name of the backend. Defaults to the registered backend with
+                ``default=True``.
+            options: The options of a new Stream, such as ``retention``. See
+                :py:class:`temporalio.common.StreamOptions`.
+
+        Raises:
+            StreamConfigError: The client has no backend with that name, or no backend has
+                ``default=True`` and the call gives no backend. No call is made.
+            StreamClosedError: A Stream of that id was created and closed before.
+            StreamExpiredError: A Stream of that id expired.
+        """
+        from temporalio.common._streams import _stream_client
+
+        return _stream_client.create(
+            self, definition, id=id, backend=backend, options=options
+        )
+
+    def stream(
+        self,
+        definition: type[StreamDefinition[_StreamPayloadT]],
+        *,
+        id: str | None = None,
+        stream: StreamHandle[Any] | None = None,
+        backend: str | None = None,
+    ) -> ClientStream[_StreamPayloadT]:
+        """Get a Stream by its id, or from a handle that came in data, such as in a Record.
+
+        This method makes no call. To create a Stream that the client owns, use
+        :py:meth:`create_stream`. A Workflow hands out its Stream, such as through a query.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class.
+            id: The Stream id.
+            stream: A handle of the Stream, such as one in a Record. The result keeps its id,
+                owner and backend.
+            backend: The name of the backend. Defaults to the handle's backend, or else to the
+                registered backend with ``default=True``.
+
+        Raises:
+            StreamConfigError: The client has no backend with that name, or no backend has
+                ``default=True`` and the call gives no backend.
+            TypeError: Neither or both of ``id`` and ``stream`` are given.
+            ValueError: The id is empty, or ``backend`` is not the handle's backend.
+        """
+        from temporalio.common._streams import _stream_client
+
+        return _stream_client.client_stream(
+            self, definition, id=id, stream=stream, backend=backend
         )
 
     def get_workflow_handle_for(

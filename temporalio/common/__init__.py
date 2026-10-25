@@ -63,11 +63,14 @@ if TYPE_CHECKING:
         Superseded,
     )
     from temporalio.common._streams._plugin import StreamBackend
+    from temporalio.common._streams._reader import Subscription
+    from temporalio.common._streams._stream_client import ClientStream
 
 __all__ = [
     "ActivityIDConflictPolicy",
     "ActivityIDReusePolicy",
     "AutoUpgradeVersioningOverride",
+    "ClientStream",
     "CloseStatus",
     "Closed",
     "Creating",
@@ -119,6 +122,7 @@ __all__ = [
     "StreamStorageError",
     "StreamTooLargeError",
     "StreamUnsupportedError",
+    "Subscription",
     "Superseded",
     "TypedSearchAttributes",
     "VersioningBehavior",
@@ -1585,6 +1589,7 @@ class _CompositeEvent:  # pyright: ignore[reportUnusedClass]
 # so this module imports the Stream names on first use.
 _STREAM_NAMES = frozenset(
     [
+        "ClientStream",
         "CloseStatus",
         "Closed",
         "Creating",
@@ -1607,6 +1612,7 @@ _STREAM_NAMES = frozenset(
         "StreamStorageError",
         "StreamTooLargeError",
         "StreamUnsupportedError",
+        "Subscription",
         "Superseded",
         "defn",
     ]

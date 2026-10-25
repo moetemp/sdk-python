@@ -25,9 +25,12 @@ from temporalio.common._streams._items import (
     Superseded,
 )
 from temporalio.common._streams._plugin import StreamBackend
+from temporalio.common._streams._reader import Subscription
+from temporalio.common._streams._stream_client import ClientStream
 
 __all__ = [
     "END",
+    "ClientStream",
     "CloseStatus",
     "Closed",
     "Creating",
@@ -49,6 +52,7 @@ __all__ = [
     "StreamStorageError",
     "StreamTooLargeError",
     "StreamUnsupportedError",
+    "Subscription",
     "Superseded",
     "defn",
 ]
