@@ -331,7 +331,7 @@ async def close_it(stream: common.ActivityStream[Events]) -> str:
 @workflow.defn
 class Closing:
     @workflow.run
-    async def run(self) -> list[str]:
+    async def run(self, native: bool) -> list[str]:
         stream = await workflow.create_stream(Events)
         backend = await workflow.execute_activity(
             wrong_backend,
@@ -349,9 +349,10 @@ class Closing:
             common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        # A handle with only the id names no Workflow, so the Store refuses it.
+        # A handle with only the id names no Workflow, so the Store refuses it. The native
+        # server finds a Workflow's Stream only by its owner fields.
         by_id = await workflow.execute_local_activity(
-            close_it,
+            only_closes if native else close_it,
             common.ActivityStream(id=stream.id),
             start_to_close_timeout=timedelta(seconds=30),
         )
@@ -360,21 +361,22 @@ class Closing:
 
 
 async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
+    native = on_native(stream_client)
     async with new_worker(
-        stream_client, Closing, activities=[wrong_backend, close_it]
+        stream_client, Closing, activities=[wrong_backend, close_it, only_closes]
     ) as worker:
         handle = await stream_client.start_workflow(
-            Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+            Closing.run, native, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         # An Activity writes to the Workflow's Stream but can't end it for every reader.
         assert await handle.result() == [
             "config",
             "stream_not_owner",
             "stream_not_owner",
-            "stream_not_owner",
+            "stream_not_found" if native else "stream_not_owner",
         ]
         items = await read(handle)
-    assert [r.data for r in records(items)] == ["last", "last", "last"]
+    assert [r.data for r in records(items)] == ["last"] * (2 if native else 3)
     assert isinstance(items[-1], common.Closed)
     assert items[-1].result == "closed by the run"
 
