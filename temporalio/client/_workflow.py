@@ -208,7 +208,7 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
             definition: The Stream definition class, with the same name as in the Workflow's
                 create.
             backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``, else to ``native``.
+                ``default=True``, or else to ``native``.
 
         Raises:
             StreamConfigError: The client has no backend with that name.

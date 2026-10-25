@@ -1,6 +1,6 @@
 """Reads of a Stream in Workflow code.
 
-Each page is a call whose answer is in History, so a replay reads the same items. A Stream
+Each page is a call whose result is in History, so a replay reads the same items. A Stream
 backend's outbound interceptor reads a page with ``_temporal_stream_read_page``. A backend
 whose server parks reads also starts a wake with ``_temporal_stream_start_wake``.
 """
@@ -33,15 +33,15 @@ from temporalio.common._streams.system import models
 
 Item = Record[Any] | Superseded | Closed
 
-# A backend that can't park a read pauses on a durable timer after a page with no Record,
-# from the first pause up to the last.
+# A backend that can't park a read waits on a durable timer after a page with no Record. The
+# pause doubles from the first to the last.
 _FIRST_PAUSE = timedelta(seconds=1)
 _LAST_PAUSE = timedelta(seconds=60)
-# A run may have 30 pending Nexus operations on the server. Wakes take at most 20, so the run's
-# closes and its own operations still fit, and a read past them pauses on a timer.
+# A run can have 30 pending Nexus operations. Wakes use at most 20, so the run's closes and its
+# own operations still fit. A read past the cap waits on a timer.
 _MAX_WAKES = 20
 # How long a read waits for a close after the Stream's owner ended. The close of a run comes
-# from its Worker, so it may come after the run closed, or never.
+# from its Worker, so it can arrive after the run closed, or never.
 _OWNER_END_GRACE = timedelta(minutes=1)
 
 
@@ -72,7 +72,7 @@ def reader_of(backend: str) -> Any:
 class _ReadState:
     # The run's wakes that wait on the server, with their reads, so the run's end cancels them.
     wakes: dict[Any, WorkflowItems] = field(default_factory=dict)
-    # The wakes that the server has not taken yet, which count against the cap too.
+    # The wakes that the server hasn't accepted yet, which count against the cap too.
     starting: int = 0
     # The lowest offset that the run's replayed pages read, per Stream, and whether a live
     # page sent it.
@@ -113,7 +113,7 @@ class WorkflowItems(Subscription[Any]):
     It ends at a close, or at the newest Record when ``wait_new_records`` is False. It also
     ends when this run should continue as new, after at least one page, and then
     :py:attr:`continue_as_new_suggested` is True. Pass
-    :py:attr:`Subscription.next_offset` to the next run, which reads on from there.
+    :py:attr:`Subscription.next_offset` to the next run, which continues reading from there.
 
     .. warning::
         This API is experimental.
@@ -140,8 +140,8 @@ class WorkflowItems(Subscription[Any]):
             stream=ref, topics=list(topics or []), topic_prefixes=list(topic_prefixes)
         )
         if offset is End.END:
-            # END is only the first page's start. Each answer's next offset pins later
-            # pages and the waits.
+            # END applies only to the first page. Later pages and the waits start at the last
+            # page's next offset.
             self._request.start = stream_pb.ReadStart.READ_START_END
         elif offset:
             self._request.from_offset = offset
@@ -164,14 +164,14 @@ class WorkflowItems(Subscription[Any]):
         )
         self.continue_as_new_suggested = False
         """Whether the read ended because this run should continue as new. The server
-        suggests it for the run's History or for the Records that the reader keeps on the
-        server."""
+        suggests it because of the run's History size, or the Records that the reader keeps
+        on the server."""
         self.owner_ended = False
-        """Whether the read ended because the run chain that owns the Stream ended with no
+        """Whether the read ended because the run chain that owns the Stream ended without a
         close, such as a terminated run on Redis."""
 
     async def _pages(self) -> AsyncGenerator[Item, None]:
-        # Gives the items of each page, and reads or waits when none is left.
+        # Yields the items of each page, and reads or waits when none are left.
         while True:
             while not self._queue:
                 if self._ended or self._closed:
@@ -188,7 +188,7 @@ class WorkflowItems(Subscription[Any]):
             yield item
 
     async def aclose(self) -> None:
-        """End the read. A wait on the server ends with it."""
+        """End the read. This also cancels a wait on the server."""
         self._closed = True
         self._queue.clear()
         if self._wake is not None:
@@ -206,7 +206,7 @@ class WorkflowItems(Subscription[Any]):
             self._started = True
             if self._create_wait:
                 self._create_until = now + self._create_wait
-        # A read ends only after a page, so next_offset says where the next run goes on.
+        # A read ends only after a page, so next_offset is where the next run continues.
         if self._paged and self._suggests_continue_as_new():
             self.continue_as_new_suggested = True
             self._ended = True
@@ -240,8 +240,8 @@ class WorkflowItems(Subscription[Any]):
         await self._wait_for_records()
 
     def _waiting_request(self) -> stream_pb.ReadRecordsRequest:
-        # The next read with the backend's waits. A backend that parks reads on the server
-        # takes the waits off its pages and puts them on its wakes.
+        # The next read request, with the backend's waits. A backend that parks reads on the
+        # server moves the waits from its pages to its wakes.
         request = stream_pb.ReadRecordsRequest()
         request.CopyFrom(self._request)
         if self._wait_new_records:
@@ -311,7 +311,7 @@ class WorkflowItems(Subscription[Any]):
 
     async def _wait_for_records(self) -> None:
         if not self._can_wake():
-            # The Store can't wake a Workflow, or the run has the most wakes. A quiet Stream
+            # The Store can't wake a Workflow, or the run is at the wake cap. A quiet Stream
             # then costs one timer and one read per pause.
             await self._sleep()
             return
@@ -323,7 +323,7 @@ class WorkflowItems(Subscription[Any]):
             return
         request = self._waiting_request()
         if not self._wait_new_records:
-            # After the create, the read takes what is there and ends.
+            # After the create, the read reads what's there and ends.
             request.wait.FromTimedelta(_FIRST_PAUSE)
         try:
             await self._wake_once(request)
@@ -344,7 +344,7 @@ class WorkflowItems(Subscription[Any]):
 
     async def _wake_once(self, request: stream_pb.ReadRecordsRequest) -> None:
         # The server parks the wake until a Record passes the filter, the Stream closes, or
-        # the wait ends. Its answer holds no Records, and the next page reads them.
+        # the wait ends. The wake's answer has no Records, and the next page reads them.
         state = _read_state()
         state.starting += 1
         try:
@@ -355,7 +355,7 @@ class WorkflowItems(Subscription[Any]):
         wakes[wake] = self
         self._wake = wake
         if self._closed:
-            # The iterator closed while the server took the wake.
+            # The iterator closed while the server was accepting the wake.
             wake.cancel()
         try:
             answer = await wake
@@ -363,8 +363,8 @@ class WorkflowItems(Subscription[Any]):
             if self._closed or isinstance(
                 err.cause, temporalio.exceptions.TimeoutError
             ):
-                # A namespace may cap a Nexus operation below the wake's wait, which ends the
-                # wake as an empty one would.
+                # A namespace can cap a Nexus operation below the wake's wait. That timeout
+                # ends the wake as an empty answer would.
                 return
             raise error_of(err) from None
         finally:
@@ -374,7 +374,7 @@ class WorkflowItems(Subscription[Any]):
             self._request.start == stream_pb.ReadStart.READ_START_END
             and answer.next_offset
         ):
-            # A wait for the create answers where END was when the Stream came.
+            # A wait for the create returns the END position at the time of the create.
             self._request.from_offset = answer.next_offset
             self._request.ClearField("start")
 
@@ -426,7 +426,7 @@ def workflow_item(
         if isinstance(failure, temporalio.exceptions.FailureError) and failure.failure:
             # The model's converter keeps payloads raw for the Topic types.
             failure = _failure_converter().from_failure(failure.failure, converter)
-        # A close Record from before close statuses has none, and its failure tells.
+        # An older close Record has no status, so its failure decides the status.
         status = model.close_status or (
             CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
         )
@@ -457,7 +457,7 @@ def _failure_converter() -> temporalio.converter.FailureConverter:
 
 
 def error_of(err: BaseException) -> BaseException:
-    """The Stream error that a failed page carries as its cause, or the error itself.
+    """The Stream error in a failed page's cause, or the error itself.
 
     A page's failure is in History, so a replay raises the same error.
     """

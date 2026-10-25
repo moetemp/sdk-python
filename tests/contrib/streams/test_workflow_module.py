@@ -837,7 +837,7 @@ async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Cl
     # The two publishes merge under the Workflow's cap. The codec makes the merge larger than the
     # batch limit, so each publish is sent as its own batch.
     client = with_codec(stream_client, _GrowingCodec())
-    # The native server takes half the bytes of one append, so each publish there is smaller.
+    # The native server accepts half the bytes per append, so each publish there is smaller.
     size = 150_000 if on_native(stream_client) else 300_000
     async with new_worker(client, PublishesLargeValues) as worker:
         handle = await client.start_workflow(

@@ -1,4 +1,4 @@
-"""The native Stream backend, whose Streams the Temporal server keeps."""
+"""The native Stream backend, whose Streams the Temporal server stores."""
 
 from __future__ import annotations
 
@@ -35,27 +35,27 @@ from temporalio.common._streams.proto import v1 as ext_pb
 
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 
-# A wake's cancel ends it once the server has the cancel. The server drops the cancel of a run
-# that closed, so the run's end waits for it.
+# A wake's cancel completes after the server gets the cancel. The server drops the cancel of a
+# closed run, so the run's end waits for it.
 _WAIT_REQUESTED = temporalio.workflow.NexusOperationCancellationType.WAIT_REQUESTED
-# A close goes on when the run is cancelled, since the cancel may be what the close records.
+# A close continues when the run is cancelled, since the close can record that cancel.
 _ABANDON = temporalio.workflow.NexusOperationCancellationType.ABANDON
 # How long a wake parks on the server. A parked wake adds nothing to History, so an idle reader
 # costs nothing. The server caps it at `stream.maxWakeWait`, and an older server at 60 s.
 _WAKE_WAIT = timedelta(days=7)
 
-# A Workflow read's Local Activity answers with its positions only: the request, and the answer
-# with no Records. The codec step turns them back into the page before Workflow code sees it.
+# A Workflow read's Local Activity returns only positions, the request and the answer without
+# Records. The codec step turns them back into the page before Workflow code gets it.
 POSITIONS_TYPE = b"temporal.io/stream-read-positions"
 _COUNT_KEY = "temporal.io/stream-read-count"
 # The SHA-256 of the page's Records as the Store gave them, so a replay that reads other
 # Records fails.
 _DIGEST_KEY = "temporal.io/stream-read-digest"
-# The run that read the page. A reset run replays the old run's pages, which this process may
+# The run that read the page. A reset run replays the old run's pages, which this process might
 # never have read.
 _RUN_KEY = "temporal.io/stream-read-run"
-# The pages that this process read and no Workflow Task took yet. A Workflow Task takes its
-# pages, and the bound covers the runs that left the Worker before theirs.
+# The pages that this process read and no Workflow Task has used yet. A Workflow Task removes its
+# pages, and the size bound covers runs that left the Worker before their task.
 _CACHE_SIZE = 256
 _pages: OrderedDict[tuple[str, bytes], list[stream_pb.StreamRecord]] = OrderedDict()
 RANGE_GONE_TYPE = "STREAM_RANGE_GONE"
@@ -67,7 +67,8 @@ def _digest(records: Sequence[stream_pb.StreamRecord]) -> bytes:
 
 
 def _range_gone(stream_id: str, detail: str) -> temporalio.exceptions.ApplicationError:
-    # Retryable, so it fails the Workflow Task and not the run. The operator picks the way out.
+    # Retryable, so it fails the Workflow Task and not the run. The operator then resets or
+    # terminates the run.
     return temporalio.exceptions.ApplicationError(
         f"A recorded read of the Stream {stream_id} is no longer in the Store, so the run can't "
         f"replay: {detail}. Reset the run to a point before its reads of the Stream, or "
@@ -86,8 +87,8 @@ class _DirectReadCodec(
         inner: temporalio.converter.PayloadCodec | None,
         records: temporalio.converter.PayloadCodec | None,
     ) -> None:
-        # The runtime that a replay reads again on: the Worker's client's, or the Replayer's
-        # stream_client's.
+        # The runtime for a replay's second read. It's the Worker's client's runtime, or the
+        # Replayer's stream_client's.
         self._backend = backend
         self._inner = inner
         # Writers encode Records with no serialization context, so a page decodes with the
@@ -153,8 +154,8 @@ class _DirectReadCodec(
         count: int,
         digest: bytes,
     ) -> Sequence[stream_pb.StreamRecord]:
-        # The range is fixed by History, and a Stream only appends, so a read of the same range
-        # gives the same Records. It runs on replay, or when the page left the cache.
+        # History fixes the range, and a Stream only appends, so a read of the same range gives
+        # the same Records. This runs on replay, or when the page is no longer in the cache.
         request.to_offset = answer.next_offset
         stream_id = request.stream.id
         try:
@@ -184,7 +185,7 @@ class _DirectReadCodec(
 
 class _ConnectionRuntime:
     # The native runtime of one client, on that client's connection. A lazy client connects at
-    # its first call, so the runtime comes then too.
+    # its first call, so the runtime is built then too.
     def __init__(
         self, service: temporalio.service.ServiceClient, config: bytes
     ) -> None:
@@ -203,8 +204,8 @@ class _ConnectionRuntime:
             if service is None:
                 raise RuntimeError("The client of the native Stream backend is gone")
             bridge_client = await _bridge_client(service)
-            # Two first calls may both wait for the connection. One runtime serves both, so
-            # a writer that one opens is known to the other.
+            # Two first calls can both wait for the connection. One runtime serves both, so each
+            # sees the writers that the other opens.
             if self._streams is None:
                 self._streams = temporalio.bridge.streams.StreamRuntime.on_client(
                     _runtime_of(service)._core_runtime,
@@ -252,7 +253,7 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
     async def _temporal_stream_start_wake(
         self, request: stream_pb.ReadRecordsRequest
     ) -> temporalio.workflow.NexusOperationHandle[stream_pb.ReadRecordsResponse]:
-        # Its answer holds no Records, so History holds only offsets.
+        # The wake's answer has no Records, so History has only offsets.
         wake = stream_pb.ReadRecordsRequest()
         wake.CopyFrom(request)
         wake.wake_only = True
@@ -275,9 +276,8 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
     async def _temporal_stream_close(
         self, request: stream_pb.CloseStreamRequest
     ) -> None:
-        # A System Nexus command, which the server carries out once the Workflow Task commits.
-        # A task that fails after the close leaves the Stream open, and its retry closes it. The
-        # server takes the closing run from the operation's links.
+        # A System Nexus command, which the server runs after the Workflow Task commits. The
+        # server gets the closing run from the operation's links.
         close = stream_pb.CloseStreamRequest()
         close.CopyFrom(request)
         close.stream.ClearField("backend")
@@ -303,19 +303,20 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
 
 
 class NativeStreamBackend(ExtensionStreamBackend):
-    """Carries Stream calls to the Temporal server, which keeps the Streams.
+    """Sends Stream calls to the Temporal server, which stores the Streams.
 
     Every client, Worker and Replayer has it with no registration, under the name
-    ``native``, and it is the default backend unless a registered backend has
+    ``native``, and it's the default backend unless a registered backend has
     ``default=True``. Register one only to configure it, such as for its Retention, or to
     make it the default next to another backend.
 
     Workflow writes run as Local Activities, as on Redis, and the client's Stream runtime
     writes them to the server's ``temporal.api.streamservice.v1.StreamService``. Activity and
-    client calls go to the same service. Each client gets its own runtime on its own
+    client calls use the same service. Each client gets its own runtime on its own
     connection, built at the first call, and the client's Workers share it. A page of a
-    Workflow read is a direct read in a Local Activity whose marker holds only its positions,
-    and a replay reads the page again, on the connection of the Replayer's ``stream_client``.
+    Workflow read is a direct read in a Local Activity whose marker has only the page's
+    positions. A replay reads the page again, with the connection of the Replayer's
+    ``stream_client``.
 
     .. warning::
         This API is experimental.
@@ -335,14 +336,15 @@ class NativeStreamBackend(ExtensionStreamBackend):
         name: str = "native",
         default: bool = False,
     ) -> None:
-        """Create the backend. It makes no call. Each client of the backend calls the server
-        on its own connection.
+        """Create the backend. It makes no call.
+
+        Each client of the backend calls the server on its own connection.
 
         Args:
             retention: The default Retention of a new Stream. Defaults to the server's.
-            name: The backend name that Stream handles carry.
+            name: The backend name that Stream handles store.
             default: Make this the backend of a create with no backend name. With more than
-                one registered backend, exactly one has it.
+                one registered backend, exactly one must have it.
         """
         config = ext_pb.NativeStreamConfig()
         if retention is not None:
@@ -358,8 +360,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def _new_backend(
         self, service: temporalio.service.ServiceClient
     ) -> _ExtensionCalls:
-        # Each connection gets its own runtime, so a call goes on the connection of the
-        # client that makes it. The runtime comes at the first call.
+        # Each connection gets its own runtime, so a call uses the connection of the client
+        # that makes it. The runtime is built at the first call.
         backend = self._connections.get(service)
         if backend is None:
             backend = _ExtensionCalls(_ConnectionRuntime(service, self._config))
@@ -379,8 +381,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
         owner_ended: bool,  # pyright: ignore[reportUnusedParameter]
         converter: temporalio.converter.DataConverter,  # pyright: ignore[reportUnusedParameter]
     ) -> Any:
-        # The marker holds the positions, and the Records wait as the Store gave them for the
-        # codec step, which decodes them as on replay.
+        # The marker holds the positions. The Records stay in the cache as the Store gave them,
+        # and the codec step decodes them as on replay.
         answer = stream_pb.ReadRecordsResponse()
         answer.CopyFrom(page)
         answer.ClearField("records")
@@ -415,8 +417,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
         return False
 
     async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> int:
-        # The close is a System Nexus command of the Workflow Task, which the server carries
-        # out once the task commits, so the Worker polls no Activities for it.
+        # The close is a System Nexus command of the Workflow Task, which the server runs after
+        # the task commits, so the Worker doesn't poll Activities for it.
         await _workflow_reader.reader_of(self.backend_name)._temporal_stream_close(
             request
         )
@@ -425,8 +427,8 @@ class NativeStreamBackend(ExtensionStreamBackend):
     def _configure_client(
         self, config: temporalio.client.ClientConfig
     ) -> temporalio.client.ClientConfig:
-        # The calls come from the client's connection at the first call, so the client needs
-        # no interceptor.
+        # The runtime is built on the client's connection at the first call, so the client
+        # needs no interceptor.
         return config
 
 
@@ -434,8 +436,9 @@ def wrap(
     backend: Callable[[], _ExtensionCalls],
     converter: temporalio.converter.DataConverter,
 ) -> temporalio.converter.DataConverter:
-    """The converter with a codec step that turns a native read's positions back into its
-    page, reading it again with ``backend`` when the page is not in the cache.
+    """The converter with a codec step that turns a native read's positions back into its page.
+
+    The step reads the page again with ``backend`` if the page isn't in the cache.
     """
     if isinstance(converter.payload_codec, _DirectReadCodec):
         return converter

@@ -83,8 +83,8 @@ class _ActivityWorker:
         # Validate and build activity dict
         self._activities: dict[str, temporalio.activity._Definition] = {}
         self._dynamic_activity: temporalio.activity._Definition | None = None
-        # The SDK's own Local Activities, such as those of Streams, which the errors about
-        # the user's activities leave out.
+        # The SDK's own Local Activities, such as the Streams ones. The errors about the user's
+        # activities don't list them.
         self._internal_activities = {
             temporalio.activity._Definition.must_from_callable(activity).name
             for activity in internal_activities

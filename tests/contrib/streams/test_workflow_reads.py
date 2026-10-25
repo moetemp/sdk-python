@@ -41,7 +41,7 @@ class Writer:
         stream = await workflow.create_stream(Events, backend=backend)
         await stream.topic(Events.turns).publish(Turn("user", "hi"))
         for token in ("a", "b", "c"):
-            # Each token goes out in its own Workflow Task, so the reader waits for some.
+            # Each token is written in its own Workflow Task, so the reader waits for some.
             await workflow.sleep(0.3)
             await stream.topic(Events.tokens).publish(token)
         await stream.close(result="written")
@@ -172,7 +172,7 @@ class ReadsInQuery:
 
     @workflow.run
     async def run(self) -> None:
-        # Set in the first task, since a query may come before a create's Local Activity ends.
+        # Set in the first task, since a query can arrive before a create's Local Activity ends.
         self._stream = workflow.create_stream_nowait(Events)
         await workflow.wait_condition(lambda: False)
 
@@ -181,7 +181,7 @@ class ReadsInQuery:
         assert self._stream is not None
         items = self._stream.subscribe()
         try:
-            # A query can't await, so it takes the read's first step by hand.
+            # A query can't await, so it runs the read's first step by hand.
             cast(Coroutine[Any, Any, Any], items.__anext__()).send(None)
         except common.ReadOnlyContextError as err:
             return str(err)
@@ -286,7 +286,7 @@ class CountsTokens:
 
 async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Client):
     # A Redis page is a History marker, and the server terminates a run whose marker is over
-    # 2 MiB. So a page of large Records splits.
+    # 2 MiB. So a page of large Records is split.
     stream = await stream_client.create_stream(Events, id=f"big-{uuid.uuid4()}")
     for _ in range(25):
         await stream.topic(Events.tokens).publish("x" * 100_000)
@@ -337,8 +337,8 @@ async def test_a_workflow_read_gives_the_close_status_and_failure(
 async def test_a_backend_that_lacks_a_capability_fails_the_task(
     stream_client: Client, monkeypatch: pytest.MonkeyPatch
 ):
-    # Such as a native server with direct Nexus calls off. A Worker or a server with the
-    # capability can retry the task, while a failed run stays failed.
+    # A native server with direct Nexus calls off is such a backend. A Worker or a server with
+    # the capability can retry the task, but a failed run stays failed.
     stream = await stream_client.create_stream(Events, id=f"cap-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a")
     call_async = _backend._ExtensionCalls.call_async
@@ -422,7 +422,7 @@ async def test_a_native_replay_checks_the_range_it_reads_again():
         return answer
 
     backend.call_async = call_async
-    # The live task takes the page from the cache, and a replay reads it again.
+    # The live task gets the page from the cache, and a replay reads it again.
     for _ in range(2):
         [page] = await codec.decode([positions])
         assert stream_pb.ReadRecordsResponse.FromString(page.data) == live

@@ -59,10 +59,11 @@ class ClosesThenFailsItsTask:
 
 
 async def test_a_close_waits_for_its_workflow_task_to_commit(stream_client: Client):
-    # A close runs only once its Workflow Task commits, so a task that fails after it leaves
+    # A close runs only after its Workflow Task commits, so a task that fails after it leaves
     # the Stream open, and the retry closes it once.
     key = str(uuid.uuid4())
-    # The test's set must survive the retry of the task, so no sandbox.
+    # The test's set must keep its value across the task's retry, so the Workflow has no
+    # sandbox.
     async with new_worker(
         stream_client,
         ClosesThenFailsItsTask,

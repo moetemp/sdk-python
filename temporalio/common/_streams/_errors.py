@@ -79,10 +79,10 @@ class StreamOffsetError(StreamError):
 class StreamTooLargeError(StreamError):
     """A Record or a batch is over the Store's limit.
 
-    A native Stream also keeps the Records that an open Workflow reader may read again on
-    replay, so an append that the Stream's size cap would make drop them fails. It passes once
-    the reader moves on, such as when it continues as new, which the server suggests to a
-    reader that keeps half of the cap.
+    A native Stream also keeps the Records that an open Workflow reader can read again on
+    replay. An append fails if the Stream's size cap would make the Store drop them. The append
+    succeeds after the reader advances, such as when it continues as new. The server suggests
+    continue-as-new to a reader that holds half of the cap.
     """
 
 
@@ -135,7 +135,7 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_unsupported": StreamUnsupportedError,
     "stream_not_owner": StreamNotOwnerError,
     "seq_divergent": StreamSeqDivergentError,
-    # The native server's Workflow reader cap. Readers leave, so a retry may get in.
+    # The native server's cap on Workflow readers. Readers finish, so a retry can succeed.
     "stream_exhausted": StreamStorageError,
 }
 
@@ -159,9 +159,9 @@ _BY_NAME: dict[str, type[StreamError]] = {cls.__name__: cls for cls in _ERROR_CL
 def from_application_error(
     err: temporalio.exceptions.ApplicationError,
 ) -> StreamError | None:
-    """The Stream error that an application error of a failed call carries, if any.
+    """The Stream error in the application error of a failed call, if any.
 
-    A Stream error's type is its class name, and its first detail is its reason. A server may
+    A Stream error's type is its class name, and its first detail is its reason. A server can
     give the reason as the type, or at the start of the message, such as ``stream_closed: ...``.
     """
     token = err.message.split(":", 1)[0].strip()

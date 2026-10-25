@@ -1,6 +1,6 @@
 """Jetty v2, "A Workflow reads another Workflow's Stream".
 
-An orchestrator Workflow follows the turns of an agent Workflow. It gets the agent's Stream as
+An orchestrator Workflow reads the turns of an agent Workflow. It gets the agent's Stream as
 an argument and reads it with ``subscribe``, an async iterator in Workflow code. Each page is in
 History, so a replay reads the same items. On a native Stream a read at the end waits on the
 server. On Redis it waits on a Local Activity, then on a durable timer. The Workflow code is
@@ -28,7 +28,7 @@ class Agent:
     async def run(self, prompt: str) -> str:
         stream = await workflow.create_stream(Events)
         for word in prompt.split():
-            # Each word goes out in its own Workflow Task, so the follower waits for some.
+            # Each word is written in its own Workflow Task, so the reader waits for some.
             await workflow.sleep(timedelta(milliseconds=200))
             await stream.topic(Events.tokens).publish(word)
         # The server would close a native Stream when the run chain ends. A Redis Stream

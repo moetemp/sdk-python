@@ -33,9 +33,9 @@ class ActivityStreams:
     # An Activity's task token, which its writes send, so the native server checks the
     # Producer against the Activity's current attempt. Empty for a Local Activity.
     task_token: bytes = b""
-    # Whether the backend keeps the Streams of a Standalone Activity.
+    # Whether the backend stores the Streams of a Standalone Activity.
     activity_streams: bool = False
-    # The most bytes of one append that the backend's Store takes.
+    # The most bytes of one append that the backend's Store accepts.
     max_batch_bytes: int = 4 * 1024 * 1024
     # Whether the backend's Store finds a Workflow's Stream only by its owner fields.
     nests_workflow_streams: bool = False

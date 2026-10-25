@@ -1,8 +1,9 @@
 """Jetty v2, "A Standalone Activity streams its progress".
 
 A Standalone Activity, one that no Workflow runs, owns a Stream on the native backend with
-``activity.create_stream``. A client reads it from the Activity handle with no call. The server
-closes the Stream when the Activity ends, with its result, so the Activity need not close it.
+``activity.create_stream``. A client gets it from the Activity handle without a call. The server
+closes the Stream when the Activity ends, with its result, so the Activity doesn't need to close
+it.
 """
 
 from __future__ import annotations

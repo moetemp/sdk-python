@@ -880,7 +880,7 @@ class PublishesClosesAndReturns:
 async def close_activity_events(
     handle: WorkflowHandle[Any, Any],
 ) -> list[EventType.ValueType]:
-    # The events of the close command, from its schedule on: the Activity on Redis, and the
+    # The events of the close command, from its schedule on. It's the Activity on Redis, and the
     # System Nexus operation on native.
     history = await handle.fetch_history()
     scheduled = {

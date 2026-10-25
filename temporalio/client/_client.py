@@ -965,10 +965,10 @@ class Client:
         retention: timedelta | None = None,
         backend: str | None = None,
     ) -> Creating[ClientStream[_StreamDefinitionT]]:
-        """Create a Stream that this client owns, so only a client closes it.
+        """Create a Stream that the client owns, so only a client can close it.
 
-        It is idempotent for one id and one Retention. Await the call for the handle, or use it
-        in ``async with``, which closes the Stream at the end of the block::
+        The call is idempotent for the same id and Retention. Await the call to get the handle,
+        or use it in ``async with``, which closes the Stream at the end of the block::
 
             async with client.create_stream(Events, id="chat-1") as chat:
                 await chat.topic(Events.turns).publish(Turn("user", "hi"))
@@ -978,16 +978,16 @@ class Client:
 
         Args:
             definition: The Stream definition class.
-            id: The Stream id, as a Workflow takes a Workflow id.
-            retention: The age after which a Record is dropped. A closed Stream stays one
-                Retention after its close. Defaults to the backend's.
+            id: The Stream id, which the caller picks, as for a Workflow id.
+            retention: The age after which a Record is deleted. A closed Stream is kept for one
+                Retention after its close. Defaults to the backend's Retention.
             backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``, else to ``native``.
+                ``default=True``, or else to ``native``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name. No call is made.
-            StreamClosedError: A Stream of that id was created and closed before.
-            StreamError: The Stream exists with another Retention, with the reason
+            StreamConfigError: The client has no backend with that name. No call is made.
+            StreamClosedError: A Stream with that id was created and closed before.
+            StreamError: The Stream exists with a different Retention, with the reason
                 ``stream_already_exists``.
         """
         from temporalio.common._streams import _stream_client

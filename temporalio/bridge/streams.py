@@ -37,8 +37,7 @@ class StreamRuntime:
         client: temporalio.bridge.client.Client,
         config: bytes,
     ) -> StreamRuntime:
-        """Build the native runtime on a connected client's connection, from its encoded
-        ``NativeStreamConfig``.
+        """Build the native runtime on a connected client, from its encoded ``NativeStreamConfig``.
 
         Raises:
             ValueError: The bridge build doesn't link the crate, or the config is not valid.

@@ -44,9 +44,7 @@ def vectors(name: str) -> object:
 
 
 def on_native(client: Any) -> bool:
-    """Whether a client's default backend is the native server, whose rules differ in
-    places.
-    """
+    """Whether a client's default backend is the native server, whose rules differ in places."""
     from temporalio.common._streams import _plugin
 
     name, _ = _plugin.client_backend(client, None)

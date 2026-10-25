@@ -184,7 +184,7 @@ def _check_backend(backend: str | None, action: str) -> str:
         raise no_worker_backend()
     names = [b.name for b in backends]
     if not backend:
-        # The default is the backend with default=True, else native, which every Worker has.
+        # The default is the backend with default=True, or else native, which every Worker has.
         return next((b.name for b in backends if b.default), _ids.NATIVE_BACKEND)
     if backend not in names:
         raise _errors.StreamConfigError(
@@ -389,7 +389,7 @@ class WorkflowStream(StreamHandle[E]):
         )
 
     def _ref(self) -> stream_pb.StreamRef:
-        # A server that nests a Stream in its owner finds it only by the owner's fields.
+        # A server that nests a Stream under its owner finds it only by the owner's fields.
         return stream_pb.StreamRef(
             id=self.id,
             workflow_id=self.workflow_id or "",
@@ -435,15 +435,15 @@ class WorkflowStream(StreamHandle[E]):
     ) -> WorkflowItems:
         """Read the Stream's items in order, in Workflow code.
 
-        It is an async iterator, as on the client, and it yields the same ``Record``,
-        ``Superseded`` and ``Closed`` items. Each page is a Local Activity whose answer is in
+        It returns an async iterator, as on the client, which yields the same ``Record``,
+        ``Superseded`` and ``Closed`` items. Each page is a Local Activity whose result is in
         History, so a replay reads the same items. On a native Stream the marker holds only
         the page's offsets, and a replay reads the page again from the server. A read at the
-        end of a native Stream waits on the server until a Record comes or the Stream closes.
-        Such waits take at most 20 of the run's 30 pending Nexus operations, and a read past
-        them waits as on Redis. On Redis the marker holds the page, the Local Activity waits a
-        short time for new Records, and a page with none is followed by a durable timer from
-        1 s up to 60 s.
+        end of a native Stream waits on the server until a Record arrives or the Stream closes.
+        These waits use at most 20 of the run's 30 pending Nexus operations. A read past that
+        limit waits as on Redis. On Redis the marker holds the page, and the Local Activity
+        waits a short time for new Records. After a page with no Records, the read waits on a
+        durable timer, from 1 s up to 60 s.
 
         A read sees this run's writes that it awaited, since each write is a Local Activity
         that ends before the next read starts.
@@ -466,14 +466,14 @@ class WorkflowStream(StreamHandle[E]):
             wait_new_records: Wait for new Records at the end of the Stream. When False,
                 the read ends at the newest Record.
             topic_prefixes: Also read the Topics whose names start with one of these.
-            create_wait: How long to wait for a Stream that nobody created yet. Defaults to
+            create_wait: How long to wait for a Stream that doesn't exist yet. Defaults to
                 no wait.
 
         Raises:
             StreamNotFoundError: The Stream does not exist, or it was not created in time.
             ReadOnlyContextError: The code must not change state, such as a query handler.
-            StreamConfigError: The Stream is of a backend that the Worker does not have. It
-                fails the Workflow Task, not the run.
+            StreamConfigError: The Worker doesn't have the Stream's backend. It fails the
+                Workflow Task, not the run.
         """
         if not temporalio.workflow.unsafe.is_read_only():
             _state().uses_streams = True
@@ -502,7 +502,7 @@ class WorkflowStream(StreamHandle[E]):
     def _check(
         self, action: str, *, backend: str | None = None
     ) -> tuple[_RunStream, str]:
-        # The run's state of the Stream, and the backend that its calls go to.
+        # The run's state of the Stream, and the backend for its calls.
         if temporalio.workflow.unsafe.is_read_only():
             raise _errors.ReadOnlyContextError(
                 f"Can't {action} a Stream in read-only code"
@@ -770,7 +770,7 @@ def _create(
     )
     if retention is not None:
         request.retention.FromTimedelta(retention)
-    # The native server closes the Stream when the run chain ends. Redis ignores it.
+    # The native server closes the Stream when the run chain ends. Redis ignores this flag.
     request.close_with_run = True
     run_stream.backend = stream.backend
     return stream, _write(stream.id, CREATE_ACTIVITY, request, backend_name)

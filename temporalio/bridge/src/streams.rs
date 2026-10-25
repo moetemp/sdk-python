@@ -77,7 +77,7 @@ pub fn new_stream_runtime(
 }
 
 /// Builds the native runtime on a client's connection, from its encoded `NativeStreamConfig`.
-/// Each client gets its own, so a call goes on the connection of the client that makes it.
+/// Each client gets its own, so a call uses the connection of the client that makes it.
 #[cfg(feature = "streams")]
 pub fn new_native_stream_runtime(
     runtime_ref: &runtime::RuntimeRef,

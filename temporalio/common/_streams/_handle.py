@@ -288,8 +288,8 @@ class StreamHandle(Generic[E]):
         return topic, type
 
     def _owner_ref(self) -> models.StreamRef:
-        # A Workflow's or a Standalone Activity's Stream carries its owner on every call, so a
-        # server that nests it in its owner finds it.
+        # A Workflow's or a Standalone Activity's Stream sends its owner on every call, so a
+        # server that nests the Stream under its owner can find it.
         return models.StreamRef(
             id=self._id,
             workflow_id=self._workflow_id or None,

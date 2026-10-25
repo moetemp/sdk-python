@@ -1010,21 +1010,23 @@ class ActivityHandle(Generic[ReturnType]):
     def stream(
         self, definition: type[_StreamDefinitionT], *, backend: str | None = None
     ) -> ClientStream[_StreamDefinitionT]:
-        """A Stream that this Standalone Activity created, by its definition.
+        """Get a Stream that this Standalone Activity created, by its definition.
 
-        It builds the Stream id from the Activity id and run id, so it makes no call. Only the
-        native backend keeps the Stream of a Standalone Activity, which
+        This method builds the Stream id from the Activity id and run id, so it makes no call.
+        Only the native backend stores the Stream of a Standalone Activity, which
         :py:func:`temporalio.activity.create_stream` creates.
 
         .. warning::
             This API is experimental.
 
         Args:
-            definition: The Stream definition class, renamed as the Activity's create.
+            definition: The Stream definition class, with the same name as in the Activity's
+                create.
             backend: The name of a native backend. Defaults to ``native``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name, or it is not native.
+            StreamConfigError: The client has no backend with that name, or the backend isn't
+                native.
             ValueError: The handle has no run id.
         """
         from temporalio.common._streams import _stream_client

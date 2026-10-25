@@ -89,9 +89,8 @@ def using(options: CallOptions | None) -> Iterator[None]:
         call_options.reset(token)
 
 
-# The task token of the Activity attempt whose write is in progress. The generated models leave
-# it out, so the transport puts it into the request, and the native server checks the Producer
-# against the Activity's current attempt.
+# The task token of the Activity attempt whose write is in progress. The generated models lack
+# it, so the transport adds it to the request for the native server's Producer check.
 _task_token: contextvars.ContextVar[bytes] = contextvars.ContextVar(
     "__temporal_stream_task_token", default=b""
 )

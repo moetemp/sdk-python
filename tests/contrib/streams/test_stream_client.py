@@ -237,8 +237,8 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
 
 
 async def test_client_creates_a_stream_on_its_default_backend(stream_client: Client):
-    # A client owns the Stream it creates, as a Workflow and a Standalone Activity own theirs.
-    # It goes on the default backend: native, unless a registered backend has default=True.
+    # A client owns the Stream that it creates, as a Workflow and a Standalone Activity own theirs.
+    # It's on the default backend, which is native unless a registered backend has default=True.
     lane, _ = _plugin.client_backend(stream_client, None)
     stream_id = f"own-{uuid.uuid4()}"
     stream = await stream_client.create_stream(Events, id=stream_id)
@@ -451,7 +451,7 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
 async def test_async_with_refuses_an_activity_stream_before_the_block(
     stream_client: Client,
 ):
-    # Only the Standalone Activity closes its Stream, so the block end would raise too.
+    # Only the Standalone Activity can close its Stream, so the block end would raise too.
     handle = stream_client.get_activity_handle("tool-1", run_id="run-1")
     ran = False
     with pytest.raises(common.StreamNotOwnerError, match="an Activity owns it"):
@@ -657,7 +657,7 @@ async def test_default_is_native_with_no_default_backend(client: Client):
     assert one.stream(Events, id="d-2", backend="memory").backend == "memory"
     # The Redis create picks the client's only Redis backend. The memory backend counts as one.
     assert (await redis.create(one, Events, id="d-2")).backend == "memory"
-    # A registered NativeStreamBackend configures native, and only it takes that name.
+    # A registered NativeStreamBackend configures native, and only it can use that name.
     config["stream_backends"] = [
         common.NativeStreamBackend(default=True),
         MemoryStreamBackend(),

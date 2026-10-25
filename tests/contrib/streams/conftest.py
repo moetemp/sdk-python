@@ -80,9 +80,8 @@ async def _brook_client(
 
 @pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
 async def stream_client(client: Client, request: pytest.FixtureRequest) -> Client:
-    # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules, and on the native server when one is given. The native backend is every
-    # client's with no registration, and the default when no backend has default=True.
+    # Every live test runs on the memory Store, on Redis and, when one is given, on the native
+    # server. Every client has the native backend, the default when no backend has default=True.
     if request.param == "native":
         return await Client.connect(NATIVE_TARGET, namespace=NATIVE_NAMESPACE)
     return await _brook_client(client, request, request.param)
@@ -90,8 +89,8 @@ async def stream_client(client: Client, request: pytest.FixtureRequest) -> Clien
 
 @pytest.fixture(params=["memory", "redis"])
 async def redis_client(client: Client, request: pytest.FixtureRequest) -> Client:
-    # A test of the Redis calls, such as temporalio.contrib.stream.create, which the memory
-    # Store keeps the rules of.
+    # A test of the Redis functions, such as temporalio.contrib.stream.create. The memory Store
+    # has the same rules.
     return await _brook_client(client, request, request.param)
 
 

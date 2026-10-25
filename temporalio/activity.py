@@ -527,30 +527,30 @@ def create_stream(
 ) -> Creating[ActivityStream[_StreamDefinitionT]]:
     """Create a Stream that this Standalone Activity owns, on the native backend.
 
-    Its id is ``<activity id>:<activity run id>:<name>``, so a client finds it from the
-    Activity handle with :py:meth:`temporalio.client.ActivityHandle.stream` and no call. The
-    Stream goes on across the Activity's retries, and the server closes it when the Activity
+    The Stream id is ``<activity id>:<activity run id>:<name>``, so a client can get it from the
+    Activity handle with :py:meth:`temporalio.client.ActivityHandle.stream` without a call. The
+    Stream stays open across the Activity's retries, and the server closes it when the Activity
     ends, with its status and result. So the end of an ``async with`` block doesn't close it.
-    Await the call for the handle::
+    Await the call to get the handle::
 
         stream = await activity.create_stream(Events)
         await stream.topic(Events.tokens).publish("hi")
 
-    Only the native backend keeps the Stream of a Standalone Activity, since nothing else
-    would close it when the Activity ends.
+    Only the native backend can store the Stream of a Standalone Activity, since no other
+    backend would close it when the Activity ends.
 
     .. warning::
         This API is experimental.
 
     Args:
         definition: The Stream definition class. Its name is the Stream name.
-        retention: The age after which a Record is dropped. A closed Stream stays one
-            Retention after its close. Defaults to the backend's.
+        retention: The age after which a Record is deleted. A closed Stream is kept for one
+            Retention after its close. Defaults to the backend's Retention.
         backend: The name of a native backend. Defaults to ``native``.
 
     Raises:
         StreamConfigError: The Activity runs for a Workflow, which owns its Streams, or the
-            backend is not native. No call is made.
+            backend isn't native. No call is made.
         StreamClosedError: The Stream was created and closed before.
     """
     from temporalio.common._streams import _activity_stream

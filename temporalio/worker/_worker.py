@@ -503,8 +503,8 @@ class Worker:
             or temporalio.runtime.Runtime.default()
         )
         activities = config.get("activities")
-        # The Local Activities that the Worker's Workflows run for Streams. They are the SDK's
-        # own, so they enable no polling of the task queue's Activities.
+        # The Local Activities that the Worker's Workflows run for Streams. They're the SDK's
+        # own, so they don't turn on polling for the task queue's Activities.
         internal_activities: Sequence[Callable[..., Any]] = []
         if config.get("workflows"):
             from temporalio.common._streams import _plugin as _stream_plugin

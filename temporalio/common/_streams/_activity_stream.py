@@ -84,8 +84,8 @@ def _access(handle: StreamHandle[Any]) -> Access:
         namespace=streams.namespace,
         ref=ref,
         writer=lambda: streams.writer(handle),
-        # A handle with only an id has no run chain, so the close sends the Activity's Workflow id
-        # and the Store refuses it. A nesting Store gets none, since a Workflow id alone isn't a ref.
+        # A handle with only an id has no run chain, so the close sends the Activity's Workflow
+        # id and the Store refuses it. A nesting Store gets no id, since one alone isn't a ref.
         workflow_id=handle.workflow_id
         or (None if streams.nests_workflow_streams else streams.workflow_id),
         first_execution_run_id=handle.first_execution_run_id,
@@ -181,8 +181,9 @@ class ActivityStream(StreamHandle[E]):
         await self._access().close(result, failure)
 
     async def __aenter__(self) -> ActivityStream[E]:
-        """Use the Stream in ``async with``, which closes it at the end, except a Standalone
-        Activity's Stream.
+        """Use the Stream in ``async with``, which closes it at the end of the block.
+
+        The block's end doesn't close a Standalone Activity's Stream.
         """
         return self
 
@@ -195,8 +196,8 @@ class ActivityStream(StreamHandle[E]):
         """Close the Stream, with the exception as its failure if there is one.
 
         A cancel closes it with a ``CancelledError`` failure. Another ``BaseException`` leaves
-        it open. A Standalone Activity's Stream stays open, since the server closes it when the
-        Activity ends, with its status and result, and a retry of the Activity writes on to it.
+        it open. A Standalone Activity's Stream stays open, since a retry of the Activity writes
+        to it, and the server closes it when the Activity ends, with its status and result.
         """
         if self.activity_id:
             return
@@ -376,8 +377,9 @@ def create_stream(
     retention: timedelta | None = None,
     backend: str | None = None,
 ) -> Creating[ActivityStream[E]]:
-    """Create a Stream that this Standalone Activity owns. See
-    :py:func:`temporalio.activity.create_stream`.
+    """Create a Stream that this Standalone Activity owns.
+
+    See :py:func:`temporalio.activity.create_stream`.
     """
     info = temporalio.activity.info()
     if info.in_workflow:
@@ -386,15 +388,16 @@ def create_stream(
             "the Streams that it receives."
         )
     attempt = _activity.current.get()
-    # Only a native backend keeps the Stream, so the default rule doesn't apply.
+    # Only a native backend stores the Stream, so the default rule doesn't apply.
     name = backend or _ids.NATIVE_BACKEND
     streams = attempt.backends.get(name) if attempt is not None else None
     if streams is None:
         raise _errors.StreamConfigError(f"No Stream backend {name} runs this Activity")
     if not streams.activity_streams:
         raise _errors.StreamConfigError(
-            f"The backend {streams.backend_name} keeps no Stream of a Standalone Activity, "
-            "since nothing would close it when the Activity ends. Use the native backend."
+            f"The backend {streams.backend_name} can't store the Stream of a Standalone "
+            "Activity, since it wouldn't close the Stream when the Activity ends. Use the "
+            "native backend."
         )
     run_id = info.activity_run_id or ""
     stream_id = _ids.scoped_stream_id(
@@ -413,8 +416,8 @@ def create_stream(
                 id=stream_id, activity_id=info.activity_id, activity_run_id=run_id
             ),
         )
-        # The server checks the token against the Activity's current attempt, so a caller
-        # can't put a Stream into an Activity it isn't.
+        # The server checks the token against the Activity's current attempt, so only that
+        # attempt can create the Activity's Stream.
         with _backend.with_task_token(streams.task_token):
             response = await streams.backend.service(
                 streams.namespace, streams.converter

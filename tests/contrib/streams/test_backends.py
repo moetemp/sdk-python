@@ -94,8 +94,8 @@ async def read_all(
 
 
 async def test_one_worker_serves_two_backends(client: Client, redis_url: str):
-    # Each call goes to the backend that the handle names: Workflow buffers, Activity
-    # writes, a Local Activity's flush, retry withdrawals and the closes.
+    # Each call goes to the backend that the handle names. That includes Workflow buffers,
+    # Activity writes, a Local Activity's flush, retry withdrawals and the closes.
     two = two_backend_client(client, redis_url)
     async with new_worker(
         two, WritesBoth, activities=[write_both, write_memory_locally]
@@ -203,7 +203,7 @@ class ContinuesOnBoth:
 
 
 async def test_continued_run_closes_each_backend(client: Client, redis_url: str):
-    # The next run learns the backend of each Stream that the chain created.
+    # The next run gets the backend of each Stream that the chain created.
     two = two_backend_client(client, redis_url)
     async with new_worker(two, ContinuesOnBoth) as worker:
         handle = await two.start_workflow(

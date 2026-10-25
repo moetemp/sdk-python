@@ -1,4 +1,4 @@
-"""The native lane: the same calls against a server that serves the Stream service.
+"""The native lane, which makes the same calls against a server with the Stream service.
 
 Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 """
@@ -111,8 +111,8 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         if event.HasField("nexus_operation_completed_event_attributes")
     ]
     assert wakes and not any(wake.records for wake in wakes)
-    # A replay reads each page again on the connection of its stream_client, once the cache
-    # is gone.
+    # A replay reads each page again on the connection of its stream_client, after the cache
+    # is cleared.
     replayer = Replayer(workflows=[Writer, Reader], stream_client=native_client)
     await replayer.replay_workflow(await writer.fetch_history())
     await replayer.replay_workflow(history)
@@ -195,8 +195,8 @@ class WritesByBareId:
 
 
 async def test_a_write_without_the_owner_fields_raises(native_client: Client):
-    # A Workflow's Stream nests in its Workflow, so a handle without the owner fields finds
-    # nothing, and the write's Local Activity raises at the await.
+    # The server nests a Workflow's Stream under its Workflow, so a handle without the owner
+    # fields finds nothing, and the write's Local Activity raises at the await.
     async with new_worker(native_client, Writer, WritesByBareId) as worker:
         writer = await native_client.start_workflow(
             Writer.run, None, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
@@ -267,7 +267,7 @@ async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
     native_client: Client,
 ):
     # The server resolves END on each call, so the wait and the read after it start where the
-    # first page ended. Else the Record that wakes the reader is behind its start.
+    # first page ended. Otherwise the Record that wakes the reader would be before its start.
     stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("old")
     async with new_worker(native_client, ReadsNewTokens) as worker:
@@ -306,7 +306,7 @@ class ClosesItsRead:
 
 
 async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
-    # A wake may park for days, so a read that its code closed must not keep it.
+    # A wake can park for days, so closing the read must cancel it.
     stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     async with new_worker(native_client, ClosesItsRead) as worker:
         reader = await native_client.start_workflow(
@@ -386,7 +386,7 @@ async def test_a_run_end_waits_until_the_server_has_its_wakes_cancels(
         await until_parked(latest)
         await latest.signal(EndsWhileItReads.end)
         assert await latest.result() == "done"
-    # Nothing comes after a run's close, so the server took each cancel while the run was open.
+    # Nothing comes after a run's close, so the server accepted each cancel while the run was open.
     for run_id in (first.first_execution_run_id, latest.result_run_id):
         history = await native_client.get_workflow_handle(
             first.id, run_id=run_id
@@ -471,10 +471,10 @@ async def test_a_workflow_reader_keeps_its_range_of_a_client_stream(
     native_client: Client,
 ):
     # The size cap would drop what the reader's replays read again, and every task of the run
-    # would fail. So the server refuses the append and suggests that the reader move on.
+    # would fail. So the server refuses the append and suggests that the reader continue as new.
     stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a")
-    # Two of them keep more than half of the 4 MiB stream.maxStoredBytes, three pass it.
+    # Two of them keep more than half of the 4 MiB stream.maxStoredBytes, three exceed it.
     big = "x" * 1_450_000
     async with new_worker(
         native_client, ReadsUntilToldToContinue, max_cached_workflows=0
@@ -511,8 +511,8 @@ async def leaves_its_stream_open() -> str:
 
 
 async def test_a_standalone_activity_owns_its_stream(native_client: Client):
-    # The Activity may close its own Stream. The server closes it when the Activity ends, with
-    # its status and result, so a Stream that the Activity leaves open doesn't stay.
+    # The Activity can close its own Stream. If it doesn't, the server closes the Stream when
+    # the Activity ends, with its status and result.
     task_queue = f"tq-{uuid.uuid4()}"
     async with new_worker(
         native_client,
@@ -538,7 +538,7 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
         "a",
         "b",
     ]
-    # The Activity's own close got past the early owner check, so its close has no result.
+    # The Activity's own close passed the SDK's owner check, so the Closed item has no result.
     assert isinstance(items[-1], common.Closed) and items[-1].result is None
     left = [item async for item in left_open.stream(Events).subscribe()]
     assert [item.data for item in left if isinstance(item, common.Record)] == ["a"]
@@ -579,7 +579,7 @@ async def test_a_block_end_leaves_a_standalone_activitys_stream_open(
     assert "attempt 2" in [
         item.data for item in items if isinstance(item, common.Record)
     ]
-    # The server's close carries the result of the attempt that ended the Activity.
+    # The server's close has the result of the attempt that ended the Activity.
     assert isinstance(items[-1], common.Closed)
     assert items[-1].result == "done on attempt 2"
 
@@ -596,7 +596,7 @@ class ReadsAll:
 
 
 async def test_a_workflow_reads_a_standalone_activitys_stream(native_client: Client):
-    # The server nests the Stream in its Activity, so the read names the Activity.
+    # The server nests the Stream under its Activity, so the read names the Activity.
     task_queue = f"tq-{uuid.uuid4()}"
     async with new_worker(
         native_client,
@@ -662,7 +662,7 @@ async def test_a_replay_that_reads_other_records_is_nondeterministic(
     native_client: Client, monkeypatch: pytest.MonkeyPatch
 ):
     # The codec step checks a replayed page against its digest, outside the Workflow. The
-    # server and the Replayer still learn that the replay was nondeterministic.
+    # server and the Replayer still see that the replay was nondeterministic.
     stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
     await stream.topic(Events.tokens).publish("a", "b")
     async with new_worker(
@@ -693,8 +693,8 @@ async def test_a_replay_that_reads_other_records_is_nondeterministic(
 
 
 async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
-    # One backend on two clients gives each its own runtime, so a call doesn't go on the
-    # connection of the client that came last.
+    # One backend on two clients gives each its own runtime, so a call doesn't use the
+    # connection of the last client.
     native = common.NativeStreamBackend()
     first = await Client.connect("127.0.0.1:1", lazy=True, stream_backends=[native])
     second = await Client.connect("127.0.0.1:2", lazy=True, stream_backends=[native])
@@ -716,8 +716,8 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
 
 
 async def test_a_native_backend_keeps_no_client_alive():
-    # The implicit backend lives as long as the process, and every Worker's client goes
-    # through it.
+    # The implicit backend exists for the life of the process, and every Worker's client uses
+    # it.
     native = common.NativeStreamBackend()
     registered = await Client.connect(
         "127.0.0.1:1", lazy=True, stream_backends=[native]

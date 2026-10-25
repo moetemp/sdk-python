@@ -1,11 +1,11 @@
 """Jetty v2, "Move from Redis to native Streams".
 
-Old Streams stay on Redis, and new ones go to the server. The client registers
-``RedisStreamBackend`` with ``default=True``, so Workflow code that names no backend keeps
-creating on Redis, and the native backend is there with no registration. Step 1 runs the old
-code. Step 2 deploys new code that picks ``native`` behind ``workflow.patched``, so a run that
-started on the old code replays the same and goes on with its Redis Stream. Redis stays the
-default, since a change of the default changes the commands of a replayed create.
+Old Streams stay on Redis, and new ones are created on the server. The client registers
+``RedisStreamBackend`` with ``default=True``, so Workflow code that names no backend still
+creates on Redis. The native backend needs no registration. Step 1 runs the old code. Step 2
+deploys new code that picks ``native`` behind ``workflow.patched``, so a run that started on the
+old code replays the same and continues with its Redis Stream. Redis stays the default, since a
+change of the default changes the commands of a replayed create.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ async def connect(target_host: str, redis_url: str) -> Client:
 
 async def read(handle: WorkflowHandle[Any, None]) -> list[str]:
     await handle.result()
-    # A UI that reads chats from both sides of the move looks on native first, then Redis.
+    # A UI that reads chats from both sides of the move checks native first, then Redis.
     for backend in ("native", "redis"):
         stream = handle.stream(Events, backend=backend)
         try:
@@ -81,7 +81,7 @@ async def read(handle: WorkflowHandle[Any, None]) -> list[str]:
 
 
 async def main(client: Client, task_queue: str) -> list[str]:
-    # Step 1: the old code starts a chat on Redis.
+    # Step 1. The old code starts a chat on Redis.
     async with Worker(client, task_queue=task_queue, workflows=[ChatBeforeTheMove]):
         old = await client.start_workflow(
             ChatBeforeTheMove.run, id=f"chat-{uuid.uuid4()}", task_queue=task_queue
@@ -89,7 +89,7 @@ async def main(client: Client, task_queue: str) -> list[str]:
         async for _ in old.stream(Events).subscribe(create_wait=timedelta(seconds=30)):
             # The old chat wrote its first Record, so it runs on the old code.
             break
-    # Step 2: the new code goes on with the old chat, and starts a new one on the server.
+    # Step 2. The new code continues the old chat, and starts a new one on the server.
     async with Worker(client, task_queue=task_queue, workflows=[Chat]):
         await old.signal(ChatBeforeTheMove.more, "old chat goes on")
         new = await client.start_workflow(

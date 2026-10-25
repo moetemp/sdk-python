@@ -184,7 +184,7 @@ class ClientStream(StreamHandle[E]):
         return fields
 
     async def _resolved_ref(self) -> models.StreamRef:
-        # The first call finds the first run id of a Workflow's Stream, which the ref carries.
+        # The first call fetches the first run id of a Workflow's Stream, which the ref includes.
         await self._stream_id()
         return self._owner_ref()
 
@@ -572,16 +572,17 @@ def activity_stream(
     *,
     backend: str | None,
 ) -> ClientStream[E]:
-    """A Stream that a Standalone Activity created. See
-    :py:meth:`temporalio.client.ActivityHandle.stream`.
+    """Get a Stream that a Standalone Activity created.
+
+    See :py:meth:`temporalio.client.ActivityHandle.stream`.
     """
     stream_name = definition_of(definition).name
     client = handle._client
-    # Only a native backend keeps the Stream, so the default rule doesn't apply.
+    # Only a native backend stores the Stream, so the default rule doesn't apply.
     stream_backend = backend_of(client, backend or _ids.NATIVE_BACKEND)
     if not stream_backend._activity_streams:
         raise _errors.StreamConfigError(
-            f"The backend {stream_backend.backend_name} keeps no Stream of a Standalone "
+            f"The backend {stream_backend.backend_name} can't store the Stream of a Standalone "
             "Activity. Use the native backend."
         )
     if not handle.run_id:

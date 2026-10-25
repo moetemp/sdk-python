@@ -105,9 +105,8 @@ async def test_worker_setup_on_redis(client: Client, redis_url: str):
     assert await worker_setup.create_on_second_backend(migrating) == "redis-b"
 
 
-# The Jetty v2 examples. The Workflow reader runs on one backend: the memory Store, Redis or
-# the native server. The others need the native server, with Redis, or a memory Store named
-# `redis` in its place, so they run only when TEMPORAL_STREAMS_NATIVE_TARGET is set.
+# The Workflow reader runs on the memory Store, Redis or native. The other Jetty v2 examples need
+# native and a Store named `redis`, so they run only when TEMPORAL_STREAMS_NATIVE_TARGET is set.
 async def native_server(*backends: common.StreamBackend) -> Client:
     if not NATIVE_TARGET:
         pytest.skip(

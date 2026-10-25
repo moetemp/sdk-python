@@ -38,10 +38,10 @@ class StreamBackend(SimplePlugin):
     # The kind of Store, such as "redis". The functions of a backend's package use it to find
     # the registered backend of their kind.
     _kind = ""
-    # Whether the backend keeps the Streams of a Standalone Activity, which it closes with the
-    # Activity. Only the server does, so a Stream that nobody closes can't stay.
+    # Whether the backend stores the Streams of a Standalone Activity and closes each with its
+    # Activity. Only the server does, so no Stream of an ended Activity stays open.
     _activity_streams = False
-    # The most bytes of one append that the Store takes, as it counts them.
+    # The most bytes of one append that the Store accepts, as it counts them.
     _max_batch_bytes = 4 * 1024 * 1024
     # Whether the Store finds a Workflow's Stream only by its owner fields, so a ref with a
     # Workflow id and no first run id names nothing.
@@ -225,7 +225,7 @@ def local_activities(
 
 
 def replayer_backends(config: temporalio.worker.ReplayerConfig) -> list[StreamBackend]:
-    """The Replayer's backends, else those of its ``stream_client``, and the native one."""
+    """The Replayer's backends, or else those of its ``stream_client``, and the native one."""
     backends = config.get("stream_backends") or ()
     client = config.get("stream_client")
     if not backends and client is not None:
@@ -245,8 +245,9 @@ def configure_replayer(
 def worker_converter(
     client: temporalio.client.Client, converter: temporalio.converter.DataConverter
 ) -> temporalio.converter.DataConverter:
-    """The converter of a Worker's Workflows, whose codec step turns a native read's
-    positions back into its page.
+    """The converter of a Worker's Workflows.
+
+    Its codec step turns a native read's positions back into its page.
     """
     from temporalio.common._streams import _native
 
@@ -261,8 +262,9 @@ def replayer_converter(
     config: temporalio.worker.ReplayerConfig,
     converter: temporalio.converter.DataConverter,
 ) -> temporalio.converter.DataConverter:
-    """The converter of a Replayer's Workflows, as :py:func:`worker_converter`. A replay
-    reads a native page again on the connection of the Replayer's ``stream_client``.
+    """The converter of a Replayer's Workflows, as :py:func:`worker_converter`.
+
+    A replay reads a native page again with the connection of the Replayer's ``stream_client``.
     """
     from temporalio.common._streams import _native
 
@@ -290,7 +292,7 @@ def backend_of(client: temporalio.client.Client, name: str | None) -> StreamBack
     """A client's backend. A ``name`` of None picks the default.
 
     Raises:
-        StreamConfigError: The client has no backend of that name.
+        StreamConfigError: The client has no backend with that name.
     """
     backends = with_native(client_backends(client))
     wanted = name or default_name(backends)
@@ -306,10 +308,10 @@ def backend_of(client: temporalio.client.Client, name: str | None) -> StreamBack
 def client_backend(
     client: temporalio.client.Client, name: str | None
 ) -> tuple[str, BackendCalls]:
-    """The name and the calls of a client's backend. None picks the default backend.
+    """The name and the calls of a client's backend. A ``name`` of None picks the default.
 
     Raises:
-        StreamConfigError: The client has no backend of that name.
+        StreamConfigError: The client has no backend with that name.
     """
     backend = backend_of(client, name)
     return backend.backend_name, backend._backend_for(client)

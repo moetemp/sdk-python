@@ -1,10 +1,10 @@
 """Jetty v2, "Two backends in one Worker".
 
 The client registers ``RedisStreamBackend``, and has the native backend with no registration.
-The Worker takes both from it. Each Stream handle carries its backend name, so every call goes
-to the backend that keeps the Stream. A create with no ``backend=`` goes to the default one,
-here native, since the Redis backend has no ``default=True``. Tests swap Redis for a
-``MemoryStreamBackend(name="redis")`` with no change to Workflow code.
+The Worker uses both. Each Stream handle stores its backend name, so every call goes to the
+backend that stores the Stream. A create with no ``backend=`` uses the default backend, which
+here is native, since the Redis backend has no ``default=True``. Tests swap Redis for a
+``MemoryStreamBackend(name="redis")`` without changing Workflow code.
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ class TwoStreams:
             ),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        # The server closes the audit log when the run chain ends. The end of a run closes
-        # nothing on Redis, so the run closes the live view.
+        # The server closes the audit log when the run chain ends. On Redis, a run's end doesn't
+        # close the Stream, so the run closes the live view.
         await live.close(result=result)
         return result
 

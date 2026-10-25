@@ -113,7 +113,7 @@ def stream_handle(
             ``native``.
 
     Raises:
-        StreamConfigError: The Worker has no backend of that name.
+        StreamConfigError: The Worker has no backend with that name.
     """
     from temporalio.common._streams import _workflow
 

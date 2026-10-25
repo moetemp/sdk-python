@@ -184,7 +184,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             max_workflow_task_external_storage_concurrency
         )
         self._throw_after_activation: Exception | None = None
-        # The runs whose last Workflow Task a NondeterminismError of the codec step failed.
+        # The runs whose last Workflow Task failed with a NondeterminismError from the codec step.
         self._nondeterministic_runs: set[str] = set()
 
         # If debug mode is enabled, disable deadlock detection
@@ -478,8 +478,8 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             else:
                 completion.failed.failure.SetInParent()
                 if isinstance(err, temporalio.workflow.NondeterminismError):
-                    # A codec step may compare the data with what the run saw, such as a
-                    # native Stream read.
+                    # A codec step can compare the data with what the run saw before, such as
+                    # for a native Stream read.
                     self._nondeterministic_runs.add(act.run_id)
                     workflow_type = (
                         workflow.get_info().workflow_type
@@ -489,7 +489,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                         else ""
                     )
                     # Core fails a run for this cause in the middle of the replay, and again at
-                    # the next marker, so only a run that fails the task takes it.
+                    # the next marker. So set it only for a run that fails the task.
                     if not (
                         self.nondeterminism_as_workflow_fail()
                         or workflow_type
@@ -681,8 +681,8 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         if act.run_id in self._nondeterministic_runs:
             self._nondeterministic_runs.discard(act.run_id)
             if job.reason == _LANG_FAIL:
-                # Core evicts a run that lang failed as a lang failure, so a hook such as the
-                # Replayer's would not see the nondeterminism.
+                # Core evicts a run that lang failed with the lang failure reason, so a hook such
+                # as the Replayer's wouldn't see the nondeterminism.
                 job = temporalio.bridge.proto.workflow_activation.RemoveFromCache(
                     message=job.message, reason=_NONDETERMINISM_EVICTION
                 )

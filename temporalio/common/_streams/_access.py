@@ -81,8 +81,8 @@ class Access:
         return response.last_offset + 1 if response.last_offset else 0
 
     async def _close_ref(self) -> models.StreamRef:
-        # A handle with only an id names no chain, so a close names the chain that the Access
-        # gives, and the Store refuses it when another chain owns the Stream.
+        # A handle with only an id has no run chain, so the close sends the Access's run chain.
+        # The Store refuses it if another chain owns the Stream.
         ref = await self.ref()
         if ref.workflow_id or not self.workflow_id:
             return ref
@@ -187,7 +187,7 @@ def subscription(
 
 
 class AsyncTopicBase(TopicBase[T]):
-    """Base of a Topic of an Activity or client handle. A publish writes before it returns."""
+    """Base class of a Topic of an Activity or client handle. A publish writes before it returns."""
 
     async def publish(self, *values: T) -> int:
         """Write one Record for each value, in order, and return the last Record's offset.

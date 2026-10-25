@@ -40,9 +40,8 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
 
-# How long a Workflow read's Local Activity waits for new Records or for the create. It is below
-# Core's 8 s Workflow Task heartbeat, so a read that waits spans one task. The Store waits for
-# both from one start, so the timeout's margin covers the calls.
+# How long a Workflow read's Local Activity waits for new Records or the create, below Core's 8 s
+# task heartbeat. The Store waits for both as one wait, so the timeout's margin covers the calls.
 _READ_WAIT = timedelta(seconds=5)
 _READ_MARGIN = timedelta(seconds=10)
 _PAGE_TYPE = stream_pb.ReadRecordsResponse.DESCRIPTOR.full_name.encode()
@@ -98,7 +97,7 @@ class ExtensionStreamBackend(StreamBackend):
                 runtime or temporalio.runtime.Runtime.default(), True
             )
         super().__init__(name, backend_name=backend_name, default=default)
-        # The read activity's name has the backend name, which the base keeps.
+        # The read Activity's name includes the backend name, so this runs after the base __init__.
         self._read_activity = _read_activity(self)
 
     async def _read_result(
@@ -109,9 +108,8 @@ class ExtensionStreamBackend(StreamBackend):
         owner_ended: bool,
         converter: temporalio.converter.DataConverter,
     ) -> Any:
-        # The result of a Workflow read's Local Activity, which its marker holds. Workflow code
-        # can't run the codec, so the page's bodies go to it decoded. The page as a whole goes
-        # through the codec as the Local Activity's result.
+        # The result of a Workflow read's Local Activity. Workflow code can't run the codec, so the
+        # bodies are decoded here, and the codec runs on the whole page as the Activity's result.
         await _decode_page(converter, page)
         payload = page_payload(page)
         if owner_ended:
@@ -119,12 +117,12 @@ class ExtensionStreamBackend(StreamBackend):
         return temporalio.common.RawValue(payload)
 
     async def _owner_ended(self, ref: stream_pb.StreamRef) -> bool:
-        # A reader at the end of a Stream whose owner ended with no close would wait until
-        # the Stream expires, so an empty page tells it.
+        # A reader at the end of a Stream whose owner ended without a close would wait until
+        # the Stream expires. So an empty page tells the reader that the owner ended.
         return await _owner_chain_ended(ref)
 
     def _activities(self) -> list[Callable[..., Any]]:
-        # The Local Activities that Workflow reads run, so the Worker must have them.
+        # Workflow reads run these Local Activities, so the Worker must register them.
         return [self._read_activity]
 
     def _runtime_backend(
@@ -184,8 +182,8 @@ class ExtensionStreamBackend(StreamBackend):
         # Add the backend's interceptor if the client has none, and on Redis add the close Activity.
         config = super()._configure_worker(config)
         if config.get("workflows") and self._kind == "redis":
-            # The close runs once the Workflow Task commits, as a regular Activity, so this
-            # Worker polls Activities on its task queue.
+            # The close is a regular Activity that runs after the Workflow Task commits, so this
+            # Worker must poll Activities on its task queue.
             activities = list(config.get("activities", []))
             if _writes.close_stream not in activities:
                 activities.append(_writes.close_stream)
@@ -275,8 +273,8 @@ def _read_activity(backend: ExtensionStreamBackend) -> Callable[..., Any]:
         # The Worker's client gave the attempt its Stream runtime.
         streams = _attempt_streams(backend.backend_name)
         try:
-            # The reading run goes with the read, so a native server keeps the Records that
-            # the open run may read again on replay.
+            # The read sends the reading run, so a native server keeps the Records that the open
+            # run can read again on replay.
             page = await cast(_ExtensionCalls, streams.backend).call_async(
                 "WorkflowReadRecords",
                 ext_pb.WorkflowReadRecordsRequest(
@@ -320,7 +318,7 @@ async def _owner_chain_ended(ref: stream_pb.StreamRef) -> bool:
     except temporalio.service.RPCError as err:
         if err.status == temporalio.service.RPCStatusCode.NOT_FOUND:
             return True
-        # Only a hint, so the reader waits on as before.
+        # The result is only a hint, so the reader keeps waiting.
         logger.debug("Describing the owner of Stream %s failed", ref.id, exc_info=True)
         return False
     first_run_id = description.raw_description.workflow_execution_info.first_run_id
@@ -461,8 +459,8 @@ def _receive(args: Sequence[Any]) -> None:
 
 
 async def _end_run(err: BaseException | None) -> None:
-    # The run's reads end with it, so the server drops their parked reads. Its block-end closes
-    # settle from its outcome, and its writes that nobody awaits go out before its end.
+    # Cancel the run's reads, so the server drops their parked reads. Then run the deferred closes
+    # by the run's outcome, and send the unawaited writes before the run ends.
     await _workflow_reader.cancel_wakes()
     streams_workflow.close_at_run_end(err)
     await streams_workflow.drain()
@@ -505,7 +503,7 @@ def _take_owned_streams(
 
 class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     _temporal_stream_transport = True
-    # The runtime can't park a read yet, so a reader pauses on a timer after an empty page.
+    # The runtime can't park a read, so a reader waits on a timer after an empty page.
     _temporal_stream_parks_reads = False
     _temporal_stream_read_wait = _READ_WAIT
     # The Local Activity's timeout bounds its wait for the create too.
@@ -553,7 +551,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
             temporalio.exceptions.ActivityError,
             temporalio.exceptions.ApplicationError,
         ) as err:
-            # A Local Activity's failure may come as its application error, with no
+            # A Local Activity's failure can come as its application error, with no
             # ActivityError around it.
             raise _workflow_reader.error_of(err) from None
         return _workflow_reader.Page(
@@ -643,8 +641,8 @@ def enter_attempt(
 ) -> tuple[_activity.AttemptStreams, Any]:
     """Add a backend's state to the attempt, and return the attempt and the token to reset.
 
-    The outermost backend's interceptor makes the attempt, so it reads the backends of the
-    Worker from the chain, and each inner one adds its state.
+    The outermost backend's interceptor creates the attempt and reads the Worker's backends
+    from the chain. Each inner interceptor adds its state.
     """
     attempt = _activity.current.get()
     if attempt is not None:
@@ -658,7 +656,7 @@ def enter_attempt(
                 (link._temporal_stream_backend_name, link._temporal_stream_default)
             )
         link = getattr(link, "next", None)
-    # The default is the backend with default=True, else native.
+    # The default is the backend with default=True, or else native.
     default = next((name for name, marked in backends if marked), _ids.NATIVE_BACKEND)
     attempt = _activity.AttemptStreams(default=default)
     attempt.backends[streams.backend_name] = streams
