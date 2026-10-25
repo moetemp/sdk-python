@@ -7,6 +7,7 @@ whose server parks reads also starts a wake with ``_temporal_stream_start_wake``
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -60,8 +61,8 @@ def reader_of(backend: str) -> Any:
 
 @dataclass
 class _ReadState:
-    # The run's wakes that wait on the server, so the run's end cancels them.
-    wakes: set[Any] = field(default_factory=set)
+    # The run's wakes that wait on the server, with their reads, so the run's end cancels them.
+    wakes: dict[Any, WorkflowItems] = field(default_factory=dict)
     # The lowest offset that the run's replayed pages read, per Stream, and whether a live
     # page sent it.
     replay_floors: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -77,10 +78,22 @@ def _read_state() -> _ReadState:
     return state
 
 
-def cancel_wakes() -> None:
-    """Cancel the run's wakes at the end of the run, so the server drops their parked reads."""
-    for wake in list(_read_state().wakes):
+async def cancel_wakes() -> None:
+    """Cancel the run's wakes at the end of the run, and wait until the server has each cancel.
+
+    The server drops the cancel of a run that closed, and a parked read holds its slot until
+    the next append or its wait ends.
+    """
+    wakes = list(_read_state().wakes.items())
+    for wake, items in wakes:
+        # The read ends with no error, as when its code closes it.
+        items._closed = True
         wake.cancel()
+    for wake, _ in wakes:
+        try:
+            await wake
+        except (Exception, asyncio.CancelledError):
+            pass
 
 
 class WorkflowItems(Subscription[Any]):
@@ -347,13 +360,12 @@ class WorkflowItems(Subscription[Any]):
         # The server parks the wake until a Record passes the filter, the Stream closes, or
         # the wait ends. Its answer holds no Records, and the next page reads them.
         wake = await self._reader._temporal_stream_start_wake(request)
+        wakes = _read_state().wakes
+        wakes[wake] = self
+        self._wake = wake
         if self._closed:
             # The iterator closed while the server took the wake.
             wake.cancel()
-            return
-        wakes = _read_state().wakes
-        self._wake = wake
-        wakes.add(wake)
         try:
             answer = await wake
         except temporalio.exceptions.NexusOperationError as err:
@@ -366,7 +378,7 @@ class WorkflowItems(Subscription[Any]):
             raise error_of(err) from None
         finally:
             self._wake = None
-            wakes.discard(wake)
+            wakes.pop(wake, None)
         if (
             self._request.start == stream_pb.ReadStart.READ_START_END
             and answer.next_offset

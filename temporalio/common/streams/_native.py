@@ -38,8 +38,9 @@ from temporalio.common.streams.proto import v1 as ext_pb
 
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 
-# Nothing waits for the answer of a wake that the reader dropped, so its cancel ends it at once.
-_TRY_CANCEL = temporalio.workflow.NexusOperationCancellationType.TRY_CANCEL
+# A wake's cancel ends it once the server has the cancel. The server drops the cancel of a run
+# that closed, so the run's end waits for it.
+_WAIT_REQUESTED = temporalio.workflow.NexusOperationCancellationType.WAIT_REQUESTED
 # A close goes on when the run is cancelled, since the cancel may be what the close records.
 _ABANDON = temporalio.workflow.NexusOperationCancellationType.ABANDON
 # How long a wake parks on the server. A parked wake adds nothing to History, so an idle reader
@@ -273,7 +274,7 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
                 schedule_to_close_timeout=None,
                 schedule_to_start_timeout=None,
                 start_to_close_timeout=None,
-                cancellation_type=_TRY_CANCEL,
+                cancellation_type=_WAIT_REQUESTED,
                 headers=None,
                 summary=None,
             )

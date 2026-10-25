@@ -18,7 +18,7 @@ import pytest
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import WorkflowTaskFailedCause
-from temporalio.client import Client, WorkflowHandle
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
 from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams import _native, _plugin
 from temporalio.common.streams._native import POSITIONS_TYPE
@@ -31,7 +31,7 @@ from tests.contrib.streams.test_workflow_reads import (
     ReadInput,
     Writer,
 )
-from tests.helpers import new_worker
+from tests.helpers import assert_eventually, new_worker
 
 
 @activity.defn
@@ -324,6 +324,78 @@ async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
         event.HasField("nexus_operation_cancel_requested_event_attributes")
         for event in history.events
     )
+
+
+@workflow.defn
+class EndsWhileItReads:
+    def __init__(self) -> None:
+        self._end = False
+
+    @workflow.signal
+    def end(self) -> None:
+        self._end = True
+
+    @workflow.run
+    async def run(self, stream: streams.WorkflowStream[Events], first: bool) -> str:
+        async def read() -> None:
+            async for _ in stream.subscribe(offset=streams.END):
+                pass
+
+        asyncio.create_task(read())
+        await workflow.wait_condition(lambda: self._end)
+        if first:
+            workflow.continue_as_new(args=[stream, False])
+        return "done"
+
+
+async def until_parked(handle: WorkflowHandle[Any, Any]) -> None:
+    for _ in range(100):
+        history = await handle.fetch_history()
+        if any(
+            event.HasField("nexus_operation_started_event_attributes")
+            for event in history.events
+        ):
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError("The reader never parked")
+
+
+async def test_a_run_end_waits_until_the_server_has_its_wakes_cancels(
+    native_client: Client,
+):
+    # The server drops the cancel of a run that closed, and its parked read would keep a slot
+    # of the Stream's stream.maxParkedReads until the next append, for up to 7 days.
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
+    async with new_worker(native_client, EndsWhileItReads) as worker:
+        first = await native_client.start_workflow(
+            EndsWhileItReads.run,
+            args=[streams.WorkflowStream.from_handle(stream), True],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await until_parked(first)
+        await first.signal(EndsWhileItReads.end)
+
+        async def continued() -> None:
+            description = await native_client.get_workflow_handle(
+                first.id, run_id=first.first_execution_run_id
+            ).describe()
+            assert description.status == WorkflowExecutionStatus.CONTINUED_AS_NEW
+
+        await assert_eventually(continued)
+        latest = native_client.get_workflow_handle(first.id)
+        await until_parked(latest)
+        await latest.signal(EndsWhileItReads.end)
+        assert await latest.result() == "done"
+    # Nothing comes after a run's close, so the server took each cancel while the run was open.
+    for run_id in (first.first_execution_run_id, latest.result_run_id):
+        history = await native_client.get_workflow_handle(
+            first.id, run_id=run_id
+        ).fetch_history()
+        assert any(
+            event.HasField("nexus_operation_cancel_request_completed_event_attributes")
+            for event in history.events
+        )
 
 
 @workflow.defn

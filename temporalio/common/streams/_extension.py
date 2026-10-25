@@ -456,7 +456,7 @@ def _receive(args: Sequence[Any]) -> None:
 async def _end_run() -> None:
     # The run's reads end with it, so the server drops their parked reads. Its writes that
     # nobody awaits go out before its end.
-    _workflow_reader.cancel_wakes()
+    await _workflow_reader.cancel_wakes()
     await streams_workflow.drain()
 
 
