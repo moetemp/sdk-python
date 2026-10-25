@@ -44,7 +44,7 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
         )
     if not handle.backend and not streams.default:
         raise _errors.no_default_backend(
-            "Worker", [streams.backend_name], "a handle that carries its backend name"
+            "Worker", [streams.backend_name], "a handle that has its backend name"
         )
     return streams
 

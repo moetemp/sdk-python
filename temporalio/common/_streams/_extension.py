@@ -143,8 +143,8 @@ class ExtensionStreamBackend(StreamBackend):
             for other in interceptors
         ):
             raise StreamConfigError(
-                "The Worker's client has another Stream backend. For now a Worker serves "
-                "one backend."
+                "The Worker's client has another Stream backend. A Worker serves only one "
+                "backend."
             )
         mine = self._interceptor_of(interceptors)
         if mine is None:
@@ -184,7 +184,7 @@ class ExtensionStreamBackend(StreamBackend):
             for other in config.get("interceptors", [])
         ):
             raise StreamConfigError(
-                "The Replayer has another Stream backend. For now a Replayer serves one "
+                "The Replayer has another Stream backend. A Replayer serves only one "
                 "backend, as a Worker does."
             )
         config["interceptors"] = [
