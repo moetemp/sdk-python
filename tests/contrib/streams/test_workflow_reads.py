@@ -303,6 +303,38 @@ async def test_a_workflow_page_stays_below_the_marker_limit(stream_client: Clien
         )
 
 
+@workflow.defn
+class ReadsTheClose:
+    @workflow.run
+    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+        [closed] = [item async for item in stream.subscribe()]
+        assert isinstance(closed, streams.Closed)
+        assert isinstance(closed.failure, ApplicationError)
+        return [
+            closed.status.name,
+            closed.failure.message,
+            closed.failure.type,
+            [type(detail).__name__ for detail in closed.failure.details],
+        ]
+
+
+async def test_a_workflow_read_gives_the_close_status_and_failure(
+    stream_client: Client,
+):
+    # The model's converter keeps the payloads raw, as Topic types decode the bodies later.
+    stream = await stream_client.create_stream(Events, id=f"failed-{uuid.uuid4()}")
+    await stream.close(
+        failure=ApplicationError("tool failed", "detail", {"k": 1}, type="Tool")
+    )
+    async with new_worker(stream_client, ReadsTheClose) as worker:
+        assert await stream_client.execute_workflow(
+            ReadsTheClose.run,
+            streams.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        ) == ["FAILED", "tool failed", "Tool", ["str", "dict"]]
+
+
 async def test_a_backend_that_lacks_a_capability_fails_the_task(
     stream_client: Client, monkeypatch: pytest.MonkeyPatch
 ):

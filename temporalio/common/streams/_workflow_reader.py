@@ -21,7 +21,13 @@ import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.workflow
 from temporalio.common.streams import _convert, _errors
-from temporalio.common.streams._items import Closed, End, Record, Superseded
+from temporalio.common.streams._items import (
+    Closed,
+    CloseStatus,
+    End,
+    Record,
+    Superseded,
+)
 from temporalio.common.streams._reader import Position, Subscription
 from temporalio.common.streams.system import models
 
@@ -416,10 +422,19 @@ def workflow_item(
             return None
         return Superseded(offset=offset, supersession=model.supersession)
     if model.kind == stream_pb.StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
+        failure = model.close_failure
+        if isinstance(failure, temporalio.exceptions.FailureError) and failure.failure:
+            # The model's converter keeps payloads raw for the Topic types.
+            failure = _failure_converter().from_failure(failure.failure, converter)
+        # A close Record from before close statuses has none, and its failure tells.
+        status = model.close_status or (
+            CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
+        )
         return Closed(
             offset=offset,
             result=_decode(converter, model.close_result, None),
-            failure=model.close_failure,
+            failure=failure,
+            status=CloseStatus(status),
         )
     return None
 
