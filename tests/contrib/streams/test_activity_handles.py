@@ -16,7 +16,7 @@ from temporalio.client import Client, WorkflowHandle
 from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams import _activity
 from temporalio.exceptions import CancelledError
-from tests.contrib.streams._support import on_native
+from tests.contrib.streams._support import on_native, read_after_run_end
 from tests.helpers import new_worker
 
 
@@ -361,8 +361,7 @@ async def test_store_refuses_another_chains_close(stream_client: Client):
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         ) == ("stream_not_found" if native else "stream_not_owner")
-    stream = owner.stream(Events)
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    items = await read_after_run_end(stream_client, owner.stream(Events))
     # The server closed the native Stream when its run chain ended.
     expected: list[type] = [streams.Closed] if native else [streams.Record]
     assert [type(item) for item in items] == expected

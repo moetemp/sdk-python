@@ -37,7 +37,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.contrib.streams._support import on_native
+from tests.contrib.streams._support import on_native, read_after_run_end
 from tests.helpers import new_worker
 
 
@@ -774,8 +774,7 @@ async def test_final_failure_under_a_retry_policy(
         )
         with pytest.raises(WorkflowFailureError):
             await handle.result()
-        stream = workflow_stream(handle)
-        items = [item async for item in stream.subscribe(wait_new_records=False)]
+        items = await read_after_run_end(stream_client, workflow_stream(handle))
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     # The end of the chain closes only a native Stream, with the last run's failure.
