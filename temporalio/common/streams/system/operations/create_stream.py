@@ -53,7 +53,7 @@ async def create_stream(
 ) -> CreateStreamResult:
     """
     Args:
-        stream_id: Required from Workflow code. Empty elsewhere asks the service for an
+        stream_id: Required on Redis and memory. On native, empty asks the server for an
             id.
         retention: The age after which a Record is dropped. Empty is the Store default.
         withdraw_run: Retry run only. The previous run, whose Records this withdraws.

@@ -59,7 +59,7 @@ class NativeStreamConfig(google.protobuf.message.Message):
 global___NativeStreamConfig = NativeStreamConfig
 
 class RedisStreamConfig(google.protobuf.message.Message):
-    """The settings of the Redis Stream extension. Lang builds it from the plugin options."""
+    """The settings of the Redis Stream extension. Lang builds it from the backend options."""
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -427,7 +427,7 @@ class FreeWriterResponse(google.protobuf.message.Message):
 global___FreeWriterResponse = FreeWriterResponse
 
 class CloseWritersRequest(google.protobuf.message.Message):
-    """Method `CloseWriters`, asynchronous. Drops every open writer, for example when the plugin's
+    """Method `CloseWriters`, asynchronous. Drops every open writer, for example when the backend's
     client or Worker shuts down.
     """
 
