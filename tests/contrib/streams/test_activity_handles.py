@@ -350,8 +350,14 @@ class Closing:
             streams.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
+        # A handle with only the id names no Workflow, so the Store refuses it.
+        by_id = await workflow.execute_local_activity(
+            close_it,
+            streams.ActivityStream(id=stream.id),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
         await stream.close(result="closed by the run")
-        return [backend, owner, local]
+        return [backend, owner, local, by_id]
 
 
 async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
@@ -366,9 +372,10 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
             "config",
             "stream_not_owner",
             "stream_not_owner",
+            "stream_not_owner",
         ]
         items = await read(handle)
-    assert [r.data for r in records(items)] == ["last", "last"]
+    assert [r.data for r in records(items)] == ["last", "last", "last"]
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == "closed by the run"
 
