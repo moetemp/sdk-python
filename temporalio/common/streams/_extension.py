@@ -33,8 +33,8 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 logger = logging.getLogger(__name__)
 
-# The backend puts this key into the headers of each Activity and Local Activity that a Workflow
-# schedules. It keeps the Producer id the same across retries.
+# The backend puts this key into the headers of each Local Activity that a Workflow schedules,
+# and of each Activity of a run that uses Streams. It keeps the Producer id across retries.
 _KEY_HEADER = "__temporal_stream_key"
 # Continue-as-new passes the run chain's open Streams to the next run in this header.
 _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
@@ -282,6 +282,7 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
         self, input: temporalio.worker.ExecuteWorkflowInput
     ) -> Any:
         _take_owned_streams(input.headers)
+        _receive(input.args)
         try:
             result = await super().execute_workflow(input)
         except BaseException as err:
@@ -292,6 +293,23 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
         streams_workflow.close_at_run_end(None)
         await streams_workflow.drain()
         return result
+
+    async def handle_signal(self, input: temporalio.worker.HandleSignalInput) -> None:
+        _receive(input.args)
+        await super().handle_signal(input)
+
+    async def handle_update_handler(
+        self, input: temporalio.worker.HandleUpdateInput
+    ) -> Any:
+        _receive(input.args)
+        return await super().handle_update_handler(input)
+
+
+def _receive(args: Sequence[Any]) -> None:
+    # A run that receives a Stream uses Streams. The inputs, Signals and Updates are in
+    # History, so a replay finds the same.
+    if _stream_arguments(args):
+        streams_workflow._state().uses_streams = True
 
 
 def _ends_run(err: BaseException) -> bool:
@@ -323,6 +341,7 @@ def _take_owned_streams(
     if payload is None:
         return
     state = streams_workflow._state()
+    state.uses_streams = True
     converter = temporalio.converter.PayloadConverter.default
     for stream_id, backend, *_ in converter.from_payload(payload, list[Any]):
         state.stream(_owned_ref(stream_id)).backend = backend
@@ -374,12 +393,20 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def start_activity(
         self, input: temporalio.worker.StartActivityInput
     ) -> temporalio.workflow.ActivityHandle[Any]:
-        input.headers = {**input.headers, **self._activity_headers()}
+        # The key goes into History, so only a run that uses Streams adds it, or a run whose
+        # Activity gets a Stream. Each call still counts, so a key is the same on replay.
+        headers = self._activity_headers()
+        state = streams_workflow._state()
+        if not state.uses_streams and _stream_arguments(input.args):
+            state.uses_streams = True
+        if state.uses_streams:
+            input.headers = {**input.headers, **headers}
         return super().start_activity(input)
 
     def start_local_activity(
         self, input: temporalio.worker.StartLocalActivityInput
     ) -> temporalio.workflow.ActivityHandle[Any]:
+        # A Local Activity's headers stay out of History, so each one gets its key.
         input.headers = {**input.headers, **self._activity_headers()}
         return super().start_local_activity(input)
 

@@ -659,3 +659,108 @@ def test_sync_call_stops_when_the_thread_is_cancelled():
     assert stopped.wait(5)
     assert errors and isinstance(errors[0], CancelledError)
     loop.call_soon_threadsafe(loop.stop)
+
+
+@activity.defn
+async def plain(name: str) -> str:
+    return f"hello {name}"
+
+
+@workflow.defn
+class NeverTouchesStreams:
+    @workflow.run
+    async def run(self) -> str:
+        return await workflow.execute_activity(
+            plain, "ada", start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+@workflow.defn
+class ReceivesAStream:
+    @workflow.run
+    async def run(self, stream: streams.WorkflowStream[Events]) -> str:
+        # The Activity gets no Stream, but the run received one.
+        return await workflow.execute_activity(
+            plain, stream.id, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+@workflow.defn
+class RetriesAfterContinueAsNew:
+    @workflow.run
+    async def run(
+        self, key: str, stream: streams.WorkflowStream[Events] | None
+    ) -> None:
+        if stream is None:
+            created = await workflow.create_stream(Events)
+            workflow.continue_as_new(args=[key, created])
+        await workflow.execute_activity(
+            flaky,
+            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+
+
+async def keyed(handle: WorkflowHandle[Any, Any], activity_type: str) -> list[bool]:
+    # Whether each schedule of the Activity carries the Producer key.
+    history = await handle.fetch_history()
+    return [
+        "__temporal_stream_key" in attributes.header.fields
+        for event in history.events
+        if (
+            attributes := event.activity_task_scheduled_event_attributes
+        ).activity_type.name
+        == activity_type
+    ]
+
+
+async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: Client):
+    # The key is in History, so a run with no Stream adds none. A run that created, bound or
+    # received one keys each Activity, so an Activity that writes keeps its Producer id.
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client,
+        NeverTouchesStreams,
+        ReceivesAStream,
+        Retrying,
+        RetriesAfterContinueAsNew,
+        activities=[plain, flaky],
+    ) as worker:
+        none = await stream_client.start_workflow(
+            NeverTouchesStreams.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await none.result() == "hello ada"
+        assert await keyed(none, "plain") == [False]
+        creates = await stream_client.start_workflow(
+            Retrying.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        await creates.result()
+        assert await keyed(creates, "flaky") == [True]
+        receives = await stream_client.start_workflow(
+            ReceivesAStream.run,
+            streams.WorkflowStream.from_handle(creates.stream(Events)),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await receives.result()
+        assert await keyed(receives, "plain") == [True]
+        # The next run gets the Stream as its argument, and its retried Activity withdraws its
+        # first attempt as in the run that created the Stream.
+        continued_key = str(uuid.uuid4())
+        continued = await stream_client.start_workflow(
+            RetriesAfterContinueAsNew.run,
+            args=[continued_key, None],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await continued.result()
+        assert await keyed(continued, "flaky") == [True]
+        items = await read(continued)
+    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    assert len(superseded) == 1
+    assert [r.data for r in records(items) if superseded[0].withdraws(r)] == [
+        "attempt-1"
+    ]
