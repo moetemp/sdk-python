@@ -13,8 +13,11 @@ import weakref
 from datetime import timedelta
 from typing import Any, cast
 
+import pytest
+
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio import activity, workflow
+from temporalio.api.enums.v1 import WorkflowTaskFailedCause
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams import _native, _plugin
@@ -486,6 +489,78 @@ async def test_a_workflow_reads_a_standalone_activitys_stream(native_client: Cli
     ]
     assert local_activities
     assert _native._describe_activity_name("native") not in local_activities
+
+
+@workflow.defn
+class CountsThenWaits:
+    def __init__(self) -> None:
+        self._go = False
+
+    @workflow.signal
+    def finish(self) -> None:
+        self._go = True
+
+    @workflow.run
+    async def run(self, stream: streams.WorkflowStream[Events]) -> int:
+        count = len([item async for item in stream.subscribe(wait_new_records=False)])
+        await workflow.wait_condition(lambda: self._go)
+        return count
+
+
+async def until_marker(handle: WorkflowHandle[Any, Any]) -> None:
+    for _ in range(100):
+        history = await handle.fetch_history()
+        if any(
+            event.HasField("marker_recorded_event_attributes")
+            for event in history.events
+        ):
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError("The reader never read")
+
+
+async def until_task_failure(handle: WorkflowHandle[Any, Any]) -> Any:
+    for _ in range(100):
+        history = await handle.fetch_history()
+        for event in history.events:
+            if event.HasField("workflow_task_failed_event_attributes"):
+                return event.workflow_task_failed_event_attributes
+        await asyncio.sleep(0.1)
+    raise AssertionError("No Workflow Task failed")
+
+
+async def test_a_replay_that_reads_other_records_is_nondeterministic(
+    native_client: Client, monkeypatch: pytest.MonkeyPatch
+):
+    # The codec step checks a replayed page against its digest, outside the Workflow. The
+    # server and the Replayer still learn that the replay was nondeterministic.
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
+    await stream.topic(Events.tokens).publish("a", "b")
+    async with new_worker(
+        native_client, CountsThenWaits, max_cached_workflows=0
+    ) as worker:
+        handle = await native_client.start_workflow(
+            CountsThenWaits.run,
+            streams.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await until_marker(handle)
+        monkeypatch.setattr(_native, "_digest", lambda records: b"other")
+        _native._pages.clear()
+        await handle.signal(CountsThenWaits.finish)
+        failed = await until_task_failure(handle)
+        await handle.terminate()
+    assert (
+        failed.cause
+        == WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
+    )
+    assert "found other Records" in failed.failure.message
+    replayer = Replayer(workflows=[CountsThenWaits], stream_client=native_client)
+    result = await replayer.replay_workflow(
+        await handle.fetch_history(), raise_on_replay_failure=False
+    )
+    assert isinstance(result.replay_failure, workflow.NondeterminismError)
 
 
 async def test_each_client_of_a_native_backend_calls_on_its_own_connection():

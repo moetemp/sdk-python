@@ -25,6 +25,7 @@ import temporalio.converter
 import temporalio.converter._extstore
 import temporalio.exceptions
 import temporalio.workflow
+from temporalio.api.enums.v1 import WorkflowTaskFailedCause
 from temporalio.bridge.worker import PollShutdownError
 from temporalio.converter import StorageDriverStoreContext, StorageDriverWorkflowInfo
 from temporalio.worker.workflow_sandbox._runner import SandboxedWorkflowRunner
@@ -53,6 +54,15 @@ logger = logging.getLogger(__name__)
 
 # Set to true to log all activations and completions
 LOG_PROTOS = False
+
+_NONDETERMINISM = (
+    WorkflowTaskFailedCause.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR
+)
+_EvictionReason = (
+    temporalio.bridge.proto.workflow_activation.RemoveFromCache.EvictionReason
+)
+_LANG_FAIL = _EvictionReason.LANG_FAIL
+_NONDETERMINISM_EVICTION = _EvictionReason.NONDETERMINISM
 
 
 # Value was chosen abitrarily as a small number that allows some concurrency and prevents
@@ -174,6 +184,8 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             max_workflow_task_external_storage_concurrency
         )
         self._throw_after_activation: Exception | None = None
+        # The runs whose last Workflow Task a NondeterminismError of the codec step failed.
+        self._nondeterministic_runs: set[str] = set()
 
         # If debug mode is enabled, disable deadlock detection
         # otherwise set to 2 seconds
@@ -465,6 +477,25 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                     )
             else:
                 completion.failed.failure.SetInParent()
+                if isinstance(err, temporalio.workflow.NondeterminismError):
+                    # A codec step may compare the data with what the run saw, such as a
+                    # native Stream read.
+                    self._nondeterministic_runs.add(act.run_id)
+                    workflow_type = (
+                        workflow.get_info().workflow_type
+                        if workflow
+                        else init_job.workflow_type
+                        if init_job
+                        else ""
+                    )
+                    # Core fails a run for this cause in the middle of the replay, and again at
+                    # the next marker, so only a run that fails the task takes it.
+                    if not (
+                        self.nondeterminism_as_workflow_fail()
+                        or workflow_type
+                        in self.nondeterminism_as_workflow_fail_for_types()
+                    ):
+                        completion.failed.force_cause = _NONDETERMINISM
                 try:
                     data_converter.failure_converter.to_failure(
                         err,
@@ -646,6 +677,15 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
                 "Failed completing eviction activation on workflow with run ID %s",
                 act.run_id,
             )
+
+        if act.run_id in self._nondeterministic_runs:
+            self._nondeterministic_runs.discard(act.run_id)
+            if job.reason == _LANG_FAIL:
+                # Core evicts a run that lang failed as a lang failure, so a hook such as the
+                # Replayer's would not see the nondeterminism.
+                job = temporalio.bridge.proto.workflow_activation.RemoveFromCache(
+                    message=job.message, reason=_NONDETERMINISM_EVICTION
+                )
 
         # Run eviction hook if present
         if self._on_eviction_hook is not None:
