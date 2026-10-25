@@ -10,15 +10,14 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from temporalio import activity
+from temporalio import activity, common
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @activity.defn
@@ -43,8 +42,8 @@ async def main(client: Client, task_queue: str) -> list[str]:
         async for item in handle.stream(Events).subscribe(
             create_wait=timedelta(seconds=30)
         ):
-            if isinstance(item, streams.Record):
+            if isinstance(item, common.Record):
                 seen.append(item.data)
-            elif isinstance(item, streams.Closed):
+            elif isinstance(item, common.Closed):
                 seen.append(f"activity said {item.result}")
         return seen

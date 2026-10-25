@@ -38,7 +38,7 @@ from .types import CallableType
 
 if TYPE_CHECKING:
     from temporalio.client import Client
-    from temporalio.common.streams import ActivityStream, Creating
+    from temporalio.common import ActivityStream, Creating
 
 _StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
@@ -553,7 +553,7 @@ def create_stream(
             backend is not native. No call is made.
         StreamClosedError: The Stream was created and closed before.
     """
-    from temporalio.common.streams import _activity_stream
+    from temporalio.common._streams import _activity_stream
 
     return _activity_stream.create_stream(
         definition, retention=retention, backend=backend

@@ -11,9 +11,8 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
@@ -23,10 +22,10 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
-    tokens = streams.topic(str)
+    turns = common.topic(Turn)
+    tokens = common.topic(str)
 
 
 @dataclass
@@ -38,7 +37,7 @@ class Reply:
 @dataclass
 class CallModelInput:
     messages: list[str]
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -65,7 +64,7 @@ class AgentTurns:
             await turns.publish(Turn("model"))
             reply = await workflow.execute_activity(
                 call_model,
-                CallModelInput(messages, streams.ActivityStream.from_handle(stream)),
+                CallModelInput(messages, common.ActivityStream.from_handle(stream)),
                 start_to_close_timeout=timedelta(minutes=5),
             )
             if not reply.tool_calls:
@@ -81,9 +80,7 @@ class AgentTurns:
                 )
 
 
-async def main(
-    client: Client, task_queue: str
-) -> list[streams.Record | streams.Closed]:
+async def main(client: Client, task_queue: str) -> list[common.Record | common.Closed]:
     async with Worker(
         client,
         task_queue=task_queue,
@@ -101,5 +98,5 @@ async def main(
         return [
             item
             async for item in stream.subscribe()
-            if isinstance(item, (streams.Record, streams.Closed))
+            if isinstance(item, (common.Record, common.Closed))
         ]

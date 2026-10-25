@@ -8,8 +8,8 @@ import uuid
 
 import pytest
 
+from temporalio import common
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.contrib.streams.conftest import NATIVE_NAMESPACE, NATIVE_TARGET
@@ -58,12 +58,12 @@ async def test_client_creates_stream(redis_client: Client):
 
 async def test_agent_publishes_turns(stream_client: Client):
     items = await agent_publishes_turns.main(stream_client, task_queue())
-    data = [item.data for item in items if isinstance(item, streams.Record)]
+    data = [item.data for item in items if isinstance(item, common.Record)]
     Turn = agent_publishes_turns.Turn
     assert data == [Turn("model"), "find", "it", Turn("model"), "search", "result"] + [
         Turn("done", "the answer")
     ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "the answer"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "the answer"
 
 
 async def test_activity_streams_tokens(stream_client: Client):
@@ -108,7 +108,7 @@ async def test_worker_setup_on_redis(client: Client, redis_url: str):
 # The Jetty v2 examples. The Workflow reader runs on one backend: the memory Store, Redis or
 # the native server. The others need the native server, with Redis, or a memory Store named
 # `redis` in its place, so they run only when TEMPORAL_STREAMS_NATIVE_TARGET is set.
-async def native_server(*backends: streams.StreamBackend) -> Client:
+async def native_server(*backends: common.StreamBackend) -> Client:
     if not NATIVE_TARGET:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
@@ -120,7 +120,7 @@ async def native_server(*backends: streams.StreamBackend) -> Client:
 
 def redis_stand_in(
     lane: str, request: pytest.FixtureRequest, *, default: bool = False
-) -> streams.StreamBackend:
+) -> common.StreamBackend:
     if lane == "memory":
         return MemoryStreamBackend(name="redis", default=default)
     redis_url = request.getfixturevalue("redis_url")

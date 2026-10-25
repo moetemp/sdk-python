@@ -10,17 +10,16 @@ from __future__ import annotations
 
 import uuid
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @workflow.defn
@@ -79,7 +78,7 @@ async def main(client: Client, task_queue: str) -> list[str]:
     return [
         item.data
         async for item in stream.subscribe()
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
 
 

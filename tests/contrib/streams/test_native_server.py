@@ -15,12 +15,12 @@ from typing import Any, cast
 import pytest
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.api.enums.v1 import WorkflowTaskFailedCause
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
-from temporalio.common import RetryPolicy, streams
-from temporalio.common.streams import _native, _plugin, _workflow_reader
-from temporalio.common.streams._native import POSITIONS_TYPE
+from temporalio.common import RetryPolicy
+from temporalio.common._streams import _native, _plugin, _workflow_reader
+from temporalio.common._streams._native import POSITIONS_TYPE
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
 from tests.contrib.streams import test_redis
@@ -34,12 +34,12 @@ from tests.helpers import assert_eventually, new_worker
 
 
 @activity.defn
-async def write_native(stream: streams.ActivityStream[Events]) -> None:
+async def write_native(stream: common.ActivityStream[Events]) -> None:
     await stream.topic(Events.tokens).publish("activity")
 
 
 @activity.defn
-def write_native_sync(stream: streams.SyncActivityStream[Events]) -> None:
+def write_native_sync(stream: common.SyncActivityStream[Events]) -> None:
     stream.topic(Events.tokens).publish("sync activity")
 
 
@@ -47,21 +47,21 @@ def write_native_sync(stream: streams.SyncActivityStream[Events]) -> None:
 class WritesNativeAndRedis:
     @workflow.run
     async def run(self) -> list[str | None]:
-        on_redis = await workflow.create_stream(streams.with_name(Events, "old"))
+        on_redis = await workflow.create_stream(common.with_name(Events, "old"))
         on_native = await workflow.create_stream(
-            streams.with_name(Events, "new"), backend="native"
+            common.with_name(Events, "new"), backend="native"
         )
         await on_redis.topic(Events.tokens).publish("redis")
         await on_native.topic(Events.tokens).publish("workflow 1", "workflow 2")
         # The Activities write after the run's own writes, as on Redis.
         await workflow.execute_activity(
             write_native,
-            streams.ActivityStream.from_handle(on_native),
+            common.ActivityStream.from_handle(on_native),
             start_to_close_timeout=timedelta(seconds=10),
         )
         await workflow.execute_activity(
             write_native_sync,
-            streams.SyncActivityStream.from_handle(on_native),
+            common.SyncActivityStream.from_handle(on_native),
             start_to_close_timeout=timedelta(seconds=10),
         )
         await on_native.topic(Events.tokens).publish("last")
@@ -73,11 +73,11 @@ async def test_native_client_round_trip(native_client: Client):
     assert await stream.topic(Events.tokens).publish("a", "b")
     await stream.close(result="done")
     items = [item async for item in stream.subscribe()]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+    assert [item.data for item in items if isinstance(item, common.Record)] == [
         "a",
         "b",
     ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "done"
 
 
 async def test_native_workflow_reads_and_replays(native_client: Client):
@@ -88,7 +88,7 @@ async def test_native_workflow_reads_and_replays(native_client: Client):
         stream = writer.stream(Events)
         reader = await native_client.start_workflow(
             Reader.run,
-            ReadInput(streams.WorkflowStream.from_handle(stream)),
+            ReadInput(common.WorkflowStream.from_handle(stream)),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -141,9 +141,9 @@ async def test_redis_and_native_on_a_native_server(
             task_queue=worker.task_queue,
         )
         assert await handle.result() == ["redis", "native"]
-    new = handle.stream(streams.with_name(Events, "new"), backend="native")
+    new = handle.stream(common.with_name(Events, "new"), backend="native")
     items = [item async for item in new.subscribe()]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+    assert [item.data for item in items if isinstance(item, common.Record)] == [
         "workflow 1",
         "workflow 2",
         "activity",
@@ -151,7 +151,7 @@ async def test_redis_and_native_on_a_native_server(
         "last",
     ]
     # The server closes a native Stream when its run chain ends, with the run's result.
-    assert isinstance(items[-1], streams.Closed)
+    assert isinstance(items[-1], common.Closed)
     assert items[-1].result == ["redis", "native"]
 
 
@@ -177,19 +177,19 @@ async def test_the_server_closes_a_stream_when_its_run_chain_ends(
         )
         assert await handle.result() == "done"
     items = [item async for item in handle.stream(Events).subscribe()]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == ["a"]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "done"
-    assert items[-1].status == streams.CloseStatus.COMPLETED
+    assert [item.data for item in items if isinstance(item, common.Record)] == ["a"]
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "done"
+    assert items[-1].status == common.CloseStatus.COMPLETED
 
 
 @workflow.defn
 class WritesByBareId:
     @workflow.run
     async def run(self, stream_id: str) -> str:
-        stream = streams.WorkflowStream[Events](id=stream_id, backend="native")
+        stream = common.WorkflowStream[Events](id=stream_id, backend="native")
         try:
             await stream.topic(Events.tokens).publish("lost")
-        except streams.StreamNotFoundError as err:
+        except common.StreamNotFoundError as err:
             return err.reason
         return "written"
 
@@ -230,7 +230,7 @@ async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: C
         )
         await handle.result()
         items = await test_redis.read_all(test_redis.workflow_stream(handle))
-    withdrawn = [item for item in items if isinstance(item, streams.Superseded)]
+    withdrawn = [item for item in items if isinstance(item, common.Superseded)]
     visible = [
         item.data
         for item in test_redis.records(items)
@@ -242,10 +242,10 @@ async def test_a_rerun_local_activity_withdraws_its_failed_task(native_client: C
 @workflow.defn
 class ReadsNewTokens:
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
-        items = stream.subscribe(Events.tokens, offset=streams.END)
+    async def run(self, stream: common.WorkflowStream[Events]) -> list[Any]:
+        items = stream.subscribe(Events.tokens, offset=common.END)
         return [
-            item.data if isinstance(item, streams.Record) else "closed"
+            item.data if isinstance(item, common.Record) else "closed"
             async for item in items
         ]
 
@@ -273,7 +273,7 @@ async def test_a_native_read_from_the_end_keeps_what_comes_after_its_first_page(
     async with new_worker(native_client, ReadsNewTokens) as worker:
         reader = await native_client.start_workflow(
             ReadsNewTokens.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -289,8 +289,8 @@ class ClosesItsRead:
         self._stop = False
 
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> str:
-        items = stream.subscribe(offset=streams.END)
+    async def run(self, stream: common.WorkflowStream[Events]) -> str:
+        items = stream.subscribe(offset=common.END)
         reading = asyncio.create_task(items.__anext__())
         await workflow.wait_condition(lambda: self._stop)
         await items.aclose()
@@ -311,7 +311,7 @@ async def test_closing_a_native_read_cancels_its_wake(native_client: Client):
     async with new_worker(native_client, ClosesItsRead) as worker:
         reader = await native_client.start_workflow(
             ClosesItsRead.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -335,9 +335,9 @@ class EndsWhileItReads:
         self._end = True
 
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events], first: bool) -> str:
+    async def run(self, stream: common.WorkflowStream[Events], first: bool) -> str:
         async def read() -> None:
-            async for _ in stream.subscribe(offset=streams.END):
+            async for _ in stream.subscribe(offset=common.END):
                 pass
 
         asyncio.create_task(read())
@@ -368,7 +368,7 @@ async def test_a_run_end_waits_until_the_server_has_its_wakes_cancels(
     async with new_worker(native_client, EndsWhileItReads) as worker:
         first = await native_client.start_workflow(
             EndsWhileItReads.run,
-            args=[streams.WorkflowStream.from_handle(stream), True],
+            args=[common.WorkflowStream.from_handle(stream), True],
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -401,10 +401,10 @@ async def test_a_run_end_waits_until_the_server_has_its_wakes_cancels(
 class ReadsTwoAndCloses:
     @workflow.run
     async def run(
-        self, a: streams.WorkflowStream[Events], b: streams.WorkflowStream[Events]
+        self, a: common.WorkflowStream[Events], b: common.WorkflowStream[Events]
     ) -> str:
-        async def read(stream: streams.WorkflowStream[Events]) -> None:
-            async for _ in stream.subscribe(offset=streams.END):
+        async def read(stream: common.WorkflowStream[Events]) -> None:
+            async for _ in stream.subscribe(offset=common.END):
                 pass
 
         asyncio.create_task(read(a))
@@ -421,10 +421,10 @@ async def test_reads_past_the_wake_cap_pause_on_a_timer(
     # Wakes and the close share the run's 30 pending Nexus operations, and the server fails a
     # task with one more. So reads past the cap leave room for the close.
     monkeypatch.setattr(_workflow_reader, "_MAX_WAKES", 1)
-    refs: list[streams.WorkflowStream[Events]] = []
+    refs: list[common.WorkflowStream[Events]] = []
     for _ in range(2):
         stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
-        refs.append(streams.WorkflowStream.from_handle(stream))
+        refs.append(common.WorkflowStream.from_handle(stream))
     async with new_worker(native_client, ReadsTwoAndCloses) as worker:
         handle = await native_client.start_workflow(
             ReadsTwoAndCloses.run,
@@ -458,10 +458,10 @@ class ReadsUntilToldToContinue:
         self._end = True
 
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+    async def run(self, stream: common.WorkflowStream[Events]) -> list[Any]:
         items = stream.subscribe(Events.tokens)
         sizes = [
-            len(item.data) async for item in items if isinstance(item, streams.Record)
+            len(item.data) async for item in items if isinstance(item, common.Record)
         ]
         await workflow.wait_condition(lambda: self._end)
         return [sizes, items.continue_as_new_suggested]
@@ -481,14 +481,14 @@ async def test_a_workflow_reader_keeps_its_range_of_a_client_stream(
     ) as worker:
         reader = await native_client.start_workflow(
             ReadsUntilToldToContinue.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
         await until_parked(reader)
         for _ in range(2):
             await stream.topic(Events.tokens).publish(big)
-        with pytest.raises(streams.StreamTooLargeError) as refused:
+        with pytest.raises(common.StreamTooLargeError) as refused:
             await stream.topic(Events.tokens).publish(big)
         assert refused.value.reason == "stream_too_large"
         await reader.signal(ReadsUntilToldToContinue.end)
@@ -534,16 +534,16 @@ async def test_a_standalone_activity_owns_its_stream(native_client: Client):
         assert await closed.result() == "done"
         assert await left_open.result() == "done"
     items = [item async for item in closed.stream(Events).subscribe()]
-    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+    assert [item.data for item in items if isinstance(item, common.Record)] == [
         "a",
         "b",
     ]
     # The Activity's own close got past the early owner check, so its close has no result.
-    assert isinstance(items[-1], streams.Closed) and items[-1].result is None
+    assert isinstance(items[-1], common.Closed) and items[-1].result is None
     left = [item async for item in left_open.stream(Events).subscribe()]
-    assert [item.data for item in left if isinstance(item, streams.Record)] == ["a"]
-    assert isinstance(left[-1], streams.Closed) and left[-1].result == "done"
-    assert left[-1].status == streams.CloseStatus.COMPLETED
+    assert [item.data for item in left if isinstance(item, common.Record)] == ["a"]
+    assert isinstance(left[-1], common.Closed) and left[-1].result == "done"
+    assert left[-1].status == common.CloseStatus.COMPLETED
 
 
 @activity.defn
@@ -577,21 +577,21 @@ async def test_a_block_end_leaves_a_standalone_activitys_stream_open(
         assert await handle.result() == "done on attempt 2"
     items = [item async for item in handle.stream(Events).subscribe()]
     assert "attempt 2" in [
-        item.data for item in items if isinstance(item, streams.Record)
+        item.data for item in items if isinstance(item, common.Record)
     ]
     # The server's close carries the result of the attempt that ended the Activity.
-    assert isinstance(items[-1], streams.Closed)
+    assert isinstance(items[-1], common.Closed)
     assert items[-1].result == "done on attempt 2"
 
 
 @workflow.defn
 class ReadsAll:
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+    async def run(self, stream: common.WorkflowStream[Events]) -> list[Any]:
         return [
-            item.data if isinstance(item, streams.Record) else f"closed {item.result}"
+            item.data if isinstance(item, common.Record) else f"closed {item.result}"
             async for item in stream.subscribe()
-            if not isinstance(item, streams.Superseded)
+            if not isinstance(item, common.Superseded)
         ]
 
 
@@ -613,7 +613,7 @@ async def test_a_workflow_reads_a_standalone_activitys_stream(native_client: Cli
         await activity_handle.result()
         reader = await native_client.start_workflow(
             ReadsAll.run,
-            streams.WorkflowStream.from_handle(activity_handle.stream(Events)),
+            common.WorkflowStream.from_handle(activity_handle.stream(Events)),
             id=f"wf-{uuid.uuid4()}",
             task_queue=task_queue,
         )
@@ -630,7 +630,7 @@ class CountsThenWaits:
         self._go = True
 
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> int:
+    async def run(self, stream: common.WorkflowStream[Events]) -> int:
         count = len([item async for item in stream.subscribe(wait_new_records=False)])
         await workflow.wait_condition(lambda: self._go)
         return count
@@ -670,7 +670,7 @@ async def test_a_replay_that_reads_other_records_is_nondeterministic(
     ) as worker:
         handle = await native_client.start_workflow(
             CountsThenWaits.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -695,7 +695,7 @@ async def test_a_replay_that_reads_other_records_is_nondeterministic(
 async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
     # One backend on two clients gives each its own runtime, so a call doesn't go on the
     # connection of the client that came last.
-    native = streams.NativeStreamBackend()
+    native = common.NativeStreamBackend()
     first = await Client.connect("127.0.0.1:1", lazy=True, stream_backends=[native])
     second = await Client.connect("127.0.0.1:2", lazy=True, stream_backends=[native])
     runtimes = [
@@ -718,7 +718,7 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
 async def test_a_native_backend_keeps_no_client_alive():
     # The implicit backend lives as long as the process, and every Worker's client goes
     # through it.
-    native = streams.NativeStreamBackend()
+    native = common.NativeStreamBackend()
     registered = await Client.connect(
         "127.0.0.1:1", lazy=True, stream_backends=[native]
     )

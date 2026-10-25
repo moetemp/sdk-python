@@ -6,17 +6,17 @@ from typing import Any
 
 import pytest
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import RetryPolicy, streams
+from temporalio.common import RetryPolicy
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 def two_backend_client(
@@ -33,13 +33,13 @@ def two_backend_client(
 
 
 def data(items: Sequence[object]) -> list[object]:
-    return [item.data for item in items if isinstance(item, streams.Record)]
+    return [item.data for item in items if isinstance(item, common.Record)]
 
 
 @dataclass
 class WriteBothInput:
-    on_redis: streams.ActivityStream[Events]
-    on_memory: streams.ActivityStream[Events]
+    on_redis: common.ActivityStream[Events]
+    on_memory: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -52,7 +52,7 @@ async def write_both(input: WriteBothInput) -> None:
 
 
 @activity.defn
-async def write_memory_locally(stream: streams.ActivityStream[Events]) -> None:
+async def write_memory_locally(stream: common.ActivityStream[Events]) -> None:
     await stream.topic(Events.tokens).publish("memory local")
 
 
@@ -60,24 +60,24 @@ async def write_memory_locally(stream: streams.ActivityStream[Events]) -> None:
 class WritesBoth:
     @workflow.run
     async def run(self) -> list[str | None]:
-        on_redis = await workflow.create_stream(streams.with_name(Events, "a"))
+        on_redis = await workflow.create_stream(common.with_name(Events, "a"))
         on_memory = await workflow.create_stream(
-            streams.with_name(Events, "b"), backend="memory"
+            common.with_name(Events, "b"), backend="memory"
         )
         await on_redis.topic(Events.tokens).publish("redis workflow")
         await on_memory.topic(Events.tokens).publish("memory workflow")
         await workflow.execute_activity(
             write_both,
             WriteBothInput(
-                streams.ActivityStream.from_handle(on_redis),
-                streams.ActivityStream.from_handle(on_memory),
+                common.ActivityStream.from_handle(on_redis),
+                common.ActivityStream.from_handle(on_memory),
             ),
             start_to_close_timeout=timedelta(seconds=10),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
         await workflow.execute_local_activity(
             write_memory_locally,
-            streams.ActivityStream.from_handle(on_memory),
+            common.ActivityStream.from_handle(on_memory),
             start_to_close_timeout=timedelta(seconds=10),
         )
         backends = [on_redis.backend, on_memory.backend]
@@ -89,7 +89,7 @@ class WritesBoth:
 async def read_all(
     handle: WorkflowHandle[Any, Any], name: str, backend: str
 ) -> list[object]:
-    stream = handle.stream(streams.with_name(Events, name), backend=backend)
+    stream = handle.stream(common.with_name(Events, name), backend=backend)
     return [item async for item in stream.subscribe(wait_new_records=False)]
 
 
@@ -106,18 +106,18 @@ async def test_one_worker_serves_two_backends(client: Client, redis_url: str):
         assert await handle.result() == ["redis", "memory"]
     on_redis = await read_all(handle, "a", "redis")
     on_memory = await read_all(handle, "b", "memory")
-    assert any(isinstance(item, streams.Superseded) for item in on_redis)
-    assert any(isinstance(item, streams.Superseded) for item in on_memory)
+    assert any(isinstance(item, common.Superseded) for item in on_redis)
+    assert any(isinstance(item, common.Superseded) for item in on_memory)
     assert data(on_redis)[-1] == "redis activity 2"
     assert data(on_memory)[-2:] == ["memory activity 2", "memory local"]
     assert "redis workflow" in data(on_redis)
     assert "memory workflow" in data(on_memory)
     for items in (on_redis, on_memory):
         closed = items[-1]
-        assert isinstance(closed, streams.Closed)
+        assert isinstance(closed, common.Closed)
         assert closed.result == ["redis", "memory"]
     # Each Stream is only in its own backend.
-    with pytest.raises(streams.StreamNotFoundError):
+    with pytest.raises(common.StreamNotFoundError):
         await read_all(handle, "b", "redis")
 
 
@@ -141,10 +141,10 @@ async def test_default_marks_the_worker_default(client: Client, redis_url: str):
 
 
 @activity.defn
-async def write_elsewhere(stream: streams.ActivityStream[Events]) -> str:
+async def write_elsewhere(stream: common.ActivityStream[Events]) -> str:
     try:
         await stream.topic(Events.tokens).publish("lost")
-    except streams.StreamConfigError as err:
+    except common.StreamConfigError as err:
         return str(err)
     return "written"
 
@@ -155,7 +155,7 @@ class PassesElsewhere:
     async def run(self) -> str:
         return await workflow.execute_activity(
             write_elsewhere,
-            streams.ActivityStream[Events](id="s", backend="elsewhere"),
+            common.ActivityStream[Events](id="s", backend="elsewhere"),
             start_to_close_timeout=timedelta(seconds=10),
         )
 
@@ -169,7 +169,7 @@ class CreatesElsewhere:
 
 async def test_a_backend_that_nobody_registered(client: Client, redis_url: str):
     two = two_backend_client(client, redis_url)
-    with pytest.raises(streams.StreamConfigError):
+    with pytest.raises(common.StreamConfigError):
         two.stream(Events, id="s", backend="elsewhere")
     async with new_worker(
         two, PassesElsewhere, CreatesElsewhere, activities=[write_elsewhere]
@@ -190,13 +190,13 @@ class ContinuesOnBoth:
     @workflow.run
     async def run(self, again: bool) -> str:
         if again:
-            await workflow.create_stream(streams.with_name(Events, "a"))
+            await workflow.create_stream(common.with_name(Events, "a"))
             await workflow.create_stream(
-                streams.with_name(Events, "b"), backend="memory"
+                common.with_name(Events, "b"), backend="memory"
             )
             workflow.continue_as_new(False)
         for name in ("a", "b"):
-            await workflow.stream_handle(streams.with_name(Events, name)).close(
+            await workflow.stream_handle(common.with_name(Events, name)).close(
                 result="last run"
             )
         return "last run"
@@ -215,5 +215,5 @@ async def test_continued_run_closes_each_backend(client: Client, redis_url: str)
         assert await handle.result() == "last run"
     for name, backend in (("a", "redis"), ("b", "memory")):
         items = await read_all(handle, name, backend)
-        assert isinstance(items[-1], streams.Closed)
+        assert isinstance(items[-1], common.Closed)
         assert items[-1].result == "last run"

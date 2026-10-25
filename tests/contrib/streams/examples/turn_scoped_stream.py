@@ -1,6 +1,6 @@
 """Brook API proposal, "A Workflow scopes a Stream to one turn and closes it".
 
-Each turn gets its own Stream, a renamed definition from ``streams.with_name``, which
+Each turn gets its own Stream, a renamed definition from ``common.with_name``, which
 ``async with`` closes at the end of the turn. An index Stream lists the turns, and
 continue-as-new passes it to the next run.
 """
@@ -11,32 +11,31 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @dataclass
 class TurnStarted:
     n: int
-    stream: streams.ClientStream[Events]
+    stream: common.ClientStream[Events]
 
 
-@streams.defn(name="index")
+@common.defn(name="index")
 class TurnIndex:
-    started = streams.topic(TurnStarted)
+    started = common.topic(TurnStarted)
 
 
 @dataclass
 class CallModelInput:
     prompt: str
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -50,7 +49,7 @@ class ChatTurnsInput:
     # The first turn number of this run. A Stream name must be unique in the run chain.
     next: int = 0
     # From the run before continue-as-new.
-    index: streams.WorkflowStream[TurnIndex] | None = None
+    index: common.WorkflowStream[TurnIndex] | None = None
 
 
 @workflow.defn
@@ -64,16 +63,16 @@ class ChatTurns:
         batch = input.prompts[:2]
         for i, prompt in enumerate(batch):
             async with workflow.create_stream(
-                streams.with_name(Events, f"turn-{input.next + i}"),
+                common.with_name(Events, f"turn-{input.next + i}"),
                 retention=timedelta(days=1),
             ) as turn:
                 # A Stream is data, so the index Record carries the turn's Stream.
                 await started.publish(
-                    TurnStarted(input.next + i, streams.ClientStream.from_handle(turn))
+                    TurnStarted(input.next + i, common.ClientStream.from_handle(turn))
                 )
                 await workflow.execute_activity(
                     call_model_into,
-                    CallModelInput(prompt, streams.ActivityStream.from_handle(turn)),
+                    CallModelInput(prompt, common.ActivityStream.from_handle(turn)),
                     start_to_close_timeout=timedelta(minutes=5),
                 )
         if len(input.prompts) > len(batch):
@@ -101,13 +100,13 @@ async def main(client: Client, task_queue: str) -> dict[int, list[str]]:
     index = handle.stream(TurnIndex)
     turns = {}
     async for item in index.subscribe():
-        if not isinstance(item, streams.Record):
+        if not isinstance(item, common.Record):
             continue
         # A Stream from a payload has no client, so the reader binds it to this one.
         turn = client.stream(Events, stream=item.data.stream)
         turns[item.data.n] = [
             token.data
             async for token in turn.subscribe()
-            if isinstance(token, streams.Record)
+            if isinstance(token, common.Record)
         ]
     return turns

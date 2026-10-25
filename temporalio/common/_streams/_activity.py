@@ -9,10 +9,10 @@ from typing import Any
 
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
-from temporalio.common.streams._backend import BackendCalls
-from temporalio.common.streams._handle import StreamHandle
-from temporalio.common.streams._writer import StreamWriter
-from temporalio.common.streams.system import models
+from temporalio.common._streams._backend import BackendCalls
+from temporalio.common._streams._handle import StreamHandle
+from temporalio.common._streams._writer import StreamWriter
+from temporalio.common._streams.system import models
 
 
 @dataclass

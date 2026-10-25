@@ -29,18 +29,18 @@ import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.converter
 import temporalio.exceptions
 import temporalio.workflow
-from temporalio.common.streams import _errors, _ids, _workflow_reader
-from temporalio.common.streams._access import read_spec
-from temporalio.common.streams._defn import TopicDefinition, definition_of
-from temporalio.common.streams._handle import (
+from temporalio.common._streams import _errors, _ids, _workflow_reader
+from temporalio.common._streams._access import read_spec
+from temporalio.common._streams._defn import TopicDefinition, definition_of
+from temporalio.common._streams._handle import (
     Creating,
     StreamHandle,
     TopicBase,
     exit_failure,
 )
-from temporalio.common.streams._items import End, close_status
-from temporalio.common.streams._workflow_reader import WorkflowItems
-from temporalio.common.streams.system import models
+from temporalio.common._streams._items import End, close_status
+from temporalio.common._streams._workflow_reader import WorkflowItems
+from temporalio.common._streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")
@@ -463,7 +463,7 @@ class WorkflowStream(StreamHandle[E]):
         Args:
             topics: Read these Topics, by Topic of the definition, name or Topic object.
                 With no Topics and no ``topic_prefixes``, read every Topic.
-            offset: Start at this offset, inclusive, or at ``streams.END`` for new Records
+            offset: Start at this offset, inclusive, or at ``common.END`` for new Records
                 only. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream. When False,
                 the read ends at the newest Record.

@@ -8,11 +8,11 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.common.streams import _backend, _errors
+from temporalio.common._streams import _backend, _errors
 
 if TYPE_CHECKING:
-    from temporalio.common.streams.system import models as system_models
-    from temporalio.common.streams.writer_system import client as writer_client
+    from temporalio.common._streams.system import models as system_models
+    from temporalio.common._streams.writer_system import client as writer_client
 
 
 class StreamWriter:
@@ -75,7 +75,7 @@ class StreamWriter:
         """Open the crate's writer once. The open of a new attempt withdraws the earlier one's
         Records, even when it writes nothing.
         """
-        from temporalio.common.streams.writer_system import models
+        from temporalio.common._streams.writer_system import models
 
         async with self._open_lock:
             if self._writer is None:
@@ -116,7 +116,7 @@ class StreamWriter:
         """Write ``(topic, value)`` pairs as Records now, in order. Returns the last Record's
         offset.
         """
-        from temporalio.common.streams.writer_system import models
+        from temporalio.common._streams.writer_system import models
 
         if self._closed:
             raise _errors.StreamClosedError(

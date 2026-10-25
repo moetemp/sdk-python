@@ -2,24 +2,23 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import UnsandboxedWorkflowRunner
 from tests.helpers import assert_task_fail_eventually, new_worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 def data(items: list[Any]) -> list[Any]:
-    return [item.data for item in items if isinstance(item, streams.Record)]
+    return [item.data for item in items if isinstance(item, common.Record)]
 
 
-def closes(items: list[Any]) -> list[streams.Closed]:
-    return [item for item in items if isinstance(item, streams.Closed)]
+def closes(items: list[Any]) -> list[common.Closed]:
+    return [item for item in items if isinstance(item, common.Closed)]
 
 
 failed_once: set[str] = set()

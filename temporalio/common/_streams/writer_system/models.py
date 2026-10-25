@@ -10,7 +10,7 @@ import google.protobuf.timestamp_pb2
 import typing_extensions
 
 import temporalio.api.streamservice.v1.stream_service_pb2
-import temporalio.common.streams.proto.v1.extension_pb2
+import temporalio.common._streams.proto.v1.extension_pb2
 import temporalio.converter
 import temporalio.nexus.system._support as _support
 
@@ -30,17 +30,17 @@ class OpenWriterRequest:
 class _OpenWriterRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         OpenWriterRequest,
-        temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest,
+        temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest] | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest
+        type[temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest] | None
+    ) = temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest,
+        value: temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest,
         type_hint: type[OpenWriterRequest],
     ) -> OpenWriterRequest:
         return OpenWriterRequest(
@@ -70,8 +70,8 @@ class _OpenWriterRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: OpenWriterRequest,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest:
-        message = temporalio.common.streams.proto.v1.extension_pb2.OpenWriterRequest()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest:
+        message = temporalio.common._streams.proto.v1.extension_pb2.OpenWriterRequest()
         if value.stream is not None:
             message.stream.CopyFrom(
                 _StreamRefTransferTypeConverter().to_transfer_type(value.stream)
@@ -426,17 +426,18 @@ class WriterResult:
 class _WriterResultTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         WriterResult,
-        temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse,
+        temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse] | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse
+        type[temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse]
+        | None
+    ) = temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse,
+        value: temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse,
         type_hint: type[WriterResult],
     ) -> WriterResult:
         return WriterResult(
@@ -447,8 +448,8 @@ class _WriterResultTransferTypeConverter(
     def to_transfer_type(
         self,
         value: WriterResult,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse:
-        message = temporalio.common.streams.proto.v1.extension_pb2.OpenWriterResponse()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse:
+        message = temporalio.common._streams.proto.v1.extension_pb2.OpenWriterResponse()
         if value.writer_id is not None:
             message.writer_id = value.writer_id
         return message
@@ -468,18 +469,18 @@ class WriteRecordsRequest:
 class _WriteRecordsRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         WriteRecordsRequest,
-        temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest,
+        temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest]
+        type[temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest]
         | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest
+    ) = temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest,
+        value: temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest,
         type_hint: type[WriteRecordsRequest],
     ) -> WriteRecordsRequest:
         return WriteRecordsRequest(
@@ -496,8 +497,10 @@ class _WriteRecordsRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: WriteRecordsRequest,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest:
-        message = temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsRequest()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest:
+        message = (
+            temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsRequest()
+        )
         if value.writer_id is not None:
             message.writer_id = value.writer_id
         if value.records:
@@ -573,18 +576,18 @@ class WriteRecordsResponse:
 class _WriteRecordsResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         WriteRecordsResponse,
-        temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse,
+        temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse]
+        type[temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse]
         | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse
+    ) = temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse,
+        value: temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse,
         type_hint: type[WriteRecordsResponse],
     ) -> WriteRecordsResponse:
         return WriteRecordsResponse(
@@ -596,9 +599,9 @@ class _WriteRecordsResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: WriteRecordsResponse,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse:
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse:
         message = (
-            temporalio.common.streams.proto.v1.extension_pb2.WriteRecordsResponse()
+            temporalio.common._streams.proto.v1.extension_pb2.WriteRecordsResponse()
         )
         if value.first_offset is not None:
             message.first_offset = value.first_offset
@@ -620,17 +623,18 @@ class CloseWriterRequest:
 class _CloseWriterRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         CloseWriterRequest,
-        temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest,
+        temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest] | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest
+        type[temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest]
+        | None
+    ) = temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest,
+        value: temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest,
         type_hint: type[CloseWriterRequest],
     ) -> CloseWriterRequest:
         return CloseWriterRequest(
@@ -641,8 +645,8 @@ class _CloseWriterRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: CloseWriterRequest,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest:
-        message = temporalio.common.streams.proto.v1.extension_pb2.CloseWriterRequest()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest:
+        message = temporalio.common._streams.proto.v1.extension_pb2.CloseWriterRequest()
         if value.writer_id is not None:
             message.writer_id = value.writer_id
         return message
@@ -661,18 +665,18 @@ class CloseWriterResponse:
 class _CloseWriterResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         CloseWriterResponse,
-        temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse,
+        temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse]
+        type[temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse]
         | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse
+    ) = temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse,
+        value: temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse,
         type_hint: type[CloseWriterResponse],
     ) -> CloseWriterResponse:
         return CloseWriterResponse(
@@ -683,8 +687,10 @@ class _CloseWriterResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: CloseWriterResponse,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse:
-        message = temporalio.common.streams.proto.v1.extension_pb2.CloseWriterResponse()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse:
+        message = (
+            temporalio.common._streams.proto.v1.extension_pb2.CloseWriterResponse()
+        )
         if value.last_offset is not None:
             message.last_offset = value.last_offset
         return message
@@ -703,17 +709,17 @@ class FreeWriterRequest:
 class _FreeWriterRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         FreeWriterRequest,
-        temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest,
+        temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest] | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest
+        type[temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest] | None
+    ) = temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest,
+        value: temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest,
         type_hint: type[FreeWriterRequest],
     ) -> FreeWriterRequest:
         return FreeWriterRequest(
@@ -724,8 +730,8 @@ class _FreeWriterRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: FreeWriterRequest,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest:
-        message = temporalio.common.streams.proto.v1.extension_pb2.FreeWriterRequest()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest:
+        message = temporalio.common._streams.proto.v1.extension_pb2.FreeWriterRequest()
         if value.writer_id is not None:
             message.writer_id = value.writer_id
         return message
@@ -744,17 +750,18 @@ class FreeWriterResponse:
 class _FreeWriterResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         FreeWriterResponse,
-        temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse,
+        temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse] | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse
+        type[temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse]
+        | None
+    ) = temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse,
+        value: temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse,
         type_hint: type[FreeWriterResponse],
     ) -> FreeWriterResponse:
         return FreeWriterResponse()
@@ -763,8 +770,8 @@ class _FreeWriterResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: FreeWriterResponse,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse:
-        message = temporalio.common.streams.proto.v1.extension_pb2.FreeWriterResponse()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse:
+        message = temporalio.common._streams.proto.v1.extension_pb2.FreeWriterResponse()
         return message
 
 
@@ -781,18 +788,18 @@ class CloseWritersRequest:
 class _CloseWritersRequestTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         CloseWritersRequest,
-        temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest,
+        temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest]
+        type[temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest]
         | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest
+    ) = temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest,
+        value: temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest,
         type_hint: type[CloseWritersRequest],
     ) -> CloseWritersRequest:
         return CloseWritersRequest()
@@ -801,8 +808,10 @@ class _CloseWritersRequestTransferTypeConverter(
     def to_transfer_type(
         self,
         value: CloseWritersRequest,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest:
-        message = temporalio.common.streams.proto.v1.extension_pb2.CloseWritersRequest()
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest:
+        message = (
+            temporalio.common._streams.proto.v1.extension_pb2.CloseWritersRequest()
+        )
         return message
 
 
@@ -819,18 +828,18 @@ class CloseWritersResponse:
 class _CloseWritersResponseTransferTypeConverter(
     temporalio.converter.TransferTypeConverter[
         CloseWritersResponse,
-        temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse,
+        temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse,
     ]
 ):
     transfer_type: (
-        type[temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse]
+        type[temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse]
         | None
-    ) = temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse
+    ) = temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse
 
     @typing_extensions.override
     def from_transfer_type(
         self,
-        value: temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse,
+        value: temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse,
         type_hint: type[CloseWritersResponse],
     ) -> CloseWritersResponse:
         return CloseWritersResponse(
@@ -841,9 +850,9 @@ class _CloseWritersResponseTransferTypeConverter(
     def to_transfer_type(
         self,
         value: CloseWritersResponse,
-    ) -> temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse:
+    ) -> temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse:
         message = (
-            temporalio.common.streams.proto.v1.extension_pb2.CloseWritersResponse()
+            temporalio.common._streams.proto.v1.extension_pb2.CloseWritersResponse()
         )
         if value.failed is not None:
             message.failed = value.failed

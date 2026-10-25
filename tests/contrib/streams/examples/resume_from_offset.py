@@ -1,8 +1,8 @@
 """Brook API proposal, "A client resumes a scoped Stream from an offset".
 
-The Workflow writes one Stream per turn, a renamed definition from ``streams.with_name``. The
+The Workflow writes one Stream per turn, a renamed definition from ``common.with_name``. The
 Reader saves the read's ``next_offset`` after each Record, stops, and later resumes from it with
-``offset``. A view that wants only new Records starts at ``streams.END``.
+``offset``. A view that wants only new Records starts at ``common.END``.
 """
 
 from __future__ import annotations
@@ -10,18 +10,17 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
-Turn3 = streams.with_name(Events, "turn-3")
+Turn3 = common.with_name(Events, "turn-3")
 
 
 @workflow.defn
@@ -65,9 +64,9 @@ async def read_some(
         Events.tokens, offset=store.load("turn-3"), create_wait=timedelta(seconds=10)
     )
     async for item in read:
-        if isinstance(item, streams.Closed):
+        if isinstance(item, common.Closed):
             break
-        if isinstance(item, streams.Superseded):
+        if isinstance(item, common.Superseded):
             continue
         seen.append(item.data)
         # The read's next offset is after this Record, so the next read starts there.
@@ -84,9 +83,9 @@ async def read_new(handle: WorkflowHandle[Turns, None]) -> list[str]:
     return [
         item.data
         async for item in turn3.subscribe(
-            Events.tokens, offset=streams.END, wait_new_records=False
+            Events.tokens, offset=common.END, wait_new_records=False
         )
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
 
 

@@ -10,8 +10,8 @@ from typing import Any, Generic, TypeVar
 
 import temporalio.converter
 from temporalio.api.streamservice.v1 import ProducerKind, ReadStart, StreamRecordKind
-from temporalio.common.streams import _backend, _convert, _errors
-from temporalio.common.streams._items import (
+from temporalio.common._streams import _backend, _convert, _errors
+from temporalio.common._streams._items import (
     Closed,
     CloseStatus,
     End,
@@ -20,8 +20,8 @@ from temporalio.common.streams._items import (
     producer_key,
     withdraws,
 )
-from temporalio.common.streams.system import client as service_client
-from temporalio.common.streams.system import models
+from temporalio.common._streams.system import client as service_client
+from temporalio.common._streams.system import models
 
 T = TypeVar("T")
 

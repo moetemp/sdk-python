@@ -14,16 +14,15 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import streams
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 class _Chat:
@@ -34,7 +33,7 @@ class _Chat:
     def more(self, text: str) -> None:
         self._more.append(text)
 
-    async def chat(self, stream: streams.WorkflowStream[Events]) -> None:
+    async def chat(self, stream: common.WorkflowStream[Events]) -> None:
         await stream.topic(Events.tokens).publish("hello")
         await workflow.wait_condition(lambda: bool(self._more))
         await stream.topic(Events.tokens).publish(*self._more)
@@ -71,12 +70,12 @@ async def read(handle: WorkflowHandle[Any, None]) -> list[str]:
             tokens = [
                 item.data
                 async for item in stream.subscribe(wait_new_records=False)
-                if isinstance(item, streams.Record)
+                if isinstance(item, common.Record)
             ]
-        except streams.StreamNotFoundError:
+        except common.StreamNotFoundError:
             continue
         return [f"{backend}: {token}" for token in tokens]
-    raise streams.StreamNotFoundError(
+    raise common.StreamNotFoundError(
         f"The chat {handle.id} has no Stream", reason="stream_not_found"
     )
 

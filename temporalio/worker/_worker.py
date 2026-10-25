@@ -416,7 +416,7 @@ class Worker:
         # plugins, as the client does, so a plugin that replaces the Workflow runner keeps the
         # Streams passthrough. A Worker of only Nexus services loads nothing of Streams.
         if config.get("workflows") or config.get("activities"):
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             config = _stream_plugin.configure_worker(config)
 
@@ -509,7 +509,7 @@ class Worker:
         # own, so they enable no polling of the task queue's Activities.
         internal_activities: Sequence[Callable[..., Any]] = []
         if config.get("workflows"):
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             internal_activities = _stream_plugin.local_activities(config)
         if activities:
@@ -564,7 +564,7 @@ class Worker:
                     )
                 self._activity_worker.assert_activity_valid(activity)
 
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             self._workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: self._bridge_worker,

@@ -9,8 +9,8 @@ import temporalio.client
 import temporalio.converter
 import temporalio.service
 import temporalio.worker
-from temporalio.common.streams import _errors, _ids
-from temporalio.common.streams._backend import BackendCalls, _ExtensionCalls
+from temporalio.common._streams import _errors, _ids
+from temporalio.common._streams._backend import BackendCalls, _ExtensionCalls
 from temporalio.plugin import SimplePlugin
 
 # The default backend when no registered backend has default=True. Every client, Worker and
@@ -178,7 +178,7 @@ def default_name(backends: Sequence[StreamBackend]) -> str:
 
 def with_native(backends: Sequence[StreamBackend]) -> list[StreamBackend]:
     """The registered backends, and the native one when none of them is named ``native``."""
-    from temporalio.common.streams import _native
+    from temporalio.common._streams import _native
 
     if any(b.backend_name == NATIVE for b in backends):
         return list(backends)
@@ -214,7 +214,7 @@ def local_activities(
     The write Local Activities route by the backend in each request, so every backend of the
     Worker shares one set. Each backend reads with its own.
     """
-    from temporalio.common.streams import _extension, _writes
+    from temporalio.common._streams import _extension, _writes
 
     client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
     activities = list(cast(list[Callable[..., Any]], _writes.LOCAL_ACTIVITIES))
@@ -248,7 +248,7 @@ def worker_converter(
     """The converter of a Worker's Workflows, whose codec step turns a native read's
     positions back into its page.
     """
-    from temporalio.common.streams import _native
+    from temporalio.common._streams import _native
 
     native = next(
         b for b in with_native(client_backends(client)) if b.backend_name == NATIVE
@@ -264,7 +264,7 @@ def replayer_converter(
     """The converter of a Replayer's Workflows, as :py:func:`worker_converter`. A replay
     reads a native page again on the connection of the Replayer's ``stream_client``.
     """
-    from temporalio.common.streams import _native
+    from temporalio.common._streams import _native
 
     native = next(b for b in replayer_backends(config) if b.backend_name == NATIVE)
     assert isinstance(native, _native.NativeStreamBackend)

@@ -79,7 +79,7 @@ from ._interceptor import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import ClientStream
+    from temporalio.common import ClientStream
 
     from ._client import Client
     from ._interceptor import ListWorkflowsInput
@@ -212,7 +212,7 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
         Raises:
             StreamConfigError: The client has no backend of that name.
         """
-        from temporalio.common.streams import _stream_client
+        from temporalio.common._streams import _stream_client
 
         return _stream_client.workflow_stream(self, definition, backend=backend)
 

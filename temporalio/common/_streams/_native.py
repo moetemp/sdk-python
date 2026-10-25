@@ -22,16 +22,16 @@ import temporalio.service
 import temporalio.worker
 import temporalio.workflow
 from temporalio.api.common.v1 import Payload, Payloads
-from temporalio.common.streams import _errors, _workflow_reader
-from temporalio.common.streams._backend import _ExtensionCalls
-from temporalio.common.streams._extension import (
+from temporalio.common._streams import _errors, _workflow_reader
+from temporalio.common._streams._backend import _ExtensionCalls
+from temporalio.common._streams._extension import (
     ExtensionStreamBackend,
     _decode_page,
     _runtime_of,
     _WorkflowOutbound,
     page_payload,
 )
-from temporalio.common.streams.proto import v1 as ext_pb
+from temporalio.common._streams.proto import v1 as ext_pb
 
 _SERVICE = "temporal.api.streamservice.v1.StreamService"
 

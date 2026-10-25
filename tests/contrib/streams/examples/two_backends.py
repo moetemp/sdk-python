@@ -13,27 +13,26 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 # Two Streams of one definition, under their own names.
-Audit = streams.with_name(Events, "audit")
-Live = streams.with_name(Events, "live")
+Audit = common.with_name(Events, "audit")
+Live = common.with_name(Events, "live")
 
 
 @dataclass
 class SummarizeInput:
-    audit: streams.ActivityStream[Events]
-    live: streams.ActivityStream[Events]
+    audit: common.ActivityStream[Events]
+    live: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -56,8 +55,8 @@ class TwoStreams:
         result = await workflow.execute_activity(
             summarize,
             SummarizeInput(
-                streams.ActivityStream.from_handle(audit),
-                streams.ActivityStream.from_handle(live),
+                common.ActivityStream.from_handle(audit),
+                common.ActivityStream.from_handle(live),
             ),
             start_to_close_timeout=timedelta(seconds=30),
         )
@@ -90,6 +89,6 @@ async def main(client: Client, task_queue: str) -> dict[str, list[str]]:
         read[name] = [
             item.data
             async for item in stream.subscribe()
-            if isinstance(item, streams.Record)
+            if isinstance(item, common.Record)
         ]
     return read

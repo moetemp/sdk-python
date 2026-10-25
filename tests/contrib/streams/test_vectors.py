@@ -4,8 +4,8 @@ from typing import Any
 import pytest
 
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.common.streams import _ids, _items
-from temporalio.common.streams.system import models
+from temporalio.common._streams import _ids, _items
+from temporalio.common._streams.system import models
 from tests.contrib.streams._support import crate_file, vectors
 
 _KINDS = {

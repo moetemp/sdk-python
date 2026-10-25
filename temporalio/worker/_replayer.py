@@ -34,7 +34,7 @@ from ._workflow_instance import (
 from .workflow_sandbox import SandboxedWorkflowRunner
 
 if TYPE_CHECKING:
-    from temporalio.common.streams import StreamBackend
+    from temporalio.common import StreamBackend
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class Replayer:
             self._config = plugin.configure_replayer(self._config)
         # A replay of Workflow code that uses Streams needs the native backend and the
         # others of the Worker's client.
-        from temporalio.common.streams import _plugin as _stream_plugin
+        from temporalio.common._streams import _plugin as _stream_plugin
 
         self._config = _stream_plugin.configure_replayer(self._config)
 
@@ -266,7 +266,7 @@ class Replayer:
             runtime = (
                 self._config.get("runtime") or temporalio.runtime.Runtime.default()
             )
-            from temporalio.common.streams import _plugin as _stream_plugin
+            from temporalio.common._streams import _plugin as _stream_plugin
 
             # A native Stream read's marker holds positions, which the codec step turns back
             # into the page.

@@ -47,7 +47,7 @@ def on_native(client: Any) -> bool:
     """Whether a client's default backend is the native server, whose rules differ in
     places.
     """
-    from temporalio.common.streams import _plugin
+    from temporalio.common._streams import _plugin
 
     name, _ = _plugin.client_backend(client, None)
     return name == "native"

@@ -17,13 +17,13 @@ import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.streams
 import temporalio.converter
 import temporalio.service
-from temporalio.common.streams import _errors
-from temporalio.common.streams.proto import v1 as ext_pb
-from temporalio.common.streams.system import client as service_client
+from temporalio.common._streams import _errors
+from temporalio.common._streams.proto import v1 as ext_pb
+from temporalio.common._streams.system import client as service_client
 
 if TYPE_CHECKING:
     # The writer bindings import this package's protos, so they load after it.
-    from temporalio.common.streams.writer_system import client as writer_client
+    from temporalio.common._streams.writer_system import client as writer_client
 
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
 
@@ -182,7 +182,7 @@ class _ExtensionCalls:
         self, namespace: str, data_converter: temporalio.converter.DataConverter
     ) -> writer_client.StreamWriterClient:
         """The generated writer client over the runtime."""
-        from temporalio.common.streams.writer_system import client
+        from temporalio.common._streams.writer_system import client
 
         return client.StreamWriterClient(
             _ExtensionTransport(self, namespace), data_converter=data_converter

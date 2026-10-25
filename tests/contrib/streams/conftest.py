@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 from temporalio.client import Client
-from temporalio.common.streams import StreamBackend
+from temporalio.common import StreamBackend
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 

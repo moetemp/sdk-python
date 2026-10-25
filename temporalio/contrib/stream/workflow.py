@@ -15,10 +15,10 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import TypeVar
 
-from temporalio.common.streams import _workflow
-from temporalio.common.streams._errors import StreamConfigError
-from temporalio.common.streams._handle import Creating
-from temporalio.common.streams._workflow import WorkflowStream
+from temporalio.common._streams import _workflow
+from temporalio.common._streams._errors import StreamConfigError
+from temporalio.common._streams._handle import Creating
+from temporalio.common._streams._workflow import WorkflowStream
 
 D = TypeVar("D")
 

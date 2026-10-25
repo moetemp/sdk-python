@@ -11,10 +11,10 @@ from typing import Any, cast
 
 import pytest
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import RetryPolicy, streams
-from temporalio.common.streams import _activity
+from temporalio.common import RetryPolicy
+from temporalio.common._streams import _activity
 from temporalio.exceptions import CancelledError
 from tests.contrib.streams._support import on_native, read_after_run_end
 from tests.helpers import new_worker
@@ -26,31 +26,31 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
-    tokens = streams.topic(str)
+    turns = common.topic(Turn)
+    tokens = common.topic(str)
 
 
 @dataclass
 class CallModelInput:
     prompt: str
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 @dataclass
 class SyncInput:
     prompt: str
-    stream: streams.SyncActivityStream[Events]
+    stream: common.SyncActivityStream[Events]
 
 
 async def read(handle: WorkflowHandle[Any, Any], name: str = "events") -> list[object]:
-    stream = handle.stream(streams.with_name(Events, name))
+    stream = handle.stream(common.with_name(Events, name))
     return [item async for item in stream.subscribe(wait_new_records=False)]
 
 
-def records(items: Sequence[object]) -> list[streams.Record[Any]]:
-    return [item for item in items if isinstance(item, streams.Record)]
+def records(items: Sequence[object]) -> list[common.Record[Any]]:
+    return [item for item in items if isinstance(item, common.Record)]
 
 
 @activity.defn
@@ -58,7 +58,7 @@ async def call_model(input: CallModelInput) -> list[int]:
     assert input.stream.definition is Events
     tokens = input.stream.topic(Events.tokens)
     offsets = [await tokens.publish(word) for word in input.prompt.split()]
-    async with streams.BufferedPublisher(
+    async with common.BufferedPublisher(
         input.stream.topic(Events.turns), max_delay=timedelta(seconds=10)
     ) as turns:
         turns.publish(Turn("model", "a"))
@@ -75,11 +75,11 @@ def call_model_sync(input: SyncInput) -> int:
 
 
 @activity.defn
-async def read_back(stream: streams.ActivityStream[Events]) -> list[Any]:
+async def read_back(stream: common.ActivityStream[Events]) -> list[Any]:
     return [
         item.data
         async for item in stream.subscribe(Events.tokens, wait_new_records=False)
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
 
 
@@ -90,17 +90,17 @@ class Agent:
         stream = await workflow.create_stream(Events)
         offsets = await workflow.execute_activity(
             call_model,
-            CallModelInput(prompt, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(prompt, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
         last = await workflow.execute_activity(
             call_model_sync,
-            SyncInput("sync words", streams.SyncActivityStream.from_handle(stream)),
+            SyncInput("sync words", common.SyncActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
         read = await workflow.execute_activity(
             read_back,
-            streams.ActivityStream.from_handle(stream),
+            common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
         await stream.close()
@@ -132,7 +132,7 @@ async def test_activity_publishes_and_returns_offsets(stream_client: Client):
     assert offsets[2] == data[3].offset + 1
     assert last == data[5].offset
     assert read_tokens == ["hi", "there", "sync", "words"]
-    assert isinstance(items[-1], streams.Closed)
+    assert isinstance(items[-1], common.Closed)
 
 
 def _executor() -> Any:
@@ -160,7 +160,7 @@ class Retrying:
         await stream.topic(Events.tokens).publish("start")
         await workflow.execute_activity(
             flaky,
-            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(key, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
@@ -174,7 +174,7 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
         )
         await handle.result()
         items = await read(handle)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    superseded = [item for item in items if isinstance(item, common.Superseded)]
     # The second attempt writes nothing, and its start still withdraws the first one's Record.
     assert len(superseded) == 1
     withdrawn = [r.data for r in records(items) if superseded[0].withdraws(r)]
@@ -184,8 +184,8 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
 @dataclass
 class FinishedStreams:
     key: str
-    closed: streams.ActivityStream[Events]
-    expired: streams.ActivityStream[Events]
+    closed: common.ActivityStream[Events]
+    expired: common.ActivityStream[Events]
 
 
 @activity.defn
@@ -194,13 +194,13 @@ async def reads_after_a_failed_attempt(input: FinishedStreams) -> list[Any]:
     if attempts[input.key] == 1:
         raise RuntimeError("first attempt fails")
     items = input.closed.subscribe(Events.tokens, wait_new_records=False)
-    return [item.data async for item in items if isinstance(item, streams.Record)]
+    return [item.data async for item in items if isinstance(item, common.Record)]
 
 
 @workflow.defn
 class ReadsFinishedStreams:
     @workflow.run
-    async def run(self, key: str, expired: streams.WorkflowStream[Events]) -> list[Any]:
+    async def run(self, key: str, expired: common.WorkflowStream[Events]) -> list[Any]:
         stream = await workflow.create_stream(Events)
         await stream.topic(Events.tokens).publish("turn")
         await stream.close()
@@ -208,8 +208,8 @@ class ReadsFinishedStreams:
             reads_after_a_failed_attempt,
             FinishedStreams(
                 key,
-                streams.ActivityStream.from_handle(stream),
-                streams.ActivityStream.from_handle(expired),
+                common.ActivityStream.from_handle(stream),
+                common.ActivityStream.from_handle(expired),
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
@@ -232,7 +232,7 @@ async def test_retry_goes_on_with_a_closed_or_expired_stream(stream_client: Clie
     ) as worker:
         result = await stream_client.execute_workflow(
             ReadsFinishedStreams.run,
-            args=[key, streams.WorkflowStream.from_handle(expired)],
+            args=[key, common.WorkflowStream.from_handle(expired)],
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -261,7 +261,7 @@ class ShownThenWithdrawn:
         stream = await workflow.create_stream(Events)
         await workflow.execute_activity(
             fails_after_it_is_shown,
-            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(key, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
@@ -296,34 +296,34 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         resumed = [
             item async for item in stream.subscribe(Events.tokens, offset=resume_at)
         ]
-    assert isinstance(first, streams.Record) and first.data == "attempt-1"
-    assert isinstance(before, streams.Record) and before.offset == first.offset
-    [live_superseded] = [i for i in live_items if isinstance(i, streams.Superseded)]
+    assert isinstance(first, common.Record) and first.data == "attempt-1"
+    assert isinstance(before, common.Record) and before.offset == first.offset
+    [live_superseded] = [i for i in live_items if isinstance(i, common.Superseded)]
     assert live_superseded.withdrawn_offsets == (first.offset,)
     # A new read gave no Record of the failed attempt, so it names no offset. The kept
     # Record is still withdrawn.
-    [superseded] = [i for i in resumed if isinstance(i, streams.Superseded)]
+    [superseded] = [i for i in resumed if isinstance(i, common.Superseded)]
     assert superseded.withdrawn_offsets == ()
     assert superseded.withdraws(before)
     assert [r.data for r in records(resumed)] == ["attempt-2"]
-    assert isinstance(resumed[-1], streams.Closed)
+    assert isinstance(resumed[-1], common.Closed)
 
 
 @activity.defn
-async def wrong_backend(stream: streams.ActivityStream[Events]) -> str:
+async def wrong_backend(stream: common.ActivityStream[Events]) -> str:
     try:
         await stream.topic(Events.tokens).publish("x")
-    except streams.StreamConfigError:
+    except common.StreamConfigError:
         return "config"
     return "wrote"
 
 
 @activity.defn
-async def close_it(stream: streams.ActivityStream[Events]) -> str:
+async def close_it(stream: common.ActivityStream[Events]) -> str:
     await stream.topic(Events.tokens).publish("last")
     try:
         await stream.close(result="closed by activity")
-    except streams.StreamNotOwnerError as err:
+    except common.StreamNotOwnerError as err:
         return err.reason
     return "closed"
 
@@ -335,22 +335,28 @@ class Closing:
         stream = await workflow.create_stream(Events)
         backend = await workflow.execute_activity(
             wrong_backend,
-            streams.ActivityStream(id=stream.id, backend="elsewhere"),
+            common.ActivityStream(id=stream.id, backend="elsewhere"),
             start_to_close_timeout=timedelta(seconds=30),
         )
         owner = await workflow.execute_activity(
             close_it,
-            streams.ActivityStream.from_handle(stream),
+            common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
         # A Local Activity writes before its Workflow Task commits, so it can't close either.
         local = await workflow.execute_local_activity(
             close_it,
-            streams.ActivityStream.from_handle(stream),
+            common.ActivityStream.from_handle(stream),
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        # A handle with only the id names no Workflow, so the Store refuses it.
+        by_id = await workflow.execute_local_activity(
+            close_it,
+            common.ActivityStream(id=stream.id),
             start_to_close_timeout=timedelta(seconds=30),
         )
         await stream.close(result="closed by the run")
-        return [backend, owner, local]
+        return [backend, owner, local, by_id]
 
 
 async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
@@ -365,10 +371,11 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
             "config",
             "stream_not_owner",
             "stream_not_owner",
+            "stream_not_owner",
         ]
         items = await read(handle)
-    assert [r.data for r in records(items)] == ["last", "last"]
-    assert isinstance(items[-1], streams.Closed)
+    assert [r.data for r in records(items)] == ["last", "last", "last"]
+    assert isinstance(items[-1], common.Closed)
     assert items[-1].result == "closed by the run"
 
 
@@ -381,10 +388,10 @@ class CreatesAndLeavesOpen:
 
 
 @activity.defn
-async def only_closes(stream: streams.ActivityStream[Events]) -> str:
+async def only_closes(stream: common.ActivityStream[Events]) -> str:
     try:
         await stream.close(result="closed by activity")
-    except streams.StreamNotFoundError as err:
+    except common.StreamNotFoundError as err:
         return err.reason
     return "closed"
 
@@ -397,7 +404,7 @@ class ClosesAnotherChainsStream:
         # native server such a handle finds no Workflow's Stream, so it can't write there.
         return await workflow.execute_local_activity(
             only_closes if native else close_it,
-            streams.ActivityStream(id=stream_id),
+            common.ActivityStream(id=stream_id),
             start_to_close_timeout=timedelta(seconds=30),
         )
 
@@ -426,12 +433,12 @@ async def test_store_refuses_another_chains_close(stream_client: Client):
         ) == ("stream_not_found" if native else "stream_not_owner")
     items = await read_after_run_end(stream_client, owner.stream(Events))
     # The server closed the native Stream when its run chain ended.
-    expected: list[type] = [streams.Closed] if native else [streams.Record]
+    expected: list[type] = [common.Closed] if native else [common.Record]
     assert [type(item) for item in items] == expected
 
 
 @dataclass
-class _Batches(streams.ActivityTopic[int]):
+class _Batches(common.ActivityTopic[int]):
     batches: list[tuple[int, ...]] = field(default_factory=list)
     fail: bool = False
     in_flight: int = 0
@@ -442,7 +449,7 @@ class _Batches(streams.ActivityTopic[int]):
 
     async def publish(self, *values: int) -> int:
         if self.fail:
-            raise streams.StreamStorageError("store down")
+            raise common.StreamStorageError("store down")
         self.in_flight += 1
         self.most_in_flight = max(self.most_in_flight, self.in_flight)
         await asyncio.sleep(0.01)
@@ -453,7 +460,7 @@ class _Batches(streams.ActivityTopic[int]):
 
 async def test_buffered_publisher_batches_by_delay():
     topic = _Batches()
-    publisher = streams.BufferedPublisher(topic, max_delay=timedelta(milliseconds=20))
+    publisher = common.BufferedPublisher(topic, max_delay=timedelta(milliseconds=20))
     publisher.publish(1)
     publisher.publish(2, 3)
     await asyncio.sleep(0.1)
@@ -466,7 +473,7 @@ async def test_buffered_publisher_batches_by_delay():
 
 async def test_buffered_publisher_writes_a_full_batch_with_one_write_in_flight():
     topic = _Batches()
-    publisher = streams.BufferedPublisher(topic, max_delay=timedelta(minutes=10))
+    publisher = common.BufferedPublisher(topic, max_delay=timedelta(minutes=10))
     publisher.publish(*range(1000))
     publisher.publish(*range(1000, 2500))
     await asyncio.sleep(0.2)
@@ -479,21 +486,21 @@ async def test_buffered_publisher_writes_a_full_batch_with_one_write_in_flight()
 
 async def test_buffered_publisher_raises_a_failed_batch():
     topic = _Batches(fail=True)
-    with pytest.raises(streams.StreamStorageError):
-        async with streams.BufferedPublisher(topic) as publisher:
+    with pytest.raises(common.StreamStorageError):
+        async with common.BufferedPublisher(topic) as publisher:
             publisher.publish(1)
     with pytest.raises(TypeError):
-        streams.BufferedPublisher(topic).publish()
+        common.BufferedPublisher(topic).publish()
 
 
 @activity.defn
-async def local_step(stream: streams.ActivityStream[Events]) -> list[Any]:
+async def local_step(stream: common.ActivityStream[Events]) -> list[Any]:
     # Each Workflow write is an awaited Local Activity, so the run's create and Records are in
     # the Store before a later Local Activity starts.
     seen = [
         item.data
         async for item in stream.subscribe(wait_new_records=False)
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
     await stream.topic(Events.tokens).publish("local")
     return seen
@@ -508,7 +515,7 @@ class LocalOrder:
         await tokens.publish("before")
         seen = await workflow.execute_local_activity(
             local_step,
-            streams.ActivityStream.from_handle(stream),
+            common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
         await tokens.publish("after")
@@ -527,27 +534,27 @@ async def test_workflow_writes_go_out_before_a_local_activity(stream_client: Cli
     assert [record.data for record in written] == ["before", "local", "after"]
     producer = written[1].producer
     assert producer is not None and producer.id.startswith("la:")
-    assert isinstance(items[-1], streams.Closed)
+    assert isinstance(items[-1], common.Closed)
 
 
 async def test_buffered_publisher_stays_failed():
     topic = _Batches(fail=True)
-    publisher = streams.BufferedPublisher(topic)
+    publisher = common.BufferedPublisher(topic)
     publisher.publish(1, 2)
-    with pytest.raises(streams.StreamStorageError):
+    with pytest.raises(common.StreamStorageError):
         await publisher.flush()
     topic.fail = False
     # A later batch would leave a gap, so the publisher refuses it and keeps the error.
-    with pytest.raises(streams.StreamStorageError):
+    with pytest.raises(common.StreamStorageError):
         publisher.publish(3)
-    with pytest.raises(streams.StreamStorageError):
+    with pytest.raises(common.StreamStorageError):
         await publisher.flush()
     assert topic.batches == [] and publisher.unwritten == 2
 
 
 @activity.defn
 async def never_flushes(input: CallModelInput) -> None:
-    publisher = streams.BufferedPublisher(
+    publisher = common.BufferedPublisher(
         input.stream.topic(Events.tokens), max_delay=timedelta(minutes=10)
     )
     publisher.publish(*input.prompt.split())
@@ -556,8 +563,8 @@ async def never_flushes(input: CallModelInput) -> None:
 @dataclass
 class ManyStreams:
     key: str
-    targets: list[streams.ActivityStream[Events]]
-    maybe: streams.ActivityStream[Events] | None = None
+    targets: list[common.ActivityStream[Events]]
+    maybe: common.ActivityStream[Events] | None = None
 
 
 @activity.defn
@@ -571,11 +578,11 @@ async def flaky_many(input: ManyStreams) -> None:
 
 
 @activity.defn
-def sync_read(stream: streams.SyncActivityStream[Events]) -> list[Any]:
+def sync_read(stream: common.SyncActivityStream[Events]) -> list[Any]:
     return [
         item.data
         for item in stream.subscribe(Events.tokens, wait_new_records=False)
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
 
 
@@ -584,25 +591,25 @@ class Leftovers:
     @workflow.run
     async def run(self, key: str) -> list[Any]:
         stream = await workflow.create_stream(Events)
-        other = await workflow.create_stream(streams.with_name(Events, "other"))
+        other = await workflow.create_stream(common.with_name(Events, "other"))
         await workflow.execute_activity(
             never_flushes,
-            CallModelInput("a b", streams.ActivityStream.from_handle(stream)),
+            CallModelInput("a b", common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
         )
         await workflow.execute_activity(
             flaky_many,
             ManyStreams(
                 key,
-                [streams.ActivityStream.from_handle(stream)],
-                streams.ActivityStream.from_handle(other),
+                [common.ActivityStream.from_handle(stream)],
+                common.ActivityStream.from_handle(other),
             ),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
         return await workflow.execute_activity(
             sync_read,
-            streams.SyncActivityStream.from_handle(stream),
+            common.SyncActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
 
@@ -625,7 +632,7 @@ async def test_attempt_end_flushes_and_retry_finds_nested_streams(
         items = await read(handle)
         other = await read(handle, "other")
     for read_items in (items, other):
-        superseded = [i for i in read_items if isinstance(i, streams.Superseded)]
+        superseded = [i for i in read_items if isinstance(i, common.Superseded)]
         withdrawn = [r.data for r in records(read_items) if superseded[0].withdraws(r)]
         assert withdrawn == ["attempt-1"]
 
@@ -644,7 +651,7 @@ def test_sync_call_stops_when_the_thread_is_cancelled():
         finally:
             stopped.set()
 
-    stream: streams.SyncActivityStream[Any] = streams.SyncActivityStream(id="s")
+    stream: common.SyncActivityStream[Any] = common.SyncActivityStream(id="s")
     token = _activity.current.set(
         _activity.AttemptStreams(
             default="", backends={"": cast(Any, SimpleNamespace(loop=loop))}
@@ -677,7 +684,7 @@ def test_sync_call_stops_when_the_thread_is_cancelled():
 async def creates_its_own() -> str:
     try:
         await activity.create_stream(Events)
-    except streams.StreamConfigError as err:
+    except common.StreamConfigError as err:
         return str(err)
     return "created"
 
@@ -721,7 +728,7 @@ class NeverTouchesStreams:
 @workflow.defn
 class ReceivesAStream:
     @workflow.run
-    async def run(self, stream: streams.WorkflowStream[Events]) -> str:
+    async def run(self, stream: common.WorkflowStream[Events]) -> str:
         # The Activity gets no Stream, but the run received one.
         return await workflow.execute_activity(
             plain, stream.id, start_to_close_timeout=timedelta(seconds=10)
@@ -731,15 +738,13 @@ class ReceivesAStream:
 @workflow.defn
 class RetriesAfterContinueAsNew:
     @workflow.run
-    async def run(
-        self, key: str, stream: streams.WorkflowStream[Events] | None
-    ) -> None:
+    async def run(self, key: str, stream: common.WorkflowStream[Events] | None) -> None:
         if stream is None:
             created = await workflow.create_stream(Events)
             workflow.continue_as_new(args=[key, created])
         await workflow.execute_activity(
             flaky,
-            CallModelInput(key, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(key, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
         )
@@ -784,7 +789,7 @@ async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: C
         assert await keyed(creates, "flaky") == [True]
         receives = await stream_client.start_workflow(
             ReceivesAStream.run,
-            streams.WorkflowStream.from_handle(creates.stream(Events)),
+            common.WorkflowStream.from_handle(creates.stream(Events)),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
@@ -802,7 +807,7 @@ async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: C
         await continued.result()
         assert await keyed(continued, "flaky") == [True]
         items = await read(continued)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    superseded = [item for item in items if isinstance(item, common.Superseded)]
     assert len(superseded) == 1
     assert [r.data for r in records(items) if superseded[0].withdraws(r)] == [
         "attempt-1"

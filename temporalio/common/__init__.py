@@ -1,4 +1,29 @@
-"""Common code used in the Temporal SDK."""
+"""Common code used in the Temporal SDK.
+
+It also has the Streams API: Streams of Records that Workflows, Activities and clients write
+and read. A Stream definition, a class with ``@common.defn``, gives the Stream name and the
+type of each Topic. Workflow code creates a Stream with
+:py:func:`temporalio.workflow.create_stream`, a Standalone Activity with
+:py:func:`temporalio.activity.create_stream`, and a client with
+:py:meth:`temporalio.client.Client.create_stream`. A client gets a Workflow's Stream with
+:py:meth:`temporalio.client.WorkflowHandle.stream`, and any Stream with
+:py:meth:`temporalio.client.Client.stream`. A Stream is data: a Workflow passes it to an
+Activity, a child Workflow or the next run as an argument, and the parameter's type gives the
+handle class of that context, such as :py:class:`ActivityStream`.
+
+A :py:class:`StreamBackend` carries the calls and registers a backend name. Every client,
+Worker and Replayer has :py:class:`NativeStreamBackend` (``native``), whose Streams the
+Temporal server keeps, with no registration. Register others with
+``Client.connect(..., stream_backends=[...])``, such as
+:py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
+:py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). A handle
+carries the name of its backend. With more than one registered backend, exactly one has
+``default=True``. A create with no ``backend=`` uses the one with ``default=True``, else
+``native``. A Worker serves every backend of its client.
+
+.. warning::
+    The Streams API is experimental.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import IntEnum
 from typing import (
+    TYPE_CHECKING,
     Any,
     ClassVar,
     Generic,
@@ -31,6 +57,134 @@ import temporalio.api.deployment.v1
 import temporalio.api.enums.v1
 import temporalio.api.workflow.v1
 import temporalio.types
+
+if TYPE_CHECKING:
+    from temporalio.common._streams._activity_stream import (
+        ActivityStream,
+        ActivityTopic,
+        SyncActivityStream,
+        SyncActivityTopic,
+        SyncSubscription,
+    )
+    from temporalio.common._streams._buffered import BufferedPublisher
+    from temporalio.common._streams._defn import (
+        StreamDefinition,
+        TopicDefinition,
+        defn,
+        topic,
+        with_name,
+    )
+    from temporalio.common._streams._errors import (
+        ReadOnlyContextError,
+        StreamClosedError,
+        StreamConfigError,
+        StreamError,
+        StreamExpiredError,
+        StreamFencedError,
+        StreamNotFoundError,
+        StreamNotOwnerError,
+        StreamOffsetError,
+        StreamSeqDivergentError,
+        StreamStorageError,
+        StreamTooLargeError,
+        StreamUnsupportedError,
+    )
+    from temporalio.common._streams._handle import Creating, StreamHandle
+    from temporalio.common._streams._items import (
+        END,
+        Closed,
+        CloseStatus,
+        End,
+        Record,
+        Superseded,
+    )
+    from temporalio.common._streams._native import NativeStreamBackend
+    from temporalio.common._streams._plugin import StreamBackend
+    from temporalio.common._streams._reader import Subscription
+    from temporalio.common._streams._stream_client import ClientStream, ClientTopic
+    from temporalio.common._streams._workflow import WorkflowStream, WorkflowTopic
+    from temporalio.common._streams._workflow_reader import WorkflowItems
+
+__all__ = [
+    "ActivityIDConflictPolicy",
+    "ActivityIDReusePolicy",
+    "ActivityStream",
+    "ActivityTopic",
+    "AutoUpgradeVersioningOverride",
+    "BufferedPublisher",
+    "ClientStream",
+    "ClientTopic",
+    "CloseStatus",
+    "Closed",
+    "Creating",
+    "END",
+    "End",
+    "HeaderCodecBehavior",
+    "MetricAttributes",
+    "MetricCommon",
+    "MetricCounter",
+    "MetricGauge",
+    "MetricGaugeFloat",
+    "MetricHistogram",
+    "MetricHistogramFloat",
+    "MetricHistogramTimedelta",
+    "MetricMeter",
+    "NativeStreamBackend",
+    "NexusOperationCancellationState",
+    "NexusOperationExecutionStatus",
+    "NexusOperationIDConflictPolicy",
+    "NexusOperationIDReusePolicy",
+    "OneTimeVersioningOverride",
+    "PendingNexusOperationExecutionState",
+    "PinnedVersioningOverride",
+    "Priority",
+    "QueryRejectCondition",
+    "RawValue",
+    "ReadOnlyContextError",
+    "Record",
+    "RetryPolicy",
+    "SearchAttributeIndexedValueType",
+    "SearchAttributeKey",
+    "SearchAttributePair",
+    "SearchAttributeUpdate",
+    "SearchAttributeValue",
+    "SearchAttributeValueType",
+    "SearchAttributeValues",
+    "SearchAttributes",
+    "StreamBackend",
+    "StreamClosedError",
+    "StreamConfigError",
+    "StreamDefinition",
+    "StreamError",
+    "StreamExpiredError",
+    "StreamFencedError",
+    "StreamHandle",
+    "StreamNotFoundError",
+    "StreamNotOwnerError",
+    "StreamOffsetError",
+    "StreamSeqDivergentError",
+    "StreamStorageError",
+    "StreamTooLargeError",
+    "StreamUnsupportedError",
+    "Subscription",
+    "Superseded",
+    "SyncActivityStream",
+    "SyncActivityTopic",
+    "SyncSubscription",
+    "TopicDefinition",
+    "TypedSearchAttributes",
+    "VersioningBehavior",
+    "VersioningOverride",
+    "WorkerDeploymentVersion",
+    "WorkflowIDConflictPolicy",
+    "WorkflowIDReusePolicy",
+    "WorkflowItems",
+    "WorkflowStream",
+    "WorkflowTopic",
+    "defn",
+    "topic",
+    "with_name",
+]
 
 
 @dataclass
@@ -1482,3 +1636,59 @@ class _CompositeEvent:  # pyright: ignore[reportUnusedClass]
         if not self.thread_event:
             raise RuntimeError("Missing event")
         self.thread_event.wait(timeout)
+
+
+# The Stream modules import temporalio.client and temporalio.workflow, which import this module,
+# so the Stream names load on first use.
+_STREAM_NAMES = frozenset(
+    [
+        "ActivityStream",
+        "ActivityTopic",
+        "BufferedPublisher",
+        "ClientStream",
+        "ClientTopic",
+        "CloseStatus",
+        "Closed",
+        "Creating",
+        "END",
+        "End",
+        "NativeStreamBackend",
+        "ReadOnlyContextError",
+        "Record",
+        "StreamBackend",
+        "StreamClosedError",
+        "StreamConfigError",
+        "StreamDefinition",
+        "StreamError",
+        "StreamExpiredError",
+        "StreamFencedError",
+        "StreamHandle",
+        "StreamNotFoundError",
+        "StreamNotOwnerError",
+        "StreamOffsetError",
+        "StreamSeqDivergentError",
+        "StreamStorageError",
+        "StreamTooLargeError",
+        "StreamUnsupportedError",
+        "Subscription",
+        "Superseded",
+        "SyncActivityStream",
+        "SyncActivityTopic",
+        "SyncSubscription",
+        "TopicDefinition",
+        "WorkflowItems",
+        "WorkflowStream",
+        "WorkflowTopic",
+        "defn",
+        "topic",
+        "with_name",
+    ]
+)
+
+
+def __getattr__(name: str) -> Any:
+    if name in _STREAM_NAMES:
+        import temporalio.common._streams
+
+        return getattr(temporalio.common._streams, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

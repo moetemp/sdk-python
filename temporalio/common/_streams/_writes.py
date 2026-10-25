@@ -15,14 +15,14 @@ from typing import Any
 import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
-from temporalio.common.streams import _activity, _errors, _ids
-from temporalio.common.streams._workflow import (
+from temporalio.common._streams import _activity, _errors, _ids
+from temporalio.common._streams._workflow import (
     APPEND_ACTIVITY,
     CLOSE_ACTIVITY,
     CREATE_ACTIVITY,
 )
-from temporalio.common.streams.system import client as service_client
-from temporalio.common.streams.system import models
+from temporalio.common._streams.system import client as service_client
+from temporalio.common._streams.system import models
 
 
 def _context(

@@ -12,27 +12,26 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @dataclass
 class CallModelInput:
     prompt: str
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 @dataclass
 class SummarizeInput:
     text: str
-    stream: streams.SyncActivityStream[Events]
+    stream: common.SyncActivityStream[Events]
 
 
 @activity.defn
@@ -42,7 +41,7 @@ async def call_model(input: CallModelInput) -> int:
     # Each awaited publish has written when it returns.
     last = await tokens.publish(words[0])
     # A fast model sends many small tokens, so the helper batches them.
-    async with streams.BufferedPublisher(
+    async with common.BufferedPublisher(
         tokens, max_delay=timedelta(milliseconds=100)
     ) as fast:
         for word in words[1:]:
@@ -62,12 +61,12 @@ class Model:
         stream = await workflow.create_stream(Events)
         first = await workflow.execute_activity(
             call_model,
-            CallModelInput(prompt, streams.ActivityStream.from_handle(stream)),
+            CallModelInput(prompt, common.ActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(minutes=5),
         )
         summary = await workflow.execute_activity(
             summarize,
-            SummarizeInput(prompt, streams.SyncActivityStream.from_handle(stream)),
+            SummarizeInput(prompt, common.SyncActivityStream.from_handle(stream)),
             start_to_close_timeout=timedelta(minutes=5),
         )
         await stream.close()
@@ -76,7 +75,7 @@ class Model:
 
 async def main(
     client: Client, task_queue: str
-) -> tuple[list[int], list[streams.Record[str]]]:
+) -> tuple[list[int], list[common.Record[str]]]:
     with concurrent.futures.ThreadPoolExecutor() as executor:
         async with Worker(
             client,
@@ -94,6 +93,6 @@ async def main(
             offsets = await handle.result()
     stream = handle.stream(Events)
     records = [
-        item async for item in stream.subscribe() if isinstance(item, streams.Record)
+        item async for item in stream.subscribe() if isinstance(item, common.Record)
     ]
     return offsets, records

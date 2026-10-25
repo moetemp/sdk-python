@@ -171,9 +171,11 @@ def definition_of(cls: type) -> StreamDefinition:
     """The definition that :py:func:`defn` gave a class.
 
     Raises:
-        TypeError: The class has no ``@streams.defn``.
+        TypeError: The class has no ``@common.defn``.
     """
     definition = cls.__dict__.get(_DEFINITION_ATTR) if isinstance(cls, type) else None
     if not isinstance(definition, StreamDefinition):
-        raise TypeError(f"{cls!r} is not a Stream definition. Add @streams.defn.")
+        raise TypeError(
+            f"{cls!r} is not a Stream definition. Add @temporalio.common.defn."
+        )
     return definition

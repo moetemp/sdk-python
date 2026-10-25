@@ -11,19 +11,19 @@ from typing import Any, Generic, TypeVar, overload
 
 import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
-from temporalio.common.streams import _activity, _backend, _errors, _ids
-from temporalio.common.streams._access import (
+from temporalio.common._streams import _activity, _backend, _errors, _ids
+from temporalio.common._streams._access import (
     Access,
     AsyncTopicBase,
     SyncTopicBase,
     read_spec,
     subscription,
 )
-from temporalio.common.streams._defn import TopicDefinition, definition_of
-from temporalio.common.streams._handle import Creating, StreamHandle, exit_failure
-from temporalio.common.streams._items import Closed, End, Record, Superseded
-from temporalio.common.streams._reader import Subscription
-from temporalio.common.streams.system import models
+from temporalio.common._streams._defn import TopicDefinition, definition_of
+from temporalio.common._streams._handle import Creating, StreamHandle, exit_failure
+from temporalio.common._streams._items import Closed, End, Record, Superseded
+from temporalio.common._streams._reader import Subscription
+from temporalio.common._streams.system import models
 
 E = TypeVar("E")
 T = TypeVar("T")

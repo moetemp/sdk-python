@@ -20,16 +20,16 @@ import temporalio.converter
 import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.workflow
-from temporalio.common.streams import _convert, _errors
-from temporalio.common.streams._items import (
+from temporalio.common._streams import _convert, _errors
+from temporalio.common._streams._items import (
     Closed,
     CloseStatus,
     End,
     Record,
     Superseded,
 )
-from temporalio.common.streams._reader import Position, Subscription
-from temporalio.common.streams.system import models
+from temporalio.common._streams._reader import Position, Subscription
+from temporalio.common._streams.system import models
 
 Item = Record[Any] | Superseded | Closed
 

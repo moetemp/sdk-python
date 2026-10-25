@@ -1,4 +1,4 @@
-"""Generates the Stream service bindings of temporalio.common.streams.
+"""Generates the Stream service bindings of the Streams API in temporalio.common.
 
 The WIT and the protos are copies of the temporalio-streams crate's, in scripts/_wit and
 scripts/_proto. Run scripts/gen_protos.py first for the proto modules. No nexgen release has the
@@ -30,9 +30,9 @@ proto_path = (
     / "v1"
     / "stream_service.proto"
 )
-output_dir = base_dir / "temporalio" / "common" / "streams" / "system"
+output_dir = base_dir / "temporalio" / "common" / "_streams" / "system"
 # The writer is client-only, so it has a caller and its resource class, and no Workflow code.
-writer_output_dir = base_dir / "temporalio" / "common" / "streams" / "writer_system"
+writer_output_dir = base_dir / "temporalio" / "common" / "_streams" / "writer_system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
 # The head of moe/brook/v3/n8-stream-resource. A branch moves, so the pin is the commit.
@@ -81,14 +81,14 @@ def generate_stream_service() -> None:
             raise RuntimeError(f"missing generator input: {path}")
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "stream_service.bin"
-        # The extension messages live in temporalio.common.streams.proto, so the descriptor
+        # The extension messages live in temporalio.common._streams.proto, so the descriptor
         # names their file by that module path.
         extension_root = Path(temp_dir) / "extension"
         extension_path = (
             extension_root
             / "temporalio"
             / "common"
-            / "streams"
+            / "_streams"
             / "proto"
             / "v1"
             / "extension.proto"

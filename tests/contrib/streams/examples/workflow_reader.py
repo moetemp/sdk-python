@@ -12,15 +12,14 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.common import streams
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @workflow.defn
@@ -42,12 +41,12 @@ class Agent:
 @workflow.defn
 class Follower:
     @workflow.run
-    async def run(self, agent: streams.WorkflowStream[Events]) -> list[str]:
+    async def run(self, agent: common.WorkflowStream[Events]) -> list[str]:
         seen = []
         async for item in agent.subscribe(create_wait=timedelta(seconds=30)):
-            if isinstance(item, streams.Record):
+            if isinstance(item, common.Record):
                 seen.append(item.data)
-            elif isinstance(item, streams.Closed):
+            elif isinstance(item, common.Closed):
                 seen.append(f"agent said {item.result}")
         return seen
 
@@ -64,7 +63,7 @@ async def main(client: Client, task_queue: str) -> list[str]:
         stream = agent.stream(Events)
         return await client.execute_workflow(
             Follower.run,
-            streams.WorkflowStream.from_handle(stream),
+            common.WorkflowStream.from_handle(stream),
             id=f"follower-{uuid.uuid4()}",
             task_queue=task_queue,
         )

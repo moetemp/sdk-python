@@ -24,12 +24,12 @@ from datetime import timedelta
 from typing import TypeVar
 
 import temporalio.client
-from temporalio.common.streams import _plugin, _stream_client
-from temporalio.common.streams._errors import StreamConfigError
-from temporalio.common.streams._extension import ExtensionStreamBackend
-from temporalio.common.streams._handle import Creating
-from temporalio.common.streams._stream_client import ClientStream
-from temporalio.common.streams.proto import v1 as ext_pb
+from temporalio.common._streams import _plugin, _stream_client
+from temporalio.common._streams._errors import StreamConfigError
+from temporalio.common._streams._extension import ExtensionStreamBackend
+from temporalio.common._streams._handle import Creating
+from temporalio.common._streams._stream_client import ClientStream
+from temporalio.common._streams.proto import v1 as ext_pb
 from temporalio.contrib.stream import workflow
 
 D = TypeVar("D")
