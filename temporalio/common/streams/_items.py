@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import enum
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
@@ -10,7 +9,7 @@ from typing import Any, Generic, TypeVar
 from temporalio.api.streamservice.v1 import CloseStatus as _CloseStatus
 from temporalio.api.streamservice.v1 import ProducerKind
 from temporalio.common.streams.system import models
-from temporalio.exceptions import CancelledError
+from temporalio.exceptions import is_cancelled_exception
 
 T = TypeVar("T")
 
@@ -92,7 +91,7 @@ class CloseStatus(enum.IntEnum):
     """Closed with a failure."""
 
     CANCELED = int(_CloseStatus.CLOSE_STATUS_CANCELED)
-    """Closed with a ``CancelledError`` failure, such as by a cancelled owner run."""
+    """Closed with a cancel failure, such as by a cancelled owner run."""
 
     TERMINATED = int(_CloseStatus.CLOSE_STATUS_TERMINATED)
     """The server closed it, since the owner run was terminated."""
@@ -103,7 +102,7 @@ class CloseStatus(enum.IntEnum):
 
 def close_status(failure: BaseException | None) -> _CloseStatus.ValueType | None:
     """The status a caller's close asks for. None lets the backend pick completed or failed."""
-    if isinstance(failure, (asyncio.CancelledError, CancelledError)):
+    if failure is not None and is_cancelled_exception(failure):
         return _CloseStatus.CLOSE_STATUS_CANCELED
     return None
 

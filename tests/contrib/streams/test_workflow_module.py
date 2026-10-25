@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import (
@@ -304,6 +304,62 @@ async def test_block_end_leaves_the_stream_open_for_a_retry_run(stream_client: C
     closes = [item for item in items if isinstance(item, streams.Closed)]
     assert len(closes) == 1 and items[-1] is closes[0]
     assert closes[0].failure is None
+
+
+# Set by the Activity of a test's run once it runs, so the test cancels the run there.
+waiting: dict[str, asyncio.Event] = {}
+
+
+@activity.defn
+async def waits_for_cancel() -> None:
+    waiting[activity.info().workflow_id].set()
+    while True:
+        activity.heartbeat()
+        await asyncio.sleep(0.1)
+
+
+@workflow.defn
+class CancelledInItsBlock:
+    @workflow.run
+    async def run(self, local: bool) -> None:
+        async with workflow.create_stream(Events) as stream:
+            await stream.topic(Events.tokens).publish("started")
+            if local:
+                await workflow.execute_local_activity(
+                    waits_for_cancel, start_to_close_timeout=timedelta(minutes=1)
+                )
+            else:
+                await workflow.execute_activity(
+                    waits_for_cancel,
+                    start_to_close_timeout=timedelta(minutes=1),
+                    heartbeat_timeout=timedelta(seconds=1),
+                )
+
+
+async def test_cancel_during_an_activity_closes_as_canceled(stream_client: Client):
+    # The cancel reaches the block as an ActivityError, and no retry follows a cancelled run.
+    async with new_worker(
+        stream_client, CancelledInItsBlock, activities=[waits_for_cancel]
+    ) as worker:
+        for local, policy in ((False, RetryPolicy(maximum_attempts=3)), (True, None)):
+            workflow_id = f"wf-{uuid.uuid4()}"
+            waiting[workflow_id] = asyncio.Event()
+            handle = await stream_client.start_workflow(
+                CancelledInItsBlock.run,
+                local,
+                id=workflow_id,
+                task_queue=worker.task_queue,
+                retry_policy=policy,
+            )
+            await asyncio.wait_for(waiting[workflow_id].wait(), 20)
+            await handle.cancel()
+            with pytest.raises(WorkflowFailureError):
+                await handle.result()
+            items = await read(handle)
+            assert data(items) == ["started"]
+            closed = items[-1]
+            assert isinstance(closed, streams.Closed), f"local={local}"
+            assert closed.status == streams.CloseStatus.CANCELED
 
 
 @workflow.defn

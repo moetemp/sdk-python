@@ -157,7 +157,7 @@ class ActivityStream(StreamHandle[E]):
         """Write this attempt's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A ``CancelledError`` failure closes it as canceled.
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
 
         No Activity closes a Workflow's Stream, also a Local Activity of the run chain that
         created it, and no Activity closes a client's Stream. They get

@@ -438,8 +438,9 @@ class WorkflowStream(StreamHandle[E]):
         writes to it again. On Redis the close is a regular Activity on the Workflow's task
         queue, which closes as the run chain, the Stream's owner. So every Worker on that queue
         registers the Redis backend. Readers get the Records before it, then a ``Closed`` item
-        with ``result`` or ``failure``. A ``CancelledError`` failure closes it as canceled.
-        Later writes in this run raise :py:class:`StreamClosedError`.
+        with ``result`` or ``failure``. A cancel failure, such as a ``CancelledError`` or an
+        ``ActivityError`` that a cancel caused, closes it as canceled. Later writes in this run
+        raise :py:class:`StreamClosedError`.
 
         Raises:
             StreamNotOwnerError: This run chain didn't create the Stream.
@@ -512,11 +513,20 @@ def _closes_at_block_end(exc: BaseException | None) -> bool:
     info = temporalio.workflow.info()
     if info.cron_schedule:
         return False
-    if exc is None or isinstance(exc, asyncio.CancelledError):
+    if exc is None or isinstance(exc, asyncio.CancelledError) or _cancelled(exc):
         return True
     if not temporalio.workflow._Runtime.current().workflow_is_failure_exception(exc):
         return False
     return info.retry_policy is None
+
+
+def _cancelled(exc: BaseException) -> bool:
+    # A cancelled run ends as canceled with no retry, also when the cancel reached the block as
+    # the error of an Activity, a Local Activity or a child.
+    return (
+        temporalio.workflow.cancellation_reason() is not None
+        and temporalio.exceptions.is_cancelled_exception(exc)
+    )
 
 
 def _own_handle(definition: type[E], backend: str | None) -> WorkflowStream[E]:

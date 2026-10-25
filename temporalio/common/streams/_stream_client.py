@@ -349,8 +349,8 @@ class ClientStream(StreamHandle[E]):
         """Write this handle's Records, then close the Stream.
 
         Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A ``CancelledError`` failure closes it as canceled. ``rpc_metadata`` and
-        ``rpc_timeout`` are as for :py:meth:`get_offset`.
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
+        ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
 
         Raises:
             StreamNotOwnerError: A Workflow owns the Stream, so only its run chain closes it.
