@@ -15,6 +15,7 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import RetryPolicy, streams
 from temporalio.common.streams import _activity
+from temporalio.contrib import stream as redis
 from temporalio.exceptions import CancelledError
 from tests.helpers import new_worker
 
@@ -178,6 +179,65 @@ async def test_retry_withdraws_a_received_stream(stream_client: Client):
     assert len(superseded) == 1
     withdrawn = [r.data for r in records(items) if superseded[0].withdraws(r)]
     assert withdrawn == ["attempt-1"]
+
+
+@dataclass
+class FinishedStreams:
+    key: str
+    closed: streams.ActivityStream[Events]
+    expired: streams.ActivityStream[Events]
+
+
+@activity.defn
+async def reads_after_a_failed_attempt(input: FinishedStreams) -> list[Any]:
+    attempts[input.key] = attempts.get(input.key, 0) + 1
+    if attempts[input.key] == 1:
+        raise RuntimeError("first attempt fails")
+    items = input.closed.subscribe(Events.tokens, wait_new_records=False)
+    return [item.data async for item in items if isinstance(item, streams.Record)]
+
+
+@workflow.defn
+class ReadsFinishedStreams:
+    @workflow.run
+    async def run(self, key: str, expired: streams.WorkflowStream[Events]) -> list[Any]:
+        stream = await workflow.create_stream(Events)
+        await stream.topic(Events.tokens).publish("turn")
+        await stream.close()
+        return await workflow.execute_activity(
+            reads_after_a_failed_attempt,
+            FinishedStreams(
+                key,
+                streams.ActivityStream.from_handle(stream),
+                streams.ActivityStream.from_handle(expired),
+            ),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+
+
+async def test_retry_goes_on_with_a_closed_or_expired_stream(stream_client: Client):
+    # The second attempt's open withdraws nothing on a Stream that takes no write, and the
+    # attempt only reads.
+    expired = await redis.create(
+        stream_client,
+        Events,
+        id=f"expired-{uuid.uuid4()}",
+        retention=timedelta(milliseconds=200),
+    )
+    await expired.topic(Events.tokens).publish("old")
+    await asyncio.sleep(0.5)
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client, ReadsFinishedStreams, activities=[reads_after_a_failed_attempt]
+    ) as worker:
+        result = await stream_client.execute_workflow(
+            ReadsFinishedStreams.run,
+            args=[key, streams.WorkflowStream.from_handle(expired)],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    assert result == ["turn"] and attempts[key] == 2
 
 
 # Set by a test once its readers showed the first attempt's Record.
