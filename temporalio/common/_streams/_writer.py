@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class StreamWriter:
-    """Writes the Records of one Producer on one Stream, through the generated Writer."""
+    """Writes the Records of one Producer to one Stream, through the generated Writer."""
 
     def __init__(
         self,
@@ -27,10 +27,10 @@ class StreamWriter:
         previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None,
         failed_tasks: Sequence[int] = (),
     ) -> None:
-        """Create a writer. It opens on its first write.
+        """Create a writer. It opens on the first write.
 
-        ``writers`` runs the values through the user's converter and codec. ``free`` releases
-        the crate's writer when Python drops this one with no close.
+        ``writers`` encodes the values with the user's converter and codec. ``free`` releases
+        the crate's writer if Python frees this one without a close.
         """
         self._writers = writers
         self._resolve_id = stream_id
@@ -49,10 +49,10 @@ class StreamWriter:
         return self._producer
 
     async def withdraw_earlier_attempts(self) -> None:
-        """Open the writer of a new attempt, which withdraws the Records of the earlier ones.
+        """Open the writer of a new attempt, which withdraws the Records of earlier attempts.
 
-        A Stream that does not exist has nothing to withdraw. A closed or expired Stream takes
-        no write, so the attempt goes on, and a later write raises the real error.
+        A Stream that doesn't exist has nothing to withdraw. A closed or expired Stream accepts
+        no write, so the attempt continues, and a later write raises the real error.
         """
         try:
             await self.open()
@@ -64,8 +64,10 @@ class StreamWriter:
             pass
 
     async def open(self) -> writer_client.Writer:
-        """Open the crate's writer once. The open of a new attempt withdraws the earlier one's
-        Records, even when it writes nothing.
+        """Open the crate's writer once.
+
+        The open of a new attempt withdraws the Records of earlier attempts, even if it writes
+        nothing.
         """
         from temporalio.common._streams.writer_system import models
 
@@ -88,17 +90,15 @@ class StreamWriter:
                     )
                 )
                 if self._free is not None:
-                    # The crate keeps a writer for each open that no one closed or freed, so a
-                    # writer that Python drops frees its open.
+                    # The crate keeps a writer for each open that nobody closed or freed. So
+                    # free it when Python frees this writer.
                     self._release = weakref.finalize(
                         self, self._free, self._writer.writer_id
                     )
             return self._writer
 
     async def write(self, records: Sequence[tuple[str, Any]]) -> int:
-        """Write ``(topic, value)`` pairs as Records now, in order. Returns the last Record's
-        offset.
-        """
+        """Write ``(topic, value)`` pairs as Records now, in order, and return the last offset."""
         from temporalio.common._streams.writer_system import models
 
         if self._closed:
@@ -112,7 +112,7 @@ class StreamWriter:
         return answer.last_offset or 0
 
     async def close(self) -> None:
-        """Drop the writer. The Stream stays open."""
+        """Close the writer. The Stream stays open."""
         if self._closed:
             return
         self._closed = True

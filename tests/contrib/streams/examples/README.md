@@ -1,6 +1,7 @@
 # Examples for the Brook streams API proposal
 
-Each file is a complete program for one section of the proposal. `test_examples.py` runs each one end to end on the memory Store and on Redis.
+Each file is a complete program for one section of the proposal. `test_examples.py` runs each one
+end to end on the memory Store and on Redis.
 
 | Proposal section | File |
 |---|---|
@@ -12,4 +13,4 @@ Each file is a complete program for one section of the proposal. `test_examples.
 | A Workflow scopes a Stream to one turn and closes it | [`turn_scoped_stream.py`](turn_scoped_stream.py) |
 | Worker setup | [`worker_setup.py`](worker_setup.py) |
 
-The proposal's Nexus examples are a later stage, so they have no file here.
+The proposal's Nexus examples aren't in this directory.

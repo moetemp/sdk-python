@@ -1,4 +1,4 @@
-"""Runs each example end to end on the memory Store and on Redis, so none goes stale."""
+"""Runs each example end to end on the memory Store and on Redis, so a broken one fails."""
 
 import uuid
 

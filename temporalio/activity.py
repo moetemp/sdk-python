@@ -112,7 +112,7 @@ class WorkflowTaskAttempt:
     """ID of the ``WorkflowTaskStarted`` event of the run's last completed task. 0 if none."""
 
     failed_tasks: Sequence[int] = ()
-    """``WorkflowTaskStarted`` event IDs of the run's failed and timed out tasks, the last 100."""
+    """``WorkflowTaskStarted`` event IDs of the run's last 100 failed and timed out tasks."""
 
 
 @dataclass(frozen=True)
@@ -167,7 +167,7 @@ class Info:
 
     workflow_task: WorkflowTaskAttempt | None = None
     """For a local activity, the Workflow Task in which the Worker dispatched this execution.
-    Retries that the Worker runs without a new task keep it. None for other activities.
+    Retries that the Worker runs in the same task have the same value. None for other activities.
 
     .. warning::
         This API is experimental.

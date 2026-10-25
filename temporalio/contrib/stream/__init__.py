@@ -1,7 +1,7 @@
 """The Redis Stream backend.
 
-Register it on the client. :py:func:`create` makes a Stream that the client owns, and
-:py:mod:`temporalio.contrib.stream.workflow` has the Workflow calls that pick this backend::
+Register it on the client. :py:func:`create` creates a Stream that the client owns.
+:py:mod:`temporalio.contrib.stream.workflow` has the Workflow functions that use this backend::
 
     from temporalio.contrib import stream as redis
 
@@ -10,8 +10,8 @@ Register it on the client. :py:func:`create` makes a Stream that the client owns
     )
 
 A Workflow's close is a regular Activity on the Workflow's task queue. So a Worker with a Redis
-backend polls Activities on its task queue for the close Activity, and Workers that share a task
-queue must all register the Redis backend.
+backend must poll Activities on its task queue for the close Activity. All Workers that share a
+task queue must register the Redis backend.
 
 .. warning::
     This package is experimental.
@@ -36,17 +36,17 @@ D = TypeVar("D")
 
 
 class RedisStreamBackend(ExtensionStreamBackend):
-    """Carries Stream calls to Redis, through the temporalio-streams runtime in the bridge.
+    """Sends Stream calls to Redis, through the temporalio-streams runtime in the bridge.
 
-    Register it on the client with ``stream_backends=``. A Worker takes its client's backends,
+    Register it on the client with ``stream_backends=``. A Worker uses its client's backends,
     so one backend serves Workflow code, Activities and the client. Each client of the backend
     gets its own runtime object, and the client's Workers share it. It registers the backend
-    name ``redis``, which the Stream handles it creates carry. For now a Worker serves one
-    backend. A client may have more than one, and ``backend=`` picks one.
+    name ``redis``, and each Stream handle that it creates stores that name. A Worker serves
+    only one backend. A client can have more than one, and ``backend=`` picks one.
 
-    A Workflow's close is a regular Activity on the Workflow's task queue, which runs once the
-    Workflow Task commits. So a Worker with this backend polls Activities on its task queue, and
-    Workers that share a task queue all register the backend.
+    A Workflow's close is a regular Activity on the Workflow's task queue, which runs after the
+    Workflow Task commits. So a Worker with this backend must poll Activities on its task queue,
+    and all Workers that share a task queue must register the backend.
 
     .. warning::
         This API is experimental.
@@ -66,8 +66,10 @@ class RedisStreamBackend(ExtensionStreamBackend):
         name: str = "redis",
         default: bool = False,
     ) -> None:
-        """Create the backend. Each client of the backend connects to Redis on its first
-        Stream call, on the client's runtime.
+        """Create the backend.
+
+        Each client of the backend connects to Redis on its first Stream call, on the client's
+        runtime.
 
         Args:
             url: A Redis URL, or the seed URLs of a cluster. Credentials and TLS come from the
@@ -75,13 +77,13 @@ class RedisStreamBackend(ExtensionStreamBackend):
             cluster: Whether the URLs are of a Redis cluster.
             key_prefix: The prefix of every key. Defaults to ``temporal-streams``.
             retention: The default Retention of a new Stream. Defaults to 7 days.
-            safety_ttl: How long an open Workflow-owned Stream stays after its last write.
+            safety_ttl: How long an open Workflow-owned Stream is kept after its last write.
                 Defaults to 90 days.
-            response_timeout: How long one Redis call takes at most. Defaults to 5 s.
-            name: The backend name that Stream handles carry, so every process routes a
-                handle it receives.
+            response_timeout: The longest time that one Redis call can take. Defaults to 5 s.
+            name: The backend name that Stream handles store, so every process can route a
+                handle that it receives.
             default: Make this the backend of a create with no backend name. With more than
-                one registered backend, exactly one has it, else the client raises
+                one registered backend, exactly one must have it, or the client raises
                 ``StreamConfigError``.
         """
         config = ext_pb.RedisStreamConfig(
@@ -109,10 +111,10 @@ def create(
     retention: timedelta | None = None,
     backend: str | None = None,
 ) -> Creating[ClientStream[D]]:
-    """Create a Stream that this client owns, so only a client closes it.
+    """Create a Stream that the client owns, so only a client can close it.
 
-    It is idempotent for one id and one Retention. Await the call for the handle, or use it in
-    ``async with``, which closes the Stream at the end of the block::
+    The call is idempotent for the same id and Retention. Await the call to get the handle, or
+    use it in ``async with``, which closes the Stream at the end of the block::
 
         async with redis.create(client, Events, id="chat-1") as chat:
             await chat.topic(Events.turns).publish(Turn("user", "hi"))
@@ -123,9 +125,10 @@ def create(
     Args:
         client: The client, with a registered Redis backend.
         definition: The Stream definition class.
-        id: The Stream id, as a Workflow takes a Workflow id.
-        retention: The age after which a Record is dropped, also while the Stream is open.
-            A closed Stream stays one Retention after its close. Defaults to the backend's.
+        id: The Stream id, which the caller picks, as for a Workflow id.
+        retention: The age after which a Record is deleted, even while the Stream is open.
+            A closed Stream is kept for one Retention after its close. Defaults to the
+            backend's Retention.
         backend: The name of the Redis backend. Defaults to the client's only Redis backend,
             or the one with ``default=True``.
 
@@ -133,7 +136,7 @@ def create(
         StreamConfigError: The client has no Redis backend of that name. No call is made.
         StreamClosedError: A Stream of that id was created and closed before.
         StreamExpiredError: A Stream of that id expired.
-        StreamError: The Stream exists with another Retention, with the reason
+        StreamError: The Stream exists with a different Retention, with the reason
             ``stream_already_exists``.
     """
 
@@ -147,7 +150,7 @@ def create(
 
 
 def _redis_backend(backends: Sequence[_plugin.StreamBackend], name: str | None) -> str:
-    # The memory backend keeps Redis's rules, so it stands in for Redis in tests.
+    # The memory backend has Redis's rules, so tests can use it in place of Redis.
     redis = [backend for backend in backends if backend._kind == "redis"]
     if name:
         if not any(backend.backend_name == name for backend in redis):

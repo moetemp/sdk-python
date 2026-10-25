@@ -29,7 +29,7 @@ class Access:
     namespace: str
     stream_id: Callable[[], Awaitable[str]]
     writer: Callable[[], StreamWriter]
-    # The run chain that a close names, which the Store checks against the Stream's owner.
+    # A close sends these, and the Store checks them against the Stream's owner.
     workflow_id: str | None = None
     first_execution_run_id: str | None = None
 
@@ -70,17 +70,15 @@ class Access:
             await items.aclose()
 
     async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one.
+        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
 
-        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
-        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
         """
         response = await self.backend.service(self.namespace).describe_stream(
             models.DescribeStreamRequest(
                 stream=models.StreamRef(id=await self.stream_id())
             )
         )
-        # Offsets start above zero, so zero means the Stream has no Record.
         return response.last_offset + 1 if response.last_offset else 0
 
     async def close(self, result: Any | None, failure: BaseException | None) -> None:
@@ -135,7 +133,7 @@ def read_spec(
     """The Topic names of a read, the decode type of each known Topic, and its options.
 
     Raises:
-        ValueError: ``last`` is not above zero, or it comes with ``offset``.
+        ValueError: ``last`` is not above zero, or the call also gives ``offset``.
     """
     if last is not None and (last < 1 or offset is not None):
         raise ValueError("last takes a count above zero and no offset")
@@ -147,7 +145,7 @@ def read_spec(
         elif isinstance(topic, TopicDefinition):
             name, topic_type = handle._topic_spec(topic, None)
         else:
-            # A read names a Topic outside the definition with no type, and its values
+            # A Topic name that the definition doesn't have gets no type here, so its values
             # decode with the read's default type.
             name, topic_type = topic, types.get(topic)
         names.append(name)
@@ -171,8 +169,7 @@ def subscription(
     options: CallOptions | None = None,
 ) -> Subscription[Any]:
     """A read over the items that ``items`` gives."""
-    # Before its first page, a read from the start resumes at 0, and a read from END or of the
-    # last Records has no offset yet.
+    # A read from END or of the last Records has no resume offset until its first page.
     if read.last is not None or read.offset is End.END:
         position = Position(None)
     else:
@@ -192,4 +189,4 @@ class _AsyncTopic(TopicBase[T]):
 
 
 class SyncTopicBase(TopicBase[T]):
-    """Base of a Topic whose calls block, for sync Activities."""
+    """Base class of a Topic whose calls block, for sync Activities."""

@@ -232,8 +232,8 @@ class Client:
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
             stream_backends: The Stream backends of this client and its Workers, such as
-                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names are unique.
-                With more than one, exactly one has ``default=True``. See
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names must be unique.
+                With more than one backend, exactly one must have ``default=True``. See
                 :py:class:`temporalio.common.StreamBackend`.
 
                 .. warning::
@@ -923,10 +923,10 @@ class Client:
         stream: StreamHandle[Any] | None = None,
         backend: str | None = None,
     ) -> ClientStream[_StreamDefinitionT]:
-        """A Stream by its id, or a handle that came as data, such as in a Record.
+        """Get a Stream by its id, or from a handle that came in data, such as in a Record.
 
-        It makes no call. To create a Stream that the client owns, use the create of a
-        backend, such as :py:func:`temporalio.contrib.stream.create`.
+        This method makes no call. To create a Stream that the client owns, use a backend's
+        ``create`` function, such as :py:func:`temporalio.contrib.stream.create`.
 
         .. warning::
             This API is experimental.
@@ -934,14 +934,14 @@ class Client:
         Args:
             definition: The Stream definition class.
             id: The Stream id.
-            stream: A handle of the Stream, such as one in a Record. Its id, owner and
-                backend stay.
-            backend: The name of the backend. Defaults to the handle's, and else to the
+            stream: A handle of the Stream, such as one in a Record. The result keeps its id,
+                owner and backend.
+            backend: The name of the backend. Defaults to the handle's backend, or else to the
                 registered backend with ``default=True``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name, or none has
-                ``default=True`` for a call with no backend.
+            StreamConfigError: The client has no backend with that name, or no backend has
+                ``default=True`` and the call gives no backend.
             TypeError: Neither or both of ``id`` and ``stream`` are given.
             ValueError: The id is empty, or ``backend`` is not the handle's backend.
         """

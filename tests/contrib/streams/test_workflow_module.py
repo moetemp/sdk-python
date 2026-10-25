@@ -58,7 +58,7 @@ class Agent:
         turns = stream.topic(Events.turns)
         await turns.publish(Turn("user", prompt), Turn("model"))
         await stream.topic("tokens").publish(*prompt.split())
-        # A run end closes nothing, so the run closes its Stream before it returns.
+        # A run's end doesn't close this Stream, so the run closes it before it returns.
         await stream.close(result=prompt.upper())
         return prompt.upper()
 
@@ -246,7 +246,7 @@ async def test_workflow_closes_only_its_own_streams(stream_client: Client):
             )
             == "stream_not_owner"
         )
-    # The writer can't end the Stream for every reader, so it stays open.
+    # The Workflow that received the Stream can't close it, so it stays open.
     items = [item async for item in stream.subscribe(wait_new_records=False)]
     assert data(items) == ["from workflow"]
 
@@ -369,7 +369,7 @@ async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client)
             assert closed.status == common.CloseStatus.FAILED
             assert isinstance(closed.failure, ApplicationError)
             assert closed.failure.message == "block failed"
-        # A close at the run's end is a command after the run's code, also on replay.
+        # A close at the run's end is a command after the run's code, even on replay.
         replayer = Replayer(
             workflows=[EndsItsBlock],
             stream_backends=stream_client.config()["stream_backends"],
@@ -378,7 +378,7 @@ async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client)
             await replayer.replay_workflow(await handles[mode].fetch_history())
 
 
-# Set by the Activity of a test's run once it runs, so the test cancels the run there.
+# The Activity of a test's run sets this when it starts, so the test cancels the run then.
 waiting: dict[str, asyncio.Event] = {}
 
 
@@ -409,7 +409,7 @@ class CancelledInItsBlock:
 
 
 async def test_cancel_during_an_activity_closes_as_canceled(stream_client: Client):
-    # The cancel reaches the block as an ActivityError, and no retry follows a cancelled run.
+    # The cancel reaches the block as an ActivityError, and a cancelled run gets no retry run.
     async with new_worker(
         stream_client, CancelledInItsBlock, activities=[waits_for_cancel]
     ) as worker:
@@ -479,7 +479,8 @@ class SchedulesACloseThenFailsItsTask:
 
 
 async def test_failed_task_writes_no_close(stream_client: Client):
-    # The test's set must survive the retry of the task, so no sandbox.
+    # The test's set must keep its value across the task's retry, so the Workflow has no
+    # sandbox.
     async with new_worker(
         stream_client,
         SchedulesACloseThenFailsItsTask,
@@ -495,7 +496,7 @@ async def test_failed_task_writes_no_close(stream_client: Client):
     closes = [item for item in items if isinstance(item, common.Closed)]
     assert len(closes) == 1 and closes[0].result == "closed"
     history = await handle.fetch_history()
-    # The failed task's close never went out, so History has one close Activity.
+    # The failed task's close was never sent, so History has one close Activity.
     scheduled = [
         event
         for event in history.events
@@ -518,7 +519,7 @@ async def test_worker_config_errors_fail_the_task(
     client: Client, stream_client: Client
 ):
     # A Worker with no plugin, or with another backend, fails the Workflow Task, so a Worker
-    # with the right config can take the run on.
+    # with the right config can continue the run.
     for task_client, backend, message in (
         (client, None, "No Stream backend"),
         (stream_client, "elsewhere", "backend elsewhere"),
@@ -568,7 +569,7 @@ async def test_cron_runs_share_an_open_stream(stream_client: Client):
 class SyncHandlers:
     @workflow.init
     def __init__(self, prompt: str) -> None:
-        # The create goes first, so the signal's writes find the Stream.
+        # The create runs first, so the Stream exists for the signal's writes.
         self._stream = workflow.create_stream_nowait(Events)
         self._prompt = prompt
         self._done = False
@@ -656,8 +657,8 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
         offsets = await handle.result()
         items = await read(handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
-    # The four writes that waited went as one Local Activity, and each call got the offset of
-    # its own Record.
+    # The four writes that waited were sent as one Local Activity, and each call got the offset
+    # of its own Record.
     assert (
         offsets
         == [item.offset for item in items if isinstance(item, common.Record)][1:]
@@ -670,7 +671,7 @@ async def test_concurrent_publishes_keep_their_order(stream_client: Client):
     ]
     # The create, the first write and the four that waited.
     assert len(markers) == 3
-    # Replay answers from the markers and writes nothing.
+    # Replay uses the markers and writes nothing.
     await Replayer(
         workflows=[Gathers], stream_backends=stream_client.config()["stream_backends"]
     ).replay_workflow(history)
@@ -695,7 +696,7 @@ class _RandomCodec(PayloadCodec):
 
 
 class _GrowingCodec(PayloadCodec):
-    # Triples each payload, so a merge under the Workflow's cap passes the Store's batch limit
+    # Triples each payload, so a merge under the Workflow's cap exceeds the Store's batch limit
     # after the codec.
     async def encode(self, payloads: Sequence[Payload]) -> list[Payload]:
         return [
@@ -761,8 +762,8 @@ async def test_retried_write_goes_in_once(
         await handle.result()
         items = await read(handle)
     assert data(items) == ["0", "1", "2", "3", "4"]
-    # The retry sends the bytes of the first attempt, so the Store's dedupe takes it as the
-    # same batch, though the codec adds random bytes.
+    # The retry sends the bytes of the first attempt, so the Store's dedupe matches it as the
+    # same batch, even though the codec adds random bytes.
     assert sent[0] == sent[1]
 
 
@@ -797,15 +798,15 @@ def test_pending_appends_keep_the_newest_epoch_and_a_bounded_size():
     one, two = ("ns", "s", "la:1"), ("ns", "s", "la:2")
     first, retried = _entry(10), _entry(10)
     pending.put(one, (5, 1, 0, 0), first)
-    # A rerun under a later epoch takes the place of the earlier one.
+    # A rerun under a later epoch replaces the earlier one.
     pending.put(one, (9, 1, 0, 0), retried)
     assert pending.get(one, (5, 1, 0, 0)) is None
     assert pending.get(one, (9, 1, 0, 0)) is retried
-    # A write of an earlier epoch is fenced, so it leaves the later one, and so does its pop.
+    # A write of an earlier epoch is fenced, so its put and its pop don't change the later entry.
     pending.put(one, (5, 1, 0, 0), first)
     pending.pop(one, (5, 1, 0, 0))
     assert pending.get(one, (9, 1, 0, 0)) is retried
-    # Past the size, the oldest entry goes.
+    # Past the size limit, the oldest entry is evicted.
     pending.put(two, (9, 1, 0, 0), _entry(95))
     assert pending.get(one, (9, 1, 0, 0)) is None
     assert pending.get(two, (9, 1, 0, 0)) is not None
@@ -824,8 +825,8 @@ class PublishesLargeValues:
 
 
 async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Client):
-    # The two publishes merge under the Workflow's cap, and the codec makes the merge larger
-    # than one batch may be, so each publish goes as its own batch.
+    # The two publishes merge under the Workflow's cap. The codec makes the merge larger than the
+    # batch limit, so each publish is sent as its own batch.
     client = with_codec(stream_client, _GrowingCodec())
     async with new_worker(client, PublishesLargeValues) as worker:
         handle = await client.start_workflow(
@@ -913,7 +914,7 @@ async def test_create_of_an_expired_workflow_stream_raises(client: Client):
 
 async def test_default_is_native_with_no_default_backend(client: Client):
     # With no backend marked default=True, the default is native, which this SDK lacks. The
-    # Redis calls still pick the registered Redis backend, and the memory one stands in for it.
+    # Redis functions still pick the registered Redis backend, and the memory backend counts as one.
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend()]
     memory_client = Client(**config)

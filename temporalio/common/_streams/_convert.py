@@ -14,7 +14,7 @@ import temporalio.exceptions
 
 class _RawPayloadConverter(temporalio.converter.PayloadConverter):
     # The generated client runs the codec on Record bodies and keeps them as RawValue, so the
-    # facade converts each body with its Topic's type.
+    # handle converts each body with its Topic's type.
     def to_payloads(
         self, values: Sequence[Any]
     ) -> list[temporalio.api.common.v1.Payload]:
@@ -43,9 +43,7 @@ def raw(
 def failure(
     converter: temporalio.converter.DataConverter, failure: BaseException
 ) -> BaseException:
-    """Convert a close failure that a read gave with RawValue payloads, after the codec, with
-    the user's payload converter.
-    """
+    """Convert the RawValue payloads of a read's close failure with the user's converter."""
     if (
         not isinstance(failure, temporalio.exceptions.FailureError)
         or not failure.failure

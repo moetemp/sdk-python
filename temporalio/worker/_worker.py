@@ -410,8 +410,8 @@ class Worker:
         self._plugins = plugins
         for plugin in plugins:
             config = plugin.configure_worker(config)
-        # The Worker takes its client's Stream backends after the plugins, as the client does,
-        # so a plugin that replaces the Workflow runner keeps the Streams passthrough.
+        # Configure Streams after the plugins, so a plugin that replaces the Workflow runner
+        # doesn't lose the Streams sandbox passthrough.
         stream_backends = client.config(active_config=True).get("stream_backends")
         if stream_backends:
             from temporalio.common._streams import _plugin as _stream_plugin

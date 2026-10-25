@@ -38,7 +38,7 @@ class SummarizeInput:
 async def call_model(input: CallModelInput) -> int:
     tokens = input.stream.topic(Events.tokens)
     words = input.prompt.split()
-    # Each awaited publish has written when it returns.
+    # Each awaited publish has written its Record when it returns.
     last = await tokens.publish(words[0])
     # A fast model sends many small tokens, so the helper batches them.
     async with common.BufferedPublisher(

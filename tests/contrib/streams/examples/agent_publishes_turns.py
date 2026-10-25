@@ -2,7 +2,7 @@
 
 The Workflow creates its Stream, publishes each turn with an awaited ``publish``, and passes the
 Stream to the model Activity in its one input object. It closes the Stream with its result
-before it returns, since a run end closes nothing.
+before it returns, since a run's end doesn't close the Stream.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class AgentTurns:
             )
             if not reply.tool_calls:
                 await turns.publish(Turn("done", reply.text))
-                # A run end closes nothing, so the Workflow closes its Stream.
+                # A run's end doesn't close the Stream, so the Workflow closes it.
                 await stream.close(result=reply.text)
                 return reply.text
             for call in reply.tool_calls:

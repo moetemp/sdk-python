@@ -50,8 +50,8 @@ def _bound(handle: StreamHandle[Any]) -> _activity.ActivityStreams:
 
 
 def _check_close(handle: StreamHandle[Any]) -> None:
-    # A Workflow's Stream closes only from Workflow code, once its task commits, and a client's
-    # only from a client. The Store refuses the others too, and this error comes with no call.
+    # Only Workflow code can close a Workflow's Stream, and only a client can close a client's
+    # Stream. This check refuses some closes without a call, and the Store refuses the rest.
     streams = _bound(handle)
     local = streams.producer.kind == stream_pb.ProducerKind.PRODUCER_KIND_LOCAL_ACTIVITY
     if not local or handle.workflow_id:
@@ -75,8 +75,8 @@ def _access(handle: StreamHandle[Any]) -> Access:
         namespace=streams.namespace,
         stream_id=known_id,
         writer=lambda: streams.writer(stream_id),
-        # A handle with only an id names no chain, so the close names this Activity's own, and
-        # the Store refuses it for a Workflow's Stream.
+        # A handle with only an id has no run chain, so the close sends the Activity's Workflow
+        # id. The Store refuses that close for a Workflow's Stream.
         workflow_id=handle.workflow_id or streams.workflow_id,
         first_execution_run_id=handle.first_execution_run_id,
     )
@@ -91,7 +91,7 @@ class ActivityTopic(_AsyncTopic[T]):
 
 
 class ActivityStream(StreamHandle[E]):
-    """A Stream in an async Activity. The Activity writes, reads and closes it.
+    """A Stream in an async Activity. The Activity can write and read it.
 
     An Activity gets a Stream only as an argument, such as a field of its input. Each publish
     writes before it returns. Use :py:class:`BufferedPublisher` to batch.
@@ -144,10 +144,9 @@ class ActivityStream(StreamHandle[E]):
         return subscription(lambda position: access.items(read, position), read)
 
     async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one.
+        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
 
-        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
-        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
         """
         return await self._access().get_offset()
 
@@ -156,14 +155,15 @@ class ActivityStream(StreamHandle[E]):
     ) -> None:
         """Write this attempt's Records, then close the Stream.
 
-        Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
+        Readers get the Records before the close, then a ``Closed`` item with ``result`` or
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes the Stream as
+        canceled.
 
-        No Activity closes a Workflow's Stream, also a Local Activity of the run chain that
-        created it, and no Activity closes a client's Stream. They get
-        :py:class:`StreamNotOwnerError`. A Local Activity writes before its Workflow Task
-        commits, so its close would stay when the task fails, and the task's retry could not
-        create the Stream again. Workflow code closes a Workflow's Stream.
+        An Activity can't close a Workflow's Stream or a client's Stream, and this call raises
+        :py:class:`StreamNotOwnerError`. The rule includes a Local Activity of the run chain
+        that created the Stream. A Local Activity runs before its Workflow Task commits. If the
+        task then failed, the close would stay, and the task's retry couldn't create the Stream
+        again. Close a Workflow's Stream from Workflow code.
         """
         _check_close(self)
         await self._access().close(result, failure)
@@ -187,9 +187,9 @@ class SyncActivityTopic(SyncTopicBase[T]):
 
 
 class SyncSubscription(Generic[T]):
-    """The items of one read of a Stream in a sync Activity, in order. Use it in ``for``.
+    """The items of one read of a Stream in a sync Activity, in order. Iterate it with ``for``.
 
-    Each step blocks the Activity's thread. See :py:class:`Subscription`.
+    Each iteration blocks the Activity's thread. See :py:class:`Subscription`.
 
     .. warning::
         This API is experimental.
@@ -246,15 +246,14 @@ class SyncActivityStream(StreamHandle[E]):
         future = asyncio.run_coroutine_threadsafe(call, loop)
         try:
             while True:
-                # Short waits let an exception that the Worker raises in this thread, such as
-                # a cancel, come in.
+                # Short waits let the Worker raise an exception in this thread, such as a cancel.
                 try:
                     return future.result(timeout=_WAIT_STEP)
                 except concurrent.futures.TimeoutError:
                     continue
         except BaseException:
-            # A cancel of the Activity thread, such as from a heartbeat, stops the call too,
-            # so a long poll does not run on in the Worker's loop.
+            # Cancel the call too, so a long poll doesn't keep running in the Worker's loop after
+            # the Activity thread is canceled, such as from a heartbeat.
             future.cancel()
             raise
 
@@ -314,18 +313,18 @@ class SyncActivityStream(StreamHandle[E]):
             self._run(items.aclose())
 
     def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one.
+        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
 
-        It is 0 for a Stream with no Record, and ``offset=0`` reads from the start.
-        Offsets are sparse and above zero, so 0 is never a Record's offset.
+        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
         """
         return self._run(self._access().get_offset())
 
     def close(
         self, *, result: Any | None = None, failure: BaseException | None = None
     ) -> None:
-        """Write this attempt's Records, then close the Stream. See
-        :py:meth:`ActivityStream.close`.
+        """Write this attempt's Records, then close the Stream.
+
+        See :py:meth:`ActivityStream.close`.
         """
         _check_close(self)
         self._run(self._access().close(result, failure))

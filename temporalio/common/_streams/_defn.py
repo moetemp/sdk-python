@@ -1,4 +1,4 @@
-"""Stream definitions: the Stream name and the type of each Topic."""
+"""Stream definitions, which give the Stream name and the type of each Topic."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ class TopicDefinition(Generic[T]):
         self._owner: type | None = None
 
     def __set_name__(self, owner: type, name: str) -> None:
-        """Take the attribute name as the Topic name, unless the Topic has a name."""
+        """Use the attribute name as the Topic name, unless the Topic has one."""
         if self._name is None:
             self._name = name
         self._owner = owner
@@ -61,7 +61,7 @@ def topic(type: Any, *, name: str | None = None) -> TopicDefinition[Any]: ...
 def topic(type: Any, *, name: str | None = None) -> TopicDefinition[Any]:
     """Declare a Topic in a Stream definition class.
 
-    ``RawValue`` keeps each Record's Payload.
+    Use ``RawValue`` as the type to read each Record's Payload with no conversion.
 
     Args:
         type: The type of the Topic's values.
@@ -101,7 +101,7 @@ def defn(
 ) -> ClassT | Callable[[ClassT], ClassT]:
     """Mark a class as a Stream definition. Its :py:func:`topic` attributes are the Topics.
 
-    A definition has no backend in it, so Workflows, Activities and clients share it.
+    A definition doesn't name a backend, so Workflows, Activities and clients can share it.
 
     Args:
         cls: The class.
@@ -140,9 +140,9 @@ def defn(
 
 
 def with_name(definition: ClassT, name: str) -> ClassT:
-    """The definition with the same Topics and another Stream name, such as one per turn.
+    """Return a definition with the same Topics and another Stream name, such as one per turn.
 
-    It is a subclass of ``definition``, which stays unchanged. Its Topics are the same
+    The result is a subclass of ``definition``, which doesn't change. Its Topics are the same
     attributes, so ``Events.tokens`` is a Topic of ``with_name(Events, "turn-3")`` too.
 
     Args:

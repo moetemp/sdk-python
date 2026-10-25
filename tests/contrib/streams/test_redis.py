@@ -141,7 +141,8 @@ class PublishThenFailTask:
 
 async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
     key = str(uuid.uuid4())
-    # The test's counter must survive the retry of the task, so no sandbox.
+    # The test's counter must keep its value across the task's retry, so the Workflow has no
+    # sandbox.
     async with new_worker(
         stream_client,
         PublishThenFailTask,
@@ -398,7 +399,7 @@ async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Cli
     superseded = [item for item in items if isinstance(item, common.Superseded)]
     visible = [r for r in written if not any(i.withdraws(r) for i in superseded)]
     assert [r.data for r in visible] == ["2", "3"]
-    # The rerun keeps the Producer id and moves to the retry task's epoch.
+    # The rerun keeps the Producer id and uses the retry task's epoch.
     first, second = written[0].producer, visible[0].producer
     assert first is not None and second is not None and first.id == second.id
     assert first.epoch is not None and second.epoch is not None
@@ -427,7 +428,7 @@ class LocalOnlyInFailedTask:
 
 async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Client):
     # The retry task skips the Local Activity, so only its own write can withdraw "0 1". The
-    # write also takes the skipped call's key.
+    # write also uses the skipped call's key.
     async with new_worker(
         stream_client,
         LocalOnlyInFailedTask,
@@ -517,7 +518,7 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
         await handle.result()
         stream = workflow_stream(handle)
         decoded = await read_all(stream)
-        # A Topic outside the definition reads the raw Payloads.
+        # A read of a Topic outside the definition gets the raw Payloads.
         plain = codec_client.stream(Plain, id=stream.id)
         raw = [
             item
@@ -656,9 +657,8 @@ class _NeverEnds(WorkflowInboundInterceptor):
 
 
 def test_closing_an_evicted_run_touches_no_runtime():
-    # Python closes the coroutine of an evicted run with GeneratorExit, outside the
-    # Workflow's loop. The interceptor must let it pass with no call to the runtime, or
-    # Python prints "Exception ignored".
+    # Python closes an evicted run's coroutine with GeneratorExit, outside the Workflow's loop.
+    # The interceptor must let it pass without a call to the runtime.
     inbound = _WorkflowInbound(_NeverEnds())
     run = inbound.execute_workflow(
         cast(ExecuteWorkflowInput, cast(object, SimpleNamespace(headers={}, args=[])))
@@ -721,14 +721,14 @@ async def test_final_failure_under_a_retry_policy(
         items = [item async for item in stream.subscribe(wait_new_records=False)]
     written = records(items)
     superseded = [item for item in items if isinstance(item, common.Superseded)]
-    # The end of the chain closes nothing.
+    # The end of the chain doesn't close the Stream.
     assert not any(isinstance(item, common.Closed) for item in items)
     if non_retryable:
         # A non-retryable failure ends the chain on attempt 1.
         assert [r.data for r in written] == ["run-1"]
         assert superseded == []
         return
-    # Each retry run withdraws the run before it.
+    # Each retry run withdraws the Records of the run before it.
     assert [r.data for r in written] == ["run-1", "run-2", "run-3"]
     assert len(superseded) == 2
     assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
@@ -746,7 +746,7 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
             assert isinstance(item, common.Record)
             seen.append(item)
 
-    # A read has no idle end, so a reader that wants one sets its own timer.
+    # A read has no idle timeout, so a reader that wants one uses its own timer.
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(read_until_quiet(), timeout=0.5)
     assert [item.offset for item in seen] == [first]
@@ -762,8 +762,8 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
 
 
 async def test_two_backends_on_one_client(client: Client, redis_url: str):
-    # A client may carry two Stream backends, such as during a move from one backend to
-    # another. Each handle carries its backend, so a call goes to the backend that has it.
+    # A client can have two Stream backends, such as during a migration to another backend. Each
+    # handle stores its backend name, so a call goes to the backend that has the Stream.
     config = client.config()
     config["stream_backends"] = [
         RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
@@ -792,8 +792,8 @@ failed_last_task: set[str] = set()
 
 
 class _FailsTheLastTaskOnce(Interceptor, WorkerInterceptor):
-    # On the client before the Stream backend's interceptor, so it is the outer Workflow
-    # interceptor and fails the task after the backend drained the run's writes.
+    # It's on the client before the Stream backend's interceptor, so it's the outer Workflow
+    # interceptor. It fails the task after the backend drained the run's writes.
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> type[WorkflowInboundInterceptor]:

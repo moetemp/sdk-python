@@ -15,7 +15,7 @@ T = TypeVar("T")
 
 
 class End(enum.Enum):
-    """An ``offset`` after the newest Record, for new Records only. Use ``END``."""
+    """An ``offset`` past the newest Record, to read only new Records. Use ``END``."""
 
     END = "END"
 
@@ -38,7 +38,7 @@ class Record(Generic[T]):
     """Value of the Record, decoded with the Topic's type."""
 
     offset: int
-    """Place of the Record in the Stream. Ordered and unique, with gaps."""
+    """Position of the Record in the Stream. Offsets are ordered and unique, with gaps."""
 
     producer: models.Producer | None
     """Producer that wrote the Record."""
@@ -46,11 +46,11 @@ class Record(Generic[T]):
 
 @dataclass(frozen=True)
 class Superseded:
-    """A failed attempt's Records are withdrawn.
+    """An item that withdraws the Records of a failed attempt.
 
-    It comes at the same point for every Reader. A live view takes back the Records in
-    :py:attr:`withdrawn_offsets`. A view that keeps Records from an earlier read, such as one
-    before a reconnect, uses :py:meth:`withdraws` on them.
+    Every reader gets it at the same point in the Stream. A live view removes the Records in
+    :py:attr:`withdrawn_offsets`. A view that keeps Records from an earlier read, such as from
+    before a reconnect, checks them with :py:meth:`withdraws`.
 
     The next write of a run to a Stream withdraws the Records that the run's Local Activities
     wrote there in Workflow Tasks that never completed. A Stream that the run never writes
@@ -61,7 +61,7 @@ class Superseded:
     """
 
     offset: int
-    """Place of the item in the Stream."""
+    """Position of the item in the Stream."""
 
     supersession: models.Supersession
     """Which earlier Records the item withdraws."""
@@ -69,7 +69,7 @@ class Superseded:
     withdrawn_offsets: tuple[int, ...] = ()
     """The offsets of the Records that this read gave and this item withdraws, in order.
 
-    A read gives each offset once. Records from before the read's start are not in it.
+    A read gives each offset once. It doesn't include Records from before the read's start.
     """
 
     def withdraws(self, record: Record[Any]) -> bool:
@@ -116,17 +116,19 @@ class Closed:
     """
 
     offset: int
-    """Place of the close in the Stream."""
+    """Position of the close in the Stream."""
 
     result: Any | None
-    """Result that the close carries, decoded with no type. None if it has none."""
+    """Result of the close, decoded with no type hint. None if it has none."""
 
     failure: BaseException | None
-    """Failure that the close carries. None if it has none."""
+    """Failure of the close. None if it has none."""
 
     status: CloseStatus = CloseStatus.COMPLETED
-    """How the Stream closed, so a reader tells a cancelled or terminated owner from a failed
-    one with no check of the failure's type.
+    """How the Stream closed.
+
+    A reader can tell a cancelled or terminated owner from a failed one without checking the
+    failure's type.
     """
 
 
@@ -159,9 +161,7 @@ def _completed(task: models.WorkflowTaskEpoch) -> tuple[int, int, tuple[int, int
 
 
 def producer_key(producer: models.Producer) -> tuple[Any, ...]:
-    """The fields of a Producer that :py:func:`withdraws` looks at, so equal keys are withdrawn
-    together.
-    """
+    """The Producer fields that :py:func:`withdraws` reads, so equal keys are withdrawn together."""
     epoch = _epoch(producer.epoch) if producer.epoch is not None else None
     return (producer.kind or 0, producer.id, producer.run_id or "", epoch)
 
@@ -179,7 +179,7 @@ def withdraws(
 ) -> bool:
     """Whether a Superseded item withdraws a Record of ``producer``.
 
-    It is the same rule as the crate's, so every SDK withdraws the same Records.
+    The rule matches the crate's, so every SDK withdraws the same Records.
     """
     if producer is None:
         return False
@@ -214,6 +214,6 @@ def withdraws(
         return False
     if (completed.attempt or 0) > 0:
         return old < _completed(completed)
-    # Core gives the completed task with attempt 0 when it no longer has the attempt. The
-    # attempts of one task start in time order, so the started time still tells the lower ones.
+    # Core sends the completed task with attempt 0 when it no longer knows the attempt. A task's
+    # attempts start in time order, so the started time still orders them.
     return old[2] < _time(completed.started_time)

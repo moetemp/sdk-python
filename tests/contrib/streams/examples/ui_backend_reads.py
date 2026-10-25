@@ -1,7 +1,7 @@
 """Brook API proposal, "A UI backend reads a Workflow's Stream".
 
 The agent Workflow creates the ``events`` Stream. The UI backend starts it, gets the Stream
-from the Workflow handle with no call to Temporal, and renders each item as it comes.
+from the Workflow handle with no call to Temporal, and renders each item as it arrives.
 """
 
 from __future__ import annotations
@@ -55,15 +55,13 @@ class Agent:
             start_to_close_timeout=timedelta(minutes=5),
         )
         await turns.publish(Turn("done", reply))
-        # A run end closes nothing, so the Workflow closes its Stream before it returns.
+        # A run's end doesn't close the Stream, so the Workflow closes it before it returns.
         await stream.close(result=reply)
         return reply
 
 
 class Screen:
-    """Stands in for the UI. It keeps what it shows by offset, so a withdrawal can take items
-    back.
-    """
+    """A fake UI. It keeps what it shows by offset, so a withdrawal can remove items."""
 
     def __init__(self) -> None:
         self.shown: dict[int, common.Record[Any]] = {}
@@ -96,6 +94,6 @@ async def main(client: Client, task_queue: str) -> Screen:
                 for offset in item.withdrawn_offsets:
                     screen.unrender(offset)
             else:
-                # item.data is a Turn or a str, by item.topic.
+                # item.data is a Turn or a str, depending on item.topic.
                 screen.render(item)
         return screen

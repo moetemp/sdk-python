@@ -10,12 +10,12 @@ from temporalio.common._streams.proto.v1 import StreamErrorDetails
 
 
 class StreamError(temporalio.exceptions.ApplicationError):
-    """Base of every Stream error.
+    """Base class of every Stream error.
 
-    It is an application error that is not retryable, except
-    :py:class:`StreamStorageError`. So in Workflow code, where only
-    :py:class:`StreamClosedError` and the backend errors are raised, an uncaught one fails the
-    Workflow and does not fail the Workflow Task again and again.
+    Each Stream error is a non-retryable application error, except
+    :py:class:`StreamStorageError`. So an uncaught Stream error in Workflow code fails the
+    Workflow, and doesn't fail the Workflow Task again and again. In Workflow code, only
+    :py:class:`StreamClosedError` and the backend errors are raised.
 
     .. warning::
         This API is experimental.
@@ -83,30 +83,33 @@ class StreamTooLargeError(StreamError):
 
 
 class StreamUnsupportedError(StreamError):
-    """The Store lacks a capability that the call needs. The message ends with its name."""
+    """The Store lacks a capability that the call needs.
+
+    The message ends with the name of the capability.
+    """
 
 
 class StreamNotOwnerError(StreamError):
-    """The caller may not close the Stream or write as that Producer, since the Stream's owner
-    doesn't allow it.
+    """The caller isn't allowed to close the Stream or write as that Producer.
 
-    A Workflow's Stream closes only from its own run chain, and a client's Stream only from a
-    client.
+    Only the Workflow's own run chain can close a Workflow's Stream. Only a client can close a
+    client's Stream.
     """
 
 
 class StreamSeqDivergentError(StreamError):
-    """A resend has the sequence of the Producer's last batch and other content.
+    """A resent batch has the sequence number of the Producer's last batch, but other content.
 
-    A writer that starts again with the same Producer id and epoch sends its first sequence
+    A writer that restarts with the same Producer id and epoch sends its first sequence number
     again. Give it a higher epoch instead.
     """
 
 
 class StreamConfigError(RuntimeError):
-    """No Stream backend, or no backend of a given name. It is config, not a Store error.
+    """The Stream backend config is wrong, such as when no backend has a given name.
 
-    ``except StreamError`` does not catch it. It fails a Workflow Task, and an Activity retries.
+    It isn't a :py:class:`StreamError`, so ``except StreamError`` doesn't catch it. In Workflow
+    code it fails the Workflow Task. An Activity that raises it retries.
     """
 
 
@@ -142,7 +145,7 @@ _BY_REASON: dict[str, type[StreamError]] = {
 def from_call_error(err: Exception) -> StreamError:
     """Turn a failed call of the crate's runtime into the Stream error for its reason.
 
-    Its args are the gRPC code, the message and the encoded ``StreamErrorDetails``.
+    ``err.args`` are the gRPC code, the message and the encoded ``StreamErrorDetails``.
     """
     code, message, details = err.args
     reason = StreamErrorDetails.FromString(details).reason if details else ""

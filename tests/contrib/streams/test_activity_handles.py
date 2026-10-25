@@ -217,7 +217,7 @@ class ReadsFinishedStreams:
 
 
 async def test_retry_goes_on_with_a_closed_or_expired_stream(stream_client: Client):
-    # The second attempt's open withdraws nothing on a Stream that takes no write, and the
+    # On a Stream that accepts no write, the second attempt's open withdraws nothing, and the
     # attempt only reads.
     expired = await redis.create(
         stream_client,
@@ -240,7 +240,7 @@ async def test_retry_goes_on_with_a_closed_or_expired_stream(stream_client: Clie
     assert result == ["turn"] and attempts[key] == 2
 
 
-# Set by a test once its readers showed the first attempt's Record.
+# Set by a test after its readers showed the first attempt's Record.
 shown: dict[str, asyncio.Event] = {}
 
 
@@ -288,8 +288,8 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         reconnects = stream.subscribe(Events.tokens, create_wait=timedelta(seconds=20))
         first = await anext(live)
         before = await anext(reconnects)
-        # The reader drops its connection and keeps only the Records it showed and where to
-        # go on from, as a UI does across a page reload.
+        # The reader closes its connection and keeps only the Records that it showed and its
+        # resume offset, as a UI does across a page reload.
         resume_at = reconnects.next_offset
         await reconnects.aclose()
         shown[key].set()
@@ -301,7 +301,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
     assert isinstance(before, common.Record) and before.offset == first.offset
     [live_superseded] = [i for i in live_items if isinstance(i, common.Superseded)]
     assert live_superseded.withdrawn_offsets == (first.offset,)
-    # A new read gave no Record of the failed attempt, so it names no offset. The kept
+    # A new read got no Record of the failed attempt, so the item lists no offset. The kept
     # Record is still withdrawn.
     [superseded] = [i for i in resumed if isinstance(i, common.Superseded)]
     assert superseded.withdrawn_offsets == ()
@@ -344,13 +344,13 @@ class Closing:
             common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        # A Local Activity writes before its Workflow Task commits, so it can't close either.
+        # A Local Activity runs before its Workflow Task commits, so it can't close it either.
         local = await workflow.execute_local_activity(
             close_it,
             common.ActivityStream.from_handle(stream),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        # A handle with only the id names no Workflow, so the Store refuses it.
+        # A handle with only the id names no Workflow, so the Store refuses the close.
         by_id = await workflow.execute_local_activity(
             close_it,
             common.ActivityStream(id=stream.id),
@@ -367,7 +367,7 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
         handle = await stream_client.start_workflow(
             Closing.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        # An Activity writes to the Workflow's Stream but can't end it for every reader.
+        # An Activity writes to the Workflow's Stream but can't close it.
         assert await handle.result() == [
             "config",
             "stream_not_owner",
@@ -467,8 +467,8 @@ async def test_buffered_publisher_writes_a_full_batch_with_one_write_in_flight()
     publisher.publish(*range(1000))
     publisher.publish(*range(1000, 2500))
     await asyncio.sleep(0.2)
-    # A full batch goes with no wait for the delay, and the values published during its
-    # write go in the next one.
+    # A full batch is written without waiting for the delay. The values published during its
+    # write are in the next batch.
     assert [len(batch) for batch in topic.batches] == [1000, 1500]
     assert topic.most_in_flight == 1
     assert await publisher.flush() == 2500
@@ -708,7 +708,7 @@ class RetriesAfterContinueAsNew:
 
 
 async def keyed(handle: WorkflowHandle[Any, Any], activity_type: str) -> list[bool]:
-    # Whether each schedule of the Activity carries the Producer key.
+    # Whether each schedule of the Activity has the Producer key.
     history = await handle.fetch_history()
     return [
         "__temporal_stream_key" in attributes.header.fields
@@ -722,7 +722,7 @@ async def keyed(handle: WorkflowHandle[Any, Any], activity_type: str) -> list[bo
 
 async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: Client):
     # The key is in History, so a run with no Stream adds none. A run that created, bound or
-    # received one keys each Activity, so an Activity that writes keeps its Producer id.
+    # received a Stream adds it to each Activity, so an Activity that writes keeps its Producer id.
     key = str(uuid.uuid4())
     async with new_worker(
         stream_client,
@@ -752,8 +752,8 @@ async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: C
         )
         await receives.result()
         assert await keyed(receives, "plain") == [True]
-        # The next run gets the Stream as its argument, and its retried Activity withdraws its
-        # first attempt as in the run that created the Stream.
+        # The next run gets the Stream as its argument. Its retried Activity withdraws the first
+        # attempt's Records, as in the run that created the Stream.
         continued_key = str(uuid.uuid4())
         continued = await stream_client.start_workflow(
             RetriesAfterContinueAsNew.run,

@@ -25,9 +25,9 @@ class ActivityStreams:
     backend_name: str = ""
     # Whether the Worker's backend is the default, which a handle with no backend name uses.
     default: bool = False
-    # The Workflow of the attempt, so a close checks that the Stream is its run chain's.
+    # The attempt's Workflow id, which a close sends so the Store can check the Stream's owner.
     workflow_id: str | None = None
-    # A Local Activity's run history, which lets its writes withdraw the run's orphaned Records.
+    # A Local Activity's writes use these to withdraw the run's orphaned Records.
     previous_completed_task: stream_pb.WorkflowTaskEpoch | None = None
     failed_tasks: tuple[int, ...] = ()
     writers: dict[str, StreamWriter] = field(default_factory=dict)
@@ -54,7 +54,7 @@ class ActivityStreams:
         return writer
 
     async def close(self) -> None:
-        """Flush the attempt's publishers, then drop every writer of the attempt."""
+        """Flush the attempt's publishers, then close every writer of the attempt."""
         errors = []
         for publisher in self.publishers:
             try:

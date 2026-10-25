@@ -140,8 +140,8 @@ async def test_handles_of_one_client_share_a_producer_and_free_it(client: Client
         if isinstance(item, common.Record) and item.producer
     }
     assert len(producers) == 1
-    # A handle that goes with no close frees its writer, so a server that makes a handle per
-    # request keeps no writer for it.
+    # A handle that Python frees without a close frees its writer. So a server that makes a
+    # handle per request doesn't keep a writer for each.
     del other
     gc.collect()
     assert len(extension.freed) == 1
@@ -166,7 +166,7 @@ async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
         await asyncio.sleep(1)
         await stream.topic(Events.tokens).publish("late")
 
-    # Each call of a read that waits answers before the deadline, so the read goes on.
+    # Each call of a waiting read returns before the deadline, so the read continues.
     reader = stream.subscribe(Events.tokens, rpc_timeout=timedelta(milliseconds=300))
     publisher = asyncio.create_task(publish_later())
     item = await anext(reader)

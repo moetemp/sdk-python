@@ -1,20 +1,20 @@
 """Common code used in the Temporal SDK.
 
-It also has the Streams API: Streams of Records that Workflows, Activities and clients write
-and read. A Stream definition, a class with ``@common.defn``, gives the Stream name and the
-type of each Topic. Workflow code creates a Stream with
+This module also has the Streams API. A Stream is an ordered log of Records that Workflows,
+Activities and clients write and read. A Stream definition is a class with ``@common.defn``.
+It gives the Stream name and the type of each Topic. Workflow code creates a Stream with
 :py:func:`temporalio.workflow.create_stream`. A client gets a Workflow's Stream with
 :py:meth:`temporalio.client.WorkflowHandle.stream`, and any Stream with
-:py:meth:`temporalio.client.Client.stream`. A Stream is data: a Workflow passes it to an
-Activity, a child Workflow or the next run as an argument, and the parameter's type gives the
-handle class of that context, such as :py:class:`ActivityStream`.
+:py:meth:`temporalio.client.Client.stream`. A Stream is data. A Workflow can pass it as an
+argument to an Activity, a child Workflow or the next run. The parameter's type sets the handle
+class for that context, such as :py:class:`ActivityStream`.
 
-A :py:class:`StreamBackend` carries the calls and registers a backend name, such as
+A :py:class:`StreamBackend` makes the Stream calls and registers a backend name. Examples are
 :py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
 :py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). Register
-backends with ``Client.connect(..., stream_backends=[...])``. A handle carries the name of its
-backend. With more than one registered backend, exactly one has ``default=True``, the one
-that a create with no ``backend=`` uses. For now a Worker serves one backend.
+backends with ``Client.connect(..., stream_backends=[...])``. A handle stores the name of its
+backend. With more than one registered backend, exactly one must have ``default=True``. A
+create with no ``backend=`` uses that backend. A Worker serves only one backend.
 
 .. warning::
     The Streams API is experimental.
@@ -1630,7 +1630,7 @@ class _CompositeEvent:  # pyright: ignore[reportUnusedClass]
 
 
 # The Stream modules import temporalio.client and temporalio.workflow, which import this module,
-# so the Stream names load on first use.
+# so this module imports the Stream names on first use.
 _STREAM_NAMES = frozenset(
     [
         "ActivityStream",

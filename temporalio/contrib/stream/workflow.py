@@ -1,10 +1,10 @@
 """Streams in Workflow code on the registered Redis backend.
 
-These calls work as :py:func:`temporalio.workflow.create_stream`,
+These functions work like :py:func:`temporalio.workflow.create_stream`,
 :py:func:`temporalio.workflow.create_stream_nowait` and
-:py:func:`temporalio.workflow.stream_handle`, with the Worker's Redis backend in place of the
-default one. A ``MemoryStreamBackend`` keeps Redis's rules, so tests use it here with no change
-to Workflow code.
+:py:func:`temporalio.workflow.stream_handle`, but use the Worker's Redis backend in place of the
+default one. A ``MemoryStreamBackend`` has Redis's rules, so tests can use it here without
+changing Workflow code.
 
 .. warning::
     This module is experimental.
@@ -24,7 +24,7 @@ D = TypeVar("D")
 
 
 def _backend(backend: str | None) -> str:
-    # The Worker's config gives this error, so it fails the Workflow Task and not the run.
+    # This error comes from the Worker's config, so it fails the Workflow Task and not the run.
     worker = _workflow.worker_backend()
     if worker is None:
         raise _workflow.no_worker_backend()
@@ -43,20 +43,21 @@ def create_stream(
 ) -> Creating[WorkflowStream[D]]:
     """Create a Stream that this run chain owns, on the Worker's Redis backend.
 
-    See :py:func:`temporalio.workflow.create_stream`. On Redis, the end of the run chain closes
-    nothing, so close the Stream before the run returns.
+    See :py:func:`temporalio.workflow.create_stream`. On Redis, the end of the run chain doesn't
+    close a Stream outside an ``async with`` block, so close the Stream before the run returns.
 
     .. warning::
         This API is experimental.
 
     Args:
         definition: The Stream definition class. Its name is the Stream name.
-        retention: The age after which a Record is dropped, also while the Stream is open.
-            A closed Stream stays one Retention after its close. Defaults to the backend's.
+        retention: The age after which a Record is deleted, even while the Stream is open.
+            A closed Stream is kept for one Retention after its close. Defaults to the
+            backend's Retention.
         backend: The name of the Redis backend. Defaults to the Worker's.
 
     Raises:
-        StreamError: The backend refused the create, such as for another Retention.
+        StreamError: The backend refused the create, such as for a different Retention.
         StreamConfigError: The Worker has no Redis backend, or none of that name. It fails
             the Workflow Task, not the run.
     """
@@ -75,7 +76,7 @@ def create_stream_nowait(
     retention: timedelta | None = None,
     backend: str | None = None,
 ) -> WorkflowStream[D]:
-    """Create a Stream on the Worker's Redis backend, with no await.
+    """Create a Stream on the Worker's Redis backend, without an await.
 
     See :py:func:`temporalio.workflow.create_stream_nowait`.
 
@@ -90,7 +91,7 @@ def create_stream_nowait(
 def stream_handle(
     definition: type[D], *, backend: str | None = None
 ) -> WorkflowStream[D]:
-    """A Stream that this run chain created on the Worker's Redis backend. It makes no call.
+    """Get a Stream that this run chain created on the Worker's Redis backend. It makes no call.
 
     See :py:func:`temporalio.workflow.stream_handle`.
 

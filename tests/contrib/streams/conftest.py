@@ -26,8 +26,8 @@ def _free_port() -> int:
             return port
 
 
-# One scratch server serves every test module, and each test takes its own key prefix. A run
-# that must use a known port gives its own server in TEMPORAL_STREAMS_REDIS_URL.
+# One scratch server serves every test module, and each test uses its own key prefix. To use a
+# known port, set TEMPORAL_STREAMS_REDIS_URL to your own server.
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
     given = os.environ.get("TEMPORAL_STREAMS_REDIS_URL")
@@ -59,7 +59,7 @@ def redis_url() -> Iterator[str]:
 async def stream_client(
     client: Client, request: pytest.FixtureRequest
 ) -> AsyncIterator[Client]:
-    # Every live test runs on the memory Store and on Redis, since both must keep one set of
+    # Every live test runs on the memory Store and on Redis, since both must have the same
     # rules. The backend is the default, so a create with no backend name uses it.
     backend: StreamBackend
     if request.param == "memory":
