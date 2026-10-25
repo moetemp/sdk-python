@@ -1,5 +1,11 @@
 """The Streams API, which :py:mod:`temporalio.common` exports."""
 
+from temporalio.common._streams._activity_stream import (
+    ActivityStream,
+    SyncActivityStream,
+    SyncSubscription,
+)
+from temporalio.common._streams._buffered import BufferedPublisher
 from temporalio.common._streams._defn import StreamDefinition, defn
 from temporalio.common._streams._errors import (
     StreamClosedError,
@@ -31,6 +37,8 @@ from temporalio.common._streams._workflow import WorkflowStream
 
 __all__ = [
     "END",
+    "ActivityStream",
+    "BufferedPublisher",
     "ClientStream",
     "CloseStatus",
     "Closed",
@@ -55,6 +63,8 @@ __all__ = [
     "StreamUnsupportedError",
     "Subscription",
     "Superseded",
+    "SyncActivityStream",
+    "SyncSubscription",
     "WorkflowStream",
     "defn",
 ]

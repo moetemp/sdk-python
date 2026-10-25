@@ -308,6 +308,20 @@ async def test_payload_type_of_the_definition_decodes_each_value(
     assert await read(TurnDicts) == [{"kind": "model", "text": ""}]
 
 
+async def test_buffered_publisher_keeps_the_publish_order(stream_client: Client):
+    stream = await stream_client.create_stream(Turns, id=f"buffered-{uuid.uuid4()}")
+    async with common.BufferedPublisher(stream) as publisher:
+        publisher.publish(Turn("user"))
+        publisher.publish(Turn("a"), Turn("b"))
+        publisher.publish(Turn("model"))
+    written = [
+        item.data
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, common.Record)
+    ]
+    assert written == [Turn("user"), Turn("a"), Turn("b"), Turn("model")]
+
+
 @common.defn(name="turns")
 class LooseTurns(common.StreamDefinition[str]): ...
 
