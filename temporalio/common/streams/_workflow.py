@@ -437,8 +437,10 @@ class WorkflowStream(StreamHandle[E]):
         History, so a replay reads the same items. On a native Stream the marker holds only
         the page's offsets, and a replay reads the page again from the server. A read at the
         end of a native Stream waits on the server until a Record comes or the Stream closes.
-        On Redis the marker holds the page, the Local Activity waits a short time for new
-        Records, and a page with none is followed by a durable timer from 1 s up to 60 s.
+        Such waits take at most 20 of the run's 30 pending Nexus operations, and a read past
+        them waits as on Redis. On Redis the marker holds the page, the Local Activity waits a
+        short time for new Records, and a page with none is followed by a durable timer from
+        1 s up to 60 s.
 
         A read sees this run's writes that it awaited, since each write is a Local Activity
         that ends before the next read starts.

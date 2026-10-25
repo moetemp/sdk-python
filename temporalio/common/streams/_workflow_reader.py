@@ -31,6 +31,9 @@ Item = Record[Any] | Superseded | Closed
 # from the first pause up to the last.
 _FIRST_PAUSE = timedelta(seconds=1)
 _LAST_PAUSE = timedelta(seconds=60)
+# A run may have 30 pending Nexus operations on the server. Wakes take at most 20, so the run's
+# closes and its own operations still fit, and a read past them pauses on a timer.
+_MAX_WAKES = 20
 # How long a read waits for a close after the Stream's owner ended. The close of a run comes
 # from its Worker, so it may come after the run closed, or never.
 _OWNER_END_GRACE = timedelta(minutes=1)
@@ -63,6 +66,8 @@ def reader_of(backend: str) -> Any:
 class _ReadState:
     # The run's wakes that wait on the server, with their reads, so the run's end cancels them.
     wakes: dict[Any, WorkflowItems] = field(default_factory=dict)
+    # The wakes that the server has not taken yet, which count against the cap too.
+    starting: int = 0
     # The lowest offset that the run's replayed pages read, per Stream, and whether a live
     # page sent it.
     replay_floors: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -323,9 +328,9 @@ class WorkflowItems(Subscription[Any]):
         return now - self._owner_ended_at >= _OWNER_END_GRACE
 
     async def _wait_for_records(self, now: datetime) -> None:
-        if not self._reader._temporal_stream_parks_reads:
-            # The Store can't wake a Workflow, so a quiet Stream costs one timer and one read
-            # per pause.
+        if not self._can_wake():
+            # The Store can't wake a Workflow, or the run has the most wakes. A quiet Stream
+            # then costs one timer and one read per pause.
             await self._sleep()
             return
         request = self._waiting_request()
@@ -339,7 +344,7 @@ class WorkflowItems(Subscription[Any]):
         await self._wake_once(request)
 
     async def _wait_for_create(self) -> None:
-        if not self._reader._temporal_stream_parks_reads:
+        if not self._can_wake():
             await self._sleep()
             return
         request = self._waiting_request()
@@ -352,6 +357,13 @@ class WorkflowItems(Subscription[Any]):
             # The next page tells whether time is left.
             pass
 
+    def _can_wake(self) -> bool:
+        state = _read_state()
+        return (
+            self._reader._temporal_stream_parks_reads
+            and len(state.wakes) + state.starting < _MAX_WAKES
+        )
+
     async def _sleep(self) -> None:
         await temporalio.workflow.sleep(self._pause)
         self._pause = min(self._pause * 2, _LAST_PAUSE)
@@ -359,8 +371,13 @@ class WorkflowItems(Subscription[Any]):
     async def _wake_once(self, request: stream_pb.ReadRecordsRequest) -> None:
         # The server parks the wake until a Record passes the filter, the Stream closes, or
         # the wait ends. Its answer holds no Records, and the next page reads them.
-        wake = await self._reader._temporal_stream_start_wake(request)
-        wakes = _read_state().wakes
+        state = _read_state()
+        state.starting += 1
+        try:
+            wake = await self._reader._temporal_stream_start_wake(request)
+        finally:
+            state.starting -= 1
+        wakes = state.wakes
         wakes[wake] = self
         self._wake = wake
         if self._closed:

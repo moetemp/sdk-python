@@ -20,7 +20,7 @@ from temporalio import activity, workflow
 from temporalio.api.enums.v1 import WorkflowTaskFailedCause
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
 from temporalio.common import RetryPolicy, streams
-from temporalio.common.streams import _native, _plugin
+from temporalio.common.streams import _native, _plugin, _workflow_reader
 from temporalio.common.streams._native import POSITIONS_TYPE
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
@@ -396,6 +396,57 @@ async def test_a_run_end_waits_until_the_server_has_its_wakes_cancels(
             event.HasField("nexus_operation_cancel_request_completed_event_attributes")
             for event in history.events
         )
+
+
+@workflow.defn
+class ReadsTwoAndCloses:
+    @workflow.run
+    async def run(
+        self, a: streams.WorkflowStream[Events], b: streams.WorkflowStream[Events]
+    ) -> str:
+        async def read(stream: streams.WorkflowStream[Events]) -> None:
+            async for _ in stream.subscribe(offset=streams.END):
+                pass
+
+        asyncio.create_task(read(a))
+        asyncio.create_task(read(b))
+        await workflow.sleep(timedelta(seconds=2))
+        own = await workflow.create_stream(Events)
+        await own.close()
+        return "closed"
+
+
+async def test_reads_past_the_wake_cap_pause_on_a_timer(
+    native_client: Client, monkeypatch: pytest.MonkeyPatch
+):
+    # Wakes and the close share the run's 30 pending Nexus operations, and the server fails a
+    # task with one more. So reads past the cap leave room for the close.
+    monkeypatch.setattr(_workflow_reader, "_MAX_WAKES", 1)
+    refs: list[streams.WorkflowStream[Events]] = []
+    for _ in range(2):
+        stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
+        refs.append(streams.WorkflowStream.from_handle(stream))
+    async with new_worker(native_client, ReadsTwoAndCloses) as worker:
+        handle = await native_client.start_workflow(
+            ReadsTwoAndCloses.run,
+            args=refs,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == "closed"
+    history = await handle.fetch_history()
+    operations = [
+        event.nexus_operation_scheduled_event_attributes.operation
+        for event in history.events
+        if event.HasField("nexus_operation_scheduled_event_attributes")
+    ]
+    assert sorted(operations) == ["CloseStream", "ReadRecords"]
+    timers = [
+        event
+        for event in history.events
+        if event.HasField("timer_started_event_attributes")
+    ]
+    assert len(timers) > 1
 
 
 @workflow.defn
