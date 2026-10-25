@@ -69,8 +69,9 @@ class Subscription(Generic[T]):
 
         After a ``Superseded`` item it is that item's own offset, since the first Record of its
         batch has the same offset and comes next. A read from there gives the ``Superseded``
-        item again, which withdraws nothing new. Pass it as ``offset`` to a later read. It
-        is None only before the first page of a read from ``END``.
+        item again, which withdraws nothing new. After a Record that failed to decode, it is
+        past that Record. Pass it as ``offset`` to a later read. It is None before the first
+        page of a read from ``END`` or of a read with ``last``.
         """
         return self._position.next_offset
 
@@ -79,7 +80,12 @@ class Subscription(Generic[T]):
         return self
 
     async def __anext__(self) -> Record[T] | Superseded | Closed:
-        """The next item."""
+        """The next item.
+
+        Raises:
+            StreamError: A Record's value failed to decode with its Topic's type. The read
+                ends, and :py:attr:`next_offset` is past that Record.
+        """
         with _backend.using(self._options):
             item = await self._items.__anext__()
         if isinstance(item, Superseded):
@@ -162,7 +168,19 @@ async def read(
         try:
             async for page in pages:
                 for record in page.records or []:
-                    item = await _item(converter, record, types, default_type)
+                    try:
+                        item = await _item(converter, record, types, default_type)
+                    except Exception as err:
+                        # A resume from next_offset goes on past the Record, so it can't stop
+                        # every later read. The error names its offset for a read of it.
+                        offset = record.offset or 0
+                        position.next_offset = max(
+                            position.next_offset or 0, offset + 1
+                        )
+                        raise _errors.StreamError(
+                            f"Can't decode the Record at the offset {offset} of the Topic "
+                            f"{record.topic or ''}: {err}"
+                        ) from err
                     if item is None:
                         continue
                     yield item

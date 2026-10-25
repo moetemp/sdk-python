@@ -384,6 +384,28 @@ async def test_buffered_publisher_keeps_the_order_across_topics(stream_client: C
     ]
 
 
+@streams.defn(name="events")
+class LooseEvents:
+    turns = streams.topic(str)
+    tokens = streams.topic(str)
+
+
+async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
+    stream_client: Client,
+):
+    stream_id = f"poison-{uuid.uuid4()}"
+    writer = await redis.create(stream_client, LooseEvents, id=stream_id)
+    bad = await writer.topic(LooseEvents.turns).publish("not a turn")
+    await writer.topic(LooseEvents.tokens).publish("after")
+    reader = stream_client.stream(Events, id=stream_id)
+    read = reader.subscribe(wait_new_records=False)
+    with pytest.raises(streams.StreamError, match=f"offset {bad} of the Topic turns"):
+        await anext(read)
+    assert read.next_offset == bad + 1
+    resumed = reader.subscribe(offset=read.next_offset, wait_new_records=False)
+    assert [item.data async for item in resumed] == ["after"]
+
+
 async def test_create_of_an_expired_stream_raises(stream_client: Client):
     # An open client Stream expires one Retention after its last write.
     stream_id = f"expired-{uuid.uuid4()}"
