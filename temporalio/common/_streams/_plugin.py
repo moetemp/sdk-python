@@ -19,15 +19,15 @@ NATIVE = _ids.NATIVE_BACKEND
 
 
 class StreamBackend(SimplePlugin):
-    """Base of the Stream backends. Each registers one backend under its name.
+    """Base class of the Stream backends. Each instance registers one backend under its name.
 
     Register backends on the client with ``Client.connect(..., stream_backends=[...])``. A
-    Worker takes its client's backends, and a ``Replayer`` takes ``stream_backends=`` too.
-    Every client, Worker and Replayer also has the native backend, named ``native``, with no
+    Worker uses its client's backends. A ``Replayer`` takes ``stream_backends=`` too. Every
+    client, Worker and Replayer also has the native backend, named ``native``, with no
     registration. Register a ``NativeStreamBackend`` only to configure it, such as for its
-    Retention. Names are unique, and only the native backend is named ``native``. With more
-    than one registered backend, exactly one has ``default=True``. With none marked, the
-    default is ``native``.
+    Retention. Names must be unique, and only the native backend can be named ``native``. With
+    more than one registered backend, exactly one must have ``default=True``. With no backend
+    marked, the default is ``native``.
 
     A backend is not a plugin, so passing it in ``plugins=`` raises ``StreamConfigError``.
 
@@ -35,8 +35,8 @@ class StreamBackend(SimplePlugin):
         This API is experimental.
     """
 
-    # The kind of Store, such as "redis", so the calls of a backend's package find the
-    # registered backend of their kind.
+    # The kind of Store, such as "redis". The functions of a backend's package use it to find
+    # the registered backend of their kind.
     _kind = ""
     # Whether the backend keeps the Streams of a Standalone Activity, which it closes with the
     # Activity. Only the server does, so a Stream that nobody closes can't stay.
@@ -62,7 +62,7 @@ class StreamBackend(SimplePlugin):
 
     @property
     def backend_name(self) -> str:
-        """The name that Stream handles carry for this backend."""
+        """The backend name that Stream handles store."""
         return self._backend_name
 
     @property
@@ -74,7 +74,7 @@ class StreamBackend(SimplePlugin):
         self,
         client: temporalio.client.Client,  # pyright: ignore[reportUnusedParameter]
     ) -> BackendCalls:
-        # The calls of this backend for the client and its Workers. Each backend gives its own.
+        # Each backend subclass returns its calls for the client and its Workers.
         raise NotImplementedError(f"{type(self).__name__} gives no calls")
 
     async def connect_service_client(
@@ -106,8 +106,8 @@ class StreamBackend(SimplePlugin):
         """Refuse a backend in ``plugins=``."""
         raise _not_a_plugin(self)
 
-    # The registration calls these, so the plugin hooks above only see a backend that went
-    # into plugins= by mistake.
+    # Stream registration calls these, so the public hooks above only run for a backend that
+    # was passed in plugins= by mistake.
 
     def _configure_client(
         self, config: temporalio.client.ClientConfig
@@ -135,13 +135,13 @@ def _not_a_plugin(backend: StreamBackend) -> _errors.StreamConfigError:
 def check_backends(backends: Sequence[object], owner: str) -> list[StreamBackend]:
     """Check the registered backends, and return them.
 
-    The default backend is part of Workflow code, since a replayed create uses it. So the
-    default must not follow the order of the list.
+    A replayed create uses the default backend, so the default must not depend on the order
+    of the list.
 
     Raises:
         TypeError: An entry is not a ``StreamBackend``.
-        StreamConfigError: Two backends have one name, a backend that is not native has the
-            name ``native``, or more than one backend and not exactly one with
+        StreamConfigError: Two backends have the same name, a backend that isn't native has
+            the name ``native``, or there is more than one backend and not exactly one has
             ``default=True``.
     """
     checked: list[StreamBackend] = []
@@ -172,7 +172,7 @@ def check_backends(backends: Sequence[object], owner: str) -> list[StreamBackend
 
 
 def default_name(backends: Sequence[StreamBackend]) -> str:
-    """The name of the default backend: the one with ``default=True``, else ``native``."""
+    """The name of the backend with ``default=True``, or ``native`` if none has it."""
     return next((b.backend_name for b in backends if b.default), NATIVE)
 
 
@@ -188,7 +188,7 @@ def with_native(backends: Sequence[StreamBackend]) -> list[StreamBackend]:
 def configure_client(
     config: temporalio.client.ClientConfig,
 ) -> temporalio.client.ClientConfig:
-    """Check the client's backends, and add the parts of each to the client."""
+    """Check the client's backends, and apply the plugin configuration of each one."""
     backends = check_backends(config.get("stream_backends", ()), "client")
     config["stream_backends"] = backends
     for backend in backends:
@@ -199,7 +199,7 @@ def configure_client(
 def configure_worker(
     config: temporalio.worker.WorkerConfig,
 ) -> temporalio.worker.WorkerConfig:
-    """Add the parts of the client's backends and of the native one to a Worker."""
+    """Apply the plugin configuration of the client's backends and the native one to a Worker."""
     client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
     for backend in with_native(client_backends(client)):
         config = backend._configure_worker(config)
@@ -236,7 +236,7 @@ def replayer_backends(config: temporalio.worker.ReplayerConfig) -> list[StreamBa
 def configure_replayer(
     config: temporalio.worker.ReplayerConfig,
 ) -> temporalio.worker.ReplayerConfig:
-    """Check the Replayer's backends, and add the parts of each and of the native one."""
+    """Check the Replayer's backends, and apply the plugin config of each and of the native one."""
     for backend in replayer_backends(config):
         config = backend._configure_replayer(config)
     return config
@@ -287,7 +287,7 @@ def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:
 
 
 def backend_of(client: temporalio.client.Client, name: str | None) -> StreamBackend:
-    """A client's backend. None picks the default backend.
+    """A client's backend. A ``name`` of None picks the default.
 
     Raises:
         StreamConfigError: The client has no backend of that name.

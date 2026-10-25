@@ -68,13 +68,13 @@ class Replayer:
         See :py:meth:`temporalio.worker.Worker.__init__` for a description of
         most of the arguments. Most of the same arguments need to be passed to
         the replayer that were passed to the worker when the workflow originally
-        ran. ``stream_backends`` are the Stream backends of the Worker's client,
-        such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The
-        native backend is there with no registration. A replay makes no Stream
-        call, except that it reads each page of a native Workflow read again.
-        It reads on the connection of ``stream_client``, a client of the server
-        that keeps the Streams, and takes that client's backends when
-        ``stream_backends`` is empty.
+        ran. Pass ``stream_backends`` with the same backends as the Worker's
+        client, such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`.
+        The native backend needs no registration. A replay makes no Stream call,
+        except that it reads each page of a native Workflow read again. It reads
+        with the connection of ``stream_client``, a client of the server that
+        stores the Streams. It uses that client's backends if ``stream_backends``
+        is empty.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that

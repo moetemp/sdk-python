@@ -1,6 +1,7 @@
 # Examples for the Brook streams API proposal
 
-Each file is a complete program for one section of the proposal. `test_examples.py` runs each one end to end on the memory Store and on Redis.
+Each file is a complete program for one section of the proposal. `test_examples.py` runs each one
+end to end on the memory Store and on Redis.
 
 | Proposal section | File |
 |---|---|
@@ -12,15 +13,20 @@ Each file is a complete program for one section of the proposal. `test_examples.
 | A Workflow scopes a Stream to one turn and closes it | [`turn_scoped_stream.py`](turn_scoped_stream.py) |
 | Worker setup | [`worker_setup.py`](worker_setup.py) |
 
-The proposal's Nexus examples are a later stage, so they have no file here.
+The proposal's Nexus examples aren't in this directory.
 
 ## Jetty v2
 
-These add Workflow reads, the native backend, two backends in one Worker, and Standalone Activity Streams to the same API. Every client has the native backend with no registration, and it is the default unless a registered backend has `default=True`. `test_examples.py` runs the Workflow reader on the memory Store, on Redis and on the native server. The others need the native server, with Redis or a memory Store named `redis` in place of Redis. The native runs happen only when `TEMPORAL_STREAMS_NATIVE_TARGET` is set.
+These add Workflow reads, the native backend, two backends in one Worker, and Standalone
+Activity Streams to the same API. Every client has the native backend with no registration, and
+it's the default unless a registered backend has `default=True`. `test_examples.py` runs the
+Workflow reader on the memory Store, on Redis and on the native server. The others need the
+native server, with Redis or a memory Store named `redis` in place of Redis. The native runs
+happen only when `TEMPORAL_STREAMS_NATIVE_TARGET` is set.
 
 | Section | File |
 |---|---|
 | One Worker with Redis and native, one Stream on each | [`two_backends.py`](two_backends.py) |
 | A Workflow reads another Workflow's Stream | [`workflow_reader.py`](workflow_reader.py) |
-| Old Streams stay on Redis, new ones go to native | [`migrate_redis_to_native.py`](migrate_redis_to_native.py) |
+| Old Streams stay on Redis, and new ones are created on native | [`migrate_redis_to_native.py`](migrate_redis_to_native.py) |
 | A Standalone Activity streams its progress | [`standalone_activity_stream.py`](standalone_activity_stream.py) |

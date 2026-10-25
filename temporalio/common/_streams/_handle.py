@@ -24,7 +24,7 @@ def exit_failure(exc: BaseException | None) -> tuple[bool, BaseException | None]
     """Whether the end of an ``async with`` block closes the Stream, and with which failure.
 
     A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
-    ``KeyboardInterrupt``, leaves it open, since the block did not end in the caller's code.
+    ``KeyboardInterrupt``, leaves it open, since the caller's code didn't end the block.
     """
     if isinstance(exc, asyncio.CancelledError):
         return True, temporalio.exceptions.CancelledError(str(exc) or "Cancelled")
@@ -46,26 +46,26 @@ S = TypeVar("S", bound=_ClosesOnExit)
 
 
 class Creating(Generic[S]):
-    """A Stream create. Await it for the handle, or use it in ``async with``, which closes the
-    Stream at the end of the block.
+    """A pending Stream create.
 
-    The create starts when it is awaited or entered, not before.
+    Await it to get the handle, or use it in ``async with``, which closes the Stream at the end
+    of the block. The create starts when it's awaited or entered, not before.
 
     .. warning::
         This API is experimental.
     """
 
     def __init__(self, create: Callable[[], Coroutine[Any, Any, S]]) -> None:
-        """Create it. Use a context's create call instead."""
+        """Create the object. Use a context's create function instead."""
         self._create = create
         self._stream: S | None = None
 
     def __await__(self) -> Generator[Any, None, S]:
-        """Create the Stream and give its handle."""
+        """Create the Stream and return its handle."""
         return self._create().__await__()
 
     async def __aenter__(self) -> S:
-        """Create the Stream and give its handle for the block."""
+        """Create the Stream and return its handle for the block."""
         self._stream = await self._create()
         return self._stream
 
@@ -81,7 +81,7 @@ class Creating(Generic[S]):
 
 
 class TopicBase(Generic[T]):
-    """Base of the Topic of each handle class. All Topics of a Stream share one order."""
+    """Base class of the Topic of each handle class. All Topics of a Stream share one order."""
 
     def __init__(self, stream: Any, name: str, type: Any) -> None:
         """Create a Topic. Use the Stream's ``topic`` instead."""
@@ -154,8 +154,8 @@ def _from_json(value: Any, type_hint: Any) -> StreamHandle[Any]:
 class _StreamHandleJson(
     temporalio.converter.TransferTypeConverter["StreamHandle[Any]", dict[str, str]]
 ):
-    # One form for every handle type, and the parameter's type hint picks the class, so a
-    # Workflow passes a Stream to an Activity as data.
+    # Every handle type has the same JSON form, and the parameter's type hint picks the class.
+    # So a Workflow can pass a Stream to an Activity as data.
     transfer_type: type[dict[str, str]] | None = dict
 
     def to_transfer_type(self, value: StreamHandle[Any]) -> dict[str, str]:
@@ -168,11 +168,11 @@ class _StreamHandleJson(
 
 
 class StreamHandle(Generic[E]):
-    """Base of the Stream handle of each context.
+    """Base class of the Stream handle of each context.
 
-    A handle is data: it passes as a Workflow or Activity argument, as the proto JSON of the
-    ``StreamRef`` message. The parameter's type, such as ``ActivityStream[Events]``, gives the
-    handle class and the definition.
+    A handle is data. It's passed as a Workflow or Activity argument in the proto JSON form of
+    the ``StreamRef`` message. The parameter's type, such as ``ActivityStream[Events]``, sets
+    the handle class and the definition.
 
     .. warning::
         This API is experimental.
@@ -189,7 +189,7 @@ class StreamHandle(Generic[E]):
         activity_id: str | None = None,
         activity_run_id: str | None = None,
     ) -> None:
-        """Create a handle. Use the create and get calls of a context instead."""
+        """Create a handle. Use a context's create and get functions instead."""
         self._id = id
         self._workflow_id = workflow_id
         self._first_execution_run_id = first_execution_run_id
@@ -202,11 +202,10 @@ class StreamHandle(Generic[E]):
 
     @classmethod
     def from_handle(cls: type[H], handle: StreamHandle[Any]) -> H:
-        """The same Stream as a handle of this class, such as an ``ActivityStream`` from a
-        ``WorkflowStream``.
+        """Return the same Stream as a handle of this class.
 
-        A handle passes as data, so a Workflow uses it to give an Activity's input the type
-        that the Activity declares.
+        For example, a Workflow converts a ``WorkflowStream`` to an ``ActivityStream`` for an
+        Activity's input, so the input has the type that the Activity declares.
         """
         return cls(
             id=handle.id,
@@ -245,7 +244,7 @@ class StreamHandle(Generic[E]):
 
     @property
     def backend(self) -> str | None:
-        """Name of the backend that keeps the Stream. None means the default one."""
+        """Name of the backend that stores the Stream. None means the default one."""
         return self._backend
 
     @property
@@ -257,7 +256,7 @@ class StreamHandle(Generic[E]):
         self, topic: str | TopicDefinition[Any], type: Any
     ) -> tuple[str, Any]:
         # The name and the decode type of a Topic. A Topic of a definition keeps its type,
-        # and a name outside the definition needs a type, so a typo does not pass.
+        # and a name outside the definition needs a type, so a typo raises an error.
         definition = definition_of(self._definition) if self._definition else None
         if isinstance(topic, TopicDefinition):
             if type is not None:
@@ -330,7 +329,7 @@ class StreamHandle(Generic[E]):
         return self._fields() == other._fields()
 
     def __hash__(self) -> int:
-        """Hash of the fields that never change, so it stays when a client learns the id."""
+        """Hash of the fields that never change, so it's the same after a client learns the id."""
         return hash((type(self), self._backend, self._workflow_id or self._id))
 
     def __repr__(self) -> str:
@@ -343,7 +342,7 @@ class StreamHandle(Generic[E]):
         return self
 
     def __deepcopy__(self, memo: dict[int, Any]) -> Self:
-        """A deep copy is the same handle, since dataclasses.asdict copies its fields."""
+        """Return the same handle, since dataclasses.asdict deep-copies a handle field."""
         return self
 
     @classmethod

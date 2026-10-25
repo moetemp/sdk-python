@@ -33,15 +33,15 @@ _MAX_WAIT = timedelta(seconds=60)
 
 @dataclasses.dataclass
 class Position:
-    """Where a read goes on from. The read moves it past each page it finished."""
+    """Where a read resumes from. The read moves it past each page that it finished."""
 
     next_offset: int | None
 
 
 class Subscription(Generic[T]):
-    """The items of one read of a Stream, in order. Use it in ``async for``.
+    """The items of one read of a Stream, in order. Iterate it with ``async for``.
 
-    It gives :py:class:`Record` items, :py:class:`Superseded` items that withdraw earlier
+    It yields :py:class:`Record` items, :py:class:`Superseded` items that withdraw earlier
     Records, and a :py:class:`Closed` item last when the Stream is closed.
 
     .. warning::
@@ -59,19 +59,19 @@ class Subscription(Generic[T]):
         self._position = position
         # A client read's rpc_metadata and rpc_timeout, for each call of each step.
         self._options = options
-        # The Producer and the offsets of each Record this read gave, with no values, so a
-        # Superseded item can give the offsets it withdraws.
+        # The Producer and the offsets of each Record that this read gave, without values, so a
+        # Superseded item can list the offsets that it withdraws.
         self._shown: dict[tuple[Any, ...], tuple[models.Producer, list[int]]] = {}
 
     @property
     def next_offset(self) -> int | None:
-        """The offset to resume from, after the last item given or the last page read.
+        """The offset to resume from, after the last item or the last page that the read got.
 
-        After a ``Superseded`` item it is that item's own offset, since the first Record of its
-        batch has the same offset and comes next. A read from there gives the ``Superseded``
-        item again, which withdraws nothing new. After a Record that failed to decode, it is
-        past that Record. Pass it as ``offset`` to a later read. It is None before the first
-        page of a read from ``END`` or of a read with ``last``.
+        Pass it as ``offset`` to a later read. After a ``Superseded`` item, it's that item's own
+        offset, since the first Record of its batch has the same offset and comes next. A read
+        from there gives the ``Superseded`` item again, which withdraws nothing new. After a
+        Record that failed to decode, it's past that Record. It's None before the first page of
+        a read from ``END`` or of a read with ``last``.
         """
         return self._position.next_offset
 
@@ -89,7 +89,7 @@ class Subscription(Generic[T]):
         with _backend.using(self._options):
             item = await self._items.__anext__()
         if isinstance(item, Superseded):
-            # The Record of the same entry shares the offset and is not given yet.
+            # The Record of the same entry has the same offset and comes next.
             self._position.next_offset = item.offset
         else:
             self._position.next_offset = max(
@@ -121,8 +121,8 @@ class Subscription(Generic[T]):
     async def aclose(self) -> None:
         """End the read early, from the task that reads it. It makes no more calls.
 
-        A read that waits for new Records in another task is still running, so this raises
-        ``RuntimeError`` there. Cancel that task instead.
+        If another task is waiting in the read for new Records, this raises ``RuntimeError``.
+        Cancel that task instead.
         """
         with _backend.using(self._options):
             await self._items.aclose()
@@ -143,8 +143,10 @@ async def read(
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
-    """Give the items of a Stream in order, until a close, or the newest Record when
-    ``wait_new_records`` is False. With ``last``, start with the newest ``last`` Records.
+    """Yield the items of a Stream in order, until a close.
+
+    With ``wait_new_records`` False, stop at the newest Record. With ``last``, start with the
+    newest ``last`` Records.
     """
     loop = asyncio.get_running_loop()
     create_until = loop.time() + create_wait.total_seconds() if create_wait else None
@@ -157,7 +159,7 @@ async def read(
         )
         return models.ReadRecordsRequest(
             stream=stream,
-            # END is only the first page's start. Each answer's next offset pins later pages.
+            # END applies only to the first page. Later pages start at the last page's next offset.
             from_offset=from_offset if isinstance(from_offset, int) else None,
             start=ReadStart.READ_START_END
             if from_offset is End.END
@@ -180,8 +182,8 @@ async def read(
                     try:
                         item = await _item(converter, record, types, default_type)
                     except Exception as err:
-                        # A resume from next_offset goes on past the Record, so it can't stop
-                        # every later read. The error names its offset for a read of it.
+                        # Move next_offset past the Record, so a resume doesn't fail on it again.
+                        # The error gives the offset, for a read of that Record.
                         offset = record.offset or 0
                         position.next_offset = max(
                             position.next_offset or 0, offset + 1
@@ -213,10 +215,10 @@ async def _pages(
     request: models.ReadRecordsRequest,
     wait_new_records: bool,
 ) -> AsyncGenerator[models.ReadRecordsResponse, None]:
-    # A read that waits long-polls each page. A read with no wait reads pages until one has no
-    # Record and moves no further.
+    # A read that waits long-polls each page. A read with no wait reads pages until a page has
+    # no Record and doesn't advance.
     if request.last:
-        # The newest Records come in one page that never waits. A read that follows goes on
+        # The newest Records come in one page that never waits. A waiting read then continues
         # after them.
         page = await service.read_records(request)
         yield page
@@ -235,8 +237,8 @@ async def _pages(
             return
         if not wait_new_records and (
             page.next_offset is None
-            # A Store scans a limited number of entries per call, so an empty page that moved
-            # on stopped in Records that a Topic filter left out, not at the newest Record.
+            # A Store scans a limited number of entries per call. So an empty page that advanced
+            # stopped in Records that a Topic filter skipped, not at the newest Record.
             or (not page.records and page.next_offset <= (request.from_offset or 0))
         ):
             return
@@ -263,7 +265,7 @@ async def _item(
     if record.kind == StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
         result = _convert.decode(converter, record.close_result, None)
         failure = record.close_failure
-        # A close Record from before close statuses has none, and its failure tells.
+        # An older close Record has no status, so its failure decides the status.
         status = record.close_status or (
             CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
         )

@@ -1,4 +1,4 @@
-"""Runs each example end to end, so none goes stale.
+"""Runs each example end to end, so a broken one fails.
 
 The Brook examples run on the memory Store, on Redis, and on the native server when
 TEMPORAL_STREAMS_NATIVE_TARGET is set.

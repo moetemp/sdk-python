@@ -34,9 +34,8 @@ from temporalio.common._streams.system import models
 E = TypeVar("E")
 T = TypeVar("T")
 
-# The handles of one client and Stream write as one Producer, so the crate shares one writer
-# between them. Each client gets its own key, since two clients may have two runtime objects,
-# and two writers of one Producer would send clashing sequences.
+# The handles of one client and Stream write as one Producer. Each client gets its own key,
+# since two clients can have two runtime objects, whose writers would send clashing sequences.
 _PROCESS_KEY = str(uuid.uuid4())
 _CLIENTS = itertools.count(1)
 _CLIENT_KEYS: weakref.WeakKeyDictionary[temporalio.client.Client, str] = (
@@ -88,17 +87,17 @@ class ClientTopic(AsyncTopicBase[T]):
 
 
 class ClientStream(StreamHandle[E]):
-    """A Stream that a client writes, reads and closes.
+    """A Stream in client code. The client can write and read it, and close a client's Stream.
 
     Get one from :py:meth:`temporalio.client.Client.stream`,
     :py:meth:`temporalio.client.WorkflowHandle.stream`,
-    :py:meth:`temporalio.client.Client.create_stream`, or a backend's create, such as
-    :py:func:`temporalio.contrib.stream.create`.
+    :py:meth:`temporalio.client.Client.create_stream`, or a backend's ``create`` function, such
+    as :py:func:`temporalio.contrib.stream.create`.
 
-    Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. The
-    handles of one client and Stream write as one Producer, and :py:meth:`producer` gives a
-    handle that writes as a named one. Use it in ``async with`` to close it at the end of the
-    block.
+    Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. All
+    handles of one client and Stream write as one Producer. :py:meth:`producer` returns a
+    handle that writes as a named Producer. Use a handle in ``async with`` to close the Stream
+    at the end of the block.
 
     .. warning::
         This API is experimental.
@@ -163,8 +162,8 @@ class ClientStream(StreamHandle[E]):
 
     async def _stream_id(self) -> str:
         if not self._id:
-            # Calls that start together share one Describe call. A failed call does not
-            # stay, so a later call tries again.
+            # Concurrent calls share one Describe call. A failed Describe is discarded, so a
+            # later call tries again.
             if self._finding is None or _failed(self._finding):
                 assert self._find_first_run is not None
                 self._finding = asyncio.ensure_future(self._find_first_run())
@@ -216,13 +215,13 @@ class ClientStream(StreamHandle[E]):
         )
 
     def producer(self, name: str, epoch: int) -> ClientStream[E]:
-        """This Stream as a handle that writes as the Producer ``name`` at ``epoch``.
+        """Return this Stream as a handle that writes as the Producer ``name`` at ``epoch``.
 
-        It is for a writer that must fence its earlier self, such as a server that restarts.
-        Keep ``epoch`` in durable storage, and raise it at each start. After a write at a
-        higher epoch, a write at a lower one raises :py:class:`StreamFencedError`. The Records
-        of the earlier epochs stay, since they are real messages. Run one live writer for a
-        name.
+        Use it for a writer that must fence its earlier instances, such as a server that
+        restarts. Keep ``epoch`` in durable storage, and raise it at each start. After a write
+        at a higher epoch, a write at a lower one raises :py:class:`StreamFencedError`. The
+        Records of the earlier epochs aren't withdrawn, since they're real messages. Run only
+        one live writer for each name.
 
         Args:
             name: The Producer name, the same across restarts.
@@ -261,7 +260,7 @@ class ClientStream(StreamHandle[E]):
 
         Args:
             topic: A Topic of the Stream's definition, such as ``Events.turns``, or a name.
-                A name of the definition takes its type.
+                A name in the definition gets the definition's type.
             type: The type of a Topic outside the definition, or of a Stream with no
                 definition.
         """
@@ -283,29 +282,28 @@ class ClientStream(StreamHandle[E]):
         """Read the Stream's items in order.
 
         The read ends after a ``Closed`` item, or at the newest Record when
-        ``wait_new_records`` is False. A reader that wants to stop after a quiet time sets its
-        own timer, and resumes later with ``offset=`` the read's ``next_offset``. A
-        ``Superseded`` item withdraws earlier Records of a failed attempt, and it passes every
-        Topic filter.
+        ``wait_new_records`` is False. To stop after a quiet period, use your own timer, and
+        resume later with ``offset=`` set to the read's ``next_offset``. A ``Superseded`` item
+        withdraws earlier Records of a failed attempt. Topic filters never skip it.
 
         Args:
             topics: Read these Topics, by Topic of the definition, name or Topic object.
                 With no Topics and no ``topic_prefixes``, read every Topic.
             offset: Start at this offset, inclusive, or at ``common.END`` for new
                 Records only. Defaults to the first Record.
-            last: Start with the newest this many Records that pass the filter, oldest
-                first, such as the first view of a chat. Not with ``offset``. A Record
+            last: Start with the newest ``last`` Records that pass the filter, oldest first,
+                such as for the first view of a chat. Can't be used with ``offset``. A Record
                 that a later ``Superseded`` item withdraws doesn't count. At most 1000.
             wait_new_records: Wait for new Records at the end of the Stream.
             topic_prefixes: Also read the Topics whose names start with one of these.
-            create_wait: How long to wait for a Stream that nobody created yet, such as the
+            create_wait: How long to wait for a Stream that doesn't exist yet, such as the
                 Stream of a Workflow that just started. Defaults to no wait.
             type: The type of the values of Topics outside the definition, such as Topics that
                 ``topic_prefixes`` match. Topics of the definition keep their own types.
-                Defaults to no type, so the values decode as the converter gives them.
+                Defaults to no type, so the converter decodes the values with no type hint.
             rpc_metadata: Headers of each call of the read. See :py:meth:`get_offset`.
             rpc_timeout: The deadline of each call of the read, not of the whole read. A call
-                that waits for new Records answers before it.
+                that waits for new Records returns before the deadline.
         """
         read = read_spec(
             self,
@@ -339,7 +337,9 @@ class ClientStream(StreamHandle[E]):
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
     ) -> int:
-        """The next offset of the Stream, the newest offset plus one.
+        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
+
+        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
 
         Args:
             rpc_metadata: Headers of each call. The Redis and memory backends make no RPC, so
@@ -352,8 +352,8 @@ class ClientStream(StreamHandle[E]):
 
     def _check_close(self) -> None:
         if self._workflow_id or self._activity_id:
-            # A Workflow's Stream closes only from its run chain, and a Standalone Activity's
-            # only from that Activity. The Store refuses a client's close too.
+            # Only the run chain can close a Workflow's Stream, and only a Standalone Activity can
+            # close its own Stream. The Store refuses a client's close too.
             raise _errors.StreamNotOwnerError(
                 f"Can't close the Stream {self._id or self._stream_name} from a client, since "
                 f"{'a Workflow' if self._workflow_id else 'an Activity'} owns it",
@@ -370,13 +370,13 @@ class ClientStream(StreamHandle[E]):
     ) -> None:
         """Write this handle's Records, then close the Stream.
 
-        Readers get the Records before it, then a ``Closed`` item with ``result`` or
-        ``failure``. A cancel failure, such as a ``CancelledError``, closes it as canceled.
-        ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
+        Readers get the Records before the close, then a ``Closed`` item with ``result`` or
+        ``failure``. A cancel failure, such as a ``CancelledError``, closes the Stream as
+        canceled. ``rpc_metadata`` and ``rpc_timeout`` are as for :py:meth:`get_offset`.
 
         Raises:
             StreamNotOwnerError: A Workflow or a Standalone Activity owns the Stream, so only
-                its run chain or that Activity closes it.
+                its run chain or that Activity can close it.
         """
         self._check_close()
         self._closed = True
@@ -388,9 +388,9 @@ class ClientStream(StreamHandle[E]):
 
         Raises:
             StreamNotOwnerError: A Workflow or a Standalone Activity owns the Stream, so only
-                its run chain or that Activity closes it.
+                its run chain or that Activity can close it.
         """
-        # The close at the end would raise and hide the block's own error.
+        # Fail early, since the close at the end would raise and hide the block's own error.
         self._check_close()
         return self
 
@@ -403,7 +403,8 @@ class ClientStream(StreamHandle[E]):
         """Close the Stream, with the exception as its failure if there is one.
 
         A cancel closes it with a ``CancelledError`` failure. Another ``BaseException``, such as
-        ``KeyboardInterrupt``, leaves it open. A Stream that this handle closed stays as it is.
+        ``KeyboardInterrupt``, leaves it open. If this handle already closed the Stream, this
+        does nothing.
         """
         if self._closed:
             return
@@ -420,8 +421,9 @@ def create(
     retention: timedelta | None,
     backend: str | None,
 ) -> Creating[ClientStream[E]]:
-    """Create a Stream that this client owns. See
-    :py:meth:`temporalio.client.Client.create_stream`.
+    """Create a Stream that the client owns.
+
+    See :py:meth:`temporalio.client.Client.create_stream`.
     """
 
     async def create() -> ClientStream[E]:
@@ -453,8 +455,9 @@ def client_stream(
     stream: StreamHandle[Any] | None,
     backend: str | None,
 ) -> ClientStream[E]:
-    """A Stream by its id, or a handle that came as data. See
-    :py:meth:`temporalio.client.Client.stream`.
+    """Get a Stream by its id, or from a handle that came in data.
+
+    See :py:meth:`temporalio.client.Client.stream`.
     """
     definition_of(definition)
     if (id is None) == (stream is None):
@@ -467,7 +470,7 @@ def client_stream(
         backend = backend or stream.backend
     stream_id = stream.id if stream else id
     if not stream_id:
-        # An empty id would fail only at the first call, with no cause in it.
+        # An empty id would fail only at the first call, with an unclear error.
         raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
     handle = ClientStream(
@@ -482,8 +485,8 @@ def client_stream(
     return handle._bind(client, calls)
 
 
-# The first run id of a Workflow handle, or the Describe call that looks for it, so the
-# Streams of one handle share the call.
+# The first run id of a Workflow handle, or the Describe call that fetches it, so the Streams
+# of one handle share the call.
 _FIRST_RUNS: weakref.WeakKeyDictionary[
     temporalio.client.WorkflowHandle[Any, Any], asyncio.Future[str] | str
 ] = weakref.WeakKeyDictionary()
@@ -496,7 +499,7 @@ def _failed(future: asyncio.Future[Any]) -> bool:
 async def _describe_first_run(
     handle: temporalio.client.WorkflowHandle[Any, Any],
 ) -> str:
-    # The first call that needs the id gives its own call options.
+    # The Describe uses the call options of the first call that needs the id.
     options = _backend.call_options.get()
     description = await handle.describe(
         rpc_metadata=options.metadata if options else {},
@@ -523,8 +526,8 @@ def _settle(
     handle_ref: weakref.ref[temporalio.client.WorkflowHandle[Any, Any]],
     finding: asyncio.Future[str],
 ) -> None:
-    # A found id stays as text. A failed call goes, so a later call tries again, and the
-    # failure's traceback does not keep the handle in the map.
+    # Store a found id as text. Remove a failed call, so a later call tries again and the
+    # failure's traceback doesn't keep the handle alive.
     handle = handle_ref()
     if handle is None or _FIRST_RUNS.get(handle) is not finding:
         return
@@ -540,8 +543,9 @@ def workflow_stream(
     *,
     backend: str | None,
 ) -> ClientStream[E]:
-    """A Stream that a Workflow created. See
-    :py:meth:`temporalio.client.WorkflowHandle.stream`.
+    """Get a Stream that a Workflow created.
+
+    See :py:meth:`temporalio.client.WorkflowHandle.stream`.
     """
     stream_name = definition_of(definition).name
     client = handle._client

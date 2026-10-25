@@ -66,7 +66,7 @@ class ChatTurns:
                 common.with_name(Events, f"turn-{input.next + i}"),
                 retention=timedelta(days=1),
             ) as turn:
-                # A Stream is data, so the index Record carries the turn's Stream.
+                # A Stream is data, so the index Record contains the turn's Stream.
                 await started.publish(
                     TurnStarted(input.next + i, common.ClientStream.from_handle(turn))
                 )
@@ -79,7 +79,7 @@ class ChatTurns:
             workflow.continue_as_new(
                 ChatTurnsInput(input.prompts[2:], input.next + len(batch), index)
             )
-        # The last run closes the index, since a run end closes nothing.
+        # The last run closes the index, since a run's end doesn't close it.
         await index.close()
 
 

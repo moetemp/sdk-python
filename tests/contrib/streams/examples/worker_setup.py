@@ -1,9 +1,9 @@
 """Brook API proposal, "Worker setup".
 
-The Stream backends go on the client with ``stream_backends=``, and the Worker takes the
-client's backends. Each backend registers a name. A create with no backend name goes to the
-one with ``default=True``. Tests use ``MemoryStreamBackend`` with no change to Workflow code.
-Sync Workflow code, such as ``@workflow.init``, uses the ``_nowait`` calls.
+Register the Stream backends on the client with ``stream_backends=``. The Worker uses the
+client's backends. Each backend registers a name. A create with no backend name uses the
+backend with ``default=True``. Tests use ``MemoryStreamBackend`` without changing Workflow code.
+Sync Workflow code, such as ``@workflow.init``, uses the ``_nowait`` functions.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ async def connect_for_tests(target_host: str) -> Client:
 
 
 async def connect_while_migrating(target_host: str, url_a: str, url_b: str) -> Client:
-    # Two backends during a move. Creates with no backend= go to the default one.
+    # Two backends during a migration. A create with no backend= uses the default one.
     return await Client.connect(
         target_host,
         stream_backends=[
@@ -64,7 +64,7 @@ async def connect_while_migrating(target_host: str, url_a: str, url_b: str) -> C
 
 
 def run_worker(client: Client, task_queue: str) -> Worker:
-    # The Worker takes the client's backends, so it needs no Stream setup of its own.
+    # The Worker uses the client's backends, so it needs no Stream setup of its own.
     return Worker(client, task_queue=task_queue, workflows=[Greeter])
 
 

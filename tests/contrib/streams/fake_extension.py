@@ -1,4 +1,4 @@
-"""An in-memory stand-in for the temporalio-streams runtime, for facade tests."""
+"""An in-memory fake of the temporalio-streams runtime, for the facade tests."""
 
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ class FakeExtension:
 
 
 class _FakeBackend(StreamBackend):
-    # The fake keeps Redis's rules, so the Redis calls take it.
+    # The fake has Redis's rules, so the Redis functions accept it.
     _kind = "redis"
 
     def __init__(self, calls: _ExtensionCalls) -> None:

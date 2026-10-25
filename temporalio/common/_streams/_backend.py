@@ -22,7 +22,7 @@ from temporalio.common._streams.proto import v1 as ext_pb
 from temporalio.common._streams.system import client as service_client
 
 if TYPE_CHECKING:
-    # The writer bindings import this package's protos, so they load after it.
+    # The writer bindings import this package's protos, so writers() imports them on first use.
     from temporalio.common._streams.writer_system import client as writer_client
 
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
@@ -60,8 +60,8 @@ class CallOptions:
     timeout: timedelta | None
 
 
-# The options of the client call in progress. Each transport reads them, so they reach the
-# generated clients' calls and the writer's with no new argument there.
+# The options of the client call in progress. Each transport reads them, so the generated
+# clients and the writer don't need a new argument for them.
 call_options: contextvars.ContextVar[CallOptions | None] = contextvars.ContextVar(
     "__temporal_stream_call_options", default=None
 )
@@ -78,7 +78,7 @@ def options_of(
 
 @contextlib.contextmanager
 def using(options: CallOptions | None) -> Iterator[None]:
-    """Give the calls in the block these options."""
+    """Apply these options to the calls in the block."""
     if options is None:
         yield
         return
@@ -108,14 +108,12 @@ def with_task_token(token: bytes) -> Iterator[None]:
 
 
 def longest_wait(longest: timedelta) -> timedelta:
-    """The longest wait of one call. It is less than ``longest`` to answer before the call's
-    rpc_timeout.
-    """
+    """The longest wait of one call, at most ``longest`` and below the call's rpc_timeout."""
     options = call_options.get()
     if options is None or options.timeout is None:
         return longest
-    # A long poll answers before the call's deadline, as the server does for its own long
-    # polls, so a read that waits goes on with its next poll and does not fail.
+    # A long poll returns before the call's deadline, as the server's long polls do, so a
+    # waiting read starts its next poll and doesn't fail.
     timeout = options.timeout
     return min(longest, max(timeout - timedelta(seconds=1), timeout / 2))
 
@@ -138,7 +136,7 @@ class BackendCalls(Protocol):
         ...
 
     def free_writer(self, writer_id: int) -> None:
-        """Release one handle of a writer with no wait, for a writer that Python drops."""
+        """Release one handle of a writer without waiting, such as when Python frees it."""
         ...
 
 
@@ -146,19 +144,19 @@ class StreamRuntime(Protocol):
     """The calls of the crate's runtime object, which the bridge builds."""
 
     async def call(self, method: str, input: bytes) -> bytes:
-        """Call a method with encoded input, and give the encoded output."""
+        """Call a method with encoded input, and return the encoded output."""
         ...
 
     def free_writer(self, writer_id: int) -> None:
-        """Release one handle of a writer with no wait."""
+        """Release one handle of a writer without waiting."""
         ...
 
 
 class _ExtensionCalls:
-    """Carries Stream calls to the crate's runtime object, which serves one client.
+    """Makes Stream calls to the crate's runtime object, which serves one client.
 
-    The five Stream service operations go through the generated client, and the writer
-    methods are the crate's own.
+    The five Stream service operations use the generated client. The writer methods are the
+    crate's own.
     """
 
     def __init__(self, runtime: StreamRuntime) -> None:
@@ -172,7 +170,8 @@ class _ExtensionCalls:
     ) -> service_client.StreamServiceClient:
         """A generated Stream service client for ``namespace``.
 
-        With a ``data_converter``, user values in the requests go through it and its codec.
+        With a ``data_converter``, the client encodes user values in the requests with it and
+        its codec.
         """
         return service_client.StreamServiceClient(
             _ExtensionTransport(self, namespace), data_converter=data_converter
@@ -189,7 +188,7 @@ class _ExtensionCalls:
         )
 
     def free_writer(self, writer_id: int) -> None:
-        """Release one handle of a writer with no wait."""
+        """Release one handle of a writer without waiting."""
         try:
             self._runtime.free_writer(writer_id)
         except temporalio.bridge.streams.StreamCallError:
@@ -208,7 +207,7 @@ class _ExtensionCalls:
         return response.FromString(data)
 
     async def close_writers(self) -> int:
-        """Drop every open writer of the runtime, and return how many failed."""
+        """Close every open writer of the runtime, and return how many failed."""
         response = await self.call_async(
             "CloseWriters", ext_pb.CloseWritersRequest(), ext_pb.CloseWritersResponse
         )
@@ -216,8 +215,7 @@ class _ExtensionCalls:
 
 
 class _ExtensionTransport:
-    # The generated client takes a transport, so the five operations reach the runtime as they
-    # would reach a server later.
+    # The generated client calls a transport. This one calls the runtime in place of a server.
     def __init__(self, backend: _ExtensionCalls, namespace: str) -> None:
         self._backend = backend
         self._namespace = namespace

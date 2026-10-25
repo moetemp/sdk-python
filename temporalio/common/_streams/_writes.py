@@ -1,9 +1,9 @@
 """The Activities that write for Workflow code.
 
-Each Workflow ``create_stream`` is a Local Activity, and the publishes that wait behind a write
-to the same Stream share one. History has the answer and not the values. Each Workflow
-``close`` on Redis is a regular Activity, so it runs only once its Workflow Task completed. The
-native backend closes with a System Nexus command instead.
+Each Workflow ``create_stream`` is a Local Activity. The publishes that wait behind a write to
+the same Stream share one Local Activity. History has the result and not the values. Each
+Workflow ``close`` on Redis is a regular Activity, so it runs only after its Workflow Task
+completes. The native backend closes with a System Nexus command instead.
 """
 
 from __future__ import annotations
@@ -39,9 +39,8 @@ def _context(
 
 
 def _producer(streams: _activity.ActivityStreams) -> models.Producer:
-    # Every attempt of one Workflow Task writes as one epoch with one sequence, so the backend
-    # drops the copy that a retry sends. A later task has a higher epoch, so its write
-    # withdraws what a failed task wrote under the same call key.
+    # All attempts of one Workflow Task write with one epoch and sequence, so the Store dedupes a
+    # retry. A later task's higher epoch withdraws a failed task's Records for the same call key.
     producer = streams.producer
     epoch = producer.epoch
     started = epoch.task_started_time if epoch.HasField("task_started_time") else None
@@ -122,8 +121,8 @@ _MAX_RECORD_BYTES = 1536 * 1024
 
 @dataclasses.dataclass
 class _Encoded:
-    # The batches of one append and the calls of each, with the bodies after the codec, and
-    # the answer of each batch that the Store took.
+    # The batches of one append, with each batch's calls and encoded bodies, and the result of
+    # each batch that the Store accepted.
     batches: list[tuple[list[int], list[stream_pb.AppendRecord]]]
     size: int
     answers: dict[int, Any] = dataclasses.field(default_factory=dict)
@@ -134,8 +133,8 @@ _Epoch = tuple[int, int, int, int]
 
 
 class _Pending:
-    # The appends that have not succeeded, one for each Producer. A retry in this process sends
-    # the same bytes, so the Store's dedupe of a resend matches them, also with a random codec.
+    # The appends that haven't succeeded, one for each Producer. A retry in this process resends
+    # the same bytes, so the Store's dedupe matches them, even with a random codec.
 
     def __init__(self, limit: int) -> None:
         self._limit = limit
@@ -166,7 +165,7 @@ class _Pending:
             self._size -= found[1].size
 
 
-# A run that ends while its append retries leaves its entry, so the oldest go past this size.
+# A run that ends while its append retries leaves its entry, so evict the oldest past this size.
 _PENDING = _Pending(64 * 1024 * 1024)
 
 
@@ -199,8 +198,8 @@ async def _encode(
         and max(sizes, default=0) <= _MAX_RECORD_BYTES
     ):
         return _Encoded([(list(range(len(counts))), records)], sum(sizes))
-    # The codec grew the merge past the Store's limit, so each call goes as its own batch, as
-    # it would with no merge. A call that is too large alone fails alone.
+    # The codec grew the merge past the Store's limit, so send each call as its own batch, as
+    # with no merge. A call that's too large by itself fails by itself.
     batches: list[tuple[list[int], list[stream_pb.AppendRecord]]] = []
     start = 0
     for call, count in enumerate(counts):
@@ -215,8 +214,8 @@ async def append_records(
 ) -> list[Any]:
     """Append the Records of a Workflow's merged publishes.
 
-    ``counts`` has the Records of each publish. Gives each publish the offset of its last
-    Record, or the error of a publish that the Store refused as too large.
+    ``counts`` has the Record count of each publish. Returns each publish's last offset, or the
+    error of a publish that the Store refused as too large.
     """
     streams, service = _context(request.stream)
     producer = _producer(streams)
@@ -233,7 +232,7 @@ async def append_records(
     if encoded is None:
         encoded = await _encode(streams, request, counts, producer_pb)
         _PENDING.put(key, epoch, encoded)
-    # The bodies went through the codec once already.
+    # The codec already ran on the bodies.
     service = streams.backend.service(
         streams.namespace, dataclasses.replace(streams.converter, payload_codec=None)
     )

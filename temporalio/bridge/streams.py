@@ -54,7 +54,7 @@ class StreamRuntime:
 
     @property
     def name(self) -> str:
-        """Name the runtime gives itself."""
+        """Name that the runtime reports."""
         return self._ref.name
 
     async def call(self, method: str, input: bytes) -> bytes:
@@ -66,5 +66,5 @@ class StreamRuntime:
         return await self._ref.call(method, input)
 
     def free_writer(self, writer_id: int) -> None:
-        """Release one handle of a writer with no wait, such as from a finalizer."""
+        """Release one handle of a writer without waiting, such as from a finalizer."""
         self._ref.free_writer(writer_id)

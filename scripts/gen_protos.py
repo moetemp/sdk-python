@@ -231,7 +231,7 @@ def generate_protos(output_dir: Path):
     for p in (output_dir / "temporal" / "sdk" / "core").iterdir():
         shutil.rmtree(sdk_out_dir / p.name, ignore_errors=True)
         p.replace(sdk_out_dir / p.name)
-    # The stream extension's own protos go with the Streams package that uses them
+    # Only the Streams package imports the stream extension protos
     streams_out_dir.mkdir(parents=True, exist_ok=True)
     for p in (output_dir / "temporal" / "sdk" / "streams").iterdir():
         shutil.rmtree(streams_out_dir / p.name, ignore_errors=True)

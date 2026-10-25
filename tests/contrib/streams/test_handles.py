@@ -161,7 +161,7 @@ def test_end_type_is_public():
 
 
 def test_temporalio_common_exports_the_streams_api():
-    # The Stream names load on first use, and each is the object of the private package.
+    # temporalio.common imports the Stream names on first use. Each is the private package's.
     import temporalio.common._streams as streams_api
 
     names = {
@@ -175,7 +175,8 @@ def test_temporalio_common_exports_the_streams_api():
 
 
 def test_import_of_temporalio_common_loads_no_stream_code():
-    # The Stream modules import temporalio.client and temporalio.workflow.
+    # The Stream modules import temporalio.client and temporalio.workflow, which import
+    # temporalio.common.
     code = "import sys, temporalio.common; print('temporalio.common._streams' in sys.modules)"
     loaded = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True

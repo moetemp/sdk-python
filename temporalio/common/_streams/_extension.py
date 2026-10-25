@@ -1,4 +1,4 @@
-"""The Stream backends whose calls go to the temporalio-streams runtime in the bridge."""
+"""The Stream backends that call the temporalio-streams runtime in the bridge."""
 
 from __future__ import annotations
 
@@ -53,20 +53,19 @@ _PAGE_BYTES = 2 * 1024 * 1024 - 64 * 1024
 # Stream with its owner sets it.
 _OWNER_ENDED_KEY = "temporal.io/stream-owner-ended"
 # The backend puts this key into the headers of each Local Activity that a Workflow schedules,
-# and of each Activity of a run that uses Streams. It keeps the Producer id across retries.
+# and of each Activity of a run that uses Streams. It keeps the Producer id the same on retries.
 _KEY_HEADER = "__temporal_stream_key"
 # Continue-as-new passes the run chain's open Streams to the next run in this header.
 _OWNED_STREAMS_HEADER = "__temporal_owned_streams"
 _CLOSE_TIMEOUT = timedelta(seconds=30)
-# A Store error is retryable and every other Stream error is not, as each one says itself.
+# Only a Store error is retryable. Each Stream error sets its own non_retryable flag.
 _CLOSE_RETRY = temporalio.common.RetryPolicy(
     initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=30)
 )
 
 
 class ExtensionStreamBackend(StreamBackend):
-    """Base of the Redis, memory and native backends, whose calls go to the
-    temporalio-streams runtime.
+    """Base class of the Redis, memory and native backends, which call the Stream runtime.
 
     .. warning::
         This API is experimental.
@@ -85,7 +84,7 @@ class ExtensionStreamBackend(StreamBackend):
     ) -> None:
         """Create the backend over the bridge's Stream runtime, on Redis or in memory.
 
-        ``backend_name`` is the name that Stream handles carry for this backend. ``default``
+        ``backend_name`` is the name that Stream handles store for this backend. ``default``
         makes it the backend of a create with no backend name.
         """
         config.backend = backend_name
@@ -150,7 +149,6 @@ class ExtensionStreamBackend(StreamBackend):
     def _configure_client(
         self, config: temporalio.client.ClientConfig
     ) -> temporalio.client.ClientConfig:
-        # Each client gets its own Stream runtime.
         config = super()._configure_client(config)
         backend = self._new_backend(config["service_client"])
         config["interceptors"] = [
@@ -183,8 +181,7 @@ class ExtensionStreamBackend(StreamBackend):
     def _configure_worker(
         self, config: temporalio.worker.WorkerConfig
     ) -> temporalio.worker.WorkerConfig:
-        # Add the backend's interceptor when the client has none, and on Redis its close
-        # Activity.
+        # Add the backend's interceptor if the client has none, and on Redis add the close Activity.
         config = super()._configure_worker(config)
         if config.get("workflows") and self._kind == "redis":
             # The close runs once the Workflow Task commits, as a regular Activity, so this
@@ -209,7 +206,7 @@ class ExtensionStreamBackend(StreamBackend):
             and self._kind == "redis"
             and config.get("no_remote_activities")
         ):
-            # Another Worker on the queue may run the close Activity, so it is no error.
+            # Another Worker on the task queue can run the close Activity, so it isn't an error.
             logger.warning(
                 "The Worker on the task queue %s polls no Activities, so the close of a "
                 "Workflow's Stream waits for another Worker on that queue with the backend",
@@ -220,8 +217,8 @@ class ExtensionStreamBackend(StreamBackend):
         mine.converter = client.data_converter
         runner = config.get("workflow_runner")
         if config.get("workflows") and isinstance(runner, SandboxedWorkflowRunner):
-            # The interceptor and the facade must share the run's Stream state, also when the
-            # restrictions don't pass temporalio through.
+            # The interceptor and temporalio.workflow must share the run's Stream state, even
+            # when the restrictions don't pass temporalio through.
             config["workflow_runner"] = dataclasses.replace(
                 runner,
                 restrictions=runner.restrictions.with_passthrough_modules(
@@ -242,10 +239,8 @@ class ExtensionStreamBackend(StreamBackend):
         return config
 
     async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> int:
-        # Workflow code closes a Workflow's Stream here. The close must run only once the
-        # Workflow Task commits, so a task that fails before then leaves the Stream open for its
-        # retry. A regular Activity on the Workflow's task queue does that, and it closes as the
-        # run chain, the Stream's owner. A backend that closes another way overrides this.
+        # An Activity runs only after the Workflow Task commits, so a failed task leaves the
+        # Stream open for its retry. The Activity closes the Stream as the run chain that owns it.
         return await temporalio.workflow.execute_activity(
             streams_workflow.CLOSE_ACTIVITY,
             request,
@@ -255,8 +250,9 @@ class ExtensionStreamBackend(StreamBackend):
         )
 
     async def shutdown(self) -> None:
-        """Drop every open writer, including the client's. Call it once the process no longer
-        writes Streams.
+        """Close every open writer, including the client's.
+
+        Call it when the process stops writing to Streams.
         """
         failed = 0
         for backend in list(self._backends):
@@ -372,7 +368,7 @@ async def _decode_page(
 def _runtime_of(
     service: temporalio.service.ServiceClient,
 ) -> temporalio.runtime.Runtime:
-    # The runtime of a client's connection, as the Worker finds it.
+    # Find the runtime of a client's connection the same way the Worker does.
     service = getattr(service, "worker_service_client", service)
     runtime = getattr(service, "_runtime", None) or getattr(
         getattr(service, "config", None), "runtime", None
@@ -381,8 +377,8 @@ def _runtime_of(
 
 
 class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interceptor):
-    # One for each client of the backend, with that client's Stream runtime. The client's
-    # Workers take it from the client.
+    # There is one for each client of the backend, with that client's Stream runtime. The
+    # client's Workers get it from the client.
     def __init__(
         self,
         plugin: ExtensionStreamBackend,
@@ -397,7 +393,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
     ) -> type[temporalio.worker.WorkflowInboundInterceptor] | None:
-        # Workflow code learns the Worker's backends from the interceptor classes.
+        # Workflow code reads the Worker's backends from the interceptor classes.
         return type(
             "_WorkflowInbound",
             (_WorkflowInbound,),
@@ -459,7 +455,7 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
 
 def _receive(args: Sequence[Any]) -> None:
     # A run that receives a Stream uses Streams. The inputs, Signals and Updates are in
-    # History, so a replay finds the same.
+    # History, so a replay sets the same flag.
     if _stream_arguments(args):
         streams_workflow._state().uses_streams = True
 
@@ -473,8 +469,8 @@ async def _end_run(err: BaseException | None) -> None:
 
 
 def _ends_run(err: BaseException) -> bool:
-    # Any other exception fails the Workflow Task, and an eviction closes the coroutine outside
-    # the Workflow's loop.
+    # True if err ends the run. Any other exception fails the Workflow Task, and an eviction
+    # closes the coroutine outside the Workflow's loop.
     if isinstance(err, temporalio.workflow.ContinueAsNewError):
         return True
     if isinstance(err, asyncio.CancelledError):
@@ -485,7 +481,7 @@ def _ends_run(err: BaseException) -> bool:
 
 
 def _owned_ref(stream_id: str) -> models.StreamRef:
-    # A Stream that the run chain creates is the chain's own.
+    # The run chain owns each Stream that it creates.
     info = temporalio.workflow.info()
     return models.StreamRef(
         id=stream_id,
@@ -529,9 +525,8 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         self._temporal_stream_backend_name = backend_name
         self._temporal_stream_default = default
         self._temporal_stream_kind = kind
-        # Numbers each Activity call of the run in order, so the key is the same on replay and
-        # a retry keeps it. A counter, not workflow.uuid4(), leaves the user's random values
-        # alone.
+        # Counts the run's Activity calls, so a key is the same on replay and on a retry. It
+        # doesn't call workflow.uuid4(), so the user's random values don't change.
         self._activity_calls = 0
 
     def _activity_headers(self) -> dict[str, temporalio.api.common.v1.Payload]:
@@ -585,8 +580,8 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def start_activity(
         self, input: temporalio.worker.StartActivityInput
     ) -> temporalio.workflow.ActivityHandle[Any]:
-        # The key goes into History, so only a run that uses Streams adds it, or a run whose
-        # Activity gets a Stream. Each call still counts, so a key is the same on replay.
+        # The key is in History, so add it only for a run that uses Streams or passes one to
+        # this Activity. Count every call, so the keys are the same on replay.
         headers = self._activity_headers()
         state = streams_workflow._state()
         if not state.uses_streams and _stream_arguments(input.args):
@@ -598,7 +593,7 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
     def start_local_activity(
         self, input: temporalio.worker.StartLocalActivityInput
     ) -> temporalio.workflow.ActivityHandle[Any]:
-        # A Local Activity's headers stay out of History, so each one gets its key.
+        # A Local Activity's headers aren't in History, so every Local Activity gets the key.
         input.headers = {**input.headers, **self._activity_headers()}
         return super().start_local_activity(input)
 
@@ -621,8 +616,8 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         attempt, token = enter_attempt(self, streams)
         try:
             if temporalio.activity.info().attempt > 1:
-                # The open of a new attempt withdraws the Records of the earlier ones, also
-                # when this attempt publishes nothing. It creates no Stream.
+                # Withdraw the Records of earlier attempts, even if this attempt publishes
+                # nothing. This creates no Stream.
                 handles = {
                     handle.id: handle
                     for handle in _stream_arguments(input.args)
@@ -671,8 +666,8 @@ def enter_attempt(
 
 
 def _stream_arguments(args: Sequence[Any]) -> list[StreamHandle[Any]]:
-    # The Streams that an Activity received, which an earlier attempt may have written. They
-    # may sit in fields of its input object, in slots, and in lists and dicts.
+    # Find the Stream handles in call arguments. A handle can be in a field, a slot, a list or
+    # a dict.
     handles: list[StreamHandle[Any]] = []
     seen: set[int] = set()
 
@@ -733,8 +728,8 @@ def _activity_streams(
     if info.is_local:
         task = info.workflow_task
         if task is not None:
-            # Always set, with 0 for none completed. An unset one turns off the withdrawal of
-            # the run's orphaned Local Activity Records.
+            # Always set it, with 0 if no task completed. If it's unset, the Store doesn't
+            # withdraw the run's orphaned Local Activity Records.
             previous = stream_pb.WorkflowTaskEpoch(
                 started_event_id=task.previous_started_event_id
             )

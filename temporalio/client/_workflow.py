@@ -195,22 +195,23 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
     def stream(
         self, definition: type[_StreamDefinitionT], *, backend: str | None = None
     ) -> ClientStream[_StreamDefinitionT]:
-        """A Stream that this Workflow created, by its definition.
+        """Get a Stream that this Workflow created, by its definition.
 
-        It builds the Stream id from the Workflow id and the first run id, so it makes no
-        call. A handle with no first run id makes one Describe call on the first use of its
-        Streams, and keeps the answer.
+        This method builds the Stream id from the Workflow id and the first run id, so it makes
+        no call. A handle with no first run id makes one Describe call when one of its Streams
+        is first used, and caches the result.
 
         .. warning::
             This API is experimental.
 
         Args:
-            definition: The Stream definition class, renamed as the Workflow's create.
+            definition: The Stream definition class, with the same name as in the Workflow's
+                create.
             backend: The name of the backend. Defaults to the registered backend with
                 ``default=True``, else to ``native``.
 
         Raises:
-            StreamConfigError: The client has no backend of that name.
+            StreamConfigError: The client has no backend with that name.
         """
         from temporalio.common._streams import _stream_client
 

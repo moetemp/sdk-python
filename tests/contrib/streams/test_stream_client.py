@@ -320,7 +320,8 @@ class _EncodesCommonAttributes(DefaultFailureConverter):
 
 
 async def test_closed_failure_decodes_with_the_clients_converter(stream_client: Client):
-    # The message goes into the encoded attributes, which only the payload converter reads.
+    # The failure converter puts the message in the encoded attributes, which only the payload
+    # converter reads.
     config = stream_client.config()
     config["data_converter"] = dataclasses.replace(
         DataConverter.default, failure_converter_class=_EncodesCommonAttributes
@@ -355,7 +356,7 @@ async def test_last_reads_the_newest_records_then_follows(stream_client: Client)
     tokens = stream.topic(Events.tokens)
     await tokens.publish("a", "b", "c")
     await stream.topic(Events.turns).publish(Turn("model"))
-    # A chat view shows the last few Records first, then follows.
+    # A chat view shows the last few Records first, then waits for new ones.
     tail = stream.subscribe(tokens, last=2)
     assert tail.next_offset is None
     shown = [await anext(tail), await anext(tail)]
@@ -460,7 +461,7 @@ async def test_async_with_refuses_an_activity_stream_before_the_block(
 
 
 async def test_record_over_the_store_limit_raises_too_large(stream_client: Client):
-    # The client's writer splits a batch at the Store's limit, so only a Record can be over.
+    # The client's writer splits a batch at the Store's limit, so only one Record can be over it.
     stream = await stream_client.create_stream(Events, id=f"large-{uuid.uuid4()}")
     with pytest.raises(common.StreamTooLargeError) as refused:
         await stream.topic(Events.tokens).publish("x" * 2_200_000)
@@ -505,7 +506,7 @@ async def test_create_of_an_expired_stream_raises(stream_client: Client):
 
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
     stream = await stream_client.create_stream(Events, id=f"named-{uuid.uuid4()}")
-    # A server that restarts writes as one name with a higher epoch, so the zombie it
+    # A server that restarts writes as the same name with a higher epoch, so the zombie that it
     # replaces can't write after it.
     before = stream.producer("ingest", epoch=1)
     await before.topic(Events.tokens).publish("before restart")
@@ -540,7 +541,7 @@ async def test_unresolved_workflow_stream_compares_and_prints(client: Client):
 
     setattr(handle, "describe", describe)
     await redis.create(client, Events, id="agent-2:run-2:events")
-    # Calls that start together share one Describe call.
+    # Concurrent calls share one Describe call.
     assert await asyncio.gather(first.get_offset(), first.get_offset()) == [0, 0]
     assert describes == [1]
     assert first.id == "agent-2:run-2:events"
@@ -556,7 +557,7 @@ async def test_registration_rules(client: Client):
     two = Client(**config)
     assert (await redis.create(two, Events, id="d-1")).backend == "b"
     assert two.stream(Events, id="d-1").backend == "b"
-    # The default is part of Workflow code, so it must not follow the order of the list.
+    # The default is part of Workflow code, so it must not depend on the order of the list.
     for backends in (
         [MemoryStreamBackend(), MemoryStreamBackend(name="b")],
         [
@@ -610,7 +611,7 @@ async def test_only_a_redis_backend_polls_activities(client: Client):
 async def test_worker_that_polls_no_activities_warns_of_the_close(
     client: Client, caplog: pytest.LogCaptureFixture
 ):
-    # The close of a Workflow's Stream is a regular Activity, which another Worker may run.
+    # The close of a Workflow's Stream is a regular Activity, which another Worker can run.
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend(default=True)]
     with caplog.at_level(logging.WARNING, logger="temporalio.common._streams"):
@@ -635,7 +636,7 @@ async def test_backend_is_not_a_plugin(client: Client):
 
 async def test_worker_plugin_keeps_the_streams_passthrough(client: Client):
     # The backends configure the Worker after its plugins, so a plugin that replaces the
-    # Workflow runner doesn't drop the passthrough.
+    # Workflow runner doesn't lose the Streams sandbox passthrough.
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend(default=True)]
     plugin = SimplePlugin("replaces-runner", workflow_runner=SandboxedWorkflowRunner())
@@ -654,7 +655,7 @@ async def test_default_is_native_with_no_default_backend(client: Client):
     assert one.stream(Events, id="d-2").backend == "native"
     assert one.get_workflow_handle("agent-3").stream(Events).backend == "native"
     assert one.stream(Events, id="d-2", backend="memory").backend == "memory"
-    # The Redis create picks the client's only Redis backend, and memory stands in for it.
+    # The Redis create picks the client's only Redis backend. The memory backend counts as one.
     assert (await redis.create(one, Events, id="d-2")).backend == "memory"
     # A registered NativeStreamBackend configures native, and only it takes that name.
     config["stream_backends"] = [
@@ -677,7 +678,7 @@ async def test_stream_takes_the_handle_backend_or_the_default(client: Client):
     created = await redis.create(two, Events, id="moving", backend="b")
     await created.topic(Events.tokens).publish("on b")
     assert await two.stream(Events, stream=created).get_offset() > 0
-    # A handle with no backend name is of the default backend.
+    # A handle with no backend name uses the default backend.
     assert two.stream(Events, stream=common.ClientStream(id="moving")).backend == "a"
     with pytest.raises(ValueError):
         two.stream(Events, stream=created, backend="a")

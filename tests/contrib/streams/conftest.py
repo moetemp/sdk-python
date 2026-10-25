@@ -26,8 +26,8 @@ def _free_port() -> int:
             return port
 
 
-# One scratch server serves every test module, and each test takes its own key prefix. A run
-# that must use a known port gives its own server in TEMPORAL_STREAMS_REDIS_URL.
+# One scratch server serves every test module, and each test uses its own key prefix. To use a
+# known port, set TEMPORAL_STREAMS_REDIS_URL to your own server.
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
     given = os.environ.get("TEMPORAL_STREAMS_REDIS_URL")
@@ -55,8 +55,8 @@ def redis_url() -> Iterator[str]:
         process.wait()
 
 
-# A server that serves the Stream service, such as a dev server of moetemp/temporal with the
-# native Stream backend. The native lane runs only when it is set.
+# A server with the Stream service, such as a moetemp/temporal dev server with the native
+# Stream backend. The native lane runs only when this is set.
 NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
 NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
 
