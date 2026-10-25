@@ -1,4 +1,25 @@
-"""Common code used in the Temporal SDK."""
+"""Common code used in the Temporal SDK.
+
+This module also has the Streams API. A Stream is an ordered log of Records that Workflows,
+Activities and clients write and read. A Stream definition is a subclass of
+:py:class:`StreamDefinition` with ``@common.defn``. It gives the Stream name and its one payload
+type. Code creates a Stream before its first publish, and a create is create-or-get. Workflow
+code creates one with :py:func:`temporalio.workflow.create_stream`, and a client with
+:py:meth:`temporalio.client.Client.create_stream`. A client binds any Stream with
+:py:meth:`temporalio.client.Client.stream`. A Stream is data. A Workflow can pass it as an
+argument to an Activity, a child Workflow or the next run, or hand it out through a query. The
+parameter's type sets the handle class for that context, such as :py:class:`ActivityStream`.
+
+A :py:class:`StreamBackend` makes the Stream calls and registers a backend name. Examples are
+:py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
+:py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). Register
+backends with ``Client.connect(..., stream_backends=[...])``. A handle stores the name of its
+backend. With more than one registered backend, exactly one must have ``default=True``. A
+create with no ``backend=`` uses that backend. A Worker serves only one backend.
+
+.. warning::
+    The Streams API is experimental.
+"""
 
 from __future__ import annotations
 

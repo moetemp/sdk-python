@@ -1,0 +1,2 @@
+Add experimental Streams to `temporalio.common`. A Stream is an ordered log of Records that Workflows, Activities and clients write, and that clients and Activities read. Register a backend with `stream_backends=` on `Client.connect`, `Replayer` or `WorkflowEnvironment`, then use `workflow.create_stream`, `Client.create_stream` or `Client.stream`.
+Add a Redis Stream backend in `temporalio.contrib.stream`, and an in-memory one for tests in `temporalio.contrib.stream.testing`. The Redis backend needs a build with the bridge's `streams` feature, which the official builds have.

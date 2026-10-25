@@ -12,3 +12,5 @@
 # manage repo-wide concerns.
 /temporalio/contrib/workflow_streams/       @temporalio/ai-sdk     @temporalio/sdk
 /tests/contrib/workflow_streams/            @temporalio/ai-sdk     @temporalio/sdk
+/temporalio/contrib/stream/                 @temporalio/ai-sdk     @temporalio/sdk
+/tests/contrib/streams/                     @temporalio/ai-sdk     @temporalio/sdk
