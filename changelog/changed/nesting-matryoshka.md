@@ -1,0 +1,1 @@
+Convert values of a `transfer_type_convertible` class inside JSON values too, such as list items and dataclass fields, not only at the top level of a payload. A dataclass with the decorator is still written as its fields inside a JSON value.

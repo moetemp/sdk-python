@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import ipaddress
+import json
 import logging
 import sys
 import traceback
@@ -459,6 +460,112 @@ def test_temporal_transfer_type_payload_converter_with_generic_value(
     payload = converter.to_payload(value)
 
     assert converter.from_payload(payload, type_hint) == value
+
+
+class NestedTransferTypeValueConverter(
+    TransferTypeConverter["NestedTransferTypeValue[Any]", dict[str, str]]
+):
+    transfer_type: type[dict[str, str]] | None = dict
+
+    def to_transfer_type(self, value: NestedTransferTypeValue[Any]) -> dict[str, str]:
+        return {"wireName": value.name}
+
+    def from_transfer_type(
+        self, value: dict[str, str], type_hint: type[NestedTransferTypeValue[Any]]
+    ) -> NestedTransferTypeValue[Any]:
+        args = typing.get_args(type_hint)
+        return NestedTransferTypeValue(value["wireName"], args[0] if args else None)
+
+
+class NestedTransferTypeValue(Generic[T]):
+    def __init__(self, name: str, kind: Any = None) -> None:
+        self.name = name
+        self.kind = kind
+
+
+transfer_type_convertible(NestedTransferTypeValueConverter)(NestedTransferTypeValue)
+
+
+@dataclass
+class HasNestedTransferTypeValues:
+    one: NestedTransferTypeValue[int]
+    many: list[NestedTransferTypeValue[str]]
+    proto: TemporalTransferTypeValueWithoutHint
+
+
+def test_transfer_type_values_nested_in_json():
+    converter = DataConverter.default.payload_converter
+    value = HasNestedTransferTypeValues(
+        one=NestedTransferTypeValue("a"),
+        many=[NestedTransferTypeValue("b")],
+        proto=TemporalTransferTypeValueWithoutHint("c"),
+    )
+    payload = converter.to_payload(value)
+    assert json.loads(payload.data) == {
+        "one": {"wireName": "a"},
+        "many": [{"wireName": "b"}],
+        "proto": {"value": "c"},
+    }
+    decoded = converter.from_payload(payload, HasNestedTransferTypeValues)
+    assert decoded.one.name == "a" and decoded.one.kind is int
+    assert decoded.many[0].name == "b" and decoded.many[0].kind is str
+    assert decoded.proto == TemporalTransferTypeValueWithoutHint("c")
+
+
+def test_transfer_type_dataclass_in_a_top_level_list_keeps_its_fields():
+    # The decode of a dataclass inside a JSON value reads its fields, so the encode writes them.
+    converter = DataConverter.default.payload_converter
+    value = [TemporalTransferTypeValueWithoutHint("c")]
+    payload = converter.to_payload(value)
+    assert json.loads(payload.data) == [{"value": "c"}]
+    decoded = converter.from_payload(
+        payload, list[TemporalTransferTypeValueWithoutHint]
+    )
+    assert decoded == value
+
+
+class NestedProtoValueConverter(
+    TransferTypeConverter[
+        "NestedProtoValue", temporalio.api.common.v1.WorkflowExecution
+    ]
+):
+    transfer_type: type[temporalio.api.common.v1.WorkflowExecution] | None = (
+        temporalio.api.common.v1.WorkflowExecution
+    )
+
+    def to_transfer_type(
+        self, value: NestedProtoValue
+    ) -> temporalio.api.common.v1.WorkflowExecution:
+        return temporalio.api.common.v1.WorkflowExecution(workflow_id=value.workflow_id)
+
+    def from_transfer_type(
+        self,
+        value: temporalio.api.common.v1.WorkflowExecution,
+        type_hint: type[NestedProtoValue],
+    ) -> NestedProtoValue:
+        return NestedProtoValue(value.workflow_id)
+
+
+class NestedProtoValue:
+    def __init__(self, workflow_id: str) -> None:
+        self.workflow_id = workflow_id
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, NestedProtoValue)
+            and other.workflow_id == self.workflow_id
+        )
+
+
+transfer_type_convertible(NestedProtoValueConverter)(NestedProtoValue)
+
+
+def test_proto_transfer_type_nested_in_json_is_its_proto_json():
+    converter = DataConverter.default.payload_converter
+    payload = converter.to_payload([NestedProtoValue("wf-1")])
+    assert json.loads(payload.data) == [{"workflowId": "wf-1"}]
+    decoded = converter.from_payload(payload, list[NestedProtoValue])
+    assert decoded == [NestedProtoValue("wf-1")]
 
 
 def test_transfer_type_convertible_rejects_existing_converter():
