@@ -36,9 +36,9 @@ def create_stream(
         async with workflow.create_stream(streams.with_name(Events, "turn-3")) as turn:
             await turn.topic(Events.tokens).publish("hi")
 
-    The block end leaves the Stream open in a cron run, on an exception that fails the run when
-    the run has a retry policy, and on an exception that fails only the Workflow Task, since a
-    later run or the task's retry writes on to the same Stream. See
+    An exception closes the Stream with that exception as the failure. When a retry run may
+    follow, the close waits for the run's end, and the Stream stays open only for a retry run
+    or for the retry of a Workflow Task that failed. A cron run leaves the Stream open. See
     :py:meth:`temporalio.common.streams.WorkflowStream.__aexit__`.
 
     .. warning::

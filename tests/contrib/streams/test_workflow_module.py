@@ -306,6 +306,78 @@ async def test_block_end_leaves_the_stream_open_for_a_retry_run(stream_client: C
     assert closes[0].failure is None
 
 
+@workflow.defn
+class EndsItsBlock:
+    @workflow.run
+    async def run(self, mode: str) -> str:
+        try:
+            async with workflow.create_stream(Events) as stream:
+                await stream.topic(Events.tokens).publish(mode)
+                if mode == "non_retryable":
+                    raise ApplicationError("block failed", non_retryable=True)
+                if mode == "listed_type":
+                    raise ApplicationError("block failed", type="Listed")
+                if mode == "caught_task_failure":
+                    raise ValueError("block failed")
+                raise ApplicationError("block failed")
+        except (ApplicationError, ValueError) as err:
+            if mode.startswith("caught"):
+                return "caught"
+            if mode == "then_non_retryable":
+                raise ApplicationError("run failed", non_retryable=True) from err
+            raise
+
+
+async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client):
+    # Each run ends with no retry run, so each block end closes its Stream, at once or at the
+    # run's end, with the block's exception.
+    retries = RetryPolicy(
+        initial_interval=timedelta(milliseconds=100), maximum_attempts=3
+    )
+    cases = {
+        "non_retryable": retries,
+        "last_attempt": RetryPolicy(maximum_attempts=1),
+        "listed_type": dataclasses.replace(
+            retries, non_retryable_error_types=["Listed"]
+        ),
+        "caught": retries,
+        "caught_task_failure": None,
+        "then_non_retryable": retries,
+    }
+    async with new_worker(stream_client, EndsItsBlock) as worker:
+        handles = {
+            mode: await stream_client.start_workflow(
+                EndsItsBlock.run,
+                mode,
+                id=f"wf-{uuid.uuid4()}",
+                task_queue=worker.task_queue,
+                retry_policy=policy,
+            )
+            for mode, policy in cases.items()
+        }
+        for mode, handle in handles.items():
+            if mode.startswith("caught"):
+                assert await handle.result() == "caught"
+            else:
+                with pytest.raises(WorkflowFailureError):
+                    await handle.result()
+            items = await read(handle)
+            assert data(items) == [mode]
+            closed = items[-1]
+            assert isinstance(closed, streams.Closed), mode
+            assert closed.status == streams.CloseStatus.FAILED
+            assert (
+                closed.failure is not None and closed.failure.message == "block failed"
+            )
+        # A close at the run's end is a command after the run's code, also on replay.
+        replayer = Replayer(
+            workflows=[EndsItsBlock],
+            stream_backends=stream_client.config()["stream_backends"],
+        )
+        for mode in ("caught", "then_non_retryable"):
+            await replayer.replay_workflow(await handles[mode].fetch_history())
+
+
 # Set by the Activity of a test's run once it runs, so the test cancels the run there.
 waiting: dict[str, asyncio.Event] = {}
 

@@ -279,8 +279,10 @@ class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
             result = await super().execute_workflow(input)
         except BaseException as err:
             if _ends_run(err):
+                streams_workflow.close_at_run_end(err)
                 await streams_workflow.drain()
             raise
+        streams_workflow.close_at_run_end(None)
         await streams_workflow.drain()
         return result
 
