@@ -111,7 +111,7 @@ class ExtensionStreamBackend(StreamBackend):
     def _backend_for(self, client: temporalio.client.Client) -> BackendCalls:
         # The Stream runtime that this backend gave the client.
         interceptor = self._interceptor_of(
-            client.config(active_config=True)["interceptors"]
+            client.config(active_config=True).get("interceptors", [])
         )
         if interceptor is None or interceptor.backend is None:
             raise StreamConfigError(
@@ -136,7 +136,7 @@ class ExtensionStreamBackend(StreamBackend):
         config = super()._configure_worker(config)
         client = config["client"]  # type: ignore[reportTypedDictNotRequiredAccess]
         interceptors = [
-            *client.config(active_config=True)["interceptors"],
+            *client.config(active_config=True).get("interceptors", []),
             *config.get("interceptors", []),
         ]
         if any(
