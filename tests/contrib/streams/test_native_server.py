@@ -6,6 +6,7 @@ Set ``TEMPORAL_STREAMS_NATIVE_TARGET`` to its address to run it.
 import asyncio
 import base64
 import concurrent.futures
+import json
 import uuid
 from datetime import timedelta
 from typing import Any, cast
@@ -437,6 +438,52 @@ async def test_a_block_end_leaves_a_standalone_activitys_stream_open(
     # The server's close carries the result of the attempt that ended the Activity.
     assert isinstance(items[-1], streams.Closed)
     assert items[-1].result == "done on attempt 2"
+
+
+@workflow.defn
+class ReadsAll:
+    @workflow.run
+    async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
+        return [
+            item.data if isinstance(item, streams.Record) else f"closed {item.result}"
+            async for item in stream.subscribe()
+            if not isinstance(item, streams.Superseded)
+        ]
+
+
+async def test_a_workflow_reads_a_standalone_activitys_stream(native_client: Client):
+    # The server nests the Stream in its Activity, so the read names the Activity.
+    task_queue = f"tq-{uuid.uuid4()}"
+    async with new_worker(
+        native_client,
+        ReadsAll,
+        activities=[leaves_its_stream_open],
+        task_queue=task_queue,
+    ):
+        activity_handle = await native_client.start_activity(
+            leaves_its_stream_open,
+            id=f"act-{uuid.uuid4()}",
+            task_queue=task_queue,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        await activity_handle.result()
+        reader = await native_client.start_workflow(
+            ReadsAll.run,
+            streams.WorkflowStream.from_handle(activity_handle.stream(Events)),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        assert await reader.result() == ["a", "closed done"]
+    # The server keeps the reader's floor on a nested Stream, so the read asks no Retention.
+    local_activities = [
+        json.loads(
+            event.marker_recorded_event_attributes.details["data"].payloads[0].data
+        )["activity_type"]
+        for event in (await reader.fetch_history()).events
+        if event.HasField("marker_recorded_event_attributes")
+    ]
+    assert local_activities
+    assert _native._describe_activity_name("native") not in local_activities
 
 
 async def test_each_client_of_a_native_backend_calls_on_its_own_connection():

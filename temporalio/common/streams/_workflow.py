@@ -380,10 +380,13 @@ class WorkflowStream(StreamHandle[E]):
         )
 
     def _ref(self) -> stream_pb.StreamRef:
+        # A server that nests a Stream in its owner finds it only by the owner's fields.
         return stream_pb.StreamRef(
             id=self.id,
             workflow_id=self.workflow_id or "",
             first_execution_run_id=self.first_execution_run_id or "",
+            activity_id=self.activity_id or "",
+            activity_run_id=self.activity_run_id or "",
         )
 
     @overload
@@ -476,11 +479,7 @@ class WorkflowStream(StreamHandle[E]):
         reader = _workflow_reader.reader_of(_check_backend(self.backend, "read"))
         return WorkflowItems(
             reader,
-            stream_pb.StreamRef(
-                id=self.id,
-                workflow_id=self.workflow_id or "",
-                first_execution_run_id=self.first_execution_run_id or "",
-            ),
+            self._ref(),
             topics=read.topics,
             topic_prefixes=topic_prefixes,
             types=read.types,

@@ -143,8 +143,8 @@ class WorkflowItems(Subscription[Any]):
         self.continue_as_new_suggested = False
         """Whether the read ended because this run should continue as new. The server
         suggests it for the run's History or for the Records that the reader keeps on the
-        server. A reader of a native Stream that no Workflow owns gets it at half the Stream's
-        Retention after its first page, so its replay finds the Records."""
+        server. A reader of a client's native Stream gets it at half the Stream's Retention
+        after its first page, so its replay finds the Records."""
         self.owner_ended = False
         """Whether the read ended because the run chain that owns the Stream ended with no
         close, such as a terminated run on Redis."""
@@ -278,10 +278,14 @@ class WorkflowItems(Subscription[Any]):
             await self._learn_retention()
 
     async def _learn_retention(self) -> None:
-        # Retention trims a Stream that no Workflow owns under its readers. A backend whose
-        # replay reads the Stream again needs the reader to move on before that.
+        # Retention trims a client's Stream under its readers. A backend whose replay reads the
+        # Stream again needs the reader to move on before that.
         stream = self._request.stream
-        if stream.workflow_id or not self._reader._temporal_stream_parks_reads:
+        if (
+            stream.workflow_id
+            or stream.activity_id
+            or not self._reader._temporal_stream_parks_reads
+        ):
             return
         description = await self._reader._temporal_stream_describe(
             stream_pb.DescribeStreamRequest(stream=stream)
