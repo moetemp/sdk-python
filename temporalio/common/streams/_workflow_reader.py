@@ -150,8 +150,6 @@ class WorkflowItems(Subscription[Any]):
         self._create_until: datetime | None = None
         self._pause = _FIRST_PAUSE
         self._server_suggests = False
-        self._retention_known = False
-        self._range_until: datetime | None = None
         self._owner_ended_at: datetime | None = None
         self._wake: Any = None
         super().__init__(
@@ -161,8 +159,7 @@ class WorkflowItems(Subscription[Any]):
         self.continue_as_new_suggested = False
         """Whether the read ended because this run should continue as new. The server
         suggests it for the run's History or for the Records that the reader keeps on the
-        server. A reader of a client's native Stream gets it at half the Stream's Retention
-        after its first page, so its replay finds the Records."""
+        server."""
         self.owner_ended = False
         """Whether the read ended because the run chain that owns the Stream ended with no
         close, such as a terminated run on Redis."""
@@ -204,7 +201,7 @@ class WorkflowItems(Subscription[Any]):
             if self._create_wait:
                 self._create_until = now + self._create_wait
         # A read ends only after a page, so next_offset says where the next run goes on.
-        if self._paged and self._suggests_continue_as_new(now):
+        if self._paged and self._suggests_continue_as_new():
             self.continue_as_new_suggested = True
             self._ended = True
             return
@@ -219,7 +216,7 @@ class WorkflowItems(Subscription[Any]):
             await self._wait_for_create()
             return
         response = page.response
-        await self._take(request, response)
+        self._take(request, response)
         if response.records or response.done:
             self._pause = _FIRST_PAUSE
             return
@@ -230,11 +227,11 @@ class WorkflowItems(Subscription[Any]):
             self.owner_ended = True
             self._ended = True
             return
-        if self._suggests_continue_as_new(now):
+        if self._suggests_continue_as_new():
             self.continue_as_new_suggested = True
             self._ended = True
             return
-        await self._wait_for_records(now)
+        await self._wait_for_records()
 
     def _waiting_request(self) -> stream_pb.ReadRecordsRequest:
         # The next read with the backend's waits. A backend that parks reads on the server
@@ -260,7 +257,7 @@ class WorkflowItems(Subscription[Any]):
             request.floor_from = floor
             state.sent_floors.add(key)
 
-    async def _take(
+    def _take(
         self, request: stream_pb.ReadRecordsRequest, page: stream_pb.ReadRecordsResponse
     ) -> None:
         self._paged = True
@@ -291,32 +288,11 @@ class WorkflowItems(Subscription[Any]):
             floors = _read_state().replay_floors
             low = request.from_offset or page.records[0].offset
             floors[key] = min(floors.get(key, low), low)
-        if not self._retention_known:
-            self._retention_known = True
-            await self._learn_retention()
 
-    async def _learn_retention(self) -> None:
-        # Retention trims a client's Stream under its readers. A backend whose replay reads the
-        # Stream again needs the reader to move on before that.
-        stream = self._request.stream
-        if (
-            stream.workflow_id
-            or stream.activity_id
-            or not self._reader._temporal_stream_parks_reads
-        ):
-            return
-        description = await self._reader._temporal_stream_describe(
-            stream_pb.DescribeStreamRequest(stream=stream)
-        )
-        retention = description.retention.ToTimedelta()
-        if retention > timedelta():
-            self._range_until = temporalio.workflow.now() + retention / 2
-
-    def _suggests_continue_as_new(self, now: datetime) -> bool:
+    def _suggests_continue_as_new(self) -> bool:
         return (
             self._server_suggests
             or temporalio.workflow.info().is_continue_as_new_suggested()
-            or (self._range_until is not None and now >= self._range_until)
         )
 
     def _owner_gone(self, page: Page, now: datetime) -> bool:
@@ -327,21 +303,13 @@ class WorkflowItems(Subscription[Any]):
             self._owner_ended_at = now
         return now - self._owner_ended_at >= _OWNER_END_GRACE
 
-    async def _wait_for_records(self, now: datetime) -> None:
+    async def _wait_for_records(self) -> None:
         if not self._can_wake():
             # The Store can't wake a Workflow, or the run has the most wakes. A quiet Stream
             # then costs one timer and one read per pause.
             await self._sleep()
             return
-        request = self._waiting_request()
-        if self._range_until is not None:
-            # The wake ends in time for the read to end at half the Retention.
-            wait = min(
-                request.wait.ToTimedelta(),
-                max(self._range_until - now, _FIRST_PAUSE),
-            )
-            request.wait.FromTimedelta(wait)
-        await self._wake_once(request)
+        await self._wake_once(self._waiting_request())
 
     async def _wait_for_create(self) -> None:
         if not self._can_wake():

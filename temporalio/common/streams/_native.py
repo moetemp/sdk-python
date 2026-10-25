@@ -8,9 +8,8 @@ import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
 
-import temporalio.activity
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.client
 import temporalio.bridge.streams
@@ -27,8 +26,6 @@ from temporalio.common.streams import _errors, _workflow_reader
 from temporalio.common.streams._backend import _ExtensionCalls
 from temporalio.common.streams._extension import (
     ExtensionStreamBackend,
-    _activity_error,
-    _attempt_streams,
     _decode_page,
     _runtime_of,
     _WorkflowOutbound,
@@ -62,11 +59,6 @@ _RUN_KEY = "temporal.io/stream-read-run"
 _CACHE_SIZE = 256
 _pages: OrderedDict[tuple[str, bytes], list[stream_pb.StreamRecord]] = OrderedDict()
 RANGE_GONE_TYPE = "STREAM_RANGE_GONE"
-_DESCRIBE_TIMEOUT = timedelta(seconds=10)
-
-
-def _describe_activity_name(backend: str) -> str:
-    return f"__temporal_stream_describe:{backend}"
 
 
 def _digest(records: Sequence[stream_pb.StreamRecord]) -> bytes:
@@ -309,22 +301,6 @@ class _NativeWorkflowOutbound(_WorkflowOutbound):
         except temporalio.exceptions.NexusOperationError as err:
             raise _workflow_reader.error_of(err) from None
 
-    async def _temporal_stream_describe(
-        self, request: stream_pb.DescribeStreamRequest
-    ) -> stream_pb.DescribeStreamResponse:
-        try:
-            return await temporalio.workflow.execute_local_activity(
-                _describe_activity_name(self._temporal_stream_backend_name),
-                request,
-                result_type=stream_pb.DescribeStreamResponse,
-                start_to_close_timeout=_DESCRIBE_TIMEOUT,
-            )
-        except (
-            temporalio.exceptions.ActivityError,
-            temporalio.exceptions.ApplicationError,
-        ) as err:
-            raise _workflow_reader.error_of(err) from None
-
 
 class NativeStreamBackend(ExtensionStreamBackend):
     """Carries Stream calls to the Temporal server, which keeps the Streams.
@@ -446,35 +422,12 @@ class NativeStreamBackend(ExtensionStreamBackend):
         )
         return 0
 
-    def _activities(self) -> list[Any]:
-        return [*super()._activities(), _describe_activity(self)]
-
     def _configure_client(
         self, config: temporalio.client.ClientConfig
     ) -> temporalio.client.ClientConfig:
         # The calls come from the client's connection at the first call, so the client needs
         # no interceptor.
         return config
-
-
-def _describe_activity(backend: NativeStreamBackend) -> Any:
-    # A Workflow reader of a standalone Stream learns its Retention, since a replay reads the
-    # Stream again and Retention trims it.
-    @temporalio.activity.defn(name=_describe_activity_name(backend.backend_name))
-    async def describe(
-        request: stream_pb.DescribeStreamRequest,
-    ) -> stream_pb.DescribeStreamResponse:
-        request.namespace = temporalio.activity.info().namespace
-        # The Worker's client gave the attempt its Stream runtime.
-        streams = _attempt_streams(backend.backend_name)
-        try:
-            return await cast(_ExtensionCalls, streams.backend).call_async(
-                "DescribeStream", request, stream_pb.DescribeStreamResponse
-            )
-        except _errors.StreamError as err:
-            raise _activity_error(err) from None
-
-    return describe
 
 
 def wrap(

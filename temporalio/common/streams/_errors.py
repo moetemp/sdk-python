@@ -76,6 +76,16 @@ class StreamOffsetError(StreamError):
     """The offset is past the newest one plus one, or Retention removed it."""
 
 
+class StreamTooLargeError(StreamError):
+    """A Record or a batch is over the Store's limit, or the Stream is full.
+
+    A native Stream keeps the Records that an open Workflow reader may read again on replay,
+    so an append that the Stream's size cap would make drop them fails. It passes once the
+    reader moves on, such as when it continues as new, which the server suggests to a reader
+    that keeps half of the cap.
+    """
+
+
 class StreamUnsupportedError(StreamError):
     """The Store lacks a capability that the call needs. The message ends with its name.
 
@@ -120,6 +130,7 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_fenced": StreamFencedError,
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
+    "stream_too_large": StreamTooLargeError,
     "stream_unsupported": StreamUnsupportedError,
     "stream_not_owner": StreamNotOwnerError,
     "seq_divergent": StreamSeqDivergentError,

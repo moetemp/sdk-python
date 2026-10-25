@@ -7,7 +7,6 @@ import asyncio
 import base64
 import concurrent.futures
 import gc
-import json
 import uuid
 import weakref
 from datetime import timedelta
@@ -450,33 +449,50 @@ async def test_reads_past_the_wake_cap_pause_on_a_timer(
 
 
 @workflow.defn
-class ReadsUntilHalfRetention:
+class ReadsUntilToldToContinue:
+    def __init__(self) -> None:
+        self._end = False
+
+    @workflow.signal
+    def end(self) -> None:
+        self._end = True
+
     @workflow.run
     async def run(self, stream: streams.WorkflowStream[Events]) -> list[Any]:
         items = stream.subscribe(Events.tokens)
-        seen = [item.data async for item in items if isinstance(item, streams.Record)]
-        return [seen, items.continue_as_new_suggested, items.next_offset]
+        sizes = [
+            len(item.data) async for item in items if isinstance(item, streams.Record)
+        ]
+        await workflow.wait_condition(lambda: self._end)
+        return [sizes, items.continue_as_new_suggested]
 
 
-async def test_a_native_reader_of_a_client_stream_ends_at_half_its_retention(
+async def test_a_workflow_reader_keeps_its_range_of_a_client_stream(
     native_client: Client,
 ):
-    # Retention trims a Stream that no Workflow owns under its readers, and a replay reads the
-    # Stream again. So the read ends in time for the run to continue as new.
-    stream = await native_client.create_stream(
-        Events,
-        id=f"native-{uuid.uuid4()}",
-        retention=timedelta(seconds=6),
-    )
-    offset = await stream.topic(Events.tokens).publish("a")
-    async with new_worker(native_client, ReadsUntilHalfRetention) as worker:
-        seen, suggested, next_offset = await native_client.execute_workflow(
-            ReadsUntilHalfRetention.run,
+    # The size cap would drop what the reader's replays read again, and every task of the run
+    # would fail. So the server refuses the append and suggests that the reader move on.
+    stream = await native_client.create_stream(Events, id=f"native-{uuid.uuid4()}")
+    await stream.topic(Events.tokens).publish("a")
+    # Two of them keep more than half of the 4 MiB stream.maxStoredBytes, three pass it.
+    big = "x" * 1_450_000
+    async with new_worker(
+        native_client, ReadsUntilToldToContinue, max_cached_workflows=0
+    ) as worker:
+        reader = await native_client.start_workflow(
+            ReadsUntilToldToContinue.run,
             streams.WorkflowStream.from_handle(stream),
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-    assert seen == ["a"] and suggested and next_offset > offset
+        await until_parked(reader)
+        for _ in range(2):
+            await stream.topic(Events.tokens).publish(big)
+        with pytest.raises(streams.StreamTooLargeError) as refused:
+            await stream.topic(Events.tokens).publish(big)
+        assert refused.value.reason == "stream_too_large"
+        await reader.signal(ReadsUntilToldToContinue.end)
+        assert await reader.result() == [[1, len(big), len(big)], True]
 
 
 @activity.defn
@@ -602,16 +618,6 @@ async def test_a_workflow_reads_a_standalone_activitys_stream(native_client: Cli
             task_queue=task_queue,
         )
         assert await reader.result() == ["a", "closed done"]
-    # The server keeps the reader's floor on a nested Stream, so the read asks no Retention.
-    local_activities = [
-        json.loads(
-            event.marker_recorded_event_attributes.details["data"].payloads[0].data
-        )["activity_type"]
-        for event in (await reader.fetch_history()).events
-        if event.HasField("marker_recorded_event_attributes")
-    ]
-    assert local_activities
-    assert _native._describe_activity_name("native") not in local_activities
 
 
 @workflow.defn

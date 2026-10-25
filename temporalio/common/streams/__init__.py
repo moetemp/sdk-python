@@ -50,6 +50,7 @@ from temporalio.common.streams._errors import (
     StreamOffsetError,
     StreamSeqDivergentError,
     StreamStorageError,
+    StreamTooLargeError,
     StreamUnsupportedError,
 )
 from temporalio.common.streams._handle import Creating, StreamHandle
@@ -93,6 +94,7 @@ __all__ = [
     "StreamOffsetError",
     "StreamSeqDivergentError",
     "StreamStorageError",
+    "StreamTooLargeError",
     "StreamUnsupportedError",
     "Subscription",
     "Superseded",
