@@ -842,6 +842,28 @@ async def test_merge_that_the_codec_grows_past_the_batch_limit(stream_client: Cl
 
 
 @workflow.defn
+class PublishesTooMuch:
+    @workflow.run
+    async def run(self) -> str:
+        tokens = (await workflow.create_stream(Events)).topic(Events.tokens)
+        try:
+            await tokens.publish(*["x" * 1_400_000] * 4)
+        except streams.StreamTooLargeError as err:
+            return err.reason
+        return "written"
+
+
+async def test_batch_over_the_store_limit_raises_too_large(stream_client: Client):
+    # Each Record is under the Store's Record limit, and the publish's batch is over 4 MiB.
+    async with new_worker(stream_client, PublishesTooMuch) as worker:
+        handle = await stream_client.start_workflow(
+            PublishesTooMuch.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        assert await handle.result() == "stream_too_large"
+        assert data(await read(handle)) == []
+
+
+@workflow.defn
 class CreatesOnTheDefault:
     @workflow.run
     async def run(self) -> None:

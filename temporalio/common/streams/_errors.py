@@ -78,6 +78,10 @@ class StreamOffsetError(StreamError):
     """The offset is below zero or past the newest one plus one."""
 
 
+class StreamTooLargeError(StreamError):
+    """A Record or a batch is over the Store's limit."""
+
+
 class StreamUnsupportedError(StreamError):
     """The Store lacks a capability that the call needs. The message ends with its name."""
 
@@ -128,6 +132,7 @@ _BY_REASON: dict[str, type[StreamError]] = {
     "stream_fenced": StreamFencedError,
     "stream_storage": StreamStorageError,
     "stream_offset": StreamOffsetError,
+    "stream_too_large": StreamTooLargeError,
     "stream_unsupported": StreamUnsupportedError,
     "stream_not_owner": StreamNotOwnerError,
     "seq_divergent": StreamSeqDivergentError,

@@ -424,6 +424,15 @@ async def test_async_with_refuses_a_workflow_stream_before_the_block(
     assert not ran
 
 
+async def test_record_over_the_store_limit_raises_too_large(stream_client: Client):
+    # The client's writer splits a batch at the Store's limit, so only a Record can be over.
+    stream = await redis.create(stream_client, Events, id=f"large-{uuid.uuid4()}")
+    with pytest.raises(streams.StreamTooLargeError) as refused:
+        await stream.topic(Events.tokens).publish("x" * 2_000_000)
+    assert refused.value.reason == "stream_too_large" and refused.value.non_retryable
+    assert await stream.get_offset() == 0
+
+
 async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
     # Nothing withdraws a client's Records, so a long UI read of them keeps no state.
     stream = await redis.create(stream_client, Events, id=f"chat-{uuid.uuid4()}")
