@@ -124,7 +124,8 @@ def create(
         client: The client, with a registered Redis backend.
         definition: The Stream definition class.
         id: The Stream id, as a Workflow takes a Workflow id.
-        retention: How long the Records stay after the close. Defaults to the backend's.
+        retention: The age after which a Record is dropped, also while the Stream is open.
+            A closed Stream stays one Retention after its close. Defaults to the backend's.
         backend: The name of the Redis backend. Defaults to the client's only Redis backend,
             or the one with ``default=True``.
 

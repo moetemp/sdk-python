@@ -61,7 +61,7 @@ class StreamClosedError(StreamError):
 
 
 class StreamExpiredError(StreamError):
-    """Retention removed the Stream."""
+    """Retention removed the Stream, or the Records at the offset that a read asked for."""
 
 
 class StreamFencedError(StreamError):
@@ -75,7 +75,7 @@ class StreamStorageError(StreamError):
 
 
 class StreamOffsetError(StreamError):
-    """The offset is past the newest one plus one, or Retention removed it."""
+    """The offset is below zero or past the newest one plus one."""
 
 
 class StreamUnsupportedError(StreamError):

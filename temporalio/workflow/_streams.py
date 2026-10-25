@@ -47,7 +47,8 @@ def create_stream(
     Args:
         definition: The Stream definition class. Its name is the Stream name. For one Stream
             per turn, for example, pass ``streams.with_name(Events, f"turn-{n}")``.
-        retention: How long the Records stay after the close. Defaults to the backend's.
+        retention: The age after which a Record is dropped, also while the Stream is open.
+            A closed Stream stays one Retention after its close. Defaults to the backend's.
         backend: The name of the backend. Defaults to the registered backend with
             ``default=True``. The default is part of the Workflow's code, since a replay must
             create on the same backend. For now a Worker serves one backend, so the name is

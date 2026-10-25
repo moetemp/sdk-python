@@ -119,7 +119,11 @@ class Subscription(Generic[T]):
         return tuple(sorted(offsets))
 
     async def aclose(self) -> None:
-        """End the read early. It makes no more calls."""
+        """End the read early, from the task that reads it. It makes no more calls.
+
+        A read that waits for new Records in another task is still running, so this raises
+        ``RuntimeError`` there. Cancel that task instead.
+        """
         with _backend.using(self._options):
             await self._items.aclose()
 
