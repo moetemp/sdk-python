@@ -241,6 +241,11 @@ async def _item(
             CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
         )
         return Closed(
-            offset=offset, result=result, failure=failure, status=CloseStatus(status)
+            offset=offset,
+            result=result,
+            failure=_convert.failure(converter, failure)
+            if failure is not None
+            else None,
+            status=CloseStatus(status),
         )
     return None

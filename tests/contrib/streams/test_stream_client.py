@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -14,7 +15,8 @@ from temporalio.common.streams import _stream_client
 from temporalio.contrib import stream as redis
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
-from temporalio.converter import DataConverter
+from temporalio.converter import DataConverter, DefaultFailureConverter
+from temporalio.exceptions import ApplicationError
 from temporalio.plugin import SimplePlugin
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
@@ -286,6 +288,29 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
     ] == ["b"]
+
+
+class _EncodesCommonAttributes(DefaultFailureConverter):
+    def __init__(self) -> None:
+        super().__init__(encode_common_attributes=True)
+
+
+async def test_closed_failure_decodes_with_the_clients_converter(stream_client: Client):
+    # The message goes into the encoded attributes, which only the payload converter reads.
+    config = stream_client.config()
+    config["data_converter"] = dataclasses.replace(
+        DataConverter.default, failure_converter_class=_EncodesCommonAttributes
+    )
+    client = Client(**config)
+    stream = await redis.create(client, Events, id=f"failed-{uuid.uuid4()}")
+    await stream.close(
+        failure=ApplicationError("tool failed", "detail", {"k": 1}, type="Tool")
+    )
+    [closed] = [item async for item in stream.subscribe()]
+    assert isinstance(closed, streams.Closed)
+    assert isinstance(closed.failure, ApplicationError)
+    assert closed.failure.message == "tool failed" and closed.failure.type == "Tool"
+    assert closed.failure.details == ("detail", {"k": 1})
 
 
 async def test_no_wait_read_goes_past_records_of_other_topics(stream_client: Client):
