@@ -107,6 +107,9 @@ class _RunState:
     waiting: dict[str, _Write] = field(default_factory=dict)
     # The Streams that a retry run's first write has withdrawn the previous run on.
     withdrawn: set[str] = field(default_factory=set)
+    # Whether the run created, bound or received a Stream. Only then do its Activities carry
+    # a Producer key, so a run with no Stream adds nothing to History.
+    uses_streams: bool = False
 
     def stream(self, ref: models.StreamRef) -> _RunStream:
         known = self.streams.get(ref.id)
@@ -458,6 +461,8 @@ class WorkflowStream(StreamHandle[E]):
             StreamConfigError: The Stream is of a backend that the Worker does not have. It
                 fails the Workflow Task, not the run.
         """
+        if not temporalio.workflow.unsafe.is_read_only():
+            _state().uses_streams = True
         read = read_spec(
             self,
             topics,
@@ -492,7 +497,9 @@ class WorkflowStream(StreamHandle[E]):
             raise _errors.ReadOnlyContextError(
                 f"Can't {action} a Stream in read-only code"
             )
-        run_stream = _state().stream(self._model_ref())
+        state = _state()
+        state.uses_streams = True
+        run_stream = state.stream(self._model_ref())
         if run_stream.closed:
             raise _errors.StreamClosedError(
                 f"Can't {action} the Stream {self.id}, since this run closed it",
@@ -688,6 +695,8 @@ def stream_handle(
     :py:func:`temporalio.workflow.stream_handle`.
     """
     stream = _own_handle(definition, backend)
+    if not temporalio.workflow.unsafe.is_read_only():
+        _state().uses_streams = True
     if backend is None:
         known = _state().streams.get(stream.id)
         stream._backend = (known.backend if known else None) or _check_backend(
