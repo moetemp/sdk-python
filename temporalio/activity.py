@@ -544,7 +544,8 @@ def create_stream(
 
     Args:
         definition: The Stream definition class. Its name is the Stream name.
-        retention: How long the Records stay after the close. Defaults to the backend's.
+        retention: The age after which a Record is dropped. A closed Stream stays one
+            Retention after its close. Defaults to the backend's.
         backend: The name of a native backend. Defaults to ``native``.
 
     Raises:

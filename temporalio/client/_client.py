@@ -976,7 +976,8 @@ class Client:
         Args:
             definition: The Stream definition class.
             id: The Stream id, as a Workflow takes a Workflow id.
-            retention: How long the Records stay after the close. Defaults to the backend's.
+            retention: The age after which a Record is dropped. A closed Stream stays one
+                Retention after its close. Defaults to the backend's.
             backend: The name of the backend. Defaults to the registered backend with
                 ``default=True``, else to ``native``.
 
