@@ -689,9 +689,9 @@ class AdvancedJSONEncoder(json.JSONEncoder):
         # Datetime support
         if isinstance(o, datetime):
             return o.isoformat()
-        # A transfer type value inside another value. A dataclass never gets here, since
-        # dataclasses.asdict has already turned it into a dict.
-        converter = _get_transfer_type_converter(type(o))
+        # A transfer type value inside another value. A dataclass there is written as its
+        # fields, such as in a top-level list, since value_to_type decodes it from them.
+        converter = _nested_transfer_type_converter(type(o))
         if converter is not None:
             value = converter.to_transfer_type(o)
             if isinstance(value, google.protobuf.message.Message):
