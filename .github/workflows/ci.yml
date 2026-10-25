@@ -60,6 +60,7 @@ jobs:
         if: ${{ matrix.clippyLinter }}
       - run: poe build-develop
       - run: poe lint
+      - uses: ./.github/actions/install-redis
       - run: mkdir junit-xml
       - run: poe test ${{matrix.pytestExtraArgs}} -s --junit-xml=junit-xml/${{ matrix.python }}--${{ matrix.os }}.xml
         timeout-minutes: 15
@@ -158,6 +159,7 @@ jobs:
       - run: poe build-develop-fips
       - name: Confirm the FIPS build is loaded
         run: uv run python -c "from temporalio.bridge import temporal_sdk_bridge; assert temporal_sdk_bridge.FIPS, 'not a FIPS build'"
+      - uses: ./.github/actions/install-redis
       - run: mkdir junit-xml
       - name: Run tests against the FIPS build
         run: |
@@ -237,6 +239,7 @@ jobs:
       - name: Check generation unchanged
         run: |
           [[ -z $(git status --porcelain temporalio tests) ]] || (git diff temporalio tests; echo "Protos changed"; exit 1)
+      - uses: ./.github/actions/install-redis
       - name: Test with protobuf 3.x
         run: poe test -s
         env:
@@ -270,6 +273,7 @@ jobs:
       - run: uv sync --all-extras
       - run: poe build-develop
       - run: poe lint
+      - uses: ./.github/actions/install-redis
       - run: mkdir junit-xml
       - run: poe test -s --junit-xml=junit-xml/latest-deps.xml
         timeout-minutes: 15
@@ -331,6 +335,7 @@ jobs:
         env:
           TEMPORAL_CLIENT_CLOUD_API_KEY: ${{ secrets.TEMPORAL_CLIENT_CLOUD_API_KEY }}
           TEMPORAL_CLIENT_CLOUD_API_VERSION: v0.19.1
+      - uses: ./.github/actions/install-redis
       - run: mkdir junit-xml
       - run: poe test -s --workflow-environment envconfig --junit-xml=junit-xml/cloud.xml
         timeout-minutes: 15

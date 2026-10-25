@@ -68,8 +68,8 @@ class Replayer:
         most of the arguments. Most of the same arguments need to be passed to
         the replayer that were passed to the worker when the workflow originally
         ran. Pass ``stream_backends`` with the same backends as the Worker's
-        client. A replay makes no Stream call, so the Store doesn't need to be
-        reachable.
+        client, such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`.
+        A replay makes no Stream call, so the Store doesn't need to be reachable.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that
