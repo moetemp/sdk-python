@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -468,6 +469,18 @@ async def test_registration_rules(client: Client):
     assert (
         Client(**from_generator.config()).stream(Events, id="d-3").backend == "memory"
     )
+
+
+async def test_worker_that_polls_no_activities_warns_of_the_close(
+    client: Client, caplog: pytest.LogCaptureFixture
+):
+    # The close of a Workflow's Stream is a regular Activity, which another Worker may run.
+    config = client.config()
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    with caplog.at_level(logging.WARNING, logger="temporalio.common.streams"):
+        async with new_worker(Client(**config), Agent, no_remote_activities=True):
+            pass
+    assert "polls no Activities" in caplog.text
 
 
 async def test_backend_is_not_a_plugin(client: Client):

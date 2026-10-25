@@ -153,6 +153,13 @@ class ExtensionStreamBackend(StreamBackend):
                 f"The Worker's client has no {type(self).__name__}. Register it with "
                 "stream_backends=."
             )
+        if config.get("no_remote_activities"):
+            # Another Worker on the queue may run the close Activity, so it is no error.
+            logger.warning(
+                "The Worker on the task queue %s polls no Activities, so the close of a "
+                "Workflow's Stream waits for another Worker on that queue with the backend",
+                config.get("task_queue"),
+            )
         # Records get no serialization context, so Workflows, Activities and clients encode
         # them alike.
         mine.converter = client.data_converter

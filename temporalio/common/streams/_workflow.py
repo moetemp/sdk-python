@@ -442,7 +442,8 @@ class WorkflowStream(StreamHandle[E]):
         A task that fails before then, or a crash, leaves the Stream open, and the task's retry
         writes to it again. On Redis the close is a regular Activity on the Workflow's task
         queue, which closes as the run chain, the Stream's owner. So every Worker on that queue
-        registers the Redis backend. Readers get the Records before it, then a ``Closed`` item
+        registers the Redis backend, and one that polls Activities runs the close, since a
+        Worker with ``no_remote_activities=True`` runs none. Readers get the Records before it, then a ``Closed`` item
         with ``result`` or ``failure``. A cancel failure, such as a ``CancelledError`` or an
         ``ActivityError`` that a cancel caused, closes it as canceled. Later writes in this run
         raise :py:class:`StreamClosedError`.
