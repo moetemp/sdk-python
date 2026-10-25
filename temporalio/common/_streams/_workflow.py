@@ -112,6 +112,9 @@ class _RunState:
     deferred_closes: list[tuple[WorkflowStream[Any], BaseException | None]] = field(
         default_factory=list
     )
+    # The publishes that failed before a caller got the error. A caller can still get it, so
+    # the run's end checks them again.
+    failed_publishes: list[asyncio.Future[int]] = field(default_factory=list)
 
     def stream(self, ref: models.StreamRef) -> _RunStream:
         known = self.streams.get(ref.id)
@@ -311,7 +314,8 @@ def _write_nowait(future: asyncio.Future[int]) -> None:
     runtime = temporalio.workflow._Runtime.current()
 
     def done(future: asyncio.Future[int]) -> None:
-        # No caller awaits the write, so its error fails the Workflow Task.
+        # No caller awaits the write, so the run raises its error after this callback, as an
+        # error that the run doesn't catch.
         if not future.cancelled() and future.exception() is not None:
             setattr(runtime, "_current_activation_error", future.exception())
 
@@ -319,13 +323,27 @@ def _write_nowait(future: asyncio.Future[int]) -> None:
 
 
 async def drain() -> None:
-    """Wait for the run's writes and closes that nobody awaits, before the run ends."""
-    for task in list(_state().tails.values()):
+    """Wait for the run's writes and closes that nobody awaits, before the run ends.
+
+    A publish error that no caller got raises here, as an error that the run doesn't catch.
+    """
+    state = _state()
+    for task in list(state.tails.values()):
         try:
             await task
         except BaseException:
             # A cancelled write already cancelled its callers.
             pass
+    for future in state.failed_publishes:
+        error = future.exception() if _unretrieved(future) else None
+        if error is not None:
+            raise error
+
+
+def _unretrieved(future: asyncio.Future[int]) -> bool:
+    # asyncio sets this flag when the future fails and clears it when a caller gets the error,
+    # with await, result() or exception(). It is what asyncio logs as never retrieved.
+    return getattr(future, "_log_traceback", False)
 
 
 def _payload(value: Any) -> Any:
@@ -340,30 +358,47 @@ class WorkflowTopic(TopicBase[T]):
         This API is experimental.
     """
 
-    async def publish(self, *values: T) -> int:
-        """Write one Record for each value, in order, and return the last Record's offset.
+    def publish(self, *values: T) -> asyncio.Future[int]:
+        """Start the write of one Record for each value, in order, and return its future.
 
-        The write is a Local Activity, so History has its result and not the values. Publishes
-        that wait behind a write to the same Stream are sent as one Local Activity, and each
-        call gets the offset of its own last Record. A list is one value. Writes to one Stream
-        keep the order of the calls.
+        The write has its place in the Stream's order when the call returns, also when no
+        caller awaits the future. Writes to one Stream keep the order of the calls. The write
+        is a Local Activity, so History has its result and not the values. Publishes that wait
+        behind a write to the same Stream are sent as one Local Activity, and each call gets the
+        offset of its own last Record. A list is one value.
+
+        A caller that awaits the future, or calls its ``result()`` or ``exception()``, gets the
+        write's error and owns it. An error that no caller gets raises at the end of the run, as
+        an error of :py:meth:`publish_nowait` does. So a ``StreamError`` fails the run.
+
+        Returns:
+            The future of the write. It gives the offset of the last Record, or raises
+            ``StreamError`` when the backend refused the write, such as
+            ``StreamClosedError`` for a Stream that another caller closed.
 
         Raises:
-            StreamError: The backend refused the write, such as ``StreamClosedError`` for a
-                Stream that another caller closed.
             StreamClosedError: This run closed the Stream.
             ReadOnlyContextError: The code must not change state, such as a query handler.
             StreamConfigError: The Worker has no Stream backend, or not the Stream's backend.
                 It fails the Workflow Task, not the run.
         """
-        return await self._stream._append(self._name, values)
+        state = _state()
+        future = self._stream._append(self._name, values)
+
+        def failed(future: asyncio.Future[int]) -> None:
+            if _unretrieved(future):
+                state.failed_publishes.append(future)
+
+        future.add_done_callback(failed)
+        return future
 
     def publish_nowait(self, *values: T) -> None:
         """Write one Record for each value, in order, without an await.
 
         Use it in sync Workflow code, such as ``@workflow.init`` and sync signal and update
         handlers. It's like ``asyncio.Queue.put_nowait`` for code that can't await ``put``. A
-        backend error fails the Workflow Task.
+        backend error raises in the run as an error that the run doesn't catch, so a
+        ``StreamError`` fails the run.
         """
         _write_nowait(self._stream._append(self._name, values))
 
@@ -559,7 +594,8 @@ class WorkflowStream(StreamHandle[E]):
         """Close the Stream without an await, for sync Workflow code.
 
         It is to :py:meth:`close` what ``asyncio.Queue.put_nowait`` is to ``put``. It starts the
-        close, and the end of the run waits for it. A backend error fails the Workflow Task.
+        close, and the end of the run waits for it. A backend error raises in the run as an
+        error that the run doesn't catch, so a ``StreamError`` fails the run.
         """
         _write_nowait(self._close(result, failure))
 

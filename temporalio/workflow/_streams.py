@@ -81,7 +81,8 @@ def create_stream_nowait(
 
     Use it in sync Workflow code, such as ``@workflow.init``. It's like
     ``asyncio.Queue.put_nowait`` for code that can't await ``put``. It takes the options of
-    :py:func:`create_stream`. A backend error fails the Workflow Task.
+    :py:func:`create_stream`. A backend error raises in the run as an error that the run
+    doesn't catch, so a ``StreamError`` fails the run.
 
     .. warning::
         This API is experimental.

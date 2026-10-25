@@ -18,7 +18,7 @@ from temporalio.client import (
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy
-from temporalio.common._streams import _writes
+from temporalio.common._streams import _workflow, _writes
 from temporalio.common._streams._backend import _ExtensionCalls
 from temporalio.common._streams._defn import definition_of
 from temporalio.contrib import stream as redis
@@ -643,6 +643,103 @@ async def test_init_creates_and_publishes_with_no_await(stream_client: Client):
         items = await read(handle)
     assert data(items) == ["hi", "HI"]
     assert isinstance(items[-1], common.Closed) and items[-1].result == "done"
+
+
+@workflow.defn
+class PublishesWithNoAwait:
+    @workflow.run
+    async def run(self) -> list[int]:
+        tokens = (await workflow.create_stream(Events)).topic(Events.tokens)
+        first = tokens.publish("a")
+        second = tokens.publish("b")
+        last = await tokens.publish("c")
+        # Nobody awaits this write, and the run's end still waits for it.
+        tokens.publish("d")
+        return [first.result(), second.result(), last]
+
+
+async def test_publish_starts_the_write_and_returns_its_future(stream_client: Client):
+    async with new_worker(stream_client, PublishesWithNoAwait) as worker:
+        handle = await stream_client.start_workflow(
+            PublishesWithNoAwait.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        offsets = await handle.result()
+        items = await read(handle)
+    written = [item for item in items if isinstance(item, common.Record)]
+    assert [r.data for r in written] == ["a", "b", "c", "d"]
+    assert offsets == [r.offset for r in written[:3]]
+
+
+@workflow.defn
+class LeavesAFailedPublish:
+    @workflow.run
+    async def run(self, stream_id: str, retrieve: bool) -> str:
+        # Nobody created the Stream, so the backend refuses the write.
+        missing = common.WorkflowStream(id=stream_id).topic(Events.tokens)
+        future = missing.publish("lost")
+        errors: list[BaseException | None] = []
+        if retrieve:
+            future.add_done_callback(lambda done: errors.append(done.exception()))
+            await workflow.wait_condition(lambda: bool(errors))
+        return "done"
+
+
+async def test_publish_error_that_no_caller_gets_raises_at_the_run_end(
+    stream_client: Client,
+):
+    # The error raises as if the run didn't catch it, as with publish_nowait.
+    async with new_worker(stream_client, LeavesAFailedPublish) as worker:
+        lost = await stream_client.start_workflow(
+            LeavesAFailedPublish.run,
+            args=[f"missing-{uuid.uuid4()}", False],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        with pytest.raises(WorkflowFailureError) as failed:
+            await lost.result()
+        assert isinstance(failed.value.cause, ApplicationError)
+        assert failed.value.cause.type == "StreamNotFoundError"
+        # A done callback that reads the error owns it, so the run completes.
+        owned = await stream_client.start_workflow(
+            LeavesAFailedPublish.run,
+            args=[f"missing-{uuid.uuid4()}", True],
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await owned.result() == "done"
+
+
+def test_asyncio_flags_a_future_error_that_no_caller_got():
+    # The run's end reads this asyncio flag, so pin it for both Future classes.
+    loop = asyncio.new_event_loop()
+    try:
+        for future_class in (asyncio.Future, getattr(asyncio.futures, "_PyFuture")):
+            unread: asyncio.Future[int] = future_class(loop=loop)
+            unread.set_exception(ValueError("refused"))
+            assert _workflow._unretrieved(unread)
+            unread.exception()
+            assert not _workflow._unretrieved(unread)
+            by_result: asyncio.Future[int] = future_class(loop=loop)
+            by_result.set_exception(ValueError("refused"))
+            with pytest.raises(ValueError):
+                by_result.result()
+            assert not _workflow._unretrieved(by_result)
+            awaited: asyncio.Future[int] = future_class(loop=loop)
+            loop.call_soon(awaited.set_exception, ValueError("refused"))
+
+            async def wait(future: asyncio.Future[int]) -> None:
+                with pytest.raises(ValueError):
+                    await future
+
+            loop.run_until_complete(wait(awaited))
+            assert not _workflow._unretrieved(awaited)
+            cancelled: asyncio.Future[int] = future_class(loop=loop)
+            cancelled.cancel()
+            assert not _workflow._unretrieved(cancelled)
+    finally:
+        loop.close()
 
 
 @workflow.defn
