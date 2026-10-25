@@ -186,9 +186,9 @@ exclude = [
   'temporalio/api',
   'temporalio/bridge/proto',
   'temporalio/nexus/system/workflow_service',
-  'temporalio/contrib/streams/proto',
-  'temporalio/contrib/streams/system',
-  'temporalio/contrib/streams/writer_system',
+  'temporalio/common/_streams/proto',
+  'temporalio/common/_streams/system',
+  'temporalio/common/_streams/writer_system',
 ]
 
 [[tool.mypy.overrides]]
@@ -197,9 +197,9 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [
-  "temporalio.contrib.streams.proto.*",
-  "temporalio.contrib.streams.system.*",
-  "temporalio.contrib.streams.writer_system.*",
+  "temporalio.common._streams.proto.*",
+  "temporalio.common._streams.system.*",
+  "temporalio.common._streams.writer_system.*",
 ]
 ignore_errors = true
 
@@ -239,6 +239,8 @@ privacy = [
   "HIDDEN:temporalio.worker.workflow_instance",
   "HIDDEN:temporalio.worker.workflow_sandbox.importer",
   "HIDDEN:temporalio.worker.workflow_sandbox.in_sandbox",
+  "HIDDEN:temporalio.common._streams.system.client",
+  "HIDDEN:temporalio.common._streams.writer_system.client",
   "HIDDEN:**.*_pb2*",
 ]
 project-name = "Temporal Python"
@@ -272,7 +274,7 @@ exclude = [
   "temporalio/api",
   "temporalio/bridge/proto",
   "temporalio/bridge/_visitor.py",
-  "temporalio/contrib/streams/proto",
+  "temporalio/common/_streams/proto",
   "tests/worker/workflow_sandbox/testmodules/proto",
 ]
 

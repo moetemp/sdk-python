@@ -1,0 +1,2 @@
+Add `temporalio.common.NativeStreamBackend`, a Stream backend that stores Streams in the Temporal server. It needs a server with the Stream service. It's the default and needs no registration. A client can register more than one backend, and its Workers serve all of them.
+Add Workflow reads of a Stream with `WorkflowStream.subscribe`, which returns a `temporalio.common.WorkflowItems`. Add Streams owned by Standalone Activities with `activity.create_stream` and `client.ActivityHandle.stream`, and client-owned Streams with `Client.create_stream`.

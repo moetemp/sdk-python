@@ -110,9 +110,10 @@ def transfer_type_convertible(
 ) -> _TransferTypeConvertibleDecorator[ValueT, TransferTypeT]:
     """Decorate a class with a transfer type converter class.
 
-    A value of the class takes its transfer type at the top level of a payload, and inside a
-    JSON value such as a list or a dataclass field. A dataclass is the exception inside a
-    JSON value: ``dataclasses.asdict`` writes it as its fields, and it decodes from them.
+    The converter converts a value of the class to its transfer type at the top level of a
+    payload, and inside a JSON value such as a list item or a dataclass field. Inside a JSON
+    value, a dataclass is the exception. ``dataclasses.asdict`` writes it as its fields, and
+    the converter decodes it from them.
 
     .. warning::
         This API is experimental and subject to change.
@@ -132,8 +133,8 @@ def _get_transfer_type_converter(
 def _nested_transfer_type_converter(
     hint: object,
 ) -> TransferTypeConverter[Any, Any] | None:
-    # A dataclass inside another value is written as its fields, so only other classes take
-    # their transfer type there.
+    # dataclasses.asdict writes a nested dataclass as its fields, so only a class that isn't a
+    # dataclass is converted there.
     origin = typing.get_origin(hint) or hint
     if not inspect.isclass(origin) or dataclasses.is_dataclass(origin):
         return None
@@ -689,9 +690,8 @@ class AdvancedJSONEncoder(json.JSONEncoder):
         # Datetime support
         if isinstance(o, datetime):
             return o.isoformat()
-        # A transfer type value inside another value. A dataclass never gets here, since
-        # dataclasses.asdict has already turned it into a dict.
-        converter = _get_transfer_type_converter(type(o))
+        # Nested transfer type support
+        converter = _nested_transfer_type_converter(type(o))
         if converter is not None:
             value = converter.to_transfer_type(o)
             if isinstance(value, google.protobuf.message.Message):
@@ -866,7 +866,7 @@ def value_to_type(
         if ret is not JSONTypeConverter.Unhandled:
             return ret
 
-    # A transfer type value inside another value, as AdvancedJSONEncoder writes it
+    # Nested transfer type values, as AdvancedJSONEncoder writes them
     converter = _nested_transfer_type_converter(hint)
     if converter is not None:
         transfer_type = converter.transfer_type

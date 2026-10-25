@@ -21,6 +21,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     NoReturn,
+    TypeVar,
     overload,
 )
 
@@ -37,6 +38,9 @@ from .types import CallableType
 
 if TYPE_CHECKING:
     from temporalio.client import Client
+    from temporalio.common import ActivityStream, Creating
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 @overload
@@ -112,7 +116,7 @@ class WorkflowTaskAttempt:
     """ID of the ``WorkflowTaskStarted`` event of the run's last completed task. 0 if none."""
 
     failed_tasks: Sequence[int] = ()
-    """``WorkflowTaskStarted`` event IDs of the run's failed and timed out tasks, the last 100."""
+    """``WorkflowTaskStarted`` event IDs of the run's last 100 failed and timed out tasks."""
 
 
 @dataclass(frozen=True)
@@ -167,7 +171,7 @@ class Info:
 
     workflow_task: WorkflowTaskAttempt | None = None
     """For a local activity, the Workflow Task in which the Worker dispatched this execution.
-    Retries that the Worker runs without a new task keep it. None for other activities.
+    Retries that the Worker runs in the same task have the same value. None for other activities.
 
     .. warning::
         This API is experimental.
@@ -513,6 +517,47 @@ def metric_meter() -> temporalio.common.MetricMeter:
             synchronous activity.
     """
     return _Context.current().metric_meter
+
+
+def create_stream(
+    definition: type[_StreamDefinitionT],
+    *,
+    retention: timedelta | None = None,
+    backend: str | None = None,
+) -> Creating[ActivityStream[_StreamDefinitionT]]:
+    """Create a Stream that this Standalone Activity owns, on the native backend.
+
+    The Stream id is ``<activity id>:<activity run id>:<name>``, so a client can get it from the
+    Activity handle with :py:meth:`temporalio.client.ActivityHandle.stream` without a call. The
+    Stream stays open across the Activity's retries, and the server closes it when the Activity
+    ends, with its status and result. So the end of an ``async with`` block doesn't close it.
+    Await the call to get the handle::
+
+        stream = await activity.create_stream(Events)
+        await stream.topic(Events.tokens).publish("hi")
+
+    Only the native backend can store the Stream of a Standalone Activity, since no other
+    backend would close it when the Activity ends.
+
+    .. warning::
+        This API is experimental.
+
+    Args:
+        definition: The Stream definition class. Its name is the Stream name.
+        retention: The age after which a Record is deleted. A closed Stream is kept for one
+            Retention after its close. Defaults to the backend's Retention.
+        backend: The name of a native backend. Defaults to ``native``.
+
+    Raises:
+        StreamConfigError: The Activity runs for a Workflow, which owns its Streams, or the
+            backend isn't native. No call is made.
+        StreamClosedError: The Stream was created and closed before.
+    """
+    from temporalio.common._streams import _activity_stream
+
+    return _activity_stream.create_stream(
+        definition, retention=retention, backend=backend
+    )
 
 
 class LoggerAdapter(logging.LoggerAdapter):

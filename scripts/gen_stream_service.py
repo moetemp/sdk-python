@@ -1,10 +1,9 @@
-"""Generates the Stream service bindings of temporalio.contrib.streams.
+"""Generates the Stream service bindings of the Streams API in temporalio.common.
 
 The WIT and the protos are copies of the temporalio-streams crate's, in scripts/_wit and
 scripts/_proto. Run scripts/gen_protos.py first for the proto modules. No nexgen release has the
-offset, long-poll and client features yet, so the script installs nexgen at
-NEX_GEN_REVISION from moetemp/nexgen. NEX_GEN_STREAMS_BIN may name a build of that revision
-instead.
+offset, long-poll and client features, so the script installs nexgen at NEX_GEN_REVISION from
+moetemp/nexgen. Set NEX_GEN_STREAMS_BIN to use a local build of that revision instead.
 """
 
 import os
@@ -30,12 +29,12 @@ proto_path = (
     / "v1"
     / "stream_service.proto"
 )
-output_dir = base_dir / "temporalio" / "contrib" / "streams" / "system"
-# The writer is client-only, so it has a caller and its resource class, and no Workflow code.
-writer_output_dir = base_dir / "temporalio" / "contrib" / "streams" / "writer_system"
+output_dir = base_dir / "temporalio" / "common" / "_streams" / "system"
+# Only clients call the writer service, so its bindings have no Workflow code.
+writer_output_dir = base_dir / "temporalio" / "common" / "_streams" / "writer_system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-# The head of moe/brook/v3/n8-stream-resource. A branch moves, so the pin is the commit.
+# A commit on the moe/brook/v3/n8-stream-resource branch.
 NEX_GEN_REVISION = "204b566ee996939b165ccd1d18c8c432bfdcc0dd"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
@@ -81,14 +80,14 @@ def generate_stream_service() -> None:
             raise RuntimeError(f"missing generator input: {path}")
     with tempfile.TemporaryDirectory(dir=base_dir) as temp_dir:
         descriptor_path = Path(temp_dir) / "stream_service.bin"
-        # The extension messages live in temporalio.contrib.streams.proto, so the descriptor
-        # names their file by that module path.
+        # The generated extension messages are in temporalio.common._streams.proto, so the
+        # descriptor must name their file by that module path.
         extension_root = Path(temp_dir) / "extension"
         extension_path = (
             extension_root
             / "temporalio"
-            / "contrib"
-            / "streams"
+            / "common"
+            / "_streams"
             / "proto"
             / "v1"
             / "extension.proto"

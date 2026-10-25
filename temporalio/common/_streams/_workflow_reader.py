@@ -1,0 +1,471 @@
+"""Reads of a Stream in Workflow code.
+
+Each page is a call whose result is in History, so a replay reads the same items. A Stream
+backend's outbound interceptor reads a page with ``_temporal_stream_read_page``. A backend
+whose server parks reads also starts a wake with ``_temporal_stream_start_wake``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections import deque
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Any, cast
+
+import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.common
+import temporalio.converter
+import temporalio.exceptions
+import temporalio.nexus.system
+import temporalio.workflow
+from temporalio.common._streams import _convert, _errors
+from temporalio.common._streams._items import (
+    Closed,
+    CloseStatus,
+    End,
+    Record,
+    Superseded,
+)
+from temporalio.common._streams._reader import Position, Subscription
+from temporalio.common._streams.system import models
+
+Item = Record[Any] | Superseded | Closed
+
+# A backend that can't park a read waits on a durable timer after a page with no Record. The
+# pause doubles from the first to the last.
+_FIRST_PAUSE = timedelta(seconds=1)
+_LAST_PAUSE = timedelta(seconds=60)
+# A run can have 30 pending Nexus operations. Wakes use at most 20, so the run's closes and its
+# own operations still fit. A read past the cap waits on a timer.
+_MAX_WAKES = 20
+# How long a read waits for a close after the Stream's owner ended. The close of a run comes
+# from its Worker, so it can arrive after the run closed, or never.
+_OWNER_END_GRACE = timedelta(minutes=1)
+
+
+@dataclass
+class Page:
+    """A page of a Workflow read, as History has it."""
+
+    response: stream_pb.ReadRecordsResponse
+    # The owner's run chain ended. Only a Store that doesn't close a Stream with its owner
+    # sets it.
+    owner_ended: bool = False
+
+
+def reader_of(backend: str) -> Any:
+    """The outbound interceptor of the Worker's Stream backend with this name."""
+    outbound = getattr(temporalio.workflow._Runtime.current(), "_outbound", None)
+    while outbound is not None:
+        if (
+            getattr(outbound, "_temporal_stream_transport", False)
+            and getattr(outbound, "_temporal_stream_backend_name", None) == backend
+        ):
+            return outbound
+        outbound = getattr(outbound, "next", None)
+    raise RuntimeError(f"The Worker has no Stream backend {backend}")
+
+
+@dataclass
+class _ReadState:
+    # The run's wakes that wait on the server, with their reads, so the run's end cancels them.
+    wakes: dict[Any, WorkflowItems] = field(default_factory=dict)
+    # The wakes that the server hasn't accepted yet, which count against the cap too.
+    starting: int = 0
+    # The lowest offset that the run's replayed pages read, per Stream, and whether a live
+    # page sent it.
+    replay_floors: dict[tuple[str, str], int] = field(default_factory=dict)
+    sent_floors: set[tuple[str, str]] = field(default_factory=set)
+
+
+def _read_state() -> _ReadState:
+    runtime = temporalio.workflow._Runtime.current()
+    state = getattr(runtime, "_temporal_streams_read_state", None)
+    if state is None:
+        state = _ReadState()
+        setattr(runtime, "_temporal_streams_read_state", state)
+    return state
+
+
+async def cancel_wakes() -> None:
+    """Cancel the run's wakes at the end of the run, and wait until the server has each cancel.
+
+    The server drops the cancel of a run that closed, and a parked read holds its slot until
+    the next append or its wait ends.
+    """
+    wakes = list(_read_state().wakes.items())
+    for wake, items in wakes:
+        # The read ends with no error, as when its code closes it.
+        items._closed = True
+        wake.cancel()
+    for wake, _ in wakes:
+        try:
+            await wake
+        except (Exception, asyncio.CancelledError):
+            pass
+
+
+class WorkflowItems(Subscription[Any]):
+    """The items of a Stream in order, in Workflow code. ``subscribe`` returns it.
+
+    It ends at a close, or at the newest Record when ``wait_new_records`` is False. It also
+    ends when this run should continue as new, after at least one page, and then
+    :py:attr:`continue_as_new_suggested` is True. Pass
+    :py:attr:`Subscription.next_offset` to the next run, which continues reading from there.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(
+        self,
+        reader: Any,
+        ref: stream_pb.StreamRef,
+        *,
+        topics: Sequence[str] | None,
+        topic_prefixes: Sequence[str],
+        types: Mapping[str, Any],
+        offset: int | End | None,
+        wait_new_records: bool,
+        create_wait: timedelta | None,
+    ) -> None:
+        """Create the iterator. It makes no call until the first item."""
+        self._reader = reader
+        self._types = types
+        self._wait_new_records = wait_new_records
+        self._create_wait = create_wait
+        self._request = stream_pb.ReadRecordsRequest(
+            stream=ref, topics=list(topics or []), topic_prefixes=list(topic_prefixes)
+        )
+        if offset is End.END:
+            # END applies only to the first page. Later pages and the waits start at the last
+            # page's next offset.
+            self._request.start = stream_pb.ReadStart.READ_START_END
+        elif offset:
+            self._request.from_offset = offset
+        else:
+            self._request.start = stream_pb.ReadStart.READ_START_BEGINNING
+        self._queue: deque[Item] = deque()
+        self._page_end = 0
+        self._paged = False
+        self._started = False
+        self._ended = False
+        self._closed = False
+        self._create_until: datetime | None = None
+        self._pause = _FIRST_PAUSE
+        self._server_suggests = False
+        self._owner_ended_at: datetime | None = None
+        self._wake: Any = None
+        super().__init__(
+            self._pages(),
+            Position(None if offset is End.END else offset or 0),
+        )
+        self.continue_as_new_suggested = False
+        """Whether the read ended because this run should continue as new. The server
+        suggests it because of the run's History size, or the Records that the reader keeps
+        on the server."""
+        self.owner_ended = False
+        """Whether the read ended because the run chain that owns the Stream ended without a
+        close, such as a terminated run on Redis."""
+
+    async def _pages(self) -> AsyncGenerator[Item, None]:
+        # Yields the items of each page, and reads or waits when none are left.
+        while True:
+            while not self._queue:
+                if self._ended or self._closed:
+                    return
+                await self._read()
+            if self._closed:
+                # A page that came after the close.
+                return
+            item = self._queue.popleft()
+            if not self._queue:
+                self._position.next_offset = max(
+                    self._position.next_offset or 0, self._page_end
+                )
+            yield item
+
+    async def aclose(self) -> None:
+        """End the read. This also cancels a wait on the server."""
+        self._closed = True
+        self._queue.clear()
+        if self._wake is not None:
+            self._wake.cancel()
+        # A read that waits in another task ends there once its wake ends.
+        if not cast(Any, self._items).ag_running:
+            await super().aclose()
+
+    async def _read(self) -> None:
+        # Reads one page, or waits once at the end of the Stream.
+        if temporalio.workflow.unsafe.is_read_only():
+            raise _errors.ReadOnlyContextError("Can't read a Stream in read-only code")
+        now = temporalio.workflow.now()
+        if not self._started:
+            self._started = True
+            if self._create_wait:
+                self._create_until = now + self._create_wait
+        # A read ends only after a page, so next_offset is where the next run continues.
+        if self._paged and self._suggests_continue_as_new():
+            self.continue_as_new_suggested = True
+            self._ended = True
+            return
+        request = self._waiting_request()
+        if not temporalio.workflow.unsafe.is_replaying():
+            self._send_floor(request)
+        try:
+            page = await self._reader._temporal_stream_read_page(request)
+        except _errors.StreamNotFoundError:
+            if not _left(self._create_until):
+                raise
+            await self._wait_for_create()
+            return
+        response = page.response
+        self._take(request, response)
+        if response.records or response.done:
+            self._pause = _FIRST_PAUSE
+            return
+        if not self._wait_new_records:
+            self._ended = True
+            return
+        if self._owner_gone(page, now):
+            self.owner_ended = True
+            self._ended = True
+            return
+        if self._suggests_continue_as_new():
+            self.continue_as_new_suggested = True
+            self._ended = True
+            return
+        await self._wait_for_records()
+
+    def _waiting_request(self) -> stream_pb.ReadRecordsRequest:
+        # The next read request, with the backend's waits. A backend that parks reads on the
+        # server moves the waits from its pages to its wakes.
+        request = stream_pb.ReadRecordsRequest()
+        request.CopyFrom(self._request)
+        if self._wait_new_records:
+            request.wait.FromTimedelta(self._reader._temporal_stream_read_wait)
+        left = _left(self._create_until)
+        if left:
+            request.create_wait.FromTimedelta(
+                min(left, self._reader._temporal_stream_create_wait)
+            )
+        return request
+
+    def _send_floor(self, request: stream_pb.ReadRecordsRequest) -> None:
+        # A reset run replays the pages of the old run. Its first live page asks the server
+        # to keep them too, since its next replay reads them again.
+        key = self._key()
+        state = _read_state()
+        floor = state.replay_floors.get(key)
+        if floor is not None and key not in state.sent_floors:
+            request.floor_from = floor
+            state.sent_floors.add(key)
+
+    def _take(
+        self, request: stream_pb.ReadRecordsRequest, page: stream_pb.ReadRecordsResponse
+    ) -> None:
+        self._paged = True
+        for record in page.records:
+            item = workflow_item(record, self._types)
+            if item is None:
+                continue
+            self._queue.append(item)
+            if isinstance(item, Closed):
+                self._ended = True
+                break
+        if page.done:
+            self._ended = True
+        if page.next_offset:
+            self._request.from_offset = page.next_offset
+            self._request.ClearField("start")
+            self._page_end = page.next_offset
+            if not self._queue:
+                self._position.next_offset = max(
+                    self._position.next_offset or 0, page.next_offset
+                )
+        if page.continue_as_new_suggested:
+            self._server_suggests = True
+        if not page.records:
+            return
+        if temporalio.workflow.unsafe.is_replaying():
+            key = self._key()
+            floors = _read_state().replay_floors
+            low = request.from_offset or page.records[0].offset
+            floors[key] = min(floors.get(key, low), low)
+
+    def _suggests_continue_as_new(self) -> bool:
+        return (
+            self._server_suggests
+            or temporalio.workflow.info().is_continue_as_new_suggested()
+        )
+
+    def _owner_gone(self, page: Page, now: datetime) -> bool:
+        if not page.owner_ended:
+            self._owner_ended_at = None
+            return False
+        if self._owner_ended_at is None:
+            self._owner_ended_at = now
+        return now - self._owner_ended_at >= _OWNER_END_GRACE
+
+    async def _wait_for_records(self) -> None:
+        if not self._can_wake():
+            # The Store can't wake a Workflow, or the run is at the wake cap. A quiet Stream
+            # then costs one timer and one read per pause.
+            await self._sleep()
+            return
+        await self._wake_once(self._waiting_request())
+
+    async def _wait_for_create(self) -> None:
+        if not self._can_wake():
+            await self._sleep()
+            return
+        request = self._waiting_request()
+        if not self._wait_new_records:
+            # After the create, the read reads what's there and ends.
+            request.wait.FromTimedelta(_FIRST_PAUSE)
+        try:
+            await self._wake_once(request)
+        except _errors.StreamNotFoundError:
+            # The next page tells whether time is left.
+            pass
+
+    def _can_wake(self) -> bool:
+        state = _read_state()
+        return (
+            self._reader._temporal_stream_parks_reads
+            and len(state.wakes) + state.starting < _MAX_WAKES
+        )
+
+    async def _sleep(self) -> None:
+        await temporalio.workflow.sleep(self._pause)
+        self._pause = min(self._pause * 2, _LAST_PAUSE)
+
+    async def _wake_once(self, request: stream_pb.ReadRecordsRequest) -> None:
+        # The server parks the wake until a Record passes the filter, the Stream closes, or
+        # the wait ends. The wake's answer has no Records, and the next page reads them.
+        state = _read_state()
+        state.starting += 1
+        try:
+            wake = await self._reader._temporal_stream_start_wake(request)
+        finally:
+            state.starting -= 1
+        wakes = state.wakes
+        wakes[wake] = self
+        self._wake = wake
+        if self._closed:
+            # The iterator closed while the server was accepting the wake.
+            wake.cancel()
+        try:
+            answer = await wake
+        except temporalio.exceptions.NexusOperationError as err:
+            if self._closed or isinstance(
+                err.cause, temporalio.exceptions.TimeoutError
+            ):
+                # A namespace can cap a Nexus operation below the wake's wait. That timeout
+                # ends the wake as an empty answer would.
+                return
+            raise error_of(err) from None
+        finally:
+            self._wake = None
+            wakes.pop(wake, None)
+        if (
+            self._request.start == stream_pb.ReadStart.READ_START_END
+            and answer.next_offset
+        ):
+            # A wait for the create returns the END position at the time of the create.
+            self._request.from_offset = answer.next_offset
+            self._request.ClearField("start")
+
+    def _key(self) -> tuple[str, str]:
+        return (self._reader._temporal_stream_backend_name, self._request.stream.id)
+
+
+def _left(until: datetime | None) -> timedelta | None:
+    if until is None:
+        return None
+    left = until - temporalio.workflow.now()
+    return left if left > timedelta() else None
+
+
+def workflow_item(
+    record: stream_pb.StreamRecord, types: Mapping[str, Any]
+) -> Item | None:
+    """One read item, with the body decoded by the Workflow's converter and its Topic's type.
+
+    The codec already ran outside the sandbox, on the page.
+    """
+    converter = temporalio.workflow.payload_converter()
+    # The generated converter makes the producer and the supersession models, and the body
+    # stays a Payload that the Topic's type decodes.
+    with temporalio.nexus.system._user_converter_context(
+        temporalio.nexus.system._SystemNexusUserConverters(
+            payload_converter=_convert._RawPayloadConverter(),
+            failure_converter=_failure_converter(),
+        )
+    ):
+        model = models._StreamRecordTransferTypeConverter().from_transfer_type(
+            record, models.StreamRecord
+        )
+    offset = model.offset or 0
+    if model.kind == stream_pb.StreamRecordKind.STREAM_RECORD_KIND_DATA:
+        topic = model.topic or ""
+        return Record(
+            topic=topic,
+            data=_decode(converter, model.body, types.get(topic)),
+            offset=offset,
+            producer=model.producer,
+        )
+    if model.kind == stream_pb.StreamRecordKind.STREAM_RECORD_KIND_SUPERSEDED:
+        if model.supersession is None:
+            return None
+        return Superseded(offset=offset, supersession=model.supersession)
+    if model.kind == stream_pb.StreamRecordKind.STREAM_RECORD_KIND_CLOSE:
+        failure = model.close_failure
+        if isinstance(failure, temporalio.exceptions.FailureError) and failure.failure:
+            # The model's converter keeps payloads raw for the Topic types.
+            failure = _failure_converter().from_failure(failure.failure, converter)
+        # An older close Record has no status, so its failure decides the status.
+        status = model.close_status or (
+            CloseStatus.FAILED if failure is not None else CloseStatus.COMPLETED
+        )
+        return Closed(
+            offset=offset,
+            result=_decode(converter, model.close_result, None),
+            failure=failure,
+            status=CloseStatus(status),
+        )
+    return None
+
+
+def _decode(
+    converter: temporalio.converter.PayloadConverter, body: Any, type_hint: Any
+) -> Any:
+    if not isinstance(body, temporalio.common.RawValue):
+        return body
+    return converter.from_payload(body.payload, type_hint)
+
+
+def _failure_converter() -> temporalio.converter.FailureConverter:
+    runtime = temporalio.workflow._Runtime.current()
+    return getattr(
+        runtime,
+        "_workflow_context_failure_converter",
+        temporalio.converter.DefaultFailureConverter(),
+    )
+
+
+def error_of(err: BaseException) -> BaseException:
+    """The Stream error in a failed page's cause, or the error itself.
+
+    A page's failure is in History, so a replay raises the same error.
+    """
+    cause: BaseException | None = err
+    while cause is not None:
+        if isinstance(cause, temporalio.exceptions.ApplicationError):
+            stream_error = _errors.from_application_error(cause)
+            if stream_error is not None:
+                return _errors.in_workflow(stream_error)
+        cause = cause.__cause__
+    return err

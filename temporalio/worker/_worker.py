@@ -19,7 +19,6 @@ from typing import (
 
 from typing_extensions import TypedDict
 
-import temporalio.bridge.proto.workflow_activation
 import temporalio.bridge.worker
 import temporalio.client
 import temporalio.common
@@ -34,7 +33,7 @@ from temporalio.common import (
 from ._activity import SharedStateManager, _ActivityWorker
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
-from ._plugin import Plugin, WorkflowEvictedInput
+from ._plugin import Plugin
 from ._tuning import WorkerTuner
 from ._workflow import (
     _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
@@ -133,7 +132,6 @@ class Worker:
         max_task_queue_activities_per_second: float | None = None,
         max_eager_activity_reservations_per_workflow_task: int = 3,
         graceful_shutdown_timeout: timedelta = timedelta(),
-        plugin_shutdown_timeout: timedelta | None = timedelta(seconds=60),
         workflow_failure_exception_types: Sequence[type[BaseException]] = [],
         shared_state_manager: SharedStateManager | None = None,
         debug_mode: bool = False,
@@ -280,11 +278,6 @@ class Worker:
             graceful_shutdown_timeout: Amount of time after shutdown is called
                 that activities are given to complete before their tasks are
                 cancelled.
-            plugin_shutdown_timeout: Amount of time that exiting
-                ``async with Worker(...)`` waits, after shutdown, for the code
-                that plugins run after the Worker stops in ``run_worker``. That
-                code is cancelled after this time. ``None`` waits with no limit.
-                The default is 60 seconds.
             workflow_failure_exception_types: The types of exceptions that, if a
                 workflow-thrown exception extends, will cause the
                 workflow/update to fail instead of suspending the workflow via
@@ -386,7 +379,6 @@ class Worker:
             max_task_queue_activities_per_second=max_task_queue_activities_per_second,
             max_eager_activity_reservations_per_workflow_task=max_eager_activity_reservations_per_workflow_task,
             graceful_shutdown_timeout=graceful_shutdown_timeout,
-            plugin_shutdown_timeout=plugin_shutdown_timeout,
             workflow_failure_exception_types=workflow_failure_exception_types,
             shared_state_manager=shared_state_manager,
             debug_mode=debug_mode,
@@ -418,6 +410,13 @@ class Worker:
         self._plugins = plugins
         for plugin in plugins:
             config = plugin.configure_worker(config)
+
+        # Workflows and Activities can use native Streams with no registration. Configure Streams
+        # after the plugins, so a plugin that replaces the runner keeps the sandbox passthrough.
+        if config.get("workflows") or config.get("activities"):
+            from temporalio.common._streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_worker(config)
 
         self._init_from_config(client, config)
 
@@ -496,7 +495,6 @@ class Worker:
         self._async_context_inner_task: asyncio.Task | None = None
         self._async_context_run_task: asyncio.Task | None = None
         self._async_context_run_exception: BaseException | None = None
-        self._async_context_exiting = False
 
         self._activity_worker: _ActivityWorker | None = None
         self._runtime = (
@@ -505,12 +503,21 @@ class Worker:
             or temporalio.runtime.Runtime.default()
         )
         activities = config.get("activities")
+        # The Local Activities that the Worker's Workflows run for Streams. They're the SDK's
+        # own, so they don't turn on polling for the task queue's Activities.
+        internal_activities: Sequence[Callable[..., Any]] = []
+        if config.get("workflows"):
+            from temporalio.common._streams import _plugin as _stream_plugin
+
+            internal_activities = _stream_plugin.local_activities(config)
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
+        if activities or internal_activities:
             self._activity_worker = _ActivityWorker(
                 bridge_worker=lambda: self._bridge_worker,
                 task_queue=config["task_queue"],  # type: ignore[reportTypedDictNotRequiredAccess]
-                activities=activities,
+                activities=activities or [],
+                internal_activities=internal_activities,
                 activity_executor=config.get("activity_executor"),
                 shared_state_manager=config.get("shared_state_manager"),
                 data_converter=client_config["data_converter"],
@@ -555,6 +562,8 @@ class Worker:
                     )
                 self._activity_worker.assert_activity_valid(activity)
 
+            from temporalio.common._streams import _plugin as _stream_plugin
+
             self._workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: self._bridge_worker,
                 namespace=config["client"].namespace,  # type: ignore[reportTypedDictNotRequiredAccess]
@@ -566,7 +575,12 @@ class Worker:
                 ),
                 workflow_runner=config["workflow_runner"],  # type: ignore[reportTypedDictNotRequiredAccess]
                 unsandboxed_workflow_runner=config["unsandboxed_workflow_runner"],  # type: ignore[reportTypedDictNotRequiredAccess]
-                data_converter=client_config["data_converter"],
+                # A native Stream read's marker holds positions, which the codec step turns
+                # back into the page.
+                data_converter=_stream_plugin.worker_converter(
+                    config["client"],  # type: ignore[reportTypedDictNotRequiredAccess]
+                    client_config["data_converter"],
+                ),
                 interceptors=interceptors,
                 workflow_failure_exception_types=config[
                     "workflow_failure_exception_types"
@@ -577,7 +591,7 @@ class Worker:
                     "disable_eager_activity_execution"
                 ],  # type: ignore[reportTypedDictNotRequiredAccess]
                 metric_meter=self._runtime.metric_meter,
-                on_eviction_hook=self._eviction_hook(),
+                on_eviction_hook=None,
                 disable_safe_eviction=config["disable_safe_workflow_eviction"],  # type: ignore[reportTypedDictNotRequiredAccess]
                 should_enforce_versioning_behavior=should_enforce_versioning_behavior,
                 assert_local_activity_valid=check_activity,
@@ -671,7 +685,7 @@ class Worker:
                     enable_workflows=self._workflow_worker is not None,
                     enable_local_activities=self._activity_worker is not None
                     and self._workflow_worker is not None,
-                    enable_remote_activities=self._activity_worker is not None
+                    enable_remote_activities=bool(config.get("activities"))
                     and not config.get("no_remote_activities"),
                     enable_nexus=self._nexus_worker is not None,
                 ),
@@ -718,42 +732,6 @@ class Worker:
                 ),
             ),
         )
-
-    def _eviction_hook(
-        self,
-    ) -> (
-        Callable[
-            [str, temporalio.bridge.proto.workflow_activation.RemoveFromCache], None
-        ]
-        | None
-    ):
-        plugins = [
-            plugin
-            for plugin in self._plugins
-            if type(plugin).on_workflow_evicted is not Plugin.on_workflow_evicted
-        ]
-        if not plugins:
-            return None
-        ending = temporalio.bridge.proto.workflow_activation.RemoveFromCache.EvictionReason.WORKFLOW_EXECUTION_ENDING
-
-        def on_evicted(
-            run_id: str,
-            job: temporalio.bridge.proto.workflow_activation.RemoveFromCache,
-        ) -> None:
-            input = WorkflowEvictedInput(
-                run_id=run_id, execution_ending=job.reason == ending
-            )
-            for plugin in plugins:
-                try:
-                    plugin.on_workflow_evicted(input)
-                except Exception:
-                    logger.exception(
-                        "Plugin %s failed on the eviction of run %s",
-                        plugin.name(),
-                        run_id,
-                    )
-
-        return on_evicted
 
     def config(self, *, active_config: bool = False) -> WorkerConfig:
         """Config, as a dictionary, used to create this worker.
@@ -1005,10 +983,7 @@ class Worker:
                 await self.run()
             except BaseException as err:
                 self._async_context_run_exception = err
-                # After __aexit__ starts, the caller is past the block, so a cancel would hit
-                # its later awaits.
-                if not self._async_context_exiting:
-                    self._async_context_inner_task.cancel()  # type: ignore[union-attr]
+                self._async_context_inner_task.cancel()  # type: ignore[union-attr]
 
         self._async_context_run_task = asyncio.create_task(run())
         return self
@@ -1023,20 +998,8 @@ class Worker:
         if not self._async_context_run_task:
             raise RuntimeError("Never started")
         await self.shutdown()
-        # Plugins can run cleanup code after shutdown. Wait for that code instead of cancelling it.
-        self._async_context_exiting = True
-        run_task = self._async_context_run_task
-        timeout = self._config.get("plugin_shutdown_timeout", timedelta(seconds=60))
-        try:
-            # wait() doesn't raise for the task's own outcome, only when this call is cancelled.
-            await asyncio.wait(
-                [run_task], timeout=timeout.total_seconds() if timeout else None
-            )
-        except asyncio.CancelledError:
-            run_task.cancel()
-            raise
-        if not run_task.done():
-            run_task.cancel()
+        # Cancel our run task
+        self._async_context_run_task.cancel()
         # Only re-raise our exception if present and exc_type is cancel
         if exc_type is asyncio.CancelledError and self._async_context_run_exception:
             raise self._async_context_run_exception
@@ -1076,7 +1039,6 @@ class WorkerConfig(TypedDict, total=False):
     max_task_queue_activities_per_second: float | None
     max_eager_activity_reservations_per_workflow_task: int
     graceful_shutdown_timeout: timedelta
-    plugin_shutdown_timeout: timedelta | None
     workflow_failure_exception_types: Sequence[type[BaseException]]
     shared_state_manager: SharedStateManager | None
     debug_mode: bool

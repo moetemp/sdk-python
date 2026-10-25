@@ -3,28 +3,26 @@ from datetime import timedelta
 
 import pydantic
 
-from temporalio import activity, workflow
+from temporalio import activity, common, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.helpers import new_worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 class CallModelInput(pydantic.BaseModel):
     prompt: str
-    stream: streams.ActivityStream[Events]
+    stream: common.ActivityStream[Events]
 
 
 class TurnResult(pydantic.BaseModel):
     text: str
-    stream: streams.ClientStream[Events]
+    stream: common.ClientStream[Events]
 
 
 @activity.defn
@@ -37,22 +35,23 @@ async def call_model(input: CallModelInput) -> int:
 class TurnWorkflow:
     @workflow.run
     async def run(self, prompt: str) -> TurnResult:
-        stream = await stream_workflow.create_stream(Events)
+        stream = await workflow.create_stream(Events)
         await workflow.execute_activity(
             call_model,
             CallModelInput(
-                prompt=prompt, stream=streams.ActivityStream.from_handle(stream)
+                prompt=prompt, stream=common.ActivityStream.from_handle(stream)
             ),
             start_to_close_timeout=timedelta(seconds=30),
         )
+        await stream.close(result=prompt.upper())
         return TurnResult(
-            text=prompt.upper(), stream=streams.ClientStream.from_handle(stream)
+            text=prompt.upper(), stream=common.ClientStream.from_handle(stream)
         )
 
 
 async def test_handles_in_models_round_trip_on_the_memory_store(client: Client):
     config = client.config()
-    config["plugins"] = [MemoryStreamPlugin()]
+    config["stream_backends"] = [MemoryStreamBackend(default=True)]
     config["data_converter"] = pydantic_data_converter
     client = Client(**config)
     async with new_worker(client, TurnWorkflow, activities=[call_model]) as worker:
@@ -67,7 +66,7 @@ async def test_handles_in_models_round_trip_on_the_memory_store(client: Client):
     assert result.stream.workflow_id == handle.id
     assert result.stream.first_execution_run_id == handle.first_execution_run_id
     assert result.stream.backend == "memory"
-    stream = streams.StreamClient(client).get_handle(Events, id=result.stream.id)
+    stream = client.stream(Events, id=result.stream.id)
     items = [item async for item in stream.subscribe()]
-    assert [i.data for i in items if isinstance(i, streams.Record)] == ["hi", "there"]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result is not None
+    assert [i.data for i in items if isinstance(i, common.Record)] == ["hi", "there"]
+    assert isinstance(items[-1], common.Closed) and items[-1].result is not None

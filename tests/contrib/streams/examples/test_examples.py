@@ -1,14 +1,17 @@
-"""Runs each example end to end on the memory Store and on Redis, so none goes stale."""
+"""Runs each example end to end, so a broken one fails.
+
+The Brook examples run on the memory Store, on Redis, and on the native server when
+TEMPORAL_STREAMS_NATIVE_TARGET is set.
+"""
 
 import uuid
 
 import pytest
 
+from temporalio import common
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.contrib.streams.conftest import NATIVE_NAMESPACE, NATIVE_TARGET
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
@@ -16,6 +19,7 @@ from tests.contrib.streams.examples import (
     client_creates_stream,
     migrate_redis_to_native,
     resume_from_offset,
+    standalone_activity_stream,
     turn_scoped_stream,
     two_backends,
     ui_backend_reads,
@@ -47,19 +51,19 @@ async def test_resume_from_offset(stream_client: Client):
     )
 
 
-async def test_client_creates_stream(stream_client: Client):
-    turns = await client_creates_stream.main(stream_client, task_queue())
+async def test_client_creates_stream(redis_client: Client):
+    turns = await client_creates_stream.main(redis_client, task_queue())
     assert [turn.kind for turn in turns] == ["model", "last"]
 
 
 async def test_agent_publishes_turns(stream_client: Client):
     items = await agent_publishes_turns.main(stream_client, task_queue())
-    data = [item.data for item in items if isinstance(item, streams.Record)]
+    data = [item.data for item in items if isinstance(item, common.Record)]
     Turn = agent_publishes_turns.Turn
     assert data == [Turn("model"), "find", "it", Turn("model"), "search", "result"] + [
         Turn("done", "the answer")
     ]
-    assert isinstance(items[-1], streams.Closed) and items[-1].result == "the answer"
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "the answer"
 
 
 async def test_activity_streams_tokens(stream_client: Client):
@@ -101,62 +105,48 @@ async def test_worker_setup_on_redis(client: Client, redis_url: str):
     assert await worker_setup.create_on_second_backend(migrating) == "redis-b"
 
 
-# The Jetty v2 examples run with a native stand-in, a memory Store with the backend name
-# `native`, and on a server with the Stream service when TEMPORAL_STREAMS_NATIVE_TARGET is set.
-LANES = ["memory", "redis", "native"]
-
-
-def lane_plugins(
-    lane: str, request: pytest.FixtureRequest
-) -> tuple[streams.StreamPlugin, streams.StreamPlugin]:
-    """The plugins of a lane: one named `redis` and one named `native`."""
-    if lane == "memory":
-        return MemoryStreamPlugin(name="redis", default=True), MemoryStreamPlugin(
-            name="native"
-        )
-    if lane == "native" and not NATIVE_TARGET:
-        pytest.skip(
-            "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
-        )
-    redis_url = request.getfixturevalue("redis_url")
-    redis = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True)
-    if lane == "redis":
-        return redis, MemoryStreamPlugin(name="native")
-    return redis, NativeStreamPlugin()
-
-
-async def lane_client(
-    lane: str, client: Client, plugins: list[streams.StreamPlugin]
-) -> Client:
-    if lane != "native":
-        config = client.config()
-        config["plugins"] = plugins
-        return Client(**config)
+# The Workflow reader runs on the memory Store, Redis or native. The other Jetty v2 examples need
+# native and a Store named `redis`, so they run only when TEMPORAL_STREAMS_NATIVE_TARGET is set.
+async def native_server(*backends: common.StreamBackend) -> Client:
     if not NATIVE_TARGET:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
     return await Client.connect(
-        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=plugins
+        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, stream_backends=backends
     )
 
 
-@pytest.mark.parametrize("lane", LANES)
-async def test_two_backends(lane: str, client: Client, request: pytest.FixtureRequest):
-    two = await lane_client(lane, client, list(lane_plugins(lane, request)))
+def redis_stand_in(
+    lane: str, request: pytest.FixtureRequest, *, default: bool = False
+) -> common.StreamBackend:
+    if lane == "memory":
+        return MemoryStreamBackend(name="redis", default=default)
+    redis_url = request.getfixturevalue("redis_url")
+    return RedisStreamBackend(
+        redis_url, key_prefix=f"t-{uuid.uuid4()}", default=default
+    )
+
+
+@pytest.mark.parametrize("lane", ["memory", "redis"])
+async def test_two_backends(lane: str, request: pytest.FixtureRequest):
+    two = await native_server(redis_stand_in(lane, request))
     assert await two_backends.main(two, task_queue()) == {
         "audit": ["started", "summarized"],
         "live": ["hello", "there", "summary"],
     }
 
 
-@pytest.mark.parametrize("lane", LANES)
+@pytest.mark.parametrize("lane", ["memory", "redis", "native"])
 async def test_workflow_reader(
     lane: str, client: Client, request: pytest.FixtureRequest
 ):
-    # Each lane reads from one backend: the memory Store, Redis or the server.
-    plugin = {"memory": 0, "redis": 0, "native": 1}[lane]
-    one = await lane_client(lane, client, [lane_plugins(lane, request)[plugin]])
+    if lane == "native":
+        one = await native_server()
+    else:
+        config = client.config()
+        config["stream_backends"] = [redis_stand_in(lane, request, default=True)]
+        one = Client(**config)
     assert await workflow_reader.main(one, task_queue()) == [
         "find",
         "the",
@@ -165,16 +155,22 @@ async def test_workflow_reader(
     ]
 
 
-@pytest.mark.parametrize("lane", LANES)
-async def test_migrate_redis_to_native(
-    lane: str, client: Client, request: pytest.FixtureRequest
-):
-    redis, native = lane_plugins(lane, request)
-    before = await lane_client(lane, client, [redis])
-    during = await lane_client(lane, client, [redis, native])
-    assert await migrate_redis_to_native.main(before, during, task_queue()) == [
+@pytest.mark.parametrize("lane", ["memory", "redis"])
+async def test_migrate_redis_to_native(lane: str, request: pytest.FixtureRequest):
+    moving = await native_server(redis_stand_in(lane, request, default=True))
+    assert await migrate_redis_to_native.main(moving, task_queue()) == [
         "redis: hello",
         "redis: old chat goes on",
         "native: hello",
         "native: new chat",
+    ]
+
+
+async def test_standalone_activity_stream():
+    native = await native_server()
+    assert await standalone_activity_stream.main(native, task_queue()) == [
+        "find",
+        "the",
+        "answer",
+        "activity said FIND THE ANSWER",
     ]

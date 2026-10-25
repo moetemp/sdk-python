@@ -10,10 +10,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
+from temporalio.contrib import stream as redis
 from temporalio.worker import Worker
 
 
@@ -23,16 +22,16 @@ class Turn:
     text: str = ""
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
+    turns = common.topic(Turn)
 
 
 @workflow.defn
 class Chat:
     @workflow.run
-    async def run(self, stream: stream_workflow.WorkflowStream[Events]) -> None:
-        # The Workflow only writes. The client, or auto-close, closes the Stream.
+    async def run(self, stream: common.WorkflowStream[Events]) -> None:
+        # The Workflow only writes. The client closes the Stream.
         await stream.topic(Events.turns).publish(
             Turn("model", "hi"), Turn("last", "bye")
         )
@@ -42,21 +41,21 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
     async with Worker(client, task_queue=task_queue, workflows=[Chat]):
         turns = []
         # The block closes the Stream at its end, or with the error that ends it.
-        async with streams.StreamClient(client).create(
+        async with redis.create(
+            client,
             Events,
             id=f"chat-{uuid.uuid4()}",
             retention=timedelta(days=1),
-            auto_close=timedelta(hours=1),
         ) as chat_stream:
             await client.start_workflow(
                 Chat.run,
                 # A Stream is data, so the Workflow gets it as an argument.
-                stream_workflow.WorkflowStream.from_handle(chat_stream),
+                common.WorkflowStream.from_handle(chat_stream),
                 id=f"chat-{uuid.uuid4()}",
                 task_queue=task_queue,
             )
             async for item in chat_stream.subscribe():
-                if not isinstance(item, streams.Record):
+                if not isinstance(item, common.Record):
                     continue
                 turns.append(item.data)
                 if item.data.kind == "last":

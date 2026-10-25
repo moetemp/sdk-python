@@ -512,6 +512,18 @@ def test_transfer_type_values_nested_in_json():
     assert decoded.proto == TemporalTransferTypeValueWithoutHint("c")
 
 
+def test_transfer_type_dataclass_in_a_top_level_list_keeps_its_fields():
+    # The decode of a dataclass inside a JSON value reads its fields, so the encode writes them.
+    converter = DataConverter.default.payload_converter
+    value = [TemporalTransferTypeValueWithoutHint("c")]
+    payload = converter.to_payload(value)
+    assert json.loads(payload.data) == [{"value": "c"}]
+    decoded = converter.from_payload(
+        payload, list[TemporalTransferTypeValueWithoutHint]
+    )
+    assert decoded == value
+
+
 def test_transfer_type_convertible_rejects_existing_converter():
     with pytest.raises(TypeError, match="already has a transfer type converter"):
         transfer_type_convertible(TemporalTransferTypeValueConverter)(

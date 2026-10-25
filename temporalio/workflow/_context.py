@@ -136,10 +136,6 @@ class Info:
 
     workflow_type: str
 
-    execution_expiration_time: datetime | None = None
-    """When the execution timeout of the run chain passes, across retries and continue-as-new.
-    None when the chain has no execution timeout."""
-
     def _logger_details(self) -> Mapping[str, Any]:
         return {
             # TODO(cretz): worker ID?

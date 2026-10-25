@@ -1,14 +1,17 @@
 import json
+import subprocess
+import sys
+import types
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import pydantic
 import pytest
 
+from temporalio import common
 from temporalio.common import RawValue
-from temporalio.contrib import streams
+from temporalio.common._streams._defn import definition_of
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.contrib.streams._defn import definition_of
 from temporalio.converter import DataConverter
 
 E = TypeVar("E")
@@ -19,19 +22,19 @@ class Turn:
     kind: str
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    turns = streams.topic(Turn)
-    tokens = streams.topic(str)
-    raw = streams.topic(RawValue, name="raw-values")
+    turns = common.topic(Turn)
+    tokens = common.topic(str)
+    raw = common.topic(RawValue, name="raw-values")
 
 
-@streams.defn
+@common.defn
 class Index:
-    turns = streams.topic(int)
+    turns = common.topic(int)
 
 
-class PlainStream(streams.StreamHandle[E]):
+class PlainStream(common.StreamHandle[E]):
     pass
 
 
@@ -47,19 +50,19 @@ OWNED = PlainStream(
 def test_definition_rejects_two_topics_of_one_name():
     with pytest.raises(ValueError, match="two Topics named t"):
 
-        @streams.defn
+        @common.defn
         class Twice:  # pyright: ignore[reportUnusedClass]
-            a = streams.topic(int, name="t")
-            b = streams.topic(str, name="t")
+            a = common.topic(int, name="t")
+            b = common.topic(str, name="t")
 
 
 def test_subclass_topic_replaces_the_base_topic():
     class Base:
-        turns = streams.topic(int)
+        turns = common.topic(int)
 
-    @streams.defn
+    @common.defn
     class Sub(Base):
-        turns = streams.topic(str)
+        turns = common.topic(str)
 
     assert definition_of(Sub).topics["turns"].type is str
 
@@ -73,10 +76,10 @@ def test_topic_of_the_definition_keeps_its_type():
     assert OWNED._topic_spec(Events.turns, None) == ("turns", Turn)
     assert OWNED._topic_spec("tokens", None) == ("tokens", str)
     assert OWNED._topic_spec("custom", Turn) == ("custom", Turn)
-    with pytest.raises(streams.StreamError, match="has no Topic turns") as err:
+    with pytest.raises(common.StreamError, match="has no Topic turns") as err:
         OWNED._topic_spec(Index.turns, None)
     assert err.value.reason == "unknown_topic"
-    with pytest.raises(streams.StreamError, match="Pass type="):
+    with pytest.raises(common.StreamError, match="Pass type="):
         OWNED._topic_spec("custom", None)
     with pytest.raises(TypeError, match="has the type"):
         OWNED._topic_spec("tokens", int)
@@ -106,7 +109,7 @@ def test_type_hint_picks_the_class_and_the_definition():
     bare = converter.from_payload(payload, PlainStream)
     assert bare.definition is None and bare.backend == "redis"
     with pytest.raises(Exception, match="handle type of its context"):
-        converter.from_payload(payload, streams.StreamHandle)
+        converter.from_payload(payload, common.StreamHandle)
 
 
 @dataclass
@@ -150,3 +153,32 @@ def test_any_type_argument_has_no_definition():
     decoded = converter.from_payload(converter.to_payload(OWNED), PlainStream[Any])
     assert type(decoded) is PlainStream and decoded.definition is None
     assert decoded.id == OWNED.id
+
+
+def test_end_type_is_public():
+    # subscribe takes offset: int | End | None, so the type of END is a public name.
+    assert isinstance(common.END, common.End) and "End" in common.__all__
+
+
+def test_temporalio_common_exports_the_streams_api():
+    # temporalio.common imports the Stream names on first use. Each is the private package's.
+    import temporalio.common._streams as streams_api
+
+    names = {
+        name
+        for name, value in vars(streams_api).items()
+        if not name.startswith("_") and not isinstance(value, types.ModuleType)
+    }
+    assert names == common._STREAM_NAMES and names <= set(common.__all__)
+    for name in common._STREAM_NAMES:
+        assert getattr(common, name) is getattr(streams_api, name)
+
+
+def test_import_of_temporalio_common_loads_no_stream_code():
+    # The Stream modules import temporalio.client and temporalio.workflow, which import
+    # temporalio.common.
+    code = "import sys, temporalio.common; print('temporalio.common._streams' in sys.modules)"
+    loaded = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout
+    assert loaded.strip() == "False"

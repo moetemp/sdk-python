@@ -1,4 +1,4 @@
-"""An in-memory stand-in for the temporalio-streams runtime, for facade tests."""
+"""An in-memory fake of the temporalio-streams runtime, for the facade tests."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ import asyncio
 
 import temporalio.api.streamservice.v1 as stream_pb
 from temporalio.bridge.streams import StreamCallError
-from temporalio.contrib.streams.proto import v1 as ext_pb
+from temporalio.client import Client
+from temporalio.common import StreamBackend
+from temporalio.common._streams._backend import _ExtensionCalls
+from temporalio.common._streams.proto import v1 as ext_pb
 from temporalio.service import RPCStatusCode
 
 
@@ -146,3 +149,27 @@ class FakeExtension:
                 await asyncio.wait_for(stream.changed.wait(), left)
             except asyncio.TimeoutError:
                 pass
+
+
+class _FakeBackend(StreamBackend):
+    # The fake has Redis's rules, so the Redis functions accept it.
+    _kind = "redis"
+
+    def __init__(self, calls: _ExtensionCalls) -> None:
+        super().__init__("fake-streams", backend_name="fake", default=True)
+        self._calls = calls
+
+    def _backend_for(
+        self,
+        client: Client,  # pyright: ignore[reportUnusedParameter]
+    ) -> _ExtensionCalls:
+        return self._calls
+
+
+def fake_client(client: Client) -> tuple[Client, FakeExtension]:
+    """A copy of ``client`` whose one Stream backend, ``fake``, is a fake runtime."""
+    extension = FakeExtension()
+    backend = _FakeBackend(_ExtensionCalls(extension))
+    config = client.config()
+    config["stream_backends"] = [backend]
+    return Client(**config), extension

@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Concatenate,
+    TypeVar,
     cast,
     overload,
 )
@@ -110,8 +111,17 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
+    from temporalio.common._streams import (
+        ClientStream,
+        Creating,
+        StreamBackend,
+        StreamHandle,
+    )
+
     from ._interceptor import Interceptor
     from ._plugin import Plugin
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 class Client:
@@ -156,6 +166,7 @@ class Client:
         grpc_compression: GrpcCompression = GrpcCompression.GZIP,
         payload_limits: PayloadLimitsConfig = PayloadLimitsConfig(),
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ) -> Self:
         """Connect to a Temporal server.
 
@@ -225,6 +236,15 @@ class Client:
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
+            stream_backends: The Stream backends of this client and its Workers, such as
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. The native backend
+                needs no registration. Names must be unique. With more than one backend,
+                exactly one must have ``default=True``. With none marked, the default is
+                ``native``. See
+                :py:class:`temporalio.common.StreamBackend`.
+
+                .. warning::
+                    This API is experimental.
         """
         connect_config = temporalio.service.ConnectConfig(
             target_host=target_host,
@@ -262,6 +282,7 @@ class Client:
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
             plugins=plugins,
+            stream_backends=stream_backends,
         )
 
     def __init__(
@@ -275,6 +296,7 @@ class Client:
         default_workflow_query_reject_condition: None
         | (temporalio.common.QueryRejectCondition) = None,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ):
         """Create a Temporal client from a service client.
 
@@ -289,11 +311,17 @@ class Client:
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
+            stream_backends=list(stream_backends),
         )
         self._initial_config = config.copy()
 
         for plugin in plugins:
             config = plugin.configure_client(config)
+        if config.get("stream_backends"):
+            # Only a client with Stream backends loads the Streams package.
+            from temporalio.common._streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_client(config)
 
         self._init_from_config(config)
 
@@ -892,6 +920,80 @@ class Client:
             result_run_id=run_id,
             first_execution_run_id=first_execution_run_id,
             result_type=result_type,
+        )
+
+    def stream(
+        self,
+        definition: type[_StreamDefinitionT],
+        *,
+        id: str | None = None,
+        stream: StreamHandle[Any] | None = None,
+        backend: str | None = None,
+    ) -> ClientStream[_StreamDefinitionT]:
+        """Get a Stream by its id, or from a handle that came in data, such as in a Record.
+
+        This method makes no call. To create a Stream that the client owns, use
+        :py:meth:`create_stream`.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class.
+            id: The Stream id.
+            stream: A handle of the Stream, such as one in a Record. The result keeps its id,
+                owner and backend.
+            backend: The name of the backend. Defaults to the handle's backend, or else to the
+                registered backend with ``default=True``, or else to ``native``.
+
+        Raises:
+            StreamConfigError: The client has no backend with that name.
+            TypeError: Neither or both of ``id`` and ``stream`` are given.
+            ValueError: The id is empty, or ``backend`` is not the handle's backend.
+        """
+        from temporalio.common._streams import _stream_client
+
+        return _stream_client.client_stream(
+            self, definition, id=id, stream=stream, backend=backend
+        )
+
+    def create_stream(
+        self,
+        definition: type[_StreamDefinitionT],
+        *,
+        id: str,
+        retention: timedelta | None = None,
+        backend: str | None = None,
+    ) -> Creating[ClientStream[_StreamDefinitionT]]:
+        """Create a Stream that the client owns, so only a client can close it.
+
+        The call is idempotent for the same id and Retention. Await the call to get the handle,
+        or use it in ``async with``, which closes the Stream at the end of the block::
+
+            async with client.create_stream(Events, id="chat-1") as chat:
+                await chat.topic(Events.turns).publish(Turn("user", "hi"))
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class.
+            id: The Stream id, which the caller picks, as for a Workflow id.
+            retention: The age after which a Record is deleted. A closed Stream is kept for one
+                Retention after its close. Defaults to the backend's Retention.
+            backend: The name of the backend. Defaults to the registered backend with
+                ``default=True``, or else to ``native``.
+
+        Raises:
+            StreamConfigError: The client has no backend with that name. No call is made.
+            StreamClosedError: A Stream with that id was created and closed before.
+            StreamError: The Stream exists with a different Retention, with the reason
+                ``stream_already_exists``.
+        """
+        from temporalio.common._streams import _stream_client
+
+        return _stream_client.create(
+            self, definition, id=id, retention=retention, backend=backend
         )
 
     def get_workflow_handle_for(
@@ -3029,6 +3131,7 @@ class ClientConnectConfig(TypedDict, total=False):
     grpc_compression: GrpcCompression
     payload_limits: PayloadLimitsConfig
     header_codec_behavior: HeaderCodecBehavior
+    stream_backends: Sequence[StreamBackend]
 
 
 class ClientConfig(TypedDict, total=False):
@@ -3043,3 +3146,4 @@ class ClientConfig(TypedDict, total=False):
         temporalio.common.QueryRejectCondition | None
     ]
     header_codec_behavior: Required[HeaderCodecBehavior]
+    stream_backends: Required[Sequence[StreamBackend]]

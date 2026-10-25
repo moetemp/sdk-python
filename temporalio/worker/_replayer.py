@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
@@ -31,6 +32,9 @@ from ._workflow_instance import (
     _WorkflowLogicFlag,
 )
 from .workflow_sandbox import SandboxedWorkflowRunner
+
+if TYPE_CHECKING:
+    from temporalio.common import StreamBackend
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +60,21 @@ class Replayer:
         runtime: temporalio.runtime.Runtime | None = None,
         disable_safe_workflow_eviction: bool = False,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
+        stream_client: temporalio.client.Client | None = None,
     ) -> None:
         """Create a replayer to replay workflows from history.
 
         See :py:meth:`temporalio.worker.Worker.__init__` for a description of
         most of the arguments. Most of the same arguments need to be passed to
         the replayer that were passed to the worker when the workflow originally
-        ran.
+        ran. Pass ``stream_backends`` with the same backends as the Worker's
+        client, such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`.
+        The native backend needs no registration. A replay makes no Stream call,
+        except that it reads each page of a native Workflow read again. It reads
+        with the connection of ``stream_client``, a client of the server that
+        stores the Streams. It uses that client's backends if ``stream_backends``
+        is empty.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that
@@ -86,6 +98,8 @@ class Replayer:
             runtime=runtime,
             disable_safe_workflow_eviction=disable_safe_workflow_eviction,
             header_codec_behavior=header_codec_behavior,
+            stream_backends=list(stream_backends),
+            stream_client=stream_client,
         )
         self._initial_config = self._config.copy()
         self._default_workflow_logic_flags = set(_DEFAULT_ENABLED_WORKFLOW_LOGIC_FLAGS)
@@ -94,6 +108,11 @@ class Replayer:
         self.plugins = plugins
         for plugin in plugins:
             self._config = plugin.configure_replayer(self._config)
+        # A replay of Workflow code that uses Streams needs the native backend and the
+        # others of the Worker's client.
+        from temporalio.common._streams import _plugin as _stream_plugin
+
+        self._config = _stream_plugin.configure_replayer(self._config)
 
         # Validate workflows after plugin configuration
         if not self._config.get("workflows"):
@@ -247,9 +266,14 @@ class Replayer:
             runtime = (
                 self._config.get("runtime") or temporalio.runtime.Runtime.default()
             )
-            data_converter = (
+            from temporalio.common._streams import _plugin as _stream_plugin
+
+            # A native Stream read's marker holds positions, which the codec step turns back
+            # into the page.
+            data_converter = _stream_plugin.replayer_converter(
+                self._config,
                 self._config.get("data_converter")
-                or temporalio.converter.DataConverter.default
+                or temporalio.converter.DataConverter.default,
             )
             workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: bridge_worker,
@@ -433,6 +457,8 @@ class ReplayerConfig(TypedDict, total=False):
     runtime: temporalio.runtime.Runtime | None
     disable_safe_workflow_eviction: bool
     header_codec_behavior: HeaderCodecBehavior
+    stream_backends: Sequence[StreamBackend]
+    stream_client: temporalio.client.Client | None
 
 
 @dataclass(frozen=True)

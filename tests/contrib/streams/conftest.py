@@ -4,15 +4,14 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 
 import pytest
 
 from temporalio.client import Client
-from temporalio.contrib.streams import StreamPlugin
-from temporalio.contrib.streams.native import NativeStreamPlugin
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.common import StreamBackend
+from temporalio.contrib.stream import RedisStreamBackend
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 
 # Ports that other local services own.
 _RESERVED = {7333, 7861, 7931, 6431, 7101, 7102, 7103}
@@ -27,8 +26,8 @@ def _free_port() -> int:
             return port
 
 
-# One scratch server serves every test module, and each test takes its own key prefix. A run
-# that must use a known port gives its own server in TEMPORAL_STREAMS_REDIS_URL.
+# One scratch server serves every test module, and each test uses its own key prefix. To use a
+# known port, set TEMPORAL_STREAMS_REDIS_URL to your own server.
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
     given = os.environ.get("TEMPORAL_STREAMS_REDIS_URL")
@@ -56,32 +55,43 @@ def redis_url() -> Iterator[str]:
         process.wait()
 
 
-# A server that serves the Stream service, such as a dev server of moetemp/temporal with the
-# native Stream backend. The native lane runs only when it is set.
+# A server with the Stream service, such as a moetemp/temporal dev server with the native
+# Stream backend. The native lane runs only when this is set.
 NATIVE_TARGET = os.environ.get("TEMPORAL_STREAMS_NATIVE_TARGET", "")
 NATIVE_NAMESPACE = os.environ.get("TEMPORAL_STREAMS_NATIVE_NAMESPACE", "default")
 
 
-@pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
-async def stream_client(
-    client: Client, request: pytest.FixtureRequest
-) -> AsyncIterator[Client]:
-    # Every live test runs on the memory Store and on Redis, since both must keep one set of
-    # rules, and on the native server when one is given.
-    if request.param == "native":
-        yield await Client.connect(
-            NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
-        )
-        return
-    plugin: StreamPlugin
-    if request.param == "memory":
-        plugin = MemoryStreamPlugin()
+async def _brook_client(
+    client: Client, request: pytest.FixtureRequest, lane: str
+) -> Client:
+    # The memory Store or Redis, as the default, so a create with no backend name uses it.
+    backend: StreamBackend
+    if lane == "memory":
+        backend = MemoryStreamBackend(default=True)
     else:
         redis_url = request.getfixturevalue("redis_url")
-        plugin = RedisStreamPlugin(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+        backend = RedisStreamBackend(
+            redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True
+        )
     config = client.config()
-    config["plugins"] = [plugin]
-    yield Client(**config)
+    config["stream_backends"] = [backend]
+    return Client(**config)
+
+
+@pytest.fixture(params=["memory", "redis", *(["native"] if NATIVE_TARGET else [])])
+async def stream_client(client: Client, request: pytest.FixtureRequest) -> Client:
+    # Every live test runs on the memory Store, on Redis and, when one is given, on the native
+    # server. Every client has the native backend, the default when no backend has default=True.
+    if request.param == "native":
+        return await Client.connect(NATIVE_TARGET, namespace=NATIVE_NAMESPACE)
+    return await _brook_client(client, request, request.param)
+
+
+@pytest.fixture(params=["memory", "redis"])
+async def redis_client(client: Client, request: pytest.FixtureRequest) -> Client:
+    # A test of the Redis functions, such as temporalio.contrib.stream.create. The memory Store
+    # has the same rules.
+    return await _brook_client(client, request, request.param)
 
 
 @pytest.fixture
@@ -90,6 +100,4 @@ async def native_client() -> Client:
         pytest.skip(
             "TEMPORAL_STREAMS_NATIVE_TARGET names no server with the Stream service"
         )
-    return await Client.connect(
-        NATIVE_TARGET, namespace=NATIVE_NAMESPACE, plugins=[NativeStreamPlugin()]
-    )
+    return await Client.connect(NATIVE_TARGET, namespace=NATIVE_NAMESPACE)

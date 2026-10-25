@@ -1,26 +1,25 @@
 """Brook API proposal, "Worker setup".
 
-The Stream plugin goes on the client, and the Worker takes the client's plugins. Each plugin
-registers a backend name. Tests use ``MemoryStreamPlugin`` with no change to Workflow code.
-Sync Workflow code, such as ``@workflow.init``, uses the ``_nowait`` calls.
+Register the Stream backends on the client with ``stream_backends=``. The Worker uses the
+client's backends. Each backend registers a name. A create with no backend name uses the
+backend with ``default=True``. Tests use ``MemoryStreamBackend`` without changing Workflow code.
+Sync Workflow code, such as ``@workflow.init``, uses the ``_nowait`` functions.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from temporalio import workflow
+from temporalio import common, workflow
 from temporalio.client import Client
-from temporalio.contrib import streams
-from temporalio.contrib.streams import workflow as stream_workflow
-from temporalio.contrib.streams.redis import RedisStreamPlugin
-from temporalio.contrib.streams.testing import MemoryStreamPlugin
+from temporalio.contrib import stream as redis
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.worker import Worker
 
 
-@streams.defn(name="events")
+@common.defn(name="events")
 class Events:
-    tokens = streams.topic(str)
+    tokens = common.topic(str)
 
 
 @workflow.defn
@@ -28,36 +27,44 @@ class Greeter:
     @workflow.init
     def __init__(self, name: str) -> None:
         # The init can't await, so it creates and publishes with the _nowait calls.
-        self.stream = stream_workflow.create_stream_nowait(Events)
+        self.stream = workflow.create_stream_nowait(Events)
         self.stream.topic(Events.tokens).publish_nowait(f"hello {name}")
 
     @workflow.run
     async def run(self, name: str) -> str:
         await self.stream.topic(Events.tokens).publish(f"bye {name}")
+        await self.stream.close()
         return name
 
 
 async def connect_with_redis(target_host: str, redis_url: str) -> Client:
-    return await Client.connect(target_host, plugins=[RedisStreamPlugin(redis_url)])
+    # With no default=True, the default is native, and Workflow code would name Redis with
+    # redis.workflow.create_stream.
+    return await Client.connect(
+        target_host,
+        stream_backends=[redis.RedisStreamBackend(redis_url, default=True)],
+    )
 
 
 async def connect_for_tests(target_host: str) -> Client:
-    return await Client.connect(target_host, plugins=[MemoryStreamPlugin()])
+    return await Client.connect(
+        target_host, stream_backends=[MemoryStreamBackend(default=True)]
+    )
 
 
 async def connect_while_migrating(target_host: str, url_a: str, url_b: str) -> Client:
-    # Two backends during a move. Creates with no backend= go to the default one.
+    # Two backends during a migration. A create with no backend= uses the default one.
     return await Client.connect(
         target_host,
-        plugins=[
-            RedisStreamPlugin(url_a, name="redis-a", default=True),
-            RedisStreamPlugin(url_b, name="redis-b"),
+        stream_backends=[
+            redis.RedisStreamBackend(url_a, name="redis-a", default=True),
+            redis.RedisStreamBackend(url_b, name="redis-b"),
         ],
     )
 
 
 def run_worker(client: Client, task_queue: str) -> Worker:
-    # The Worker takes the client's plugins, so it needs no Stream setup of its own.
+    # The Worker uses the client's backends, so it needs no Stream setup of its own.
     return Worker(client, task_queue=task_queue, workflows=[Greeter])
 
 
@@ -67,16 +74,16 @@ async def main(client: Client, task_queue: str) -> list[str]:
             Greeter.run, "ada", id=f"greeter-{uuid.uuid4()}", task_queue=task_queue
         )
         await handle.result()
-    stream = streams.StreamClient(client).workflow_stream(handle, Events)
+    stream = handle.stream(Events)
     return [
         item.data
         async for item in stream.subscribe()
-        if isinstance(item, streams.Record)
+        if isinstance(item, common.Record)
     ]
 
 
 async def create_on_second_backend(client: Client) -> str | None:
-    stream = await streams.StreamClient(client).create(
-        Events, id=f"chat-{uuid.uuid4()}", backend="redis-b"
+    stream = await redis.create(
+        client, Events, id=f"chat-{uuid.uuid4()}", backend="redis-b"
     )
     return stream.backend

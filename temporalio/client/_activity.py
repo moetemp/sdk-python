@@ -57,8 +57,12 @@ from ._interceptor import (
 )
 
 if TYPE_CHECKING:
+    from temporalio.common import ClientStream
+
     from ._client import Client
     from ._interceptor import ListActivitiesInput
+
+_StreamDefinitionT = TypeVar("_StreamDefinitionT")
 
 
 class ActivityExecutionAsyncIterator:
@@ -1002,6 +1006,32 @@ class ActivityHandle(Generic[ReturnType]):
     def run_id(self) -> str | None:
         """Run ID of the activity."""
         return self._run_id
+
+    def stream(
+        self, definition: type[_StreamDefinitionT], *, backend: str | None = None
+    ) -> ClientStream[_StreamDefinitionT]:
+        """Get a Stream that this Standalone Activity created, by its definition.
+
+        This method builds the Stream id from the Activity id and run id, so it makes no call.
+        Only the native backend stores the Stream of a Standalone Activity, which
+        :py:func:`temporalio.activity.create_stream` creates.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            definition: The Stream definition class, with the same name as in the Activity's
+                create.
+            backend: The name of a native backend. Defaults to ``native``.
+
+        Raises:
+            StreamConfigError: The client has no backend with that name, or the backend isn't
+                native.
+            ValueError: The handle has no run id.
+        """
+        from temporalio.common._streams import _stream_client
+
+        return _stream_client.activity_stream(self, definition, backend=backend)
 
     async def result(
         self,

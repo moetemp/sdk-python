@@ -1,5 +1,5 @@
-//! The Stream runtime of the temporalio-streams crate, when this build links it. A Stream plugin
-//! builds one for each client from its config, and Python calls it by method name.
+//! Bindings to the Stream runtime of the temporalio-streams crate. A Stream plugin builds one
+//! runtime for each client from its config. Python calls it by method name.
 
 use pyo3::exceptions::PyException;
 #[cfg(feature = "streams")]
@@ -8,10 +8,10 @@ use pyo3::prelude::*;
 #[cfg(feature = "streams")]
 use crate::runtime;
 
-// Its args are the gRPC code, the message and the encoded details, as with `RPCError`.
+// The exception args are the gRPC code, the message and the encoded details, as in `RPCError`.
 pyo3::create_exception!(temporal_sdk_bridge, StreamCallError, PyException);
 
-/// The crate's runtime object. Python keeps it on the plugin for the client that it serves.
+/// The crate's runtime object. Python keeps it with the client that it serves.
 #[cfg(feature = "streams")]
 #[pyclass(frozen)]
 pub struct StreamRuntimeRef {
@@ -41,8 +41,8 @@ impl StreamRuntimeRef {
         })
     }
 
-    /// Releases one handle of a writer with no wait. It needs no runtime, so a finalizer of a
-    /// handle that Python drops can call it.
+    /// Releases one handle of a writer without waiting. It needs no Tokio runtime, so a Python
+    /// finalizer can call it.
     fn free_writer(&self, writer_id: u64) -> PyResult<()> {
         self.streams.free_writer(writer_id).map_err(call_error)
     }
@@ -64,7 +64,7 @@ pub fn new_stream_runtime(
 
     let runtime = runtime_ref.runtime.clone();
     runtime.assert_same_process("create a Stream runtime")?;
-    // The runtime may start tasks on the Tokio runtime that it lives on.
+    // Building the Stream runtime can spawn Tokio tasks, which need an entered Tokio runtime.
     let _guard = runtime.core.tokio_handle().enter();
     let meter = runtime.core.telemetry().get_temporal_metric_meter();
     let streams = if memory {
@@ -77,7 +77,7 @@ pub fn new_stream_runtime(
 }
 
 /// Builds the native runtime on a client's connection, from its encoded `NativeStreamConfig`.
-/// Each client gets its own, so a call goes on the connection of the client that makes it.
+/// Each client gets its own, so a call uses the connection of the client that makes it.
 #[cfg(feature = "streams")]
 pub fn new_native_stream_runtime(
     runtime_ref: &runtime::RuntimeRef,

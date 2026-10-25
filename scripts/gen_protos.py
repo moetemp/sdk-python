@@ -33,7 +33,7 @@ proto_paths.extend(additional_proto_dir.glob("**/*.proto"))
 
 api_out_dir = base_dir / "temporalio" / "api"
 sdk_out_dir = base_dir / "temporalio" / "bridge" / "proto"
-streams_out_dir = base_dir / "temporalio" / "contrib" / "streams" / "proto"
+streams_out_dir = base_dir / "temporalio" / "common" / "_streams" / "proto"
 
 py_fixes = [
     partial(re.compile(r"from temporal\.api\.").sub, r"from temporalio.api."),
@@ -53,11 +53,11 @@ py_fixes = [
     ),
     partial(
         re.compile(r"from temporal\.sdk\.streams\.").sub,
-        r"from temporalio.contrib.streams.proto.",
+        r"from temporalio.common._streams.proto.",
     ),
     partial(
         re.compile(r"'__module__' : 'temporal\.sdk\.streams\.").sub,
-        r"'__module__' : 'temporalio.contrib.streams.proto.",
+        r"'__module__' : 'temporalio.common._streams.proto.",
     ),
     partial(
         re.compile(r"'__module__' : 'temporal\.api\.").sub,
@@ -82,7 +82,7 @@ pyi_fixes = [
     partial(re.compile(r"temporal\.sdk\.core\.").sub, r"temporalio.bridge.proto."),
     partial(
         re.compile(r"temporal\.sdk\.streams\.").sub,
-        r"temporalio.contrib.streams.proto.",
+        r"temporalio.common._streams.proto.",
     ),
 ]
 
@@ -231,7 +231,7 @@ def generate_protos(output_dir: Path):
     for p in (output_dir / "temporal" / "sdk" / "core").iterdir():
         shutil.rmtree(sdk_out_dir / p.name, ignore_errors=True)
         p.replace(sdk_out_dir / p.name)
-    # The stream extension's own protos go with the contrib package that uses them
+    # Only the Streams package imports the stream extension protos
     streams_out_dir.mkdir(parents=True, exist_ok=True)
     for p in (output_dir / "temporal" / "sdk" / "streams").iterdir():
         shutil.rmtree(streams_out_dir / p.name, ignore_errors=True)
