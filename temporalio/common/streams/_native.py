@@ -200,6 +200,9 @@ class _ConnectionRuntime:
         self._streams: temporalio.bridge.streams.StreamRuntime | None = None
 
     async def call(self, method: str, input: bytes) -> bytes:
+        if self._streams is None and method == "CloseWriters":
+            # A runtime that no call built has no writer, so a shutdown makes no connection.
+            return ext_pb.CloseWritersResponse().SerializeToString()
         if self._streams is None:
             bridge_client = await _bridge_client(self._service)
             # Two first calls may both wait for the connection. One runtime serves both, so

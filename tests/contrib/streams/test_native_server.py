@@ -419,3 +419,5 @@ async def test_each_client_of_a_native_backend_calls_on_its_own_connection():
     _, calls = _plugin.client_backend(plain, None)
     assert cast(Any, calls)._runtime._service is plain.service_client
     assert _plugin.client_backend(plain, None)[1] is calls
+    # No call built these runtimes, so a shutdown connects to none of them.
+    await native.shutdown()
