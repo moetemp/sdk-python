@@ -239,6 +239,8 @@ privacy = [
   "HIDDEN:temporalio.worker.workflow_instance",
   "HIDDEN:temporalio.worker.workflow_sandbox.importer",
   "HIDDEN:temporalio.worker.workflow_sandbox.in_sandbox",
+  "HIDDEN:temporalio.common.streams.system",
+  "HIDDEN:temporalio.common.streams.writer_system",
   "HIDDEN:**.*_pb2*",
 ]
 project-name = "Temporal Python"
