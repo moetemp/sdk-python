@@ -134,13 +134,6 @@ _BY_REASON: dict[str, type[StreamError]] = {
 }
 
 
-# The details move to temporal.api.streamservice.v1. Both names carry the same message.
-_DETAILS_TYPES = (
-    "temporal.api.streamservice.v1.StreamErrorDetails",
-    StreamErrorDetails.DESCRIPTOR.full_name,
-)
-
-
 def from_call_error(err: Exception) -> StreamError:
     """Turn a failed call of the crate's runtime into the Stream error for its reason.
 
@@ -173,15 +166,4 @@ def from_activity_error(err: Exception) -> Exception:
     ):
         reason = str(cause.details[0]) if cause.details else ""
         return _BY_TYPE[cause.type](cause.message, reason=reason)
-    return err
-
-
-def from_rpc_error(err: temporalio.service.RPCError) -> Exception:
-    """The Stream error for a server failure with Stream error details, else ``err``."""
-    for detail in err.grpc_status.details:
-        if detail.type_url.rsplit("/", 1)[-1] in _DETAILS_TYPES:
-            reason = StreamErrorDetails.FromString(detail.value).reason
-            return _BY_REASON.get(reason, StreamError)(
-                err.message, reason=reason, code=err.status
-            )
     return err

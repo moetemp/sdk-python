@@ -149,3 +149,8 @@ def test_any_type_argument_has_no_definition():
     decoded = converter.from_payload(converter.to_payload(OWNED), PlainStream[Any])
     assert type(decoded) is PlainStream and decoded.definition is None
     assert decoded.id == OWNED.id
+
+
+def test_end_type_is_public():
+    # subscribe takes offset: int | End | None, so the type of END is a public name.
+    assert isinstance(streams.END, streams.End) and "End" in streams.__all__
