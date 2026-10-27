@@ -92,6 +92,30 @@ def defn(
 
 
 @dataclass(frozen=True)
+class WorkflowTaskAttempt:
+    """One attempt of a Workflow Task.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    started_event_id: int
+    """ID of the task's ``WorkflowTaskStarted`` event."""
+
+    attempt: int
+    """Attempt of the task."""
+
+    started_time: datetime | None
+    """When the server started the task. None if the server did not send it."""
+
+    previous_started_event_id: int = 0
+    """ID of the ``WorkflowTaskStarted`` event of the run's last completed task. 0 if none."""
+
+    failed_tasks: Sequence[int] = ()
+    """``WorkflowTaskStarted`` event IDs of the run's last 100 failed and timed out tasks."""
+
+
+@dataclass(frozen=True)
 class Info:
     """Information about the running activity.
 
@@ -140,6 +164,14 @@ class Info:
 
     activity_run_id: str | None = None
     """Run ID of this activity. None for workflow activities."""
+
+    workflow_task: WorkflowTaskAttempt | None = None
+    """For a local activity, the Workflow Task in which the Worker dispatched this execution.
+    Retries that the Worker runs in the same task have the same value. None for other activities.
+
+    .. warning::
+        This API is experimental.
+    """
 
     @property
     def in_workflow(self) -> bool:
