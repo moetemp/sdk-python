@@ -97,8 +97,8 @@ dev = [
 ]
 
 [tool.poe.tasks]
-build-develop = "uv run maturin develop --uv"
-build-develop-with-release = { cmd = "uv run maturin develop --release --uv" }
+build-develop = "uv run maturin develop --uv --features streams"
+build-develop-with-release = { cmd = "uv run maturin develop --release --uv --features streams" }
 # FIPS builds: swap the rustls stack onto aws-lc-rs FIPS mode (aws-lc-fips-sys), eliminating `ring`.
 build-develop-fips = { cmd = "uv run maturin develop --uv --no-default-features --features fips", env = { TEMPORALIO_FIPS = "1" } }
 build-wheel-fips = { cmd = "uv run maturin build --release --no-default-features --features fips", env = { TEMPORALIO_FIPS = "1" } }
@@ -163,18 +163,20 @@ filterwarnings = [
 before-all = "pip install protoc-wheel-0"
 build = "cp310-win_amd64 cp310-manylinux_x86_64 cp310-manylinux_aarch64 cp310-musllinux_x86_64 cp310-musllinux_aarch64 cp310-macosx_x86_64 cp310-macosx_arm64"
 build-verbosity = 1
+# The official wheels link the Stream runtime.
+environment = { MATURIN_PEP517_ARGS = "--features streams" }
 
 [tool.cibuildwheel.macos]
-environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12", MATURIN_PEP517_ARGS = "--features streams" }
 
 [tool.cibuildwheel.linux]
 before-all = "sh scripts/cibuildwheel_before_all_linux.sh"
 before-build = "sh scripts/cibuildwheel_before_build_linux.sh"
-environment = { PATH = "$PATH:$HOME/.cargo/bin", CARGO_NET_GIT_FETCH_WITH_CLI = "true" }
+environment = { PATH = "$PATH:$HOME/.cargo/bin", CARGO_NET_GIT_FETCH_WITH_CLI = "true", MATURIN_PEP517_ARGS = "--features streams" }
 
 [[tool.cibuildwheel.overrides]]
 select = "*musllinux*"
-environment = { PATH = "$PATH:$HOME/.cargo/bin", CARGO_NET_GIT_FETCH_WITH_CLI = "true", RUSTFLAGS = "-C target-feature=-crt-static" }
+environment = { PATH = "$PATH:$HOME/.cargo/bin", CARGO_NET_GIT_FETCH_WITH_CLI = "true", RUSTFLAGS = "-C target-feature=-crt-static", MATURIN_PEP517_ARGS = "--features streams" }
 
 [tool.mypy]
 ignore_missing_imports = true
@@ -183,6 +185,8 @@ exclude = [
   'temporalio/api',
   'temporalio/bridge/proto',
   'temporalio/nexus/system/workflow_service',
+  # The Core submodule, which has a script of the crate's test vectors
+  'temporalio/bridge/sdk-core',
 ]
 
 [[tool.mypy.overrides]]
@@ -192,7 +196,7 @@ ignore_errors = true
 [tool.pydocstyle]
 convention = "google"
 # https://github.com/PyCQA/pydocstyle/issues/363#issuecomment-625563088
-match_dir = "^(?!(docs|scripts|tests|api|proto|system|_support|notifications|\\.)).*"
+match_dir = "^(?!(docs|scripts|tests|api|proto|system|_support|notifications|sdk-core|\\.)).*"
 add_ignore = [
   # We like to wrap at a certain number of chars, even long summary sentences.
   # https://github.com/PyCQA/pydocstyle/issues/184
@@ -259,10 +263,14 @@ exclude = [
   "temporalio/bridge/proto",
   "temporalio/bridge/_visitor.py",
   "tests/worker/workflow_sandbox/testmodules/proto",
+  # The Core submodule, which has a script of the crate's test vectors
+  "temporalio/bridge/sdk-core",
 ]
 
 [tool.ruff]
 target-version = "py310"
+# The Core submodule, which has a script of the crate's test vectors
+extend-exclude = ["temporalio/bridge/sdk-core"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
