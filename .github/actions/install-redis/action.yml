@@ -1,0 +1,17 @@
+name: Install Redis
+description: Install redis-server for the Stream tests on Linux and macOS, and make their Redis lane fail without it.
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends redis-server
+    - if: runner.os == 'macOS'
+      shell: bash
+      run: brew install redis
+    # Redis has no official Windows build, so the Redis lane skips there.
+    - if: runner.os != 'Windows'
+      shell: bash
+      run: echo "TEMPORAL_STREAMS_REQUIRE_REDIS=1" >> "$GITHUB_ENV"

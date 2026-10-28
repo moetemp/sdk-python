@@ -238,8 +238,9 @@ class Client:
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
-            stream_backends: The Stream backends of this client and its Workers. Names must be
-                unique. With more than one backend, exactly one must have ``default=True``. See
+            stream_backends: The Stream backends of this client and its Workers, such as
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names must be unique.
+                With more than one backend, exactly one must have ``default=True``. See
                 :py:class:`temporalio.common.StreamBackend`.
 
                 .. warning::
