@@ -90,9 +90,10 @@ class ClientStream(StreamHandle[T]):
     :py:meth:`temporalio.client.Client.stream`. A ``ClientStream`` that a query of a client
     returns, such as a Workflow's ``stream`` query, uses that client.
 
-    Each publish writes before it returns. All handles of one client and Stream write as one
-    Producer. :py:meth:`producer` returns a handle that writes as a named Producer. Use a handle
-    in ``async with`` to close the Stream at the end of the block.
+    Each publish writes before it returns. Use :py:class:`BufferedPublisher` to batch. All
+    handles of one client and Stream write as one Producer. :py:meth:`producer` returns a
+    handle that writes as a named Producer. Use a handle in ``async with`` to close the Stream
+    at the end of the block.
 
     .. warning::
         This API is experimental.

@@ -34,6 +34,12 @@ import temporalio.api.workflow.v1
 import temporalio.types
 
 if TYPE_CHECKING:
+    from temporalio.common._streams._activity_stream import (
+        ActivityStream,
+        SyncActivityStream,
+        SyncSubscription,
+    )
+    from temporalio.common._streams._buffered import BufferedPublisher
     from temporalio.common._streams._defn import StreamDefinition, defn
     from temporalio.common._streams._errors import (
         StreamClosedError,
@@ -70,7 +76,9 @@ if TYPE_CHECKING:
 __all__ = [
     "ActivityIDConflictPolicy",
     "ActivityIDReusePolicy",
+    "ActivityStream",
     "AutoUpgradeVersioningOverride",
+    "BufferedPublisher",
     "ClientStream",
     "CloseStatus",
     "Closed",
@@ -125,6 +133,8 @@ __all__ = [
     "StreamUnsupportedError",
     "Subscription",
     "Superseded",
+    "SyncActivityStream",
+    "SyncSubscription",
     "TypedSearchAttributes",
     "VersioningBehavior",
     "VersioningOverride",
@@ -1591,6 +1601,8 @@ class _CompositeEvent:  # pyright: ignore[reportUnusedClass]
 # so this module imports the Stream names on first use.
 _STREAM_NAMES = frozenset(
     [
+        "ActivityStream",
+        "BufferedPublisher",
         "ClientStream",
         "CloseStatus",
         "Closed",
@@ -1616,6 +1628,8 @@ _STREAM_NAMES = frozenset(
         "StreamUnsupportedError",
         "Subscription",
         "Superseded",
+        "SyncActivityStream",
+        "SyncSubscription",
         "WorkflowStream",
         "defn",
     ]
