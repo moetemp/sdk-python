@@ -159,9 +159,16 @@ def default_name(backends: Sequence[StreamBackend]) -> str:
 def configure_client(
     config: temporalio.client.ClientConfig,
 ) -> temporalio.client.ClientConfig:
-    """Check the client's backends, and apply the plugin configuration of each one."""
+    """Check the client's backends, and apply the plugin configuration of each one.
+
+    The client's query results bind each ``ClientStream`` in them to the client.
+    """
+    # The client Stream module imports this one.
+    from temporalio.common._streams._stream_client import BindQueryResults
+
     backends = check_backends(config.get("stream_backends", ()), "client")
     config["stream_backends"] = backends
+    config["interceptors"] = [*config.get("interceptors", []), BindQueryResults()]
     for backend in backends:
         config = backend._configure_client(config)
     return config
