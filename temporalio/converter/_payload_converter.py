@@ -110,6 +110,11 @@ def transfer_type_convertible(
 ) -> _TransferTypeConvertibleDecorator[ValueT, TransferTypeT]:
     """Decorate a class with a transfer type converter class.
 
+    The converter converts a value of the class to its transfer type at the top level of a
+    payload, and inside a JSON value such as a list item or a dataclass field. Inside a JSON
+    value, a dataclass is the exception. ``dataclasses.asdict`` writes it as its fields, and
+    the converter decodes it from them.
+
     .. warning::
         This API is experimental and subject to change.
     """
@@ -123,6 +128,21 @@ def _get_transfer_type_converter(
     if isinstance(converter, TransferTypeConverter):
         return converter
     return None
+
+
+def _nested_transfer_type_converter(
+    hint: object,
+) -> TransferTypeConverter[Any, Any] | None:
+    # The JSON converter calls this for each value that isn't a primitive, so the fastest check
+    # is first. A generic alias gives the attribute of its origin class.
+    if getattr(hint, _TRANSFER_TYPE_CONVERTER_ATTR, None) is None:
+        return None
+    origin = typing.get_origin(hint) or hint
+    # dataclasses.asdict writes a nested dataclass as its fields, so only a class that isn't a
+    # dataclass is converted there.
+    if not inspect.isclass(origin) or dataclasses.is_dataclass(origin):
+        return None
+    return _get_transfer_type_converter(origin)
 
 
 class PayloadConverter(ABC):
@@ -677,6 +697,13 @@ class AdvancedJSONEncoder(json.JSONEncoder):
         # Dataclass support
         if dataclasses.is_dataclass(o) and not isinstance(o, type):
             return dataclasses.asdict(o)
+        # Nested transfer type support
+        converter = _nested_transfer_type_converter(type(o))
+        if converter is not None:
+            value = converter.to_transfer_type(o)
+            if isinstance(value, google.protobuf.message.Message):
+                return google.protobuf.json_format.MessageToDict(value)
+            return value
         # Support for Pydantic v1's dict method
         dict_fn = getattr(o, "dict", None)
         if callable(dict_fn):
@@ -884,6 +911,20 @@ def value_to_type(
     supertype = getattr(hint, "__supertype__", None)
     if supertype:
         return value_to_type(supertype, value, custom_converters)
+
+    # Nested transfer type values, as AdvancedJSONEncoder writes them
+    converter = _nested_transfer_type_converter(hint)
+    if converter is not None:
+        transfer_type = converter.transfer_type
+        if inspect.isclass(transfer_type) and issubclass(
+            transfer_type, google.protobuf.message.Message
+        ):
+            value = google.protobuf.json_format.ParseDict(
+                value, transfer_type(), ignore_unknown_fields=True
+            )
+        elif transfer_type is not None:
+            value = value_to_type(transfer_type, value, custom_converters)
+        return converter.from_transfer_type(value, hint)
 
     # Load origin for other checks
     origin = getattr(hint, "__origin__", hint)
