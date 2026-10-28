@@ -110,6 +110,8 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
+    from temporalio.common import StreamBackend
+
     from ._interceptor import Interceptor
     from ._plugin import Plugin
 
@@ -156,6 +158,7 @@ class Client:
         grpc_compression: GrpcCompression = GrpcCompression.GZIP,
         payload_limits: PayloadLimitsConfig = PayloadLimitsConfig(),
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ) -> Self:
         """Connect to a Temporal server.
 
@@ -225,6 +228,12 @@ class Client:
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
+            stream_backends: The Stream backends of this client and its Workers. Names must be
+                unique. With more than one backend, exactly one must have ``default=True``. See
+                :py:class:`temporalio.common.StreamBackend`.
+
+                .. warning::
+                    This API is experimental.
         """
         connect_config = temporalio.service.ConnectConfig(
             target_host=target_host,
@@ -262,6 +271,7 @@ class Client:
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
             plugins=plugins,
+            stream_backends=stream_backends,
         )
 
     def __init__(
@@ -275,6 +285,7 @@ class Client:
         default_workflow_query_reject_condition: None
         | (temporalio.common.QueryRejectCondition) = None,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
+        stream_backends: Sequence[StreamBackend] = (),
     ):
         """Create a Temporal client from a service client.
 
@@ -289,11 +300,17 @@ class Client:
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
+            stream_backends=list(stream_backends),
         )
         self._initial_config = config.copy()
 
         for plugin in plugins:
             config = plugin.configure_client(config)
+        if config.get("stream_backends"):
+            # Only a client with Stream backends loads the Streams package.
+            from temporalio.common._streams import _plugin as _stream_plugin
+
+            config = _stream_plugin.configure_client(config)
 
         self._init_from_config(config)
 
@@ -3029,6 +3046,7 @@ class ClientConnectConfig(TypedDict, total=False):
     grpc_compression: GrpcCompression
     payload_limits: PayloadLimitsConfig
     header_codec_behavior: HeaderCodecBehavior
+    stream_backends: Sequence[StreamBackend]
 
 
 class ClientConfig(TypedDict, total=False):
@@ -3043,3 +3061,4 @@ class ClientConfig(TypedDict, total=False):
         temporalio.common.QueryRejectCondition | None
     ]
     header_codec_behavior: Required[HeaderCodecBehavior]
+    stream_backends: Required[Sequence[StreamBackend]]

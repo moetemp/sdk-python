@@ -24,6 +24,7 @@ from temporalio.common._streams._items import (
     Record,
     Superseded,
 )
+from temporalio.common._streams._plugin import StreamBackend
 
 __all__ = [
     "END",
@@ -35,6 +36,7 @@ __all__ = [
     "StreamClosedError",
     "StreamConfigError",
     "StreamDefinition",
+    "StreamBackend",
     "StreamError",
     "StreamExpiredError",
     "StreamFencedError",
