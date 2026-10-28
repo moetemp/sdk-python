@@ -27,6 +27,7 @@ from temporalio.common._streams._items import (
 from temporalio.common._streams._plugin import StreamBackend
 from temporalio.common._streams._reader import Subscription
 from temporalio.common._streams._stream_client import ClientStream
+from temporalio.common._streams._workflow import WorkflowStream
 
 __all__ = [
     "END",
@@ -54,5 +55,6 @@ __all__ = [
     "StreamUnsupportedError",
     "Subscription",
     "Superseded",
+    "WorkflowStream",
     "defn",
 ]

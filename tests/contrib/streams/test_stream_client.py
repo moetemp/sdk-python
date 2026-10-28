@@ -13,6 +13,7 @@ from temporalio.client import Client
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter, DefaultFailureConverter
 from temporalio.exceptions import ApplicationError
+from temporalio.worker import Replayer
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
@@ -89,6 +90,80 @@ async def test_query_result_binds_its_client_stream(client: Client):
     assert [item.data for item in items if isinstance(item, common.Record)] == [
         "from the query result"
     ]
+
+
+@workflow.defn
+class WriteToStream:
+    @workflow.run
+    async def run(self, stream: common.WorkflowStream[Turn]) -> None:
+        await stream.publish(Turn("workflow"))
+
+
+async def test_client_stream_takes_workflow_writes(stream_client: Client):
+    stream = await stream_client.create_stream(Turns, id=f"chat-{uuid.uuid4()}")
+    assert await stream.get_offset() == 0
+    first = await stream.publish(Turn("client"))
+    last = await stream.publish(Turn("a"), Turn("b"))
+    assert last > first
+    async with new_worker(stream_client, WriteToStream) as worker:
+        await stream_client.execute_workflow(
+            WriteToStream.run,
+            common.WorkflowStream.from_handle(stream),
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    await stream.close(result="bye")
+    items = [item async for item in stream.subscribe()]
+    data = [item.data for item in items if isinstance(item, common.Record)]
+    assert data == [Turn("client"), Turn("a"), Turn("b"), Turn("workflow")]
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "bye"
+
+    # Another handle of the same Stream reads it from an offset.
+    again = stream_client.stream(Turns, id=stream.id)
+    resumed = [
+        item.data
+        async for item in again.subscribe(offset=first + 1)
+        if isinstance(item, common.Record)
+    ]
+    assert resumed == [Turn("a"), Turn("b"), Turn("workflow")]
+
+
+@workflow.defn
+class Agent:
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        await workflow.sleep(timedelta(milliseconds=200))
+        stream = await workflow.create_stream(Tokens)
+        await stream.publish(*prompt.split())
+        await stream.close(result=prompt.upper())
+        return prompt.upper()
+
+    @workflow.query
+    def stream(self) -> common.WorkflowStream[str]:
+        # The handle needs no call, so a reader gets it before the create.
+        return workflow.stream_handle(Tokens)
+
+
+async def test_client_reads_a_workflow_stream(stream_client: Client):
+    async with new_worker(stream_client, Agent) as worker:
+        handle = await stream_client.start_workflow(
+            Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        stream = await handle.query(Agent.stream)
+        reader = await handle.query("stream", result_type=common.ClientStream[str])
+        # The Workflow creates its Stream later, so the read waits for the create.
+        items = [
+            item async for item in reader.subscribe(create_wait=timedelta(seconds=20))
+        ]
+    assert stream.id == reader.id
+    assert [item.data for item in items if isinstance(item, common.Record)] == [
+        "hi",
+        "there",
+    ]
+    assert isinstance(items[-1], common.Closed) and items[-1].result == "HI THERE"
+    assert reader.workflow_id == handle.id
+    with pytest.raises(common.StreamNotOwnerError):
+        await reader.close()
 
 
 async def test_async_with_closes_a_client_stream(stream_client: Client):
@@ -292,6 +367,15 @@ async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
     assert read._shown == {}
 
 
+async def test_empty_stream_id_raises_with_no_call(client: Client):
+    client, extension = fake_client(client)
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Turns, id="")
+    with pytest.raises(ValueError, match="id is empty"):
+        client.stream(Turns, stream=common.WorkflowStream(id=""))
+    assert not extension.namespaces
+
+
 async def test_create_of_an_expired_stream_raises(stream_client: Client):
     # An open client Stream expires one Retention after its last write.
     stream_id = f"expired-{uuid.uuid4()}"
@@ -334,6 +418,22 @@ async def test_clients_of_one_runtime_share_the_backend_calls(stream_client: Cli
     assert [item.data for item in items if isinstance(item, common.Record)] == [
         "from the other client"
     ]
+
+
+async def test_registration_rules(client: Client):
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(),
+        MemoryStreamBackend(name="b", default=True),
+    ]
+    two = Client(**config)
+    assert (await two.create_stream(Tokens, id="d-1")).backend == "b"
+    assert two.stream(Tokens, id="d-1").backend == "b"
+    # A Worker serves only one backend, and so does a Replayer.
+    with pytest.raises(common.StreamConfigError, match="one backend"):
+        new_worker(Client(**config), Agent)
+    with pytest.raises(common.StreamConfigError, match="one backend"):
+        Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):

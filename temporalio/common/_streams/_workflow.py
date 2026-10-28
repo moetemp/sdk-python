@@ -1,0 +1,755 @@
+"""Streams in Workflow code.
+
+Workflow code creates a Stream with :py:func:`temporalio.workflow.create_stream` and gets it
+again with :py:func:`temporalio.workflow.stream_handle`. A Stream that the Workflow receives as
+an argument works the same, such as a :py:class:`WorkflowStream` that a run passes on through
+continue-as-new.
+
+Each create and publish is a Local Activity. Each close is a command that the backend runs after
+the Workflow Task commits, and on Redis it's a regular Activity. So each one has a place in the
+run's commands. To add, remove or move one in a Workflow that has open runs, gate the change
+with ``workflow.patched``, or the replay of those runs fails as nondeterministic. Publishes that
+wait behind a write to the same Stream are sent as one Local Activity. If a task fails or the
+Worker crashes before the close commits, the Stream stays open for the task's retry.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Generator
+from dataclasses import dataclass, field
+from datetime import timedelta
+from types import TracebackType
+from typing import Any, NamedTuple, TypeVar
+
+import google.protobuf.message
+
+import temporalio.api.stream.v1 as stream_v1
+import temporalio.api.streamservice.v1 as stream_pb
+import temporalio.converter
+import temporalio.exceptions
+import temporalio.workflow
+from temporalio.api.enums.v1 import StreamErrorReason, StreamProducerKind
+from temporalio.common._streams import _errors, _ids
+from temporalio.common._streams._defn import StreamDefinition, definition_of
+from temporalio.common._streams._handle import (
+    Creating,
+    StreamHandle,
+    StreamOptions,
+    exit_failure,
+    workflow_owner,
+)
+from temporalio.common._streams._items import close_status
+from temporalio.common._streams.system import models
+
+T = TypeVar("T")
+
+# The create and the append are Local Activities, so History has only their results. The Redis
+# close is a regular Activity on the Workflow's task queue.
+CREATE_ACTIVITY = "__temporal_streams_create"
+APPEND_ACTIVITY = "__temporal_streams_append"
+CLOSE_ACTIVITY = "__temporal_streams_close"
+_WRITE_TIMEOUT = timedelta(seconds=30)
+# Limits of one merged append before the codec. Half of the Store's 4 MiB batch limit leaves room
+# for most codecs. The Local Activity splits a merge by call if the codec grows it past the limit.
+_MERGE_RECORDS = 1000
+_MERGE_BYTES = 2 * 1024 * 1024
+
+
+@dataclass
+class _RunStream:
+    # What this run knows about one Stream. Many handles can name it, so the state is keyed by id.
+    ref: models.StreamRef
+    closed: bool = False
+    # Set for a Stream that the run chain created, which continue-as-new passes on.
+    backend: str | None = None
+
+
+@dataclass
+class _Write:
+    # One Local Activity that writes to a Stream, and the calls that it answers. Each call has the
+    # Record count up to its own last Record, and its future.
+    activity: str
+    request: google.protobuf.message.Message
+    calls: list[tuple[int, asyncio.Future[int]]]
+    size: int = 0
+    started: bool = False
+
+    def take(self, request: google.protobuf.message.Message) -> bool:
+        # An append that waits behind the previous write merges the appends that come after it.
+        # So a burst of awaits costs two markers, not one for each await.
+        if self.started or not isinstance(request, stream_pb.AppendRecordsRequest):
+            return False
+        mine = self.request
+        if (
+            not isinstance(mine, stream_pb.AppendRecordsRequest)
+            or mine.stream != request.stream
+        ):
+            return False
+        size = sum(record.ByteSize() for record in request.records)
+        count = len(mine.records) + len(request.records)
+        if count > _MERGE_RECORDS or self.size + size > _MERGE_BYTES:
+            return False
+        mine.records.extend(request.records)
+        self.size += size
+        return True
+
+
+@dataclass
+class _RunState:
+    streams: dict[str, _RunStream] = field(default_factory=dict)
+    # The last write of each Stream. Each write waits for it, so writes keep their order.
+    tails: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    # The last write of each Stream that hasn't started, which later appends can join.
+    waiting: dict[str, _Write] = field(default_factory=dict)
+    # The Streams on which a retry run's first write withdrew the previous run's Records.
+    withdrawn: set[str] = field(default_factory=set)
+    # Whether the run created, bound or received a Stream. Only then do its Activities get a
+    # Producer key, so a run with no Stream adds nothing to History.
+    uses_streams: bool = False
+    # The async with blocks whose close waits for the run's outcome, with each block's failure.
+    deferred_closes: list[tuple[WorkflowStream[Any], BaseException | None]] = field(
+        default_factory=list
+    )
+    # The publishes that failed before a caller got the error. A caller can still get it, so
+    # the run's end checks them again.
+    failed_publishes: list[asyncio.Future[int]] = field(default_factory=list)
+
+    def stream(self, ref: models.StreamRef) -> _RunStream:
+        known = self.streams.get(ref.id)
+        if known is None:
+            known = _RunStream(ref)
+            self.streams[ref.id] = known
+        return known
+
+
+def _state() -> _RunState:
+    # Keep the state on the run, since its tasks refer to the run's loop and would keep a weak
+    # map entry alive.
+    runtime = temporalio.workflow._Runtime.current()
+    state = getattr(runtime, "_temporal_streams_state", None)
+    if state is None:
+        state = _RunState()
+        setattr(runtime, "_temporal_streams_state", state)
+    return state
+
+
+class WorkerBackend(NamedTuple):
+    """The Stream backend of the Worker that runs the Workflow."""
+
+    name: str
+    default: bool
+
+
+def _transport() -> Any:
+    # The run's outbound interceptor that the Worker's backend marks, or None.
+    outbound = getattr(temporalio.workflow._Runtime.current(), "_outbound", None)
+    while outbound is not None:
+        if getattr(outbound, "_temporal_stream_transport", False):
+            return outbound
+        outbound = getattr(outbound, "next", None)
+    return None
+
+
+def worker_backend() -> WorkerBackend | None:
+    """The Worker's backend, which marks the run's outbound interceptor, or None."""
+    outbound = _transport()
+    if outbound is None:
+        return None
+    return WorkerBackend(
+        getattr(outbound, "_temporal_stream_backend_name", ""),
+        getattr(outbound, "_temporal_stream_default", False),
+    )
+
+
+async def _close_in_workflow(request: stream_pb.CloseStreamRequest) -> int:
+    # The Worker's backend runs the close after the Workflow Task commits.
+    outbound = _transport()
+    if outbound is None:
+        raise no_worker_backend()
+    return await outbound._temporal_stream_backend._close_in_workflow(request)
+
+
+def no_worker_backend() -> _errors.StreamConfigError:
+    """The error of Workflow code on a Worker with no Stream backend."""
+    return _errors.StreamConfigError(
+        "No Stream backend is on the Worker. Register one on its client with "
+        "stream_backends=."
+    )
+
+
+def _check_backend(backend: str | None, action: str) -> str:
+    # These errors come from the Worker's config, not from History. So they fail the Workflow
+    # Task, and a Worker with the right config retries it.
+    worker = worker_backend()
+    if worker is None:
+        raise no_worker_backend()
+    if not backend:
+        if not worker.default:
+            raise _errors.no_default_backend(
+                "Worker",
+                [worker.name],
+                "workflow.create_stream(definition, backend=...)",
+            )
+        return worker.name
+    if backend != worker.name:
+        raise _errors.StreamConfigError(
+            f"Can't {action} a Stream of the backend {backend}. The Worker has only "
+            f"{worker.name}."
+        )
+    return worker.name
+
+
+def _records(request: google.protobuf.message.Message) -> int:
+    if isinstance(request, stream_pb.AppendRecordsRequest):
+        return len(request.records)
+    return 0
+
+
+class _WriteFuture(asyncio.Future[int]):
+    # A caller that gets the result or the error sets retrieved. The run's end raises only the
+    # errors that no caller got.
+    retrieved = False
+
+    def result(self) -> int:
+        self.retrieved = True
+        return super().result()
+
+    def exception(self) -> BaseException | None:
+        self.retrieved = True
+        return super().exception()
+
+    def __await__(self) -> Generator[Any, None, int]:
+        # The await of asyncio's future doesn't call result(), so this one does.
+        if not self.done():
+            self._asyncio_future_blocking = True
+            yield self
+        return self.result()
+
+    __iter__ = __await__
+
+
+def _write(
+    stream_id: str, activity: str, request: google.protobuf.message.Message
+) -> asyncio.Future[int]:
+    state = _state()
+    loop = asyncio.get_running_loop()
+    future = _WriteFuture(loop=loop)
+    waiting = state.waiting.get(stream_id)
+    if waiting is not None and waiting.take(request):
+        waiting.calls.append((_records(waiting.request), future))
+        return future
+    info = temporalio.workflow.info()
+    if (
+        info.attempt > 1
+        and info.continued_run_id
+        and stream_id not in state.withdrawn
+        and isinstance(
+            request, (stream_pb.CreateStreamRequest, stream_pb.AppendRecordsRequest)
+        )
+    ):
+        # A retry run's first write to a Stream withdraws the Records of the run it retries.
+        setattr(request, "withdraw_run", info.continued_run_id)
+        state.withdrawn.add(stream_id)
+    write = _Write(activity, request, [(_records(request), future)])
+    if isinstance(request, stream_pb.AppendRecordsRequest):
+        write.size = sum(record.ByteSize() for record in request.records)
+    previous = state.tails.get(stream_id)
+
+    async def run() -> None:
+        if previous is not None:
+            try:
+                await previous
+            except BaseException:
+                pass
+        write.started = True
+        if state.waiting.get(stream_id) is write:
+            del state.waiting[stream_id]
+        try:
+            if isinstance(write.request, stream_pb.AppendRecordsRequest):
+                # The Local Activity returns each merged call's last offset or error.
+                counts = [
+                    count - before
+                    for (before, _), (count, _) in zip(
+                        [(0, None), *write.calls], write.calls
+                    )
+                ]
+                answers = await temporalio.workflow.execute_local_activity(
+                    activity,
+                    args=[write.request, counts],
+                    result_type=list[Any],
+                    start_to_close_timeout=_WRITE_TIMEOUT,
+                )
+            elif activity == CLOSE_ACTIVITY:
+                assert isinstance(write.request, stream_pb.CloseStreamRequest)
+                answers = [await _close_in_workflow(write.request)]
+            else:
+                answers = [
+                    await temporalio.workflow.execute_local_activity(
+                        activity,
+                        write.request,
+                        result_type=int,
+                        start_to_close_timeout=_WRITE_TIMEOUT,
+                    )
+                ]
+        except (
+            temporalio.exceptions.ActivityError,
+            temporalio.exceptions.ApplicationError,
+        ) as err:
+            for _, call in write.calls:
+                if not call.done():
+                    call.set_exception(_errors.from_activity_error(err))
+            return
+        except BaseException:
+            for _, call in write.calls:
+                call.cancel()
+            raise
+        for (_, call), answer in zip(write.calls, answers):
+            if call.done():
+                continue
+            if isinstance(answer, dict):
+                call.set_exception(
+                    _errors.from_reason(int(answer["reason"]), str(answer["message"]))
+                )
+            else:
+                call.set_result(int(answer))
+
+    task = loop.create_task(run())
+    state.tails[stream_id] = task
+    state.waiting[stream_id] = write
+    return future
+
+
+def _write_nowait(future: asyncio.Future[int]) -> None:
+    runtime = temporalio.workflow._Runtime.current()
+
+    def done(future: asyncio.Future[int]) -> None:
+        # No caller awaits the write, so the run raises its error after this callback, as an
+        # error that the run doesn't catch.
+        if not future.cancelled() and future.exception() is not None:
+            setattr(runtime, "_current_activation_error", future.exception())
+
+    future.add_done_callback(done)
+
+
+async def drain() -> None:
+    """Wait for the run's writes and closes that nobody awaits, before the run ends.
+
+    A publish error that no caller got raises here, as an error that the run doesn't catch. A
+    cancel of the run doesn't stop the writes. The run waits for them, then ends as canceled.
+    """
+    state = _state()
+    cancel: asyncio.CancelledError | None = None
+    # A Signal or Update handler can start a write while the run waits here.
+    while pending := [task for task in state.tails.values() if not task.done()]:
+        for task in pending:
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as err:
+                if not task.done():
+                    cancel = err
+            except BaseException:
+                # A failed write already gave its error to its callers.
+                pass
+    if cancel is not None:
+        raise cancel
+    for future in state.failed_publishes:
+        error = _unretrieved_error(future)
+        if error is not None:
+            raise error
+
+
+def _unretrieved_error(future: asyncio.Future[int]) -> BaseException | None:
+    # The error of a failed write that no caller got, else None.
+    if not isinstance(future, _WriteFuture) or future.retrieved or future.cancelled():
+        return None
+    return asyncio.Future.exception(future)
+
+
+def _converters() -> tuple[
+    temporalio.converter.PayloadConverter, temporalio.converter.FailureConverter
+]:
+    # Records get no serialization context, so Workflows, Activities and clients encode them
+    # alike. The backend runs only the codec.
+    runtime = temporalio.workflow._Runtime.current()
+    return (
+        getattr(runtime, "_context_free_payload_converter"),
+        getattr(runtime, "_context_free_failure_converter"),
+    )
+
+
+def _payload(value: Any) -> Any:
+    return _converters()[0].to_payload(value)
+
+
+class WorkflowStream(StreamHandle[T]):
+    """A Stream in Workflow code. Workflow code writes and closes it, and can't read it.
+
+    Pass it to an Activity, a child Workflow or the next run of continue-as-new as an
+    argument. Use it in ``async with`` to close it at the end of the block. The end of a run
+    closes only the Streams whose ``async with`` block deferred the close to the run end. A
+    Stream that the run chain never closes stays open until its ``safety_ttl``.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def _model_ref(self) -> models.StreamRef:
+        return models.StreamRef(
+            id=self.id,
+            owner=workflow_owner(self.workflow_id, self.first_execution_run_id),
+        )
+
+    def _ref(self) -> stream_v1.StreamRef:
+        return models._StreamRefTransferTypeConverter().to_transfer_type(
+            self._model_ref()
+        )
+
+    def publish(self, *values: T) -> asyncio.Future[int]:
+        """Start the write of one Record for each value, in order, and return its future.
+
+        The write has its place in the Stream's order when the call returns, also when no
+        caller awaits the future. Writes to one Stream keep the order of the calls. The write
+        is a Local Activity, so History has its result and not the values. Publishes that wait
+        behind a write to the same Stream are sent as one Local Activity, and each call gets the
+        offset of its own last Record. A list is one value.
+
+        A caller that awaits the future, or calls its ``result()`` or ``exception()``, gets the
+        write's error and owns it. An error that no caller gets raises at the end of the run, as
+        an error of :py:meth:`publish_nowait` does. So a ``StreamError`` fails the run. The
+        Workflow's logger logs the error when the write fails, if no caller waits for it then.
+
+        Returns:
+            The future of the write. It gives the offset of the last Record, or raises
+            ``StreamError`` when the backend refused the write, such as
+            ``StreamNotFoundError`` for a Stream that nobody created, or
+            ``StreamClosedError`` for a Stream that another caller closed.
+
+        Raises:
+            StreamClosedError: This run closed the Stream.
+            temporalio.workflow.ReadOnlyContextError: The code must not change state, such as
+                a query handler.
+            StreamConfigError: The Worker has no Stream backend, or not the Stream's backend.
+                It fails the Workflow Task, not the run.
+        """
+        state = _state()
+        future = self._append(values)
+        loop = asyncio.get_running_loop()
+
+        def warn(future: asyncio.Future[int]) -> None:
+            error = _unretrieved_error(future)
+            if error is not None:
+                temporalio.workflow.logger.warning(
+                    "A publish to the Stream %s failed, and no caller has its error. If no "
+                    "caller gets the error, it fails the run when the run ends: %s",
+                    self.id,
+                    error,
+                )
+
+        def failed(future: asyncio.Future[int]) -> None:
+            if _unretrieved_error(future) is not None:
+                state.failed_publishes.append(future)
+                # A caller that already waits for the future gets the error before warn runs.
+                loop.call_soon(warn, future)
+
+        future.add_done_callback(failed)
+        return future
+
+    def publish_nowait(self, *values: T) -> None:
+        """Write one Record for each value, in order, without an await.
+
+        Use it in sync Workflow code, such as ``@workflow.init`` and sync signal and update
+        handlers. It's like ``asyncio.Queue.put_nowait`` for code that can't await ``put``. A
+        backend error raises in the run as an error that the run doesn't catch, so a
+        ``StreamError`` fails the run.
+        """
+        _write_nowait(self._append(values))
+
+    def _check(self, action: str, *, backend_checked: bool = False) -> _RunStream:
+        if temporalio.workflow.unsafe.is_read_only():
+            raise temporalio.workflow.ReadOnlyContextError(
+                f"Can't {action} a Stream in read-only code"
+            )
+        state = _state()
+        state.uses_streams = True
+        run_stream = state.stream(self._model_ref())
+        if run_stream.closed:
+            raise _errors.StreamClosedError(
+                f"Can't {action} the Stream {self.id}, since this run closed it",
+                reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
+            )
+        if not backend_checked:
+            _check_backend(self.backend, action)
+        return run_stream
+
+    def _append(self, values: tuple[Any, ...]) -> asyncio.Future[int]:
+        if not values:
+            raise TypeError("publish takes one or more values")
+        self._check("write to")
+        records = [stream_v1.AppendRecord(body=_payload(v)) for v in values]
+        return _write(
+            self.id,
+            APPEND_ACTIVITY,
+            stream_pb.AppendRecordsRequest(stream=self._ref(), records=records),
+        )
+
+    async def close(
+        self, *, result: Any | None = None, failure: BaseException | None = None
+    ) -> None:
+        """Close the Stream after the writes before it, once the Workflow Task commits.
+
+        If the task fails first, or the Worker crashes, the Stream stays open, and the task's
+        retry writes to it again. On Redis the close is a regular Activity on the Workflow's
+        task queue, which closes the Stream as the run chain that owns it. So every Worker on
+        that queue must register the Redis backend. A Worker that polls Activities runs the
+        close, and a Worker with ``no_remote_activities=True`` doesn't. History keeps
+        ``result`` and ``failure`` as the close Activity's input, so the payload size limit
+        applies to them.
+
+        Readers get the Records before the close, then a ``Closed`` item with ``result`` or
+        ``failure``. A cancel failure, such as a ``CancelledError`` or an ``ActivityError``
+        that a cancel caused, closes the Stream as canceled. Later writes in this run raise
+        :py:class:`StreamClosedError`.
+
+        Raises:
+            StreamNotOwnerError: This run chain didn't create the Stream.
+        """
+        await self._close(result, failure)
+
+    def close_nowait(
+        self, *, result: Any | None = None, failure: BaseException | None = None
+    ) -> None:
+        """Close the Stream without an await, for sync Workflow code.
+
+        It is to :py:meth:`close` what ``asyncio.Queue.put_nowait`` is to ``put``. It starts the
+        close, and the end of the run waits for it. A backend error raises in the run as an
+        error that the run doesn't catch, so a ``StreamError`` fails the run.
+        """
+        _write_nowait(self._close(result, failure))
+
+    def _closing(self) -> _RunStream:
+        info = temporalio.workflow.info()
+        if (self.workflow_id, self.first_execution_run_id) != (
+            info.workflow_id,
+            info.first_execution_run_id,
+        ):
+            # Only the run chain that created a Stream can close it. The backend refuses the
+            # close too, but this check fails before the Workflow schedules a command.
+            raise _errors.StreamNotOwnerError(
+                f"Can't close the Stream {self.id}, since this run chain didn't create it",
+                reason=StreamErrorReason.STREAM_ERROR_REASON_NOT_OWNER,
+            )
+        return self._check("close")
+
+    def _close(self, result: Any, failure: BaseException | None) -> asyncio.Future[int]:
+        self._closing().closed = True
+        request = stream_pb.CloseStreamRequest(stream=self._ref())
+        if result is not None:
+            request.result.CopyFrom(_payload(result))
+        if failure is not None:
+            payload_converter, failure_converter = _converters()
+            failure_converter.to_failure(failure, payload_converter, request.failure)
+        status = close_status(failure)
+        if status is not None:
+            request.status = status
+        return _write(self.id, CLOSE_ACTIVITY, request)
+
+    async def __aenter__(self) -> WorkflowStream[T]:
+        """Use the Stream in ``async with``, which closes it at the end."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the Stream, with the exception as its failure if there is one.
+
+        A cancel of the block or of the run closes the Stream as canceled. An exception that
+        fails the run with no retry run closes it too. Examples are an exception in a run with
+        no retry policy, a non-retryable ``ApplicationError``, and an exception on the last
+        attempt.
+
+        For any other exception, the close waits for the run's end. The Stream then closes with
+        that exception if the run returns, continues as new, or fails with no retry run. It
+        stays open if a retry run comes next, since that run writes to the same Stream. It also
+        stays open if the exception fails only the Workflow Task, since the task's retry runs
+        the block again.
+
+        In a cron run, the block end leaves the Stream open, since the Stream spans the cron
+        chain and the next run creates it again. An eviction cancels the block, and the Worker
+        sends no commands for an evicted run. An explicit :py:meth:`close` always closes the
+        Stream.
+        """
+        state = _state()
+        if state.stream(self._model_ref()).closed:
+            return
+        close, failure = exit_failure(exc)
+        if not close or temporalio.workflow.info().cron_schedule:
+            return
+        if _closes_at_block_end(exc):
+            await self.close(failure=failure)
+        else:
+            # A refused close raises here, as it does for a close at the block end.
+            self._closing()
+            state.deferred_closes.append((self, failure))
+
+
+def _closes_at_block_end(exc: BaseException | None) -> bool:
+    # For other exceptions, only the run's end shows whether a retry run will write to the Stream.
+    if exc is None or isinstance(exc, asyncio.CancelledError) or _cancelled(exc):
+        return True
+    runtime = temporalio.workflow._Runtime.current()
+    return runtime.workflow_is_failure_exception(exc) and not _retried(exc)
+
+
+def close_at_run_end(err: BaseException | None) -> None:
+    """Close the Streams whose block end deferred the close, unless a retry run comes next.
+
+    ``err`` is the exception that ends the run, or None if the run returns.
+    """
+    state = _state()
+    runtime = temporalio.workflow._Runtime.current()
+    if (
+        isinstance(err, Exception)
+        and not _cancelled(err)
+        and runtime.workflow_is_failure_exception(err)
+        and _retried(err)
+    ):
+        return
+    for stream, failure in state.deferred_closes:
+        if not state.stream(stream._model_ref()).closed:
+            _write_nowait(stream._close(None, failure))
+
+
+def _retried(exc: BaseException) -> bool:
+    # Whether the server starts a retry run after the run fails with exc, by the server's rule.
+    info = temporalio.workflow.info()
+    policy = info.retry_policy
+    if policy is None or 0 < policy.maximum_attempts <= info.attempt:
+        return False
+    failure_type: str | None
+    if isinstance(exc, temporalio.exceptions.ApplicationError):
+        if exc.non_retryable:
+            return False
+        failure_type = exc.type
+    elif isinstance(
+        exc,
+        (temporalio.exceptions.CancelledError, temporalio.exceptions.TerminatedError),
+    ):
+        return False
+    elif isinstance(exc, temporalio.exceptions.TimeoutError):
+        return exc.type in (
+            temporalio.exceptions.TimeoutType.START_TO_CLOSE,
+            temporalio.exceptions.TimeoutType.HEARTBEAT,
+        )
+    elif isinstance(exc, temporalio.exceptions.FailureError):
+        return True
+    else:
+        # For any other exception, the run's failure has the class name as its type.
+        failure_type = type(exc).__name__
+    return failure_type not in (policy.non_retryable_error_types or ())
+
+
+def _cancelled(exc: BaseException) -> bool:
+    # A cancelled run ends as canceled with no retry, even when the cancel reached the block as
+    # the error of an Activity, a Local Activity or a child.
+    return (
+        temporalio.workflow.cancellation_reason() is not None
+        and temporalio.exceptions.is_cancelled_exception(exc)
+    )
+
+
+def _own_handle(
+    definition: type[StreamDefinition[T]], backend: str | None
+) -> WorkflowStream[T]:
+    info = temporalio.workflow.info()
+    known = definition_of(definition)
+    return WorkflowStream(
+        id=_ids.scoped_stream_id(
+            info.workflow_id, info.first_execution_run_id, known.name
+        ),
+        workflow_id=info.workflow_id,
+        first_execution_run_id=info.first_execution_run_id,
+        backend=backend,
+        payload_type=known.type,
+    )
+
+
+def create_stream(
+    definition: type[StreamDefinition[T]],
+    *,
+    backend: str | None,
+    options: StreamOptions,
+) -> Creating[WorkflowStream[T]]:
+    """Create a Stream that this run chain owns, or get the one that exists.
+
+    See :py:func:`temporalio.workflow.create_stream`.
+    """
+
+    async def create() -> WorkflowStream[T]:
+        stream, task = _create(definition, options, backend)
+        await task
+        return stream
+
+    return Creating(create)
+
+
+def create_stream_nowait(
+    definition: type[StreamDefinition[T]],
+    *,
+    backend: str | None,
+    options: StreamOptions,
+) -> WorkflowStream[T]:
+    """Create a Stream that this run chain owns, or get it, without an await.
+
+    See :py:func:`temporalio.workflow.create_stream_nowait`.
+    """
+    stream, task = _create(definition, options, backend)
+    _write_nowait(task)
+    return stream
+
+
+def _create(
+    definition: type[StreamDefinition[T]],
+    options: StreamOptions,
+    backend: str | None,
+) -> tuple[WorkflowStream[T], asyncio.Future[int]]:
+    stream = _own_handle(definition, _check_backend(backend, "create"))
+    run_stream = stream._check("create", backend_checked=True)
+    run_id = temporalio.workflow.info().run_id
+    # A retry run's withdrawal names the owner's run id. The Store keeps the ref's run chain, and
+    # checks each close against it.
+    request = stream_pb.CreateStreamRequest(
+        stream_id=stream.id,
+        owner=stream_v1.Producer(
+            kind=StreamProducerKind.STREAM_PRODUCER_KIND_WORKFLOW,
+            id=_ids.workflow_producer_id(run_id),
+            run_id=run_id,
+        ),
+        ref=stream._ref(),
+    )
+    retention = options.get("retention")
+    if retention is not None:
+        request.retention.FromTimedelta(retention)
+    run_stream.backend = stream.backend
+    return stream, _write(stream.id, CREATE_ACTIVITY, request)
+
+
+def stream_handle(
+    definition: type[StreamDefinition[T]], *, backend: str | None = None
+) -> WorkflowStream[T]:
+    """Get a Stream that this run chain created, by its definition.
+
+    See :py:func:`temporalio.workflow.stream_handle`.
+    """
+    stream = _own_handle(definition, backend)
+    if not temporalio.workflow.unsafe.is_read_only():
+        _state().uses_streams = True
+    if backend is None:
+        known = _state().streams.get(stream.id)
+        stream._backend = (known.backend if known else None) or _check_backend(
+            None, "get"
+        )
+    return stream
