@@ -70,9 +70,10 @@ pub fn new_stream_runtime(
     let meter = runtime.core.telemetry().get_temporal_metric_meter();
     let streams = if memory {
         temporalio_streams::MemoryStreamRuntime::from_config_bytes(&config, meter)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
     } else {
         temporalio_streams_redis::RedisStreamRuntime::from_config_bytes(&config, meter)
-    }
-    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+    };
     Ok(StreamRuntimeRef { streams, runtime })
 }

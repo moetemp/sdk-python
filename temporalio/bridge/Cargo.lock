@@ -3080,6 +3080,7 @@ dependencies = [
  "protox",
  "sha2",
  "temporalio-common",
+ "temporalio-protos",
  "thiserror",
  "tokio",
  "tonic",
@@ -3089,7 +3090,7 @@ dependencies = [
 [[package]]
 name = "temporalio-streams-redis"
 version = "0.1.0"
-source = "git+https://github.com/temporal-community/sdk-streams?rev=6e3ee4996bc5ec4a0f8873634b4ca1262f77786d#6e3ee4996bc5ec4a0f8873634b4ca1262f77786d"
+source = "git+https://github.com/temporal-community/sdk-streams?rev=aea36a311d4e56e9f435a627a2a07834ee837fe4#aea36a311d4e56e9f435a627a2a07834ee837fe4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -3099,6 +3100,7 @@ dependencies = [
  "redis",
  "temporalio-common",
  "temporalio-streams",
+ "thiserror",
  "tokio",
  "tonic-prost-build",
  "tracing",
