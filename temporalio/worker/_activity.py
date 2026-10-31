@@ -672,6 +672,12 @@ class _ActivityWorker:
                 else None,
                 previous_started_event_id=start.workflow_task.previous_started_event_id,
                 failed_tasks=tuple(start.workflow_task.failed_tasks),
+                previous_attempt=start.workflow_task.previous_attempt,
+                previous_started_time=_proto_to_datetime(
+                    start.workflow_task.previous_started_time
+                )
+                if start.workflow_task.HasField("previous_started_time")
+                else None,
             )
             if start.HasField("workflow_task")
             else None,

@@ -114,6 +114,12 @@ class WorkflowTaskAttempt:
     failed_tasks: Sequence[int] = ()
     """``WorkflowTaskStarted`` event IDs of the run's last 100 failed and timed out tasks."""
 
+    previous_attempt: int = 0
+    """Attempt of the run's last completed task. 0 if no task has completed."""
+
+    previous_started_time: datetime | None = None
+    """When the server started the run's last completed task. None if no task has completed."""
+
 
 @dataclass(frozen=True)
 class Info:
