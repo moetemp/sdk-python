@@ -12,7 +12,14 @@ async def task_of_dispatch() -> list[int] | None:
     if task is None:
         return None
     assert task.started_time is not None
-    return [task.started_event_id, task.attempt]
+    # Before the run's first completed task, both previous fields are empty.
+    assert (task.previous_started_time is None) == (task.previous_started_event_id == 0)
+    return [
+        task.started_event_id,
+        task.attempt,
+        task.previous_started_event_id,
+        task.previous_attempt,
+    ]
 
 
 @workflow.defn
@@ -45,4 +52,6 @@ async def test_local_activity_gets_its_dispatching_workflow_task(client: Client)
     assert local[0] > 0 and local[1] == 1
     # The second call comes from a later task, after the timer.
     assert later[0] > local[0]
+    # The task of the second call follows the completed task of the first.
+    assert later[2] >= local[0] and later[3] == 1
     assert remote is None
