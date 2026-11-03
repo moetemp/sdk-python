@@ -1,6 +1,7 @@
 //! Bindings to the Stream runtime of the temporalio-streams crate, on the Redis Store of
-//! temporalio-streams-redis or on the memory Store. A Stream plugin builds one runtime for each
-//! client from its config. Python calls it by method name.
+//! temporalio-streams-redis or on the memory Store. A Stream backend keeps one runtime for each
+//! Core runtime, and the clients of that Core runtime share it and its connections. Python calls
+//! it by method name.
 
 use pyo3::exceptions::PyException;
 #[cfg(feature = "streams")]
@@ -12,7 +13,7 @@ use crate::runtime;
 // The exception args are the gRPC code, the message and the encoded details, as in `RPCError`.
 pyo3::create_exception!(temporal_sdk_bridge, StreamCallError, PyException);
 
-/// The crate's runtime object. Python keeps it with the client that it serves.
+/// The crate's runtime object. Python keeps one for each Core runtime, which its clients share.
 #[cfg(feature = "streams")]
 #[pyclass(frozen)]
 pub struct StreamRuntimeRef {
