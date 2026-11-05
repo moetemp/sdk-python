@@ -98,7 +98,7 @@ optional = true
 # The Redis Store, which lives in its own repo.
 [dependencies.temporalio-streams-redis]
 git = "https://github.com/temporal-community/sdk-streams"
-rev = "aea36a311d4e56e9f435a627a2a07834ee837fe4"
+rev = "dc93cba6bd49c89bb255a3aae9f4d970f4ffc997"
 default-features = false
 optional = true
 
