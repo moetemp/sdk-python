@@ -1,5 +1,8 @@
+import asyncio
 import collections.abc
+import dataclasses
 import typing
+import uuid
 from datetime import timedelta
 
 import google.protobuf.duration_pb2
@@ -298,3 +301,194 @@ def versioning_override_from_proto(
     if proto.auto_upgrade:
         return temporalio.common.AutoUpgradeVersioningOverride()
     raise ValueError("unknown versioning override proto shape")
+
+
+class _ReadRequest(typing.Protocol):
+    __dataclass_fields__: typing.ClassVar[dict[str, typing.Any]]
+
+    @property
+    def from_offset(self) -> int | None: ...
+
+    @property
+    def start(self) -> object: ...
+
+    @property
+    def wait(self) -> timedelta | None: ...
+
+    @property
+    def last(self) -> int | None: ...
+
+
+class _ReadResponse(typing.Protocol):
+    @property
+    def records(self) -> collections.abc.Sized | None: ...
+
+    @property
+    def next_offset(self) -> int | None: ...
+
+    @property
+    def done(self) -> bool | None: ...
+
+
+_ReadRequestT = typing.TypeVar("_ReadRequestT", bound=_ReadRequest)
+
+
+def next_read_request(
+    request: _ReadRequestT, response: _ReadResponse
+) -> _ReadRequestT | None:
+    """The request after one page of a Stream read, or None to stop.
+
+    A read ends when the Stream is closed and the read gave its last item. A read with no wait
+    also ends at an empty page that didn't move, since the Store had nothing past the newest
+    Record.
+    """
+    if response.done or response.next_offset is None:
+        return None
+    moved = response.next_offset > (request.from_offset or 0)
+    if not response.records and not moved and request.wait is None:
+        return None
+    # The next page starts where this one ended, so the first page's start and last no longer
+    # apply.
+    return dataclasses.replace(
+        request, from_offset=response.next_offset, start=None, last=None
+    )
+
+
+class _ReadItem(typing.Protocol):
+    @property
+    def item(self) -> object: ...
+
+    @property
+    def offset(self) -> int | None: ...
+
+
+def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
+    """The request that resumes a Stream read after ``item``."""
+    from temporalio.streams.system.models import StreamItemSuperseded
+
+    offset = item.offset or 0
+    if not isinstance(item.item, StreamItemSuperseded):
+        offset += 1
+    # A Superseded item has the offset of the first Record of its batch, which comes next. So a
+    # read resumes at that offset, and gets the Superseded item again, which withdraws nothing
+    # new. The first page's start and last no longer apply.
+    return dataclasses.replace(request, from_offset=offset, start=None, last=None)
+
+
+class _AppendResponse(typing.Protocol):
+    @property
+    def last_offset(self) -> int | None: ...
+
+
+def last_offset(response: _AppendResponse) -> int:
+    """The offset of the last Record that an append wrote, or 0 when it wrote none."""
+    return response.last_offset or 0
+
+
+_T = typing.TypeVar("_T")
+
+
+def start_now(call: collections.abc.Awaitable[_T]) -> asyncio.Task[_T]:
+    """Run ``call`` up to its first wait now, in a task that gives its result.
+
+    A Workflow call adds its command before it first waits, so the command keeps its place in
+    the order of the caller's commands, as ``workflow.start_activity`` does.
+    """
+
+    async def run() -> _T:
+        return await call
+
+    # A task runs only when the loop gets to it, so step the call here and let a task drive the
+    # rest. Every Python version takes this path, so a replay on another version gives the same
+    # commands.
+    loop = asyncio.get_running_loop()
+    coroutine = run()
+    try:
+        waiting = coroutine.send(None)
+    except StopIteration as finished:
+        return loop.create_task(_finished(typing.cast(_T, finished.value)))
+    except BaseException as error:
+        return loop.create_task(_raised(error))
+    return loop.create_task(_resume(coroutine, waiting))
+
+
+async def _finished(value: _T) -> _T:
+    return value
+
+
+async def _raised(error: BaseException) -> typing.NoReturn:
+    raise error
+
+
+async def _resume(
+    coroutine: collections.abc.Coroutine[object, None, _T], waiting: object
+) -> _T:
+    # Drive a started coroutine as a task does. A cancel goes to the future that it waits on.
+    while True:
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            if isinstance(waiting, asyncio.Future):
+                future = typing.cast("asyncio.Future[object]", waiting)
+                done = asyncio.get_running_loop().create_future()
+
+                def wake(_: object, done: asyncio.Future[None] = done) -> None:
+                    if not done.done():
+                        done.set_result(None)
+
+                future.add_done_callback(wake)
+                await done
+            else:
+                await asyncio.sleep(0)
+        except asyncio.CancelledError as error:
+            if isinstance(waiting, asyncio.Future):
+                typing.cast("asyncio.Future[object]", waiting).cancel()
+            cancelled = error
+        try:
+            waiting = (
+                coroutine.send(None)
+                if cancelled is None
+                else coroutine.throw(cancelled)
+            )
+        except StopIteration as finished:
+            return typing.cast(_T, finished.value)
+
+
+def request_id() -> str:
+    """The id of one create call, which its retries send again.
+
+    In a Workflow it comes from ``workflow.uuid4()``, so a replay sends the same id.
+    """
+    from temporalio.workflow import in_workflow, uuid4
+
+    return str(uuid4() if in_workflow() else uuid.uuid4())
+
+
+# The Stream sources. Each one checks where it runs and gives the value of that context, or
+# raises where it has none to give.
+
+
+def _no_workflow_streams(source: str) -> RuntimeError:
+    # This SDK doesn't run Workflow Stream calls yet, so a generated Workflow call fails here.
+    return RuntimeError(f"Workflow code can't call the Stream service yet ({source})")
+
+
+def workflow_writer() -> typing.Any:
+    """The writer of the Workflow run's writes."""
+    raise _no_workflow_streams("workflow_writer")
+
+
+def withdraw_run() -> str | None:
+    """The previous run whose Records a retry run's create withdraws."""
+    from temporalio.workflow import in_workflow
+
+    if in_workflow():
+        raise _no_workflow_streams("withdraw_run")
+    # Code outside a Workflow isn't a retry run.
+    return None
+
+
+def client_writer() -> typing.Any:
+    """The writer of a write outside a Workflow."""
+    # Each client has its own Producer, and a generated call doesn't say which client makes it.
+    # So the SDK's Streams send their writer, and a call without one fails.
+    raise RuntimeError("A Stream write outside a Workflow needs its Producer")
