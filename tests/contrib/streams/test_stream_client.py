@@ -9,7 +9,7 @@ import pytest
 
 from temporalio import streams, workflow
 from temporalio.api.enums.v1 import StreamErrorReason
-from temporalio.client import Client, Stream
+from temporalio.client import BufferedPublisher, Client, Stream
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
 from temporalio.streams.system import models
@@ -308,6 +308,20 @@ async def test_payload_type_of_the_call_decodes_each_value(stream_client: Client
         assert [r.data async for r in read if isinstance(r, streams.Record)] == [
             expected
         ]
+
+
+async def test_buffered_publisher_keeps_the_publish_order(stream_client: Client):
+    stream = await stream_client.create_stream[Turn](f"buffered-{uuid.uuid4()}")
+    async with BufferedPublisher(stream) as publisher:
+        publisher.publish(Turn("user"))
+        publisher.publish(Turn("a"), Turn("b"))
+        publisher.publish(Turn("model"))
+    written = [
+        item.data
+        async for item in stream.subscribe(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ]
+    assert written == [Turn("user"), Turn("a"), Turn("b"), Turn("model")]
 
 
 async def test_record_that_fails_to_decode_raises_and_resumes_past_it(

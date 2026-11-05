@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.converter
 from temporalio.streams._backend import BackendCalls
 from temporalio.streams._writer import RecordWriter
+
+if TYPE_CHECKING:
+    import temporalio.client
+    from temporalio.client import BufferedPublisher
 
 
 @dataclass
@@ -27,6 +32,11 @@ class ActivityStreams:
     previous_completed_task: stream_v1.WorkflowTaskEpoch | None = None
     failed_tasks: tuple[int, ...] = ()
     writers: dict[str, RecordWriter] = field(default_factory=dict)
+    # The attempt's BufferedPublishers, which the end of the attempt flushes.
+    publishers: list[BufferedPublisher[Any]] = field(default_factory=list)
+    # The Worker's client. Its Streams in the attempt write as the attempt, and other clients'
+    # Streams write as those clients.
+    client: temporalio.client.Client | None = None
 
     def writer(self, stream_id: str) -> RecordWriter:
         """The attempt's writer for a Stream, one per Stream."""
@@ -44,13 +54,27 @@ class ActivityStreams:
         return writer
 
     async def close(self) -> None:
-        """Close every writer of the attempt."""
+        """Flush the attempt's publishers, then close every writer of the attempt.
+
+        A write error that no caller got fails the attempt.
+        """
         errors: list[BaseException] = []
+        for publisher in self.publishers:
+            try:
+                await publisher._flush_at_attempt_end()
+            except Exception as err:
+                errors.append(err)
         for writer in self.writers.values():
             try:
                 await writer.close()
             except Exception as err:
                 errors.append(err)
+            # As the end of a Workflow run does, the end of the attempt raises a write error that
+            # no caller got. A retry then writes the Records again, and the attempt doesn't end
+            # with a gap.
+            lost = writer.unretrieved_error()
+            if lost is not None:
+                errors.append(lost)
         if errors:
             raise errors[0]
 
