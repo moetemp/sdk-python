@@ -19,7 +19,9 @@ class MemoryStreamBackend(ExtensionStreamBackend):
     Register it on the client, as with ``RedisStreamBackend``. Every Worker and client that
     shares one backend shares its Streams. The Streams are lost when the process ends. It
     registers its ``name``, ``memory`` by default. It has Redis's rules, so tests can swap the
-    Store without changing Workflow code.
+    Store without changing Workflow code. As on Redis, a Workflow's close is a regular Activity
+    on the Workflow's task queue, so a Worker on that queue that polls Activities must have the
+    backend.
 
     .. warning::
         This API is experimental.

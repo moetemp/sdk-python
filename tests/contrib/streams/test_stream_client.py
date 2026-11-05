@@ -13,6 +13,7 @@ from temporalio.client import Client, Stream
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
 from temporalio.streams.system import models
+from temporalio.worker import Replayer
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
@@ -425,3 +426,102 @@ async def test_stream_takes_the_named_backend_or_the_default(client: Client):
         await two.to_stream(streams.StreamRef(id="moving")).get_offset()
     with pytest.raises(ValueError):
         two.get_stream[str]("")
+
+
+@workflow.defn
+class WriteToStream:
+    @workflow.run
+    async def run(self, ref: streams.StreamRef[Turn]) -> None:
+        await workflow.to_stream(ref).publish(Turn("workflow"))
+
+
+async def test_client_stream_takes_workflow_writes(stream_client: Client):
+    stream = await stream_client.create_stream[Turn](f"chat-{uuid.uuid4()}")
+    assert await stream.get_offset() == 0
+    first = await stream.publish(Turn("client"))
+    last = await stream.publish(Turn("a"), Turn("b"))
+    assert last > first
+    async with new_worker(stream_client, WriteToStream) as worker:
+        await stream_client.execute_workflow(
+            WriteToStream.run,
+            stream.ref,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    await stream.close()
+    items = [item async for item in stream.subscribe()]
+    data = [item.data for item in items if isinstance(item, streams.Record)]
+    assert data == [Turn("client"), Turn("a"), Turn("b"), Turn("workflow")]
+
+    # Another Stream of the same id reads it from an offset.
+    again = stream_client.get_stream[Turn](stream.ref.id)
+    resumed = [
+        item.data
+        async for item in again.subscribe(offset=first + 1)
+        if isinstance(item, streams.Record)
+    ]
+    assert resumed == [Turn("a"), Turn("b"), Turn("workflow")]
+
+
+@workflow.defn
+class Agent:
+    def __init__(self) -> None:
+        self._tokens: workflow.WorkflowStream[str] | None = None
+
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        await workflow.sleep(timedelta(milliseconds=200))
+        self._tokens = stream = await workflow.create_stream[str](
+            f"{workflow.info().workflow_id}-tokens"
+        )
+        await stream.publish(*prompt.split())
+        await stream.close()
+        return prompt.upper()
+
+    @workflow.query
+    def stream(self) -> streams.StreamRef[str] | None:
+        # A query has no ref before the run creates the Stream.
+        return self._tokens.ref if self._tokens else None
+
+
+async def test_client_reads_a_workflow_stream(stream_client: Client):
+    async with new_worker(stream_client, Agent) as worker:
+        handle = await stream_client.start_workflow(
+            Agent.run, "hi there", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
+        )
+        ref = await handle.query(Agent.stream)
+        while ref is None:
+            await asyncio.sleep(0.05)
+            ref = await handle.query(Agent.stream)
+        reader = stream_client.to_stream(ref)
+        items = [item async for item in reader.subscribe()]
+        await handle.result()
+    assert [item.data for item in items if isinstance(item, streams.Record)] == [
+        "hi",
+        "there",
+    ]
+    # A Workflow creates only standalone Streams, so the ref has no owner.
+    assert reader.ref.owner is None and reader.ref.backend is not None
+
+
+async def test_empty_stream_id_raises_with_no_call(client: Client):
+    client, extension = fake_client(client)
+    with pytest.raises(ValueError, match="id is empty"):
+        client.get_stream[Turn]("")
+    assert not extension.namespaces
+
+
+async def test_registration_rules(client: Client):
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(),
+        MemoryStreamBackend(name="b", default=True),
+    ]
+    two = Client(**config)
+    assert (await two.create_stream[str]("d-1")).ref.backend == "b"
+    assert two.get_stream[str]("d-1").ref.backend == "b"
+    # A Worker serves only one backend, and so does a Replayer.
+    with pytest.raises(streams.StreamConfigError, match="one backend"):
+        new_worker(Client(**config), Agent)
+    with pytest.raises(streams.StreamConfigError, match="one backend"):
+        Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
