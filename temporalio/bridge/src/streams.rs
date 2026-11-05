@@ -1,0 +1,80 @@
+//! Bindings to the Stream runtime of the temporalio-streams crate, on the Redis Store of
+//! temporalio-streams-redis or on the memory Store. A Stream backend keeps one runtime for each
+//! Core runtime, and the clients of that Core runtime share it and its connections. Python calls
+//! it by method name.
+
+use pyo3::exceptions::PyException;
+#[cfg(feature = "streams")]
+use pyo3::prelude::*;
+
+#[cfg(feature = "streams")]
+use crate::runtime;
+
+// The exception args are the gRPC code, the message and the encoded details, as in `RPCError`.
+pyo3::create_exception!(temporal_sdk_bridge, StreamCallError, PyException);
+
+/// The crate's runtime object. Python keeps one for each Core runtime, which its clients share.
+#[cfg(feature = "streams")]
+#[pyclass(frozen)]
+pub struct StreamRuntimeRef {
+    streams: std::sync::Arc<temporalio_streams::StreamRuntime>,
+    runtime: runtime::Runtime,
+}
+
+#[cfg(feature = "streams")]
+#[pymethods]
+impl StreamRuntimeRef {
+    #[getter]
+    fn name(&self) -> String {
+        self.streams.name().to_string()
+    }
+
+    fn call<'p>(
+        &self,
+        py: Python<'p>,
+        method: String,
+        input: Vec<u8>,
+    ) -> PyResult<Bound<'p, PyAny>> {
+        self.runtime
+            .assert_same_process("call the Stream runtime")?;
+        let streams = self.streams.clone();
+        self.runtime.future_into_py(py, async move {
+            streams.call(&method, &input).await.map_err(call_error)
+        })
+    }
+
+    /// Releases one handle of a writer without waiting. It needs no Tokio runtime, so a Python
+    /// finalizer can call it.
+    fn free_writer(&self, writer_id: u64) -> PyResult<()> {
+        self.streams.free_writer(writer_id).map_err(call_error)
+    }
+}
+
+#[cfg(feature = "streams")]
+fn call_error(err: temporalio_streams::StreamError) -> PyErr {
+    StreamCallError::new_err((err.code() as u32, err.message.clone(), err.details()))
+}
+
+/// Builds the runtime on Redis, or on the memory Store with `memory`, from its encoded config.
+#[cfg(feature = "streams")]
+pub fn new_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    memory: bool,
+    config: Vec<u8>,
+) -> PyResult<StreamRuntimeRef> {
+    use pyo3::exceptions::PyValueError;
+
+    let runtime = runtime_ref.runtime.clone();
+    runtime.assert_same_process("create a Stream runtime")?;
+    // Building the Stream runtime can spawn Tokio tasks, which need an entered Tokio runtime.
+    let _guard = runtime.core.tokio_handle().enter();
+    let meter = runtime.core.telemetry().get_temporal_metric_meter();
+    let streams = if memory {
+        temporalio_streams::MemoryStreamRuntime::from_config_bytes(&config, meter)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+    } else {
+        temporalio_streams_redis::RedisStreamRuntime::from_config_bytes(&config, meter)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?
+    };
+    Ok(StreamRuntimeRef { streams, runtime })
+}
