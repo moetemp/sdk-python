@@ -185,6 +185,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._streams import Stream
 from ._worker_versioning import (
     BuildIdOp,
     BuildIdOpAddNewCompatible,
@@ -397,4 +398,5 @@ __all__ = [
     "ParamType",
     "ReturnType",
     "SelfType",
+    "Stream",
 ]
