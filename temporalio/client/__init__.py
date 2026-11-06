@@ -185,7 +185,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
-from ._streams import Stream
+from ._streams import BufferedPublisher, Stream, SyncStream, SyncSubscription
 from ._worker_versioning import (
     BuildIdOp,
     BuildIdOpAddNewCompatible,
@@ -398,5 +398,8 @@ __all__ = [
     "ParamType",
     "ReturnType",
     "SelfType",
+    "BufferedPublisher",
     "Stream",
+    "SyncStream",
+    "SyncSubscription",
 ]

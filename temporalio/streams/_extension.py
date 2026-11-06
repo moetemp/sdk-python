@@ -172,6 +172,7 @@ class ExtensionStreamBackend(StreamBackend):
         # Records get no serialization context, so Workflows, Activities and clients encode
         # them alike.
         mine.converter = client.data_converter
+        mine.client = client
         runner = config.get("workflow_runner")
         if isinstance(runner, SandboxedWorkflowRunner):
             # The interceptor and temporalio.workflow must share the run's Stream state, even
@@ -250,6 +251,7 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
         self.plugin = plugin
         self.backend = backend
         self.converter = converter or temporalio.converter.DataConverter.default
+        self.client: temporalio.client.Client | None = None
 
     def workflow_interceptor_class(
         self, input: temporalio.worker.WorkflowInterceptorClassInput
@@ -566,4 +568,5 @@ def _activity_streams(
         workflow_id=info.workflow_id,
         previous_completed_task=previous,
         failed_tasks=failed,
+        client=interceptor.client,
     )

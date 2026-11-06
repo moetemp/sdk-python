@@ -7,17 +7,26 @@ with no Stream never imports it.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from datetime import timedelta
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from typing_extensions import Self, Unpack
 
+import temporalio.workflow
+
 if TYPE_CHECKING:
     import temporalio.api.stream.v1
     import temporalio.client
-    from temporalio.streams import End, StreamOptions, StreamRef, Subscription
+    from temporalio.streams import (
+        End,
+        Record,
+        StreamOptions,
+        StreamRef,
+        Subscription,
+        Superseded,
+    )
     from temporalio.streams._stream_client import StreamCalls
 
 T = TypeVar("T")
@@ -36,6 +45,12 @@ class Stream(Generic[T]):
     All Streams of one client and Stream id write as one Producer, and :py:meth:`producer`
     returns a Stream that writes as a Producer with a name of its own. A write error that no
     caller got raises at the next call of the Stream.
+
+    In an Activity, including a Local Activity, a Stream from the Worker's client, such as from
+    ``activity.client()``, writes as the Producer of the attempt. So a retry withdraws the
+    Records of the failed attempt. It can't close the Stream. The end of the attempt waits
+    for the attempt's writes, and a write error that no caller got fails the attempt. A sync
+    Activity wraps the Stream in :py:class:`SyncStream`.
 
     .. warning::
         This API is experimental.
@@ -89,6 +104,8 @@ class Stream(Generic[T]):
 
         Raises:
             StreamClosedError: This object closed the Stream.
+            StreamUnsupportedError: The code is a sync Activity, which uses
+                :py:class:`SyncStream`.
         """
         return self._calls.publish(values, rpc_metadata, rpc_timeout)
 
@@ -122,6 +139,10 @@ class Stream(Generic[T]):
                 ignore it.
             rpc_timeout: The deadline of each call of the read, on every backend, and not of the
                 whole read. A call that waits for new Records returns before the deadline.
+
+        Raises:
+            StreamUnsupportedError: The code is a sync Activity, which uses
+                :py:class:`SyncStream`.
         """
         from temporalio.streams._access import read_spec
 
@@ -168,7 +189,8 @@ class Stream(Generic[T]):
 
         Raises:
             StreamNotOwnerError: The code can't close the Stream. Only the run chain closes a
-                Stream bound to a Workflow, and it raises with no call.
+                Stream bound to a Workflow, and an Activity closes no Stream. Both raise with no
+                call.
         """
         await self._calls.close(rpc_metadata, rpc_timeout)
 
@@ -208,12 +230,295 @@ class Stream(Generic[T]):
 
         Raises:
             ValueError: The epoch is below 1.
+            StreamUnsupportedError: The Stream writes as an Activity attempt.
         """
         return Stream(self._ref, self._payload_type, self._calls.producer(name, epoch))
 
     def __repr__(self) -> str:
         """Show the ref."""
         return f"{type(self).__name__}({self._ref!r})"
+
+
+class SyncSubscription(Generic[T]):
+    """The items of one read of a Stream in a sync Activity, in order. Iterate it with ``for``.
+
+    Each iteration blocks the Activity's thread. See :py:class:`temporalio.streams.Subscription`.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(self, subscription: Subscription[T]) -> None:
+        """Create a read. Use a ``SyncStream``'s ``subscribe`` instead."""
+        from temporalio.streams import _activity_stream
+
+        self._subscription = subscription
+        self._steps: Generator[Record[T] | Superseded, None, None] = (
+            _activity_stream.sync_items(subscription)
+        )
+
+    @property
+    def next_offset(self) -> int | None:
+        """The offset to resume from. See :py:attr:`temporalio.streams.Subscription.next_offset`."""
+        return self._subscription.next_offset
+
+    def __iter__(self) -> SyncSubscription[T]:
+        """The read is its own iterator."""
+        return self
+
+    def __next__(self) -> Record[T] | Superseded:
+        """The next item."""
+        return next(self._steps)
+
+    def close(self) -> None:
+        """End the read early. It makes no more calls."""
+        self._steps.close()
+
+
+class SyncStream(Generic[T]):
+    """A Stream in a sync Activity. Its calls block the Activity's thread.
+
+    It wraps a :py:class:`Stream` of the Worker's client, such as for a ref of the Activity's
+    input. A sync Activity has no ``activity.client()``, so it keeps the Worker's client, such as
+    in an Activity class. Each call runs the Stream's call of the same name on the Worker's event
+    loop, and blocks until it ends. A publish returns the offset, not a future.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(self, stream: Stream[T]) -> None:
+        """Wrap ``stream`` for a sync Activity."""
+        self._stream = stream
+
+    def publish(self, *values: T) -> int:
+        """Write one Record for each value, in order, and return the last Record's offset.
+
+        A list is one value.
+
+        Raises:
+            StreamNotFoundError: Nobody created the Stream.
+        """
+        from temporalio.streams import _activity_stream
+
+        async def publish() -> int:
+            return await self._stream.publish(*values)
+
+        return _activity_stream.run_blocking(publish())
+
+    def subscribe(
+        self,
+        *,
+        offset: int | End | None = None,
+        last: int | None = None,
+        wait_new_records: bool = True,
+        create_wait: timedelta | None = None,
+    ) -> SyncSubscription[T]:
+        """Read the Stream's items in order. See :py:meth:`Stream.subscribe`."""
+        from temporalio.streams import _activity_stream
+
+        async def subscribe() -> Subscription[T]:
+            return self._stream.subscribe(
+                offset=offset,
+                last=last,
+                wait_new_records=wait_new_records,
+                create_wait=create_wait,
+            )
+
+        return SyncSubscription(_activity_stream.run_blocking(subscribe()))
+
+    def get_offset(self) -> int:
+        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
+
+        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
+        """
+        from temporalio.streams import _activity_stream
+
+        return _activity_stream.run_blocking(self._stream.get_offset())
+
+    def close(self) -> None:
+        """Close the Stream. See :py:meth:`Stream.close`.
+
+        Raises:
+            StreamNotOwnerError: The Stream writes as the Activity attempt, which can't close it.
+        """
+        from temporalio.streams import _activity_stream
+
+        _activity_stream.run_blocking(self._stream.close())
+
+
+# Records in one batch of the crate's writer. A full batch is written at once.
+_BATCH = 1000
+
+
+class BufferedPublisher(Generic[T]):
+    """Batches the publishes of one Stream.
+
+    Use it in an Activity or a client that writes often. :py:meth:`publish` returns at once.
+    The publisher writes the buffered values as one batch at most ``max_delay`` after the first
+    of them, or at once when they fill a batch. One write is in flight at a time, and values
+    published during it wait for the next one. Use it in ``async with``, which writes the
+    remaining values at the end of the block. For a Stream that writes as an Activity attempt,
+    the end of the attempt also writes the remaining values.
+
+    ``await flush()`` is the backpressure point. A caller that publishes faster than the Store
+    accepts Records must await it from time to time, so the buffer doesn't grow without bound.
+
+    After a batch fails, the publisher writes nothing more, so a reader sees no gap. Each later
+    call raises the error.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    def __init__(
+        self,
+        stream: Stream[T],
+        *,
+        max_delay: timedelta = timedelta(milliseconds=100),
+    ) -> None:
+        """Create a publisher.
+
+        Args:
+            stream: The Stream to publish to.
+            max_delay: The longest time that a value waits in the buffer.
+
+        Raises:
+            StreamUnsupportedError: The code is Workflow code. There, the publishes that wait
+                behind a write to the same Stream go as one Local Activity.
+        """
+        from temporalio.streams import _activity_stream, _errors
+
+        if temporalio.workflow.in_workflow():
+            raise _errors.StreamUnsupportedError(
+                "Workflow code can't use a BufferedPublisher. Its publishes that wait behind "
+                "a write already go as one Local Activity."
+            )
+        self._stream = stream
+        self._max_delay = max_delay
+        self._buffer: list[T] = []
+        # When the oldest buffered value arrived, so the next batch is at most max_delay later.
+        self._first_at = 0.0
+        self._timer: asyncio.TimerHandle | None = None
+        self._writing: asyncio.Task[None] | None = None
+        self._published = 0
+        # Count of the values that a write took, written or not.
+        self._settled = 0
+        self._error: BaseException | None = None
+        self._last_offset = 0
+        self._unwritten = 0
+        self._reported = False
+        attempt = _activity_stream.attempt_of(stream)
+        if attempt is not None:
+            attempt.publishers.append(self)
+
+    def publish(self, *values: T) -> None:
+        """Add one Record for each value to the buffer, and return at once.
+
+        A list is one value.
+
+        Raises:
+            StreamError: A batch failed to write, so the publisher takes no more values.
+        """
+        self._raise_error()
+        if not values:
+            raise TypeError("publish takes one or more values")
+        loop = asyncio.get_running_loop()
+        if not self._buffer:
+            self._first_at = loop.time()
+        self._buffer.extend(values)
+        self._published += len(values)
+        self._schedule()
+
+    async def flush(self) -> int:
+        """Write every value published before the call, and return the last written offset.
+
+        Returns 0 if the publisher hasn't written anything.
+        """
+        target = self._published
+        while self._settled < target:
+            if self._writing is None:
+                self._start()
+            assert self._writing is not None
+            await asyncio.shield(self._writing)
+        self._raise_error()
+        return self._last_offset
+
+    def _raise_error(self) -> None:
+        if self._error is not None:
+            self._reported = True
+            raise self._error
+
+    async def _flush_at_attempt_end(self) -> None:
+        # Fail the attempt for unwritten values, unless the Activity already got the error and
+        # continued.
+        reported = self._reported
+        try:
+            await self.flush()
+        except Exception:
+            if not reported:
+                raise
+
+    def _schedule(self) -> None:
+        if self._writing is not None or not self._buffer:
+            return
+        if len(self._buffer) >= _BATCH:
+            self._start()
+        elif self._timer is None:
+            self._timer = asyncio.get_running_loop().call_at(
+                self._first_at + self._max_delay.total_seconds(), self._start
+            )
+
+    def _start(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if self._writing is not None or not self._buffer:
+            return
+        batch, self._buffer = self._buffer, []
+        self._writing = asyncio.get_running_loop().create_task(self._write(batch))
+
+    async def _write(self, batch: list[T]) -> None:
+        try:
+            if self._error is None:
+                self._last_offset = await self._send(batch)
+            else:
+                # A failed batch fails the later ones too, so a reader sees no gap.
+                self._unwritten += len(batch)
+        except Exception as err:
+            self._unwritten += len(batch)
+            self._error = err
+        finally:
+            self._settled += len(batch)
+            self._writing = None
+            # Schedule the values published during the write, for when their delay ends or they
+            # fill a batch.
+            self._schedule()
+
+    async def _send(self, batch: list[T]) -> int:
+        return await self._stream.publish(*batch)
+
+    @property
+    def unwritten(self) -> int:
+        """How many published values a failed batch left unwritten."""
+        return self._unwritten
+
+    async def __aenter__(self) -> BufferedPublisher[T]:
+        """Use the publisher in ``async with``."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Write the buffered values. A write error does not hide an error of the block."""
+        try:
+            await self.flush()
+        except Exception:
+            if exc is None:
+                raise
 
 
 # Python has no type arguments on a call, so a call that takes the payload type is an object

@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.client
 from temporalio.client._streams import Stream
-from temporalio.streams import _backend, _errors, _ids
+from temporalio.streams import _activity, _backend, _errors, _ids
 from temporalio.streams._access import Access, ReadSpec, subscription
 from temporalio.streams._backend import BackendCalls
 from temporalio.streams._plugin import client_backend
@@ -324,4 +324,12 @@ def _stream(
     ref: StreamRef[T],
     payload_type: Any,
 ) -> Stream[T]:
+    streams = _activity.current.get()
+    if streams is not None and streams.client is client:
+        # The Activity module imports this one.
+        from temporalio.streams._activity_stream import ActivityCalls
+
+        # A Stream of the Worker's client writes as the attempt, so a retry withdraws the
+        # Records of the failed attempt.
+        return Stream(ref, payload_type, ActivityCalls(streams, ref))
     return Stream(ref, payload_type, ClientCalls(client, backend, ref))
