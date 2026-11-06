@@ -1,0 +1,19 @@
+# The chat app's own environment. It takes the SDK from this repo, so the build needs
+# MATURIN_PEP517_ARGS="--features streams" for the Stream runtime. See the README.
+[project]
+name = "streams-chat-app"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "temporalio",
+  "fastapi>=0.135",
+  "uvicorn>=0.30",
+  "openai>=1.40",
+  "anthropic>=1.3",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+temporalio = { path = "../../../../..", editable = true }

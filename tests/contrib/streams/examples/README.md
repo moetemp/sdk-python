@@ -13,3 +13,6 @@ end to end on the memory Store and on Redis.
 | Worker setup | [`worker_setup.py`](worker_setup.py) |
 
 The proposal's Nexus examples aren't in this directory.
+
+[`chat_app`](chat_app/README.md) is a small chat app that uses most parts of the API, with a page
+that shows each Stream item as it arrives.
