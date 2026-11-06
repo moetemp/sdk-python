@@ -1,0 +1,31 @@
+from .message_pb2 import (
+    ActivityEpoch,
+    AppendRecord,
+    ClientEpoch,
+    LocalActivityEpoch,
+    Producer,
+    ProducerEpoch,
+    StreamData,
+    StreamErrorDetails,
+    StreamRecord,
+    StreamRef,
+    StreamSuperseded,
+    StreamWriter,
+    WorkflowTaskEpoch,
+)
+
+__all__ = [
+    "ActivityEpoch",
+    "AppendRecord",
+    "ClientEpoch",
+    "LocalActivityEpoch",
+    "Producer",
+    "ProducerEpoch",
+    "StreamData",
+    "StreamErrorDetails",
+    "StreamRecord",
+    "StreamRef",
+    "StreamSuperseded",
+    "StreamWriter",
+    "WorkflowTaskEpoch",
+]
