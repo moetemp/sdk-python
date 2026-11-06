@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Concatenate,
+    TypeVar,
     cast,
     overload,
 )
@@ -94,6 +95,7 @@ from ._schedule import (
     ScheduleBackfill,
     ScheduleHandle,
 )
+from ._streams import CreateStream, GetStream, Stream
 from ._worker_versioning import (
     BuildIdOp,
     TaskReachabilityType,
@@ -110,10 +112,12 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.streams import StreamBackend
+    from temporalio.streams import StreamBackend, StreamRef
 
     from ._interceptor import Interceptor
     from ._plugin import Plugin
+
+_StreamPayloadT = TypeVar("_StreamPayloadT")
 
 
 class Client:
@@ -910,6 +914,80 @@ class Client:
             first_execution_run_id=first_execution_run_id,
             result_type=result_type,
         )
+
+    @property
+    def create_stream(self) -> CreateStream[Any]:
+        """Create a Stream, which fails if a Stream of the id exists.
+
+        Give the payload type as a type argument::
+
+            stream = await client.create_stream[Turn]("chat-42", retention=timedelta(days=1))
+            async with stream:  # optional, the block end closes it
+                await stream.publish(Turn("user", "hi"))
+
+        A Stream must exist before its first publish, and the create calls the Store, so a bad
+        setting fails early. Code closes the Stream with ``close()``, or at the end of
+        ``async with``. The call takes the Stream id, an optional ``backend=`` name and the
+        options of :py:class:`temporalio.streams.StreamOptions`. See
+        :py:meth:`CreateStream.__call__`.
+
+        .. warning::
+            This API is experimental.
+        """
+        return CreateStream(self, None, or_get=False)
+
+    @property
+    def create_or_get_stream(self) -> CreateStream[Any]:
+        """Create a Stream, or get the one of the id that exists.
+
+        It takes the arguments of :py:attr:`create_stream`. On a Stream that exists, it ignores
+        the options, so its retries are safe. It still fails on a closed or expired Stream.
+
+        .. warning::
+            This API is experimental.
+        """
+        return CreateStream(self, None, or_get=True)
+
+    @property
+    def get_stream(self) -> GetStream[Any]:
+        """Get a Stream by its id, with no call.
+
+        Give the payload type as a type argument, as in ``client.get_stream[Turn]("chat-42")``.
+        Reads decode each Record with it, or as a JSON value with no type argument. For a ref
+        that came as data, such as from a Workflow's query, use :py:meth:`to_stream`. See
+        :py:meth:`GetStream.__call__`.
+
+        .. warning::
+            This API is experimental.
+        """
+        return GetStream(self, None)
+
+    def to_stream(
+        self,
+        ref: StreamRef[_StreamPayloadT],
+        *,
+        payload_type: type[_StreamPayloadT] | None = None,
+    ) -> Stream[_StreamPayloadT]:
+        """Get the Stream of a ref that came as data, such as from a query. It makes no call.
+
+        The type argument of the ref is for type checkers only. Without ``payload_type``, a read
+        gives each Record as a JSON value, such as a dict for a dataclass.
+
+        .. warning::
+            This API is experimental.
+
+        Args:
+            ref: The ref of the Stream.
+            payload_type: The type that reads decode each Record with. Defaults to no type, so
+                a read decodes each Record as a JSON value.
+
+        Raises:
+            StreamConfigError: The client has no backend of the ref, or the ref has no backend
+                and no backend has ``default=True``.
+        """
+        from temporalio.streams import _stream_client
+
+        return _stream_client.to_stream(self, ref, payload_type=payload_type)
 
     def get_workflow_handle_for(
         self,

@@ -23,6 +23,7 @@ from temporalio.streams._errors import (
 )
 from temporalio.streams._items import END, End, ItemKind, Record, Superseded
 from temporalio.streams._plugin import StreamBackend
+from temporalio.streams._reader import Subscription
 from temporalio.streams._ref import StreamOptions, StreamRef
 
 # nexgen generates these wire models. Refs, Records and Superseded items carry them.
@@ -83,6 +84,7 @@ __all__ = [
     "StreamTooLargeError",
     "StreamUnsupportedError",
     "StreamWriter",
+    "Subscription",
     "Superseded",
     "Timestamp",
     "WorkflowTaskEpoch",
