@@ -1,8 +1,8 @@
 """The Redis Stream backend.
 
-Register it on the client. A client creates a Stream with
-:py:attr:`temporalio.client.Client.create_stream`. ``backend=`` picks a backend that isn't the
-default::
+Register it on the client. Workflow code and clients create Streams with
+:py:data:`temporalio.workflow.create_stream` and :py:attr:`temporalio.client.Client.create_stream`.
+``backend=`` picks a backend that isn't the default::
 
     from temporalio.contrib.stream import RedisStreamBackend
 
@@ -10,6 +10,10 @@ default::
         "localhost:7233",
         stream_backends=[RedisStreamBackend("redis://localhost", default=True)],
     )
+
+A Workflow's close is a regular Activity on the Workflow's task queue. So a Worker on that queue
+that polls Activities must run the close, and must register the Redis backend. A Worker with
+``no_remote_activities=True`` logs a warning, since the close waits for another Worker.
 
 .. warning::
     This package is experimental.
@@ -33,6 +37,11 @@ class RedisStreamBackend(ExtensionStreamBackend):
     connections, and so do their Workers. It registers its ``name``, ``redis`` by default, and
     each Stream ref that it creates keeps that name. A Worker serves only one backend. A client
     can have more than one, and ``backend=`` picks one.
+
+    A Workflow's close is a regular Activity on the Workflow's task queue, which runs after the
+    Workflow Task commits. So a Worker on that queue that polls Activities must have this
+    backend. A Worker with ``no_remote_activities=True`` logs a warning, since the close waits
+    for another Worker.
 
     .. warning::
         This API is experimental.

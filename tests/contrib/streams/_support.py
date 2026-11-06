@@ -1,4 +1,4 @@
-"""Finds the Stream crates that the bridge links, for the shared vectors and protos."""
+"""Finds the Stream crates that the bridge links, and describes a Stream in tests."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from temporalio.client import Client
+from temporalio.streams._plugin import client_backend
+from temporalio.streams.system import models
 
 _BRIDGE = Path(__file__).parents[3] / "temporalio" / "bridge"
 
@@ -39,3 +43,14 @@ def crate_file(relative: str, crate: str = "temporalio-streams") -> Path:
 
 def vectors(name: str) -> object:
     return json.loads(crate_file(f"testdata/{name}").read_text(encoding="utf-8"))
+
+
+async def stream_status(
+    client: Client, stream_id: str, backend: str | None = None
+) -> models.StreamStatus:
+    """The status that a describe gives, such as whether the Stream is closed."""
+    _, calls = client_backend(client, backend)
+    response = await calls.service(client.namespace).send_describe_stream(
+        models.DescribeStreamRequest(ref=models.StreamRef(id=stream_id))
+    )
+    return response.status or models.StreamStatus.StreamStatusUnspecified

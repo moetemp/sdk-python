@@ -456,39 +456,62 @@ async def _resume(
 def request_id() -> str:
     """The id of one create call, which its retries send again.
 
-    In a Workflow it comes from ``workflow.uuid4()``, so a replay sends the same id.
+    Outside a Workflow it's a random UUID. In a Workflow it's empty, since the Workflow create
+    sets an id that is the same in each run of the chain.
     """
-    from temporalio.workflow import in_workflow, uuid4
+    from temporalio.workflow import in_workflow
 
-    return str(uuid4() if in_workflow() else uuid.uuid4())
+    # A workflow.uuid4() here would move the user's workflow.random() sequence, and the
+    # Workflow create replaces the id anyway.
+    return "" if in_workflow() else str(uuid.uuid4())
 
 
 # The Stream sources. Each one checks where it runs and gives the value of that context, or
-# raises where it has none to give.
-
-
-def _no_workflow_streams(source: str) -> RuntimeError:
-    # This SDK doesn't run Workflow Stream calls yet, so a generated Workflow call fails here.
-    return RuntimeError(f"Workflow code can't call the Stream service yet ({source})")
+# raises where it has none to give. The Streams API imports this module, so the sources import
+# the API only when they run.
 
 
 def workflow_writer() -> typing.Any:
-    """The writer of the Workflow run's writes."""
-    raise _no_workflow_streams("workflow_writer")
+    """The writer of the Workflow run's writes, with the previous run in a retry run."""
+    from temporalio.streams import _ids
+    from temporalio.streams.system import models
+    from temporalio.workflow import info
+
+    return models.StreamWriter(
+        producer=_ids.workflow_producer(info().run_id),
+        failed_tasks=[],
+        withdraw_run=withdraw_run(),
+    )
 
 
 def withdraw_run() -> str | None:
-    """The previous run whose Records a retry run's create withdraws."""
-    from temporalio.workflow import in_workflow
+    """The previous run whose Records a retry run's first write withdraws."""
+    from temporalio.workflow import in_workflow, info
 
-    if in_workflow():
-        raise _no_workflow_streams("withdraw_run")
-    # Code outside a Workflow isn't a retry run.
-    return None
+    if not in_workflow():
+        # Code outside a Workflow isn't a retry run.
+        return None
+    run = info()
+    return run.continued_run_id if run.attempt > 1 and run.continued_run_id else None
 
 
 def client_writer() -> typing.Any:
-    """The writer of a write outside a Workflow."""
-    # Each client has its own Producer, and a generated call doesn't say which client makes it.
-    # So the SDK's Streams send their writer, and a call without one fails.
-    raise RuntimeError("A Stream write outside a Workflow needs its Producer")
+    """The writer of a write outside a Workflow, which is the Activity attempt's writer."""
+    import temporalio.api.stream.v1 as stream_v1
+    from temporalio.streams import _activity
+    from temporalio.streams.system import models
+
+    streams = _activity.current.get()
+    if streams is None:
+        # Each client has its own Producer, and a generated call doesn't say which client makes
+        # it. So the SDK's Streams send their writer, and a call without one fails.
+        raise RuntimeError("A Stream write outside a Workflow needs its Producer")
+    writer = stream_v1.StreamWriter(
+        producer=streams.producer,
+        # Only a Local Activity has the run's task facts.
+        previous_completed_task=streams.previous_completed_task,
+        failed_tasks=streams.failed_tasks,
+    )
+    return models._StreamWriterTransferTypeConverter().from_transfer_type(
+        writer, models.StreamWriter
+    )

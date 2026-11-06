@@ -65,7 +65,9 @@ class Subscription(Generic[T]):
         # A client read's rpc_metadata and rpc_timeout, for each call of each step.
         self._options = options
         # The Producer and the offsets of each Record that this read gave, without values, so a
-        # Superseded item can list the offsets that it withdraws.
+        # Superseded item can list the offsets that it withdraws. Each write Local Activity of a
+        # run is its own Producer, so a read of a Workflow's writes keeps one entry for each
+        # write, not for each Record, and a Superseded item scans those entries.
         self._shown: dict[
             tuple[Any, ...], tuple[models.Producer, array.array[int]]
         ] = {}

@@ -1,8 +1,10 @@
-"""Producer ids. They must match the temporalio-streams crate byte for byte."""
+"""Producers and their ids. The ids must match the temporalio-streams crate byte for byte."""
 
 from __future__ import annotations
 
 import urllib.parse
+
+from temporalio.streams.system import models
 
 
 def encode_part(text: str) -> str:
@@ -17,6 +19,22 @@ def _join(*parts: str) -> str:
 def workflow_producer_id(run_id: str) -> str:
     """Producer id of a Workflow run."""
     return f"wf:{_join(run_id)}"
+
+
+def workflow_producer(run_id: str) -> models.Producer:
+    """The Workflow Producer of a run.
+
+    The run writes through Local Activities, which send their own Producers, so its Workflow
+    Producer only closes. Its epoch is the Workflow case with no task, which fences nothing,
+    since that Producer writes no Record.
+    """
+    return models.Producer(
+        id=workflow_producer_id(run_id),
+        run_id=run_id,
+        epoch=models.ProducerEpoch(
+            kind=models.ProducerEpochKindWorkflow(models.WorkflowTaskEpoch())
+        ),
+    )
 
 
 def local_activity_producer_id(run_id: str, call_key: str) -> str:
