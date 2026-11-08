@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
+import contextvars
 import itertools
 import os
+import typing
 import uuid
 import weakref
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from datetime import timedelta
 from typing import Any, TypeVar
 
@@ -16,11 +19,13 @@ import temporalio.api.stream.v1 as stream_v1
 import temporalio.client
 from temporalio.client._streams import Stream
 from temporalio.streams import _activity, _backend, _errors, _ids
-from temporalio.streams._access import Access, ReadSpec, subscription
+from temporalio.streams._access import Access, ReadSpec, reader
 from temporalio.streams._backend import BackendCalls
+from temporalio.streams._conflict import StreamIDConflictPolicy
+from temporalio.streams._offset import StreamOffset
 from temporalio.streams._plugin import client_backend
-from temporalio.streams._reader import Item, Position, Subscription
-from temporalio.streams._ref import StreamOptions, StreamRef
+from temporalio.streams._reader import Item, Position, Reader
+from temporalio.streams._ref import StreamRef
 from temporalio.streams._writer import RecordWriter
 from temporalio.streams.system import models
 
@@ -32,6 +37,11 @@ _process_key = str(uuid.uuid4())
 _clients = itertools.count(1)
 _CLIENT_KEYS: weakref.WeakKeyDictionary[temporalio.client.Client, str] = (
     weakref.WeakKeyDictionary()
+)
+
+# The named Producer that client writes use, set by the producer() context manager.
+_producer_override: contextvars.ContextVar[tuple[str, int] | None] = (
+    contextvars.ContextVar("__temporal_stream_producer", default=None)
 )
 
 
@@ -48,6 +58,35 @@ def _new_process_key() -> None:
 _register_at_fork = getattr(os, "register_at_fork", None)
 if _register_at_fork is not None:
     _register_at_fork(after_in_child=_new_process_key)
+
+
+@contextlib.contextmanager
+def producer(name: str, epoch: int) -> Iterator[None]:
+    """Make the client writes in the block write as the Producer ``name`` at ``epoch``.
+
+    Use it for a writer that must fence its earlier instances, such as a server that restarts.
+    Keep ``epoch`` in durable storage, and raise it at each start. After a write at a higher
+    epoch, a write at a lower one raises :py:class:`temporalio.streams.StreamFencedError`. The
+    Records of the earlier epochs aren't withdrawn, since they're real messages. Run only one
+    live writer for each name. Writes in an Activity ignore it and write as the attempt.
+
+    Args:
+        name: The Producer name, the same across restarts.
+        epoch: The writer's epoch, 1 or more.
+
+    Raises:
+        ValueError: The epoch is below 1.
+
+    .. warning::
+        This API is experimental.
+    """
+    if epoch < 1:
+        raise ValueError("A Producer's epoch is 1 or more")
+    token = _producer_override.set((name, epoch))
+    try:
+        yield
+    finally:
+        _producer_override.reset(token)
 
 
 def _client_epoch(attempt: int) -> stream_v1.ProducerEpoch:
@@ -75,27 +114,27 @@ class StreamCalls(abc.ABC):
     """The calls of one :py:class:`Stream`, such as in client code."""
 
     @abc.abstractmethod
-    def publish(
+    def append(
         self,
         values: tuple[Any, ...],
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> asyncio.Future[int]:
-        """Start a write. See :py:meth:`Stream.publish`."""
+    ) -> asyncio.Future[StreamOffset]:
+        """Start a write. See :py:meth:`Stream.append`."""
 
     @abc.abstractmethod
-    def subscribe(
+    def read(
         self,
         read: ReadSpec,
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> Subscription[Any]:
-        """Start a read. See :py:meth:`Stream.subscribe`."""
+    ) -> Reader[Any]:
+        """Start a read. See :py:meth:`Stream.read`."""
 
     @abc.abstractmethod
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
-    ) -> int:
+    ) -> StreamOffset:
         """Get the next offset. See :py:meth:`Stream.get_offset`."""
 
     @abc.abstractmethod
@@ -112,16 +151,12 @@ class StreamCalls(abc.ABC):
     async def exit(self, exc: BaseException | None) -> None:
         """End an ``async with`` block of the Stream. See :py:meth:`Stream.__aexit__`."""
 
-    @abc.abstractmethod
-    def producer(self, name: str, epoch: int) -> StreamCalls:
-        """The calls of a Producer with a name of its own. See :py:meth:`Stream.producer`."""
-
 
 class ClientCalls(StreamCalls):
     """The calls of one Stream in client code.
 
-    Each publish starts its write at the call. All Streams of one client and Stream id write as
-    one Producer, unless a Stream is of a Producer with a name of its own.
+    Each append starts its write at the call. All Streams of one client and Stream id write as
+    one Producer, unless :py:func:`producer` sets a Producer with a name of its own.
     """
 
     def __init__(
@@ -129,14 +164,13 @@ class ClientCalls(StreamCalls):
         client: temporalio.client.Client,
         backend: BackendCalls,
         ref: StreamRef[Any],
-        named: tuple[str, int] | None = None,
     ) -> None:
-        """Create the calls of ``ref``. ``named`` is a Producer's name and epoch."""
+        """Create the calls of ``ref``."""
         self._client = client
         self._backend = backend
         self._ref = ref
-        self._named = named
-        self._writer: RecordWriter | None = None
+        # One writer for each Producer this Stream wrote as, keyed by the producer() override.
+        self._writers: dict[tuple[str, int] | None, RecordWriter] = {}
         self._closed = False
 
     def _access(self) -> Access:
@@ -145,14 +179,18 @@ class ClientCalls(StreamCalls):
         stream_id = self._ref.id
 
         def writer() -> RecordWriter:
-            if self._writer is None:
-                self._writer = RecordWriter(
+            # Read the Producer at write time, so a write in a producer() block uses it.
+            named = _producer_override.get()
+            found = self._writers.get(named)
+            if found is None:
+                found = RecordWriter(
                     writers=backend.writers(client.namespace, client.data_converter),
                     stream_id=stream_id,
-                    producer=_client_producer(client, self._named),
+                    producer=_client_producer(client, named),
                     free=backend.free_writer,
                 )
-            return self._writer
+                self._writers[named] = found
+            return found
 
         return Access(
             backend=backend,
@@ -165,30 +203,34 @@ class ClientCalls(StreamCalls):
     def _raise_lost_write(self) -> None:
         # Client code has no end, such as a run's, to raise a write error that no caller got. So
         # the Stream's next call raises it.
-        error = self._writer.unretrieved_error() if self._writer else None
-        if error is not None:
-            raise error
+        first: BaseException | None = None
+        for writer in list(self._writers.values()):
+            error = writer.unretrieved_error()
+            if error is not None and first is None:
+                first = error
+        if first is not None:
+            raise first
 
-    def publish(
+    def append(
         self,
         values: tuple[Any, ...],
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> asyncio.Future[int]:
+    ) -> asyncio.Future[StreamOffset]:
         """Start a write. The write's task takes the call options."""
         self._raise_lost_write()
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            return self._access().publish(values)
+            return self._access().append(values)
 
-    def subscribe(
+    def read(
         self,
         read: ReadSpec,
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> Subscription[Any]:
+    ) -> Reader[Any]:
         """Start a read."""
         self._raise_lost_write()
-        return subscription(
+        return reader(
             lambda position: self._items(read, position),
             read,
             _backend.options_of(rpc_metadata, rpc_timeout),
@@ -206,17 +248,17 @@ class ClientCalls(StreamCalls):
 
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
-    ) -> int:
+    ) -> StreamOffset:
         """Get the next offset."""
         self._raise_lost_write()
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            return await self._access().get_offset()
+            return StreamOffset._from_wire(await self._access().get_offset())
 
     def _check_close(self) -> None:
         if self._ref.owner is not None:
             # Only the run chain closes a Stream bound to a Workflow. The Store refuses a
             # client's close too, but this check makes no call.
-            raise _errors.StreamNotOwnerError(
+            raise _errors.not_owner(
                 f"Can't close the Stream {self._ref.id} from a client, since it is bound to a "
                 "Workflow"
             )
@@ -244,12 +286,6 @@ class ClientCalls(StreamCalls):
         if not self._closed:
             await self.close({}, None)
 
-    def producer(self, name: str, epoch: int) -> StreamCalls:
-        """The calls of the same Stream and client as a Producer with a name of its own."""
-        if epoch < 1:
-            raise ValueError("A Producer's epoch is 1 or more")
-        return ClientCalls(self._client, self._backend, self._ref, (name, epoch))
-
 
 async def create(
     client: temporalio.client.Client,
@@ -257,29 +293,27 @@ async def create(
     *,
     id: str,
     backend: str | None,
-    options: StreamOptions,
-    or_get: bool,
+    id_conflict_policy: StreamIDConflictPolicy,
+    rpc_metadata: Mapping[str, str | bytes],
+    rpc_timeout: timedelta | None,
 ) -> Stream[T]:
-    """Create a Stream, or with ``or_get`` get the one that exists.
+    """Create a Stream.
 
-    See :py:attr:`temporalio.client.Client.create_stream`.
+    See :py:meth:`temporalio.client.Client.create_stream`.
     """
     if not id:
         # An empty id would fail only at the Store, with an unclear error.
         raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
-    policy = (
-        models.StreamIdConflictPolicy.StreamIdConflictPolicyUseExisting
-        if or_get
-        else models.StreamIdConflictPolicy.StreamIdConflictPolicyFail
-    )
-    # The generated create sends a new request id for each call. A closed, expired or another
-    # owner's Stream fails either create.
-    await calls.service(client.namespace).create_stream[object](
+    # Delegate to the generated client. It sends a new request id for each call. A closed,
+    # expired or another owner's Stream fails the create.
+    await calls.service(client.namespace).create_stream(
         id=id,
         backend=backend_name,
-        retention=options.get("retention"),
-        id_conflict_policy=policy,
+        id_conflict_policy=models.StreamIdConflictPolicy(int(id_conflict_policy)),
+        body_type=object,
+        rpc_metadata=rpc_metadata,
+        rpc_timeout=rpc_timeout,
     )
     ref: StreamRef[T] = StreamRef(id=id, backend=backend_name)
     return _stream(client, calls, ref, payload_type)
@@ -290,31 +324,33 @@ def get_stream(
     payload_type: type[T] | None,
     *,
     id: str,
+    owner: models.Execution | None,
     backend: str | None,
 ) -> Stream[T]:
     """Get a Stream by its id.
 
-    See :py:attr:`temporalio.client.Client.get_stream`.
+    See :py:meth:`temporalio.client.Client.get_stream`.
     """
     if not id:
         # An empty id would fail only at the first call, with an unclear error.
         raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
-    ref: StreamRef[T] = StreamRef(id=id, backend=backend_name)
+    ref: StreamRef[T] = StreamRef(id=id, owner=owner, backend=backend_name)
     return _stream(client, calls, ref, payload_type)
 
 
-def to_stream(
+def from_ref(
     client: temporalio.client.Client,
     ref: StreamRef[T],
-    *,
-    payload_type: type[T] | None,
 ) -> Stream[T]:
     """The Stream of a ref that came as data.
 
-    See :py:meth:`temporalio.client.Client.to_stream`.
+    See :py:meth:`temporalio.client.Client.get_stream`.
     """
     _, calls = client_backend(client, ref.backend, hint="the ref's backend field")
+    # A ref that code built as StreamRef[T] carries the payload type, so reads decode with it.
+    arguments = typing.get_args(getattr(ref, "__orig_class__", None))
+    payload_type = arguments[0] if arguments else None
     return _stream(client, calls, ref, payload_type)
 
 

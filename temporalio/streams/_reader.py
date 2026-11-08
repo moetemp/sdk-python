@@ -20,6 +20,7 @@ from temporalio.streams._items import (
     producer_key,
     withdraws,
 )
+from temporalio.streams._offset import StreamOffset
 from temporalio.streams.system import models
 
 T = TypeVar("T")
@@ -42,7 +43,7 @@ class Position:
     next_offset: int | None
 
 
-class Subscription(Generic[T]):
+class Reader(Generic[T]):
     """The items of one read of a Stream, in order. Iterate it with ``async for``.
 
     It yields :py:class:`Record` items, and :py:class:`Superseded` items that withdraw earlier
@@ -59,7 +60,7 @@ class Subscription(Generic[T]):
         position: Position,
         options: _backend.CallOptions | None = None,
     ) -> None:
-        """Create a read. Use a Stream's ``subscribe`` instead."""
+        """Create a read. Use a Stream's ``read`` instead."""
         self._items = items
         self._position = position
         # A client read's rpc_metadata and rpc_timeout, for each call of each step.
@@ -73,7 +74,7 @@ class Subscription(Generic[T]):
         ] = {}
 
     @property
-    def next_offset(self) -> int | None:
+    def next_offset(self) -> StreamOffset | None:
         """The offset to resume from, after the last item or the last page that the read got.
 
         Pass it as ``offset`` to a later read. After a ``Superseded`` item, it's that item's own
@@ -82,9 +83,10 @@ class Subscription(Generic[T]):
         Record that failed to decode, it's past that Record. It's None before the first page of
         a read from ``END`` or of a read with ``last``.
         """
-        return self._position.next_offset
+        wire = self._position.next_offset
+        return StreamOffset._from_wire(wire) if wire is not None else None
 
-    def __aiter__(self) -> Subscription[T]:
+    def __aiter__(self) -> Reader[T]:
         """The read is its own iterator."""
         return self
 
@@ -97,12 +99,13 @@ class Subscription(Generic[T]):
         """
         with _backend.using(self._options):
             item = await self._items.__anext__()
+        offset = item.offset._wire
         if isinstance(item, Superseded):
             # The Record of the same entry has the same offset and comes next.
-            self._position.next_offset = item.offset
+            self._position.next_offset = offset
         else:
             self._position.next_offset = max(
-                self._position.next_offset or 0, item.offset + 1
+                self._position.next_offset or 0, offset + 1
             )
         if (
             isinstance(item, Record)
@@ -113,17 +116,17 @@ class Subscription(Generic[T]):
             key = producer_key(item.producer)
             _, runs = self._shown.setdefault(key, (item.producer, array.array("Q")))
             # A batch has consecutive offsets, so a run of them costs one first and last pair.
-            if runs and runs[-1] + 1 == item.offset:
-                runs[-1] = item.offset
+            if runs and runs[-1] + 1 == offset:
+                runs[-1] = offset
             else:
-                runs.extend((item.offset, item.offset))
+                runs.extend((offset, offset))
         elif isinstance(item, Superseded):
             item = dataclasses.replace(
                 item, withdrawn_offsets=self._withdraw(item.facts)
             )
         return item
 
-    def _withdraw(self, facts: models.StreamSuperseded) -> tuple[int, ...]:
+    def _withdraw(self, facts: models.StreamSuperseded) -> tuple[StreamOffset, ...]:
         offsets: list[int] = []
         for key, (producer, runs) in list(self._shown.items()):
             if withdraws(facts, producer):
@@ -131,7 +134,7 @@ class Subscription(Generic[T]):
                     offsets.extend(range(first, last + 1))
                 # A withdrawn Record stays withdrawn, so the read forgets it.
                 del self._shown[key]
-        return tuple(sorted(offsets))
+        return tuple(StreamOffset._from_wire(offset) for offset in sorted(offsets))
 
     async def aclose(self) -> None:
         """End the read early, from the task that reads it. It makes no more calls.
@@ -308,6 +311,10 @@ async def _item(
             return None
         case models.StreamItemData(value=data):
             value = _convert.decode(converter, data.body, payload_type)
-            return Record(data=value, offset=offset, producer=data.producer)
+            return Record(
+                data=value,
+                offset=StreamOffset._from_wire(offset),
+                producer=data.producer,
+            )
         case models.StreamItemSuperseded(value=facts):
-            return Superseded(offset=offset, facts=facts)
+            return Superseded(offset=StreamOffset._from_wire(offset), facts=facts)

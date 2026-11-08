@@ -3,32 +3,16 @@
 from __future__ import annotations
 
 import typing
-from datetime import timedelta
 from typing import Any, Generic, TypeVar
 
 import google.protobuf.json_format
-from typing_extensions import Self, TypedDict
+from typing_extensions import Self
 
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.converter
 from temporalio.streams.system import models
 
 T = TypeVar("T")
-
-
-class StreamOptions(TypedDict, total=False):
-    """The options of a new Stream. ``create_or_get_stream`` ignores them on a Stream that exists.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    retention: timedelta
-    """How long a Record stays readable, even while the Stream is open.
-
-    A closed Stream is kept for one Retention after its close. Defaults to the backend's
-    Retention.
-    """
 
 
 def _model(ref: StreamRef[Any]) -> models.StreamRef:
@@ -89,7 +73,7 @@ class StreamRef(Generic[T]):
     dataclass or a pydantic model, in the proto JSON form of that message.
 
     A ref has no calls. To make calls, Workflow code gets a Stream with
-    ``workflow.to_stream(ref)``, and other code with ``client.to_stream(ref)``.
+    ``workflow.get_stream(ref)``, and other code with ``client.get_stream(ref)``.
 
     .. warning::
         This API is experimental.

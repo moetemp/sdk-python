@@ -8,14 +8,16 @@ from collections.abc import Callable, Generator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import temporalio.api.stream.v1 as stream_v1
+from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams import _errors
+from temporalio.streams._offset import StreamOffset
 
 if TYPE_CHECKING:
     from temporalio.streams.writer_system import client as writer_client
     from temporalio.streams.writer_system.client import Writer
 
 
-class WriteFuture(asyncio.Future[int]):
+class WriteFuture(asyncio.Future[StreamOffset]):
     """The future of a write. A caller that gets its result or its error sets ``retrieved``.
 
     A write error that no caller gets still raises, at the end of a Workflow run or an Activity
@@ -24,8 +26,12 @@ class WriteFuture(asyncio.Future[int]):
 
     retrieved = False
 
-    def result(self) -> int:
-        """The last offset of the write."""
+    def _set_wire(self, offset: int) -> None:
+        """Set the result from a wire offset. The plumbing works in wire ints."""
+        self.set_result(StreamOffset._from_wire(offset))
+
+    def result(self) -> StreamOffset:
+        """The offset of the write's last Record."""
         self.retrieved = True
         return super().result()
 
@@ -34,7 +40,7 @@ class WriteFuture(asyncio.Future[int]):
         self.retrieved = True
         return super().exception()
 
-    def __await__(self) -> Generator[Any, None, int]:
+    def __await__(self) -> Generator[Any, None, StreamOffset]:
         """Wait for the write, and return its last offset."""
         # The await of asyncio's future doesn't call result(), so this one does.
         if not self.done():
@@ -45,7 +51,7 @@ class WriteFuture(asyncio.Future[int]):
     __iter__ = __await__
 
 
-def unretrieved_error(future: asyncio.Future[int]) -> BaseException | None:
+def unretrieved_error(future: asyncio.Future[StreamOffset]) -> BaseException | None:
     """The error of a failed write that no caller got, else None."""
     if not isinstance(future, WriteFuture) or future.retrieved or future.cancelled():
         return None
@@ -99,12 +105,13 @@ class RecordWriter:
         """
         try:
             await self.open()
-        except (
-            _errors.StreamNotFoundError,
-            _errors.StreamClosedError,
-            _errors.StreamExpiredError,
-        ):
-            pass
+        except _errors.StreamError as err:
+            if err.reason not in (
+                StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND,
+                StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
+                StreamErrorReason.STREAM_ERROR_REASON_EXPIRED,
+            ):
+                raise
 
     async def open(self) -> Writer:
         """Open the crate's writer once.
@@ -172,7 +179,7 @@ class RecordWriter:
                 future.set_exception(error)
                 self._failed.append(future)
             else:
-                future.set_result(task.result())
+                future._set_wire(task.result())
 
         task.add_done_callback(done)
         return future

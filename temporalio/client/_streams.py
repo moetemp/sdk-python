@@ -12,39 +12,35 @@ from datetime import timedelta
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from typing_extensions import Self, Unpack
+from typing_extensions import Self
 
 import temporalio.workflow
 
 if TYPE_CHECKING:
     import temporalio.api.stream.v1
-    import temporalio.client
     from temporalio.streams import (
         End,
+        Reader,
         Record,
-        StreamOptions,
+        StreamOffset,
         StreamRef,
-        Subscription,
         Superseded,
     )
     from temporalio.streams._stream_client import StreamCalls
 
 T = TypeVar("T")
-_U = TypeVar("_U")
 
 
 class Stream(Generic[T]):
     """A Stream outside Workflow code, with its calls. ``T`` is the payload type.
 
-    Get one with :py:attr:`temporalio.client.Client.create_stream`,
-    :py:attr:`temporalio.client.Client.create_or_get_stream`,
-    :py:attr:`temporalio.client.Client.get_stream`, or
-    :py:meth:`temporalio.client.Client.to_stream` for a ref that came as data. Its
-    :py:attr:`ref` is the data to pass on, such as to a Workflow.
+    Get one with :py:meth:`temporalio.client.Client.create_stream` or
+    :py:meth:`temporalio.client.Client.get_stream`. Its :py:attr:`ref` is the data to pass on,
+    such as to a Workflow.
 
-    All Streams of one client and Stream id write as one Producer, and :py:meth:`producer`
-    returns a Stream that writes as a Producer with a name of its own. A write error that no
-    caller got raises at the next call of the Stream.
+    All Streams of one client and Stream id write as one Producer, and
+    :py:func:`temporalio.streams.producer` sets a Producer with a name of its own for the writes
+    in a block. A write error that no caller got raises at the next call of the Stream.
 
     In an Activity, including a Local Activity, a Stream from the Worker's client, such as from
     ``activity.client()``, writes as the Producer of the attempt. So a retry withdraws the
@@ -59,7 +55,7 @@ class Stream(Generic[T]):
     def __init__(
         self, ref: StreamRef[T], payload_type: Any, calls: StreamCalls
     ) -> None:
-        """Create a Stream. Use a client's ``create_stream``, ``get_stream`` or ``to_stream``."""
+        """Create a Stream. Use a client's ``create_stream`` or ``get_stream``."""
         self._ref = ref
         # The type that a read decodes each value with. None decodes with no type hint.
         self._payload_type = payload_type
@@ -77,12 +73,12 @@ class Stream(Generic[T]):
 
         return _ref.to_proto(self._ref)
 
-    def publish(
+    def append(
         self,
         *values: T,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
-    ) -> asyncio.Future[int]:
+    ) -> asyncio.Future[StreamOffset]:
         """Start the write of one Record for each value, in order, and return its future.
 
         The write has its place in the Stream's order when the call returns, also when no
@@ -104,21 +100,20 @@ class Stream(Generic[T]):
 
         Raises:
             StreamClosedError: This object closed the Stream.
-            StreamUnsupportedError: The code is a sync Activity, which uses
-                :py:class:`SyncStream`.
+            StreamError: The code is a sync Activity, which uses :py:class:`SyncStream`.
         """
-        return self._calls.publish(values, rpc_metadata, rpc_timeout)
+        return self._calls.append(values, rpc_metadata, rpc_timeout)
 
-    def subscribe(
+    def read(
         self,
         *,
-        offset: int | End | None = None,
+        offset: StreamOffset | End | None = None,
         last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
-    ) -> Subscription[T]:
+    ) -> Reader[T]:
         """Read the Stream's items in order.
 
         The read ends when the Stream is closed and the read gave its last item, or at the
@@ -141,29 +136,32 @@ class Stream(Generic[T]):
                 whole read. A call that waits for new Records returns before the deadline.
 
         Raises:
-            StreamUnsupportedError: The code is a sync Activity, which uses
-                :py:class:`SyncStream`.
+            StreamError: The code is a sync Activity, which uses :py:class:`SyncStream`.
         """
         from temporalio.streams._access import read_spec
+        from temporalio.streams._items import End
 
+        wire_offset: int | End | None
+        if offset is None or isinstance(offset, End):
+            wire_offset = offset
+        else:
+            wire_offset = offset._wire
         read = read_spec(
             self._payload_type,
-            offset=offset,
+            offset=wire_offset,
             last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
-        return self._calls.subscribe(read, rpc_metadata, rpc_timeout)
+        return self._calls.read(read, rpc_metadata, rpc_timeout)
 
     async def get_offset(
         self,
         *,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
-    ) -> int:
-        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
-
-        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
+    ) -> StreamOffset:
+        """The next offset of the Stream, past the newest Record, or the beginning if it's empty.
 
         Args:
             rpc_metadata: Headers of the call. The Redis and memory backends ignore it.
@@ -177,9 +175,9 @@ class Stream(Generic[T]):
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
     ) -> None:
-        """Write the Records that this object published, then close the Stream.
+        """Write the Records that this object appended, then close the Stream.
 
-        A close carries no value, so code with a last value publishes it first. Readers get the
+        A close carries no value, so code with a last value appends it first. Readers get the
         Records before the close, then their read ends. Later writes fail with
         ``StreamClosedError``.
 
@@ -188,9 +186,8 @@ class Stream(Generic[T]):
             rpc_timeout: The deadline of each call, on every backend.
 
         Raises:
-            StreamNotOwnerError: The code can't close the Stream. Only the run chain closes a
-                Stream bound to a Workflow, and an Activity closes no Stream. Both raise with no
-                call.
+            StreamError: The code can't close the Stream. Only the run chain closes a Stream
+                bound to a Workflow, and an Activity closes no Stream. Both raise with no call.
         """
         await self._calls.close(rpc_metadata, rpc_timeout)
 
@@ -198,7 +195,7 @@ class Stream(Generic[T]):
         """Use the Stream in ``async with``, which closes it at the end.
 
         Raises:
-            StreamNotOwnerError: The code can't close the Stream. See :py:meth:`close`.
+            StreamError: The code can't close the Stream. See :py:meth:`close`.
         """
         await self._calls.enter()
         return self
@@ -215,54 +212,35 @@ class Stream(Generic[T]):
         """
         await self._calls.exit(exc)
 
-    def producer(self, name: str, epoch: int) -> Stream[T]:
-        """Return this Stream as a Stream that writes as the Producer ``name`` at ``epoch``.
-
-        Use it for a writer that must fence its earlier instances, such as a server that
-        restarts. Keep ``epoch`` in durable storage, and raise it at each start. After a write
-        at a higher epoch, a write at a lower one raises
-        :py:class:`temporalio.streams.StreamFencedError`. The Records of the earlier epochs
-        aren't withdrawn, since they're real messages. Run only one live writer for each name.
-
-        Args:
-            name: The Producer name, the same across restarts.
-            epoch: The writer's epoch, 1 or more.
-
-        Raises:
-            ValueError: The epoch is below 1.
-            StreamUnsupportedError: The Stream writes as an Activity attempt.
-        """
-        return Stream(self._ref, self._payload_type, self._calls.producer(name, epoch))
-
     def __repr__(self) -> str:
         """Show the ref."""
         return f"{type(self).__name__}({self._ref!r})"
 
 
-class SyncSubscription(Generic[T]):
+class SyncReader(Generic[T]):
     """The items of one read of a Stream in a sync Activity, in order. Iterate it with ``for``.
 
-    Each iteration blocks the Activity's thread. See :py:class:`temporalio.streams.Subscription`.
+    Each iteration blocks the Activity's thread. See :py:class:`temporalio.streams.Reader`.
 
     .. warning::
         This API is experimental.
     """
 
-    def __init__(self, subscription: Subscription[T]) -> None:
-        """Create a read. Use a ``SyncStream``'s ``subscribe`` instead."""
+    def __init__(self, reader: Reader[T]) -> None:
+        """Create a read. Use a ``SyncStream``'s ``read`` instead."""
         from temporalio.streams import _activity_stream
 
-        self._subscription = subscription
+        self._reader = reader
         self._steps: Generator[Record[T] | Superseded, None, None] = (
-            _activity_stream.sync_items(subscription)
+            _activity_stream.sync_items(reader)
         )
 
     @property
-    def next_offset(self) -> int | None:
-        """The offset to resume from. See :py:attr:`temporalio.streams.Subscription.next_offset`."""
-        return self._subscription.next_offset
+    def next_offset(self) -> StreamOffset | None:
+        """The offset to resume from. See :py:attr:`temporalio.streams.Reader.next_offset`."""
+        return self._reader.next_offset
 
-    def __iter__(self) -> SyncSubscription[T]:
+    def __iter__(self) -> SyncReader[T]:
         """The read is its own iterator."""
         return self
 
@@ -281,7 +259,7 @@ class SyncStream(Generic[T]):
     It wraps a :py:class:`Stream` of the Worker's client, such as for a ref of the Activity's
     input. A sync Activity has no ``activity.client()``, so it keeps the Worker's client, such as
     in an Activity class. Each call runs the Stream's call of the same name on the Worker's event
-    loop, and blocks until it ends. A publish returns the offset, not a future.
+    loop, and blocks until it ends. An append returns the offset, not a future.
 
     .. warning::
         This API is experimental.
@@ -291,7 +269,7 @@ class SyncStream(Generic[T]):
         """Wrap ``stream`` for a sync Activity."""
         self._stream = stream
 
-    def publish(self, *values: T) -> int:
+    def append(self, *values: T) -> StreamOffset:
         """Write one Record for each value, in order, and return the last Record's offset.
 
         A list is one value.
@@ -301,37 +279,34 @@ class SyncStream(Generic[T]):
         """
         from temporalio.streams import _activity_stream
 
-        async def publish() -> int:
-            return await self._stream.publish(*values)
+        async def append() -> StreamOffset:
+            return await self._stream.append(*values)
 
-        return _activity_stream.run_blocking(publish())
+        return _activity_stream.run_blocking(append())
 
-    def subscribe(
+    def read(
         self,
         *,
-        offset: int | End | None = None,
+        offset: StreamOffset | End | None = None,
         last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
-    ) -> SyncSubscription[T]:
-        """Read the Stream's items in order. See :py:meth:`Stream.subscribe`."""
+    ) -> SyncReader[T]:
+        """Read the Stream's items in order. See :py:meth:`Stream.read`."""
         from temporalio.streams import _activity_stream
 
-        async def subscribe() -> Subscription[T]:
-            return self._stream.subscribe(
+        async def read() -> Reader[T]:
+            return self._stream.read(
                 offset=offset,
                 last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
             )
 
-        return SyncSubscription(_activity_stream.run_blocking(subscribe()))
+        return SyncReader(_activity_stream.run_blocking(read()))
 
-    def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
-
-        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
-        """
+    def get_offset(self) -> StreamOffset:
+        """The next offset of the Stream, past the newest Record, or the beginning if empty."""
         from temporalio.streams import _activity_stream
 
         return _activity_stream.run_blocking(self._stream.get_offset())
@@ -340,7 +315,7 @@ class SyncStream(Generic[T]):
         """Close the Stream. See :py:meth:`Stream.close`.
 
         Raises:
-            StreamNotOwnerError: The Stream writes as the Activity attempt, which can't close it.
+            StreamError: The Stream writes as the Activity attempt, which can't close it.
         """
         from temporalio.streams import _activity_stream
 
@@ -351,20 +326,20 @@ class SyncStream(Generic[T]):
 _BATCH = 1000
 
 
-class BufferedPublisher(Generic[T]):
-    """Batches the publishes of one Stream.
+class BufferedAppender(Generic[T]):
+    """Batches the appends of one Stream.
 
-    Use it in an Activity or a client that writes often. :py:meth:`publish` returns at once.
-    The publisher writes the buffered values as one batch at most ``max_delay`` after the first
+    Use it in an Activity or a client that writes often. :py:meth:`append` returns at once.
+    The appender writes the buffered values as one batch at most ``max_delay`` after the first
     of them, or at once when they fill a batch. One write is in flight at a time, and values
-    published during it wait for the next one. Use it in ``async with``, which writes the
+    appended during it wait for the next one. Use it in ``async with``, which writes the
     remaining values at the end of the block. For a Stream that writes as an Activity attempt,
     the end of the attempt also writes the remaining values.
 
-    ``await flush()`` is the backpressure point. A caller that publishes faster than the Store
+    ``await flush()`` is the backpressure point. A caller that appends faster than the Store
     accepts Records must await it from time to time, so the buffer doesn't grow without bound.
 
-    After a batch fails, the publisher writes nothing more, so a reader sees no gap. Each later
+    After a batch fails, the appender writes nothing more, so a reader sees no gap. Each later
     call raises the error.
 
     .. warning::
@@ -377,21 +352,21 @@ class BufferedPublisher(Generic[T]):
         *,
         max_delay: timedelta = timedelta(milliseconds=100),
     ) -> None:
-        """Create a publisher.
+        """Create an appender.
 
         Args:
-            stream: The Stream to publish to.
+            stream: The Stream to append to.
             max_delay: The longest time that a value waits in the buffer.
 
         Raises:
-            StreamUnsupportedError: The code is Workflow code. There, the publishes that wait
-                behind a write to the same Stream go as one Local Activity.
+            StreamError: The code is Workflow code. There, the appends that wait behind a write
+                to the same Stream go as one Local Activity.
         """
         from temporalio.streams import _activity_stream, _errors
 
         if temporalio.workflow.in_workflow():
-            raise _errors.StreamUnsupportedError(
-                "Workflow code can't use a BufferedPublisher. Its publishes that wait behind "
+            raise _errors.unsupported(
+                "Workflow code can't use a BufferedAppender. Its appends that wait behind "
                 "a write already go as one Local Activity."
             )
         self._stream = stream
@@ -401,41 +376,41 @@ class BufferedPublisher(Generic[T]):
         self._first_at = 0.0
         self._timer: asyncio.TimerHandle | None = None
         self._writing: asyncio.Task[None] | None = None
-        self._published = 0
+        self._appended = 0
         # Count of the values that a write took, written or not.
         self._settled = 0
         self._error: BaseException | None = None
-        self._last_offset = 0
+        self._last_offset: StreamOffset | None = None
         self._unwritten = 0
         self._reported = False
         attempt = _activity_stream.attempt_of(stream)
         if attempt is not None:
-            attempt.publishers.append(self)
+            attempt.appenders.append(self)
 
-    def publish(self, *values: T) -> None:
+    def append(self, *values: T) -> None:
         """Add one Record for each value to the buffer, and return at once.
 
         A list is one value.
 
         Raises:
-            StreamError: A batch failed to write, so the publisher takes no more values.
+            StreamError: A batch failed to write, so the appender takes no more values.
         """
         self._raise_error()
         if not values:
-            raise TypeError("publish takes one or more values")
+            raise TypeError("append takes one or more values")
         loop = asyncio.get_running_loop()
         if not self._buffer:
             self._first_at = loop.time()
         self._buffer.extend(values)
-        self._published += len(values)
+        self._appended += len(values)
         self._schedule()
 
-    async def flush(self) -> int:
-        """Write every value published before the call, and return the last written offset.
+    async def flush(self) -> StreamOffset | None:
+        """Write every value appended before the call, and return the last written offset.
 
-        Returns 0 if the publisher hasn't written anything.
+        Returns None if the appender hasn't written anything.
         """
-        target = self._published
+        target = self._appended
         while self._settled < target:
             if self._writing is None:
                 self._start()
@@ -491,20 +466,20 @@ class BufferedPublisher(Generic[T]):
         finally:
             self._settled += len(batch)
             self._writing = None
-            # Schedule the values published during the write, for when their delay ends or they
+            # Schedule the values appended during the write, for when their delay ends or they
             # fill a batch.
             self._schedule()
 
-    async def _send(self, batch: list[T]) -> int:
-        return await self._stream.publish(*batch)
+    async def _send(self, batch: list[T]) -> StreamOffset:
+        return await self._stream.append(*batch)
 
     @property
     def unwritten(self) -> int:
-        """How many published values a failed batch left unwritten."""
+        """How many appended values a failed batch left unwritten."""
         return self._unwritten
 
-    async def __aenter__(self) -> BufferedPublisher[T]:
-        """Use the publisher in ``async with``."""
+    async def __aenter__(self) -> BufferedAppender[T]:
+        """Use the appender in ``async with``."""
         return self
 
     async def __aexit__(
@@ -519,114 +494,3 @@ class BufferedPublisher(Generic[T]):
         except Exception:
             if exc is None:
                 raise
-
-
-# Python has no type arguments on a call, so a call that takes the payload type is an object
-# whose subscript binds the type, as in client.get_stream[Turn]("chat-42"). The subscript passes
-# the class on, so a read decodes each Record with it, and type checkers see Stream[Turn]. With
-# no subscript, T is Any and a read gives JSON values.
-
-
-class CreateStream(Generic[T]):
-    """The call of :py:attr:`temporalio.client.Client.create_stream` and
-    :py:attr:`temporalio.client.Client.create_or_get_stream`.
-
-    Subscript it with the payload type, as in ``client.create_stream[Turn]("chat-42")``.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    def __init__(
-        self,
-        client: temporalio.client.Client,
-        payload_type: type[T] | None,
-        *,
-        or_get: bool,
-    ) -> None:
-        """Create the call. Use the client's property instead."""
-        self._client = client
-        self._payload_type = payload_type
-        self._or_get = or_get
-
-    def __getitem__(self, payload_type: type[_U]) -> CreateStream[_U]:
-        """The call for Streams of ``payload_type``.
-
-        It takes a class, such as ``Turn`` or ``list[str]``. Type checkers refuse a union, such
-        as ``str | None``, so use ``Any`` or a class that holds the value instead.
-        """
-        return CreateStream(self._client, payload_type, or_get=self._or_get)
-
-    async def __call__(
-        self,
-        id: str,
-        *,
-        backend: str | None = None,
-        **options: Unpack[StreamOptions],
-    ) -> Stream[T]:
-        """Create the Stream, and return it.
-
-        Args:
-            id: The Stream id, which the caller picks, as for a Workflow ID.
-            backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``.
-            options: The options of a new Stream, such as ``retention``. See
-                :py:class:`temporalio.streams.StreamOptions`.
-
-        Raises:
-            StreamAlreadyExistsError: ``create_stream`` of an id that exists.
-            StreamClosedError: A Stream of that id closed.
-            StreamExpiredError: A Stream of that id expired.
-            StreamConfigError: The client has no backend with that name, or no backend has
-                ``default=True`` and the call gives no backend. No call is made.
-        """
-        from temporalio.streams import _stream_client
-
-        return await _stream_client.create(
-            self._client,
-            self._payload_type,
-            id=id,
-            backend=backend,
-            options=options,
-            or_get=self._or_get,
-        )
-
-
-class GetStream(Generic[T]):
-    """The call of :py:attr:`temporalio.client.Client.get_stream`.
-
-    Subscript it with the payload type, as in ``client.get_stream[Turn]("chat-42")``.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    def __init__(
-        self, client: temporalio.client.Client, payload_type: type[T] | None
-    ) -> None:
-        """Create the call. Use the client's property instead."""
-        self._client = client
-        self._payload_type = payload_type
-
-    def __getitem__(self, payload_type: type[_U]) -> GetStream[_U]:
-        """The call for Streams of ``payload_type``. It takes a class, as for ``create_stream``."""
-        return GetStream(self._client, payload_type)
-
-    def __call__(self, id: str, *, backend: str | None = None) -> Stream[T]:
-        """Get the Stream with no call.
-
-        Args:
-            id: The Stream id.
-            backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``.
-
-        Raises:
-            StreamConfigError: The client has no backend with that name, or no backend has
-                ``default=True`` and the call gives no backend.
-            ValueError: The id is empty.
-        """
-        from temporalio.streams import _stream_client
-
-        return _stream_client.get_stream(
-            self._client, self._payload_type, id=id, backend=backend
-        )

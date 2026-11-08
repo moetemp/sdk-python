@@ -153,11 +153,9 @@ from ._sandbox import (
 )
 from ._streams import (
     WorkflowStream,
-    create_or_get_stream,
-    create_or_get_stream_nowait,
     create_stream,
     create_stream_nowait,
-    to_stream,
+    get_stream,
 )
 from ._workflow_ops import (
     ChildWorkflowCancellationType,
@@ -267,11 +265,9 @@ __all__ = [
     "logger",
     "unsafe",
     "WorkflowStream",
-    "create_or_get_stream",
-    "create_or_get_stream_nowait",
     "create_stream",
     "create_stream_nowait",
-    "to_stream",
+    "get_stream",
     "ChildWorkflowCancellationType",
     "ChildWorkflowConfig",
     "ChildWorkflowHandle",

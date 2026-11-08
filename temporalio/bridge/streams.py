@@ -22,11 +22,15 @@ class StreamRuntime:
         """Build the runtime on Redis, or on memory with ``memory``, from its encoded config.
 
         Raises:
-            ValueError: The bridge build doesn't link the crate, or the config is not valid.
+            StreamConfigError: The bridge build doesn't link the crate.
+            ValueError: The config is not valid.
         """
         new = getattr(temporalio.bridge.temporal_sdk_bridge, "new_stream_runtime", None)
         if new is None:
-            raise ValueError("This bridge build has no Stream runtime")
+            # Imported here, since temporalio.streams._errors imports this module.
+            from temporalio.streams._errors import StreamConfigError
+
+            raise StreamConfigError("This bridge build has no Stream runtime")
         self._ref: Any = new(runtime._ref, memory, config)
 
     @property

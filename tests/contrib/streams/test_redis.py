@@ -14,7 +14,7 @@ from temporalio import activity, streams, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.api.enums.v1 import EventType, StreamErrorReason
 from temporalio.client import (
-    BufferedPublisher,
+    BufferedAppender,
     Client,
     Interceptor,
     Stream,
@@ -45,7 +45,7 @@ from tests.helpers import new_worker
 
 
 async def read_all(stream: Stream[Any]) -> list[Any]:
-    return [item async for item in stream.subscribe(create_wait=timedelta(seconds=20))]
+    return [item async for item in stream.read(create_wait=timedelta(seconds=20))]
 
 
 def records(items: list[Any]) -> list[streams.Record[Any]]:
@@ -59,12 +59,12 @@ attempts: dict[str, int] = {}
 class PublishThenFailTask:
     @workflow.run
     async def run(self, key: str) -> None:
-        stream = await workflow.create_stream[str](
-            f"{workflow.info().workflow_id}-tokens"
+        stream = await workflow.create_stream(
+            f"{workflow.info().workflow_id}-tokens", payload_type=str
         )
-        await stream.publish("before")
+        await stream.append("before")
         await workflow.sleep(timedelta(milliseconds=10))
-        await stream.publish("after")
+        await stream.append("after")
         if attempts.setdefault(key, 0) == 0:
             attempts[key] = 1
             raise RuntimeError("fail this Workflow Task once")
@@ -88,7 +88,7 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
         )
         await handle.result()
         stream_id = f"{handle.id}-tokens"
-        items = await read_all(stream_client.get_stream[str](stream_id))
+        items = await read_all(stream_client.get_stream(stream_id, payload_type=str))
         assert (
             await stream_status(stream_client, stream_id)
             == models.StreamStatus.StreamStatusClosed
@@ -109,15 +109,15 @@ class CallModelInput:
 
 @activity.defn
 async def local_tokens(input: CallModelInput) -> None:
-    await activity.client().to_stream(input.stream).publish(*input.prompt.split())
+    await activity.client().get_stream(input.stream).append(*input.prompt.split())
 
 
 @workflow.defn
 class LocalThenFailTask:
     @workflow.run
     async def run(self, key: str) -> None:
-        stream = await workflow.create_stream[str](
-            f"{workflow.info().workflow_id}-tokens"
+        stream = await workflow.create_stream(
+            f"{workflow.info().workflow_id}-tokens", payload_type=str
         )
         first = attempts.setdefault(key, 0) == 0
         await workflow.execute_local_activity(
@@ -154,7 +154,9 @@ async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Cli
             task_queue=worker.task_queue,
         )
         await handle.result()
-        items = await read_all(stream_client.get_stream[str](f"{handle.id}-tokens"))
+        items = await read_all(
+            stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
+        )
     written = records(items)
     superseded = [item for item in items if isinstance(item, streams.Superseded)]
     visible = [r for r in written if not any(i.withdraws(r) for i in superseded)]
@@ -169,8 +171,8 @@ async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Cli
 class LocalOnlyInFailedTask:
     @workflow.run
     async def run(self, key: str) -> None:
-        stream = await workflow.create_stream[str](
-            f"{workflow.info().workflow_id}-tokens"
+        stream = await workflow.create_stream(
+            f"{workflow.info().workflow_id}-tokens", payload_type=str
         )
         if attempts.setdefault(key, 0) == 0:
             attempts[key] = 1
@@ -180,7 +182,7 @@ class LocalOnlyInFailedTask:
                 start_to_close_timeout=timedelta(seconds=30),
             )
             raise RuntimeError("fail this Workflow Task once")
-        await stream.publish("other")
+        await stream.append("other")
         await stream.close()
 
 
@@ -201,7 +203,7 @@ async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Cli
         )
         await handle.result()
         stream_id = f"{handle.id}-tokens"
-        items = await read_all(stream_client.get_stream[str](stream_id))
+        items = await read_all(stream_client.get_stream(stream_id, payload_type=str))
         assert (
             await stream_status(stream_client, stream_id)
             == models.StreamStatus.StreamStatusClosed
@@ -236,9 +238,9 @@ async def closed(client: Client, handle: WorkflowHandle[Any, Any], name: str) ->
 
 @activity.defn
 async def call_model(input: CallModelInput) -> str:
-    stream = activity.client().to_stream(input.stream)
+    stream = activity.client().get_stream(input.stream)
     for word in input.prompt.split():
-        await stream.publish(word)
+        await stream.append(word)
     return input.prompt.upper()
 
 
@@ -246,15 +248,15 @@ async def call_model(input: CallModelInput) -> str:
 class Agent:
     @workflow.run
     async def run(self, prompt: str) -> str:
-        turns = await workflow.create_stream[Turn](own_id("turns"))
-        tokens = await workflow.create_stream[str](own_id("tokens"))
-        await turns.publish(Turn("model"))
+        turns = await workflow.create_stream(own_id("turns"), payload_type=Turn)
+        tokens = await workflow.create_stream(own_id("tokens"), payload_type=str)
+        await turns.append(Turn("model"))
         reply = await workflow.execute_activity(
             call_model,
             CallModelInput(prompt, tokens.ref),
             start_to_close_timeout=timedelta(seconds=30),
         )
-        await turns.publish(Turn("done", reply))
+        await turns.append(Turn("done", reply))
         await turns.close()
         await tokens.close()
         return reply
@@ -275,7 +277,7 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
         )
         await handle.result()
     stream = stream_of(stream_client, handle)
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    items = [item async for item in stream.read(wait_new_records=False)]
     # The retried task's batch has its Superseded item and its first Record in one entry.
     record_offsets = {r.offset for r in records(items)}
     [shared] = [
@@ -283,7 +285,7 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
         for i in items
         if isinstance(i, streams.Superseded) and i.offset in record_offsets
     ]
-    reader = stream.subscribe(wait_new_records=False)
+    reader = stream.read(wait_new_records=False)
     async for item in reader:
         if item == shared:
             break
@@ -291,8 +293,7 @@ async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Cl
     await reader.aclose()
     assert resume_at == shared.offset
     resumed = [
-        item
-        async for item in stream.subscribe(offset=resume_at, wait_new_records=False)
+        item async for item in stream.read(offset=resume_at, wait_new_records=False)
     ]
     assert [r.data for r in records(resumed) if r.offset == shared.offset] == ["after"]
 
@@ -331,10 +332,10 @@ class WritesThenContinues:
     @workflow.run
     async def run(self, ref: streams.StreamRef[str] | None) -> str:
         if ref is None:
-            stream = await workflow.create_stream[str](own_id())
-            await stream.publish("first run")
+            stream = await workflow.create_stream(own_id(), payload_type=str)
+            await stream.append("first run")
             workflow.continue_as_new(stream.ref)
-        await workflow.to_stream(ref).close()
+        await workflow.get_stream(ref).close()
         return "second run"
 
 
@@ -356,8 +357,10 @@ async def test_later_run_closes_a_stream_it_did_not_write(stream_client: Client)
 class CancelledBlock:
     @workflow.run
     async def run(self) -> None:
-        async with await workflow.create_stream[str](own_id("scoped")) as turn:
-            await turn.publish("started")
+        async with await workflow.create_stream(
+            own_id("scoped"), payload_type=str
+        ) as turn:
+            await turn.append("started")
             await workflow.wait_condition(lambda: False)
 
 
@@ -367,7 +370,7 @@ async def test_cancelled_block_closes_the_stream(stream_client: Client):
             CancelledBlock.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         turn = stream_of(stream_client, handle, "scoped")
-        reader = turn.subscribe(create_wait=timedelta(seconds=20))
+        reader = turn.read(create_wait=timedelta(seconds=20))
         assert isinstance(await anext(reader), streams.Record)
         await reader.aclose()
         await handle.cancel()
@@ -380,10 +383,12 @@ async def test_cancelled_block_closes_the_stream(stream_client: Client):
 class PlainWriter:
     @workflow.run
     async def run(self) -> str:
-        stream = await workflow.create_stream[str](own_id("plain"))
-        await stream.publish("plain")
-        async with await workflow.create_stream[str](own_id("scoped")) as scoped:
-            await scoped.publish("scoped")
+        stream = await workflow.create_stream(own_id("plain"), payload_type=str)
+        await stream.append("plain")
+        async with await workflow.create_stream(
+            own_id("scoped"), payload_type=str
+        ) as scoped:
+            await scoped.append("scoped")
         await stream.close()
         return "done"
 
@@ -442,13 +447,13 @@ async def test_records_go_through_the_payload_codec(stream_client: Client):
             Agent.run, "a b", id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         await handle.result()
-        turns = codec_client.get_stream[Turn](f"{handle.id}-turns")
-        tokens = codec_client.get_stream[str](f"{handle.id}-tokens")
+        turns = codec_client.get_stream(f"{handle.id}-turns", payload_type=Turn)
+        tokens = codec_client.get_stream(f"{handle.id}-tokens", payload_type=str)
         turn_items = await read_all(turns)
         decoded = await read_all(tokens)
         # RawValue as the payload type reads the raw Payloads.
-        raw_tokens = codec_client.get_stream[RawValue](tokens.ref.id)
-        raw = [item async for item in raw_tokens.subscribe(wait_new_records=False)]
+        raw_tokens = codec_client.get_stream(tokens.ref.id, payload_type=RawValue)
+        raw = [item async for item in raw_tokens.read(wait_new_records=False)]
     assert [item.data for item in records(turn_items)] == [
         Turn("model"),
         Turn("done", "A B"),
@@ -466,12 +471,14 @@ class WaitsForSignal:
 
     @workflow.run
     async def run(self) -> str:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("before restart")
-        async with await workflow.create_stream[str](own_id("scoped")) as scoped:
-            await scoped.publish("scoped")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("before restart")
+        async with await workflow.create_stream(
+            own_id("scoped"), payload_type=str
+        ) as scoped:
+            await scoped.append("scoped")
         await workflow.wait_condition(lambda: self.go)
-        await stream.publish("after restart")
+        await stream.append("after restart")
         await stream.close()
         return "done"
 
@@ -487,7 +494,7 @@ async def test_new_worker_replays_and_writes_each_record_once(stream_client: Cli
             WaitsForSignal.run, id=f"wf-{uuid.uuid4()}", task_queue=task_queue
         )
         first = stream_of(stream_client, handle)
-        reader = first.subscribe(create_wait=timedelta(seconds=20))
+        reader = first.read(create_wait=timedelta(seconds=20))
         assert isinstance(await anext(reader), streams.Record)
         await reader.aclose()
     # The new Worker has no cache, so it replays the run. A replay sends no create, which would
@@ -524,13 +531,15 @@ async def test_backend_replays_a_history_made_without_it(
 async def test_backend_shutdown_after_client_writes(stream_client: Client):
     [backend] = stream_client.config()["stream_backends"]
     assert isinstance(backend, ExtensionStreamBackend)
-    stream = await stream_client.create_stream[str](f"shutdown-{uuid.uuid4()}")
-    async with BufferedPublisher(stream) as tokens:
-        tokens.publish("buffered")
+    stream = await stream_client.create_stream(
+        f"shutdown-{uuid.uuid4()}", payload_type=str
+    )
+    async with BufferedAppender(stream) as tokens:
+        tokens.append("buffered")
     await backend.shutdown()
     written = [
         item.data
-        async for item in stream.subscribe(wait_new_records=False)
+        async for item in stream.read(wait_new_records=False)
         if isinstance(item, streams.Record)
     ]
     assert written == ["buffered"]
@@ -540,8 +549,8 @@ async def test_backend_shutdown_after_client_writes(stream_client: Client):
 class WaitsForever:
     @workflow.run
     async def run(self) -> None:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("waiting")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("waiting")
         await workflow.wait_condition(lambda: False)
 
 
@@ -584,7 +593,7 @@ async def test_eviction_prints_nothing(
         handle = await stream_client.start_workflow(
             WaitsForever.run, id=f"wf-{uuid.uuid4()}", task_queue=w.task_queue
         )
-        reader = stream_of(stream_client, handle).subscribe(
+        reader = stream_of(stream_client, handle).read(
             create_wait=timedelta(seconds=20)
         )
         assert isinstance(await anext(reader), streams.Record)
@@ -601,8 +610,8 @@ class AlwaysFails:
     async def run(self, non_retryable: bool) -> None:
         attempt = workflow.info().attempt
         # Each retry run sends the create of the first run, so it gets the same Stream.
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish(f"run-{attempt}")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append(f"run-{attempt}")
         raise ApplicationError(f"attempt {attempt} fails", non_retryable=non_retryable)
 
 
@@ -623,7 +632,7 @@ async def test_final_failure_under_a_retry_policy(
         with pytest.raises(WorkflowFailureError):
             await handle.result()
         stream = stream_of(stream_client, handle)
-        items = [item async for item in stream.subscribe(wait_new_records=False)]
+        items = [item async for item in stream.read(wait_new_records=False)]
         # The end of the chain doesn't close the Stream.
         assert not await closed(stream_client, handle, "tokens")
     written = records(items)
@@ -642,12 +651,15 @@ async def test_final_failure_under_a_retry_policy(
 
 
 async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
-    stream = await stream_client.create_stream[str](f"timer-{uuid.uuid4()}")
-    first = await stream.publish("one")
+    stream = await stream_client.create_stream(
+        f"timer-{uuid.uuid4()}", payload_type=str
+    )
+    first = await stream.append("one")
     seen: list[streams.Record[Any]] = []
+    reader = stream.read()
 
     async def read_until_quiet() -> None:
-        async for item in stream.subscribe():
+        async for item in reader:
             assert isinstance(item, streams.Record)
             seen.append(item)
 
@@ -655,12 +667,11 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(read_until_quiet(), timeout=0.5)
     assert [item.offset for item in seen] == [first]
-    await stream.publish("two")
+    resume_at = reader.next_offset
+    await stream.append("two")
     resumed = [
         item.data
-        async for item in stream.subscribe(
-            offset=seen[-1].offset + 1, wait_new_records=False
-        )
+        async for item in stream.read(offset=resume_at, wait_new_records=False)
         if isinstance(item, streams.Record)
     ]
     assert resumed == ["two"]
@@ -676,16 +687,18 @@ async def test_two_backends_on_one_client(client: Client, redis_url: str):
     ]
     stream_client = Client(**config)
     stream_id = f"two-{uuid.uuid4()}"
-    on_redis = await stream_client.create_stream[str](stream_id)
-    on_memory = await stream_client.create_stream[str](stream_id, backend="memory")
+    on_redis = await stream_client.create_stream(stream_id, payload_type=str)
+    on_memory = await stream_client.create_stream(
+        stream_id, backend="memory", payload_type=str
+    )
     assert (on_redis.ref.backend, on_memory.ref.backend) == ("redis", "memory")
-    await on_redis.publish("redis")
-    await on_memory.publish("memory")
+    await on_redis.append("redis")
+    await on_memory.append("memory")
     for backend, expected in (("redis", "redis"), ("memory", "memory")):
-        again = stream_client.get_stream[str](stream_id, backend=backend)
+        again = stream_client.get_stream(stream_id, backend=backend, payload_type=str)
         data = [
             item.data
-            async for item in again.subscribe(wait_new_records=False)
+            async for item in again.read(wait_new_records=False)
             if isinstance(item, streams.Record)
         ]
         assert data == [expected]
@@ -717,8 +730,8 @@ class _FailsTheLastTaskOnceInbound(WorkflowInboundInterceptor):
 class PublishesClosesAndReturns:
     @workflow.run
     async def run(self) -> str:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("token")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("token")
         await stream.close()
         return "done"
 
@@ -764,7 +777,7 @@ async def test_close_survives_a_failed_last_task(stream_client: Client, cache: i
         )
         assert await handle.result() == "done"
         stream = stream_of(client, handle)
-        items = [item async for item in stream.subscribe(wait_new_records=False)]
+        items = [item async for item in stream.read(wait_new_records=False)]
         assert await closed(client, handle, "tokens")
     assert [r.data for r in records(items)] == ["token"]
     assert await close_activity_events(handle) == [
@@ -779,14 +792,16 @@ class WritesToStream:
     @workflow.run
     async def run(self, ref: streams.StreamRef[str]) -> str:
         try:
-            await workflow.to_stream(ref).publish("from workflow")
+            await workflow.get_stream(ref).append("from workflow")
         except streams.StreamError as err:
             return StreamErrorReason.Name(StreamErrorReason.ValueType(err.reason))
         return "wrote"
 
 
 async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Client):
-    stream = await stream_client.create_stream[str](f"closed-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(
+        f"closed-{uuid.uuid4()}", payload_type=str
+    )
     await stream.close()
     async with new_worker(stream_client, WritesToStream) as worker:
         assert (
@@ -799,7 +814,7 @@ async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Clien
             == "STREAM_ERROR_REASON_CLOSED"
         )
     # The close wrote no item, so a read of the closed Stream ends at once with none.
-    assert [item async for item in stream.subscribe()] == []
+    assert [item async for item in stream.read()] == []
 
 
 @workflow.defn
@@ -807,12 +822,12 @@ class ContinuesThenRetries:
     @workflow.run
     async def run(self, ref: streams.StreamRef[str] | None) -> str:
         if ref is None:
-            created = await workflow.create_stream[str](own_id())
-            await created.publish("first")
+            created = await workflow.create_stream(own_id(), payload_type=str)
+            await created.append("first")
             workflow.continue_as_new(created.ref)
-        stream = workflow.to_stream(ref)
+        stream = workflow.get_stream(ref)
         info = workflow.info()
-        await stream.publish(f"attempt-{info.attempt}")
+        await stream.append(f"attempt-{info.attempt}")
         if info.attempt == 1:
             raise ApplicationError("the continued run fails once")
         await stream.close()

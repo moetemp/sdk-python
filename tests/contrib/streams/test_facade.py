@@ -73,14 +73,14 @@ def test_runtime_errors_map_to_stream_errors():
 
 async def test_client_writes_reads_and_closes(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[Turn]("chat-42")
-    first = await stream.publish(Turn("model"))
-    second = await stream.publish(Turn("user", "hello"))
-    assert second == first + 1
-    assert await stream.get_offset() == second + 1
+    stream = await client.create_stream("chat-42", payload_type=Turn)
+    first = await stream.append(Turn("model"))
+    second = await stream.append(Turn("user", "hello"))
+    assert first < second
+    assert await stream.get_offset() > second
     await stream.close()
     # A close writes no item. The read ends once it gave the last Record.
-    items = [item async for item in stream.subscribe()]
+    items = [item async for item in stream.read()]
     assert [item.kind for item in items] == [streams.ItemKind.RECORD] * 2
     turn, token = items
     assert isinstance(turn, streams.Record) and turn.data == Turn("model")
@@ -89,17 +89,21 @@ async def test_client_writes_reads_and_closes(client: Client):
     assert isinstance(turn.producer.epoch.kind, streams.ProducerEpochKindClient)
     assert extension.namespaces == {client.namespace}
 
-    resumed = [item async for item in stream.subscribe(offset=token.offset)]
+    resumed = [item async for item in stream.read(offset=token.offset)]
     assert [item.offset for item in resumed] == [token.offset]
 
 
 async def test_create_fails_on_an_id_that_exists(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[str]("taken")
+    stream = await client.create_stream("taken", payload_type=str)
     with pytest.raises(streams.StreamAlreadyExistsError):
-        await client.create_stream[str]("taken")
-    # The create-or-get gets it, and ignores the options.
-    got = await client.create_or_get_stream[str]("taken", retention=timedelta(hours=1))
+        await client.create_stream("taken", payload_type=str)
+    # USE_EXISTING gets the Stream instead of failing.
+    got = await client.create_stream(
+        "taken",
+        payload_type=str,
+        id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
+    )
     assert got.ref == stream.ref
     policies = [create.id_conflict_policy for create in extension.creates]
     assert policies == [
@@ -114,7 +118,7 @@ async def test_create_fails_on_an_id_that_exists(client: Client):
 
 async def test_a_stream_gives_its_ref_and_its_wire_message(client: Client):
     client, _ = fake_client(client)
-    stream = await client.create_stream[Turn]("chat-proto")
+    stream = await client.create_stream("chat-proto", payload_type=Turn)
     assert stream.ref == streams.StreamRef(id="chat-proto", backend="fake")
     assert stream.proto_ref == temporalio.api.stream.v1.StreamRef(
         id="chat-proto", backend="fake"
@@ -123,32 +127,32 @@ async def test_a_stream_gives_its_ref_and_its_wire_message(client: Client):
 
 async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
-    stream = client.get_stream[str]("tokens-7")
+    stream = client.get_stream("tokens-7", payload_type=str)
     with pytest.raises(streams.StreamNotFoundError):
-        async for _ in stream.subscribe():
+        async for _ in stream.read():
             pass
 
     async def create_later() -> None:
-        created = await client.create_stream[str](stream.ref.id)
-        await created.publish("five")
+        created = await client.create_stream(stream.ref.id, payload_type=str)
+        await created.append("five")
         await created.close()
 
     task = asyncio.create_task(create_later())
-    items = [item async for item in stream.subscribe(create_wait=timedelta(seconds=5))]
+    items = [item async for item in stream.read(create_wait=timedelta(seconds=5))]
     await task
     assert [item.data for item in items if isinstance(item, streams.Record)] == ["five"]
 
 
 async def test_a_waiting_read_ends_at_a_close(client: Client):
     client, _ = fake_client(client)
-    stream = await client.create_stream[str]("closes-later")
-    reader = stream.subscribe()
+    stream = await client.create_stream("closes-later", payload_type=str)
+    reader = stream.read()
 
     async def read() -> list[str]:
         return [item.data async for item in reader if isinstance(item, streams.Record)]
 
     task = asyncio.create_task(read())
-    await stream.publish("last")
+    await stream.append("last")
     await asyncio.sleep(0.05)
     await stream.close()
     assert await asyncio.wait_for(task, 5) == ["last"]
@@ -160,8 +164,11 @@ def test_stream_errors_fail_the_workflow_not_the_task():
     assert isinstance(err, ApplicationError)
     assert err.non_retryable and err.type == "StreamClosedError"
     assert err.reason == closed
-    # A Store outage is the one error that a retry can fix.
-    assert not streams.StreamStorageUnavailableError("down").non_retryable
+    # A Store outage is the one error that a retry can fix. Its reason, not a class, marks it.
+    outage = streams.StreamError(
+        "down", reason=StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE
+    )
+    assert not outage.non_retryable
     mapped = _mapped(
         StreamCallError(
             int(RPCStatusCode.FAILED_PRECONDITION), "closed", _details(closed)
@@ -182,11 +189,11 @@ def test_stream_errors_fail_the_workflow_not_the_task():
 
 async def test_streams_of_one_client_share_a_producer_and_free_it(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[str]("two-writers")
-    other = client.get_stream[str]("two-writers")
-    await stream.publish("1")
-    await other.publish("2")
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    stream = await client.create_stream("two-writers", payload_type=str)
+    other = client.get_stream("two-writers", payload_type=str)
+    await stream.append("1")
+    await other.append("2")
+    items = [item async for item in stream.read(wait_new_records=False)]
     producers = {
         item.producer.id
         for item in items
@@ -202,7 +209,7 @@ async def test_streams_of_one_client_share_a_producer_and_free_it(client: Client
 
 async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[str]("slow")
+    stream = await client.create_stream("slow", payload_type=str)
     call = extension.call
 
     async def slow_describe(method: str, input: bytes) -> bytes:
@@ -215,16 +222,16 @@ async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):
         await stream.get_offset(rpc_timeout=timedelta(milliseconds=100))
     assert err.value.status == RPCStatusCode.DEADLINE_EXCEEDED
 
-    async def publish_later() -> None:
+    async def append_later() -> None:
         await asyncio.sleep(1)
-        await stream.publish("late")
+        await stream.append("late")
 
     # Each call of a waiting read returns before the deadline, so the read continues.
-    reader = stream.subscribe(rpc_timeout=timedelta(milliseconds=300))
-    publisher = asyncio.create_task(publish_later())
+    reader = stream.read(rpc_timeout=timedelta(milliseconds=300))
+    appender = asyncio.create_task(append_later())
     item = await anext(reader)
     await reader.aclose()
-    await publisher
+    await appender
     assert isinstance(item, streams.Record) and item.data == "late"
 
 
@@ -248,9 +255,9 @@ async def test_codec_runs_once_for_each_write_and_page(client: Client):
     config = client.config()
     config["data_converter"] = DataConverter(payload_codec=codec)
     client, _ = fake_client(Client(**config))
-    stream = await client.create_stream[str]("coded")
-    await stream.publish(*(str(n) for n in range(5)))
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    stream = await client.create_stream("coded", payload_type=str)
+    await stream.append(*(str(n) for n in range(5)))
+    items = [item async for item in stream.read(wait_new_records=False)]
     assert [item.data for item in items if isinstance(item, streams.Record)] == [
         str(n) for n in range(5)
     ]
@@ -267,7 +274,7 @@ async def test_forked_process_gets_its_own_client_producers(client: Client):
 
 async def test_client_streams_are_of_the_exported_class(client: Client):
     client, _ = fake_client(client)
-    stream = client.get_stream[str]("exported")
+    stream = client.get_stream("exported", payload_type=str)
     assert isinstance(stream, temporalio.client.Stream)
     assert "Stream" in temporalio.client.__all__
 
@@ -283,10 +290,10 @@ def test_import_of_temporalio_client_loads_no_stream_code():
 async def test_bad_create_and_read_arguments_raise_with_no_call(client: Client):
     client, extension = fake_client(client)
     with pytest.raises(ValueError, match="id is empty"):
-        await client.create_stream[str]("")
-    stream = client.get_stream[str]("args")
+        await client.create_stream("", payload_type=str)
+    stream = client.get_stream("args", payload_type=str)
     with pytest.raises(ValueError, match="from 1 to 1000"):
-        stream.subscribe(last=1001)
+        stream.read(last=1001)
     assert not extension.creates and not extension.namespaces
 
 
@@ -296,7 +303,7 @@ class _Interrupt(BaseException):
 
 async def test_block_end_closes_on_any_exception(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[str]("interrupted")
+    stream = await client.create_stream("interrupted", payload_type=str)
     with pytest.raises(_Interrupt):
         async with stream:
             raise _Interrupt
@@ -305,8 +312,8 @@ async def test_block_end_closes_on_any_exception(client: Client):
 
 async def test_a_failed_close_is_tried_again(client: Client):
     client, extension = fake_client(client)
-    stream = await client.create_stream[str]("closes-twice")
-    await stream.publish("a")
+    stream = await client.create_stream("closes-twice", payload_type=str)
+    await stream.append("a")
     call = extension.call
     refused: list[str] = []
 
@@ -321,12 +328,15 @@ async def test_a_failed_close_is_tried_again(client: Client):
         return await call(method, input)
 
     setattr(extension, "call", refuses_the_first_close)
-    with pytest.raises(streams.StreamStorageUnavailableError):
+    with pytest.raises(streams.StreamError) as failed:
         async with stream:
             pass
+    assert (
+        failed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE
+    )
     # The writer closed before the Store refused, so this object writes no more.
     with pytest.raises(streams.StreamClosedError, match="closed its writer"):
-        stream.publish("late")
+        stream.append("late")
     # The Stream is still open, and the next close goes through.
     assert not extension.streams["closes-twice"].closed
     await stream.close()

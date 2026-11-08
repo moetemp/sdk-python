@@ -95,7 +95,7 @@ from ._schedule import (
     ScheduleBackfill,
     ScheduleHandle,
 )
-from ._streams import CreateStream, GetStream, Stream
+from ._streams import Stream
 from ._worker_versioning import (
     BuildIdOp,
     TaskReachabilityType,
@@ -112,7 +112,12 @@ from ._workflow import (
 )
 
 if TYPE_CHECKING:
-    from temporalio.streams import StreamBackend, StreamRef
+    from temporalio.streams import (
+        Execution,
+        StreamBackend,
+        StreamIDConflictPolicy,
+        StreamRef,
+    )
 
     from ._interceptor import Interceptor
     from ._plugin import Plugin
@@ -916,79 +921,154 @@ class Client:
             result_type=result_type,
         )
 
-    @property
-    def create_stream(self) -> CreateStream[Any]:
-        """Create a Stream, which fails if a Stream of the id exists.
-
-        Give the payload type as a type argument::
-
-            stream = await client.create_stream[Turn]("chat-42", retention=timedelta(days=1))
-            async with stream:  # optional, the block end closes it
-                await stream.publish(Turn("user", "hi"))
-
-        A Stream must exist before its first publish, and the create calls the Store, so a bad
-        setting fails early. Code closes the Stream with ``close()``, or at the end of
-        ``async with``. The call takes the Stream id, an optional ``backend=`` name and the
-        options of :py:class:`temporalio.streams.StreamOptions`. See
-        :py:meth:`CreateStream.__call__`.
-
-        .. warning::
-            This API is experimental.
-        """
-        return CreateStream(self, None, or_get=False)
-
-    @property
-    def create_or_get_stream(self) -> CreateStream[Any]:
-        """Create a Stream, or get the one of the id that exists.
-
-        It takes the arguments of :py:attr:`create_stream`. On a Stream that exists, it ignores
-        the options, so its retries are safe. It still fails on a closed or expired Stream.
-
-        .. warning::
-            This API is experimental.
-        """
-        return CreateStream(self, None, or_get=True)
-
-    @property
-    def get_stream(self) -> GetStream[Any]:
-        """Get a Stream by its id, with no call.
-
-        Give the payload type as a type argument, as in ``client.get_stream[Turn]("chat-42")``.
-        Reads decode each Record with it, or as a JSON value with no type argument. For a ref
-        that came as data, such as from a Workflow's query, use :py:meth:`to_stream`. See
-        :py:meth:`GetStream.__call__`.
-
-        .. warning::
-            This API is experimental.
-        """
-        return GetStream(self, None)
-
-    def to_stream(
+    @overload
+    async def create_stream(
         self,
-        ref: StreamRef[_StreamPayloadT],
+        id: str,
+        /,
+        *,
+        payload_type: type[_StreamPayloadT],
+        backend: str | None = None,
+        id_conflict_policy: StreamIDConflictPolicy | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> Stream[_StreamPayloadT]: ...
+
+    @overload
+    async def create_stream(
+        self,
+        id: str,
+        /,
+        *,
+        payload_type: None = None,
+        backend: str | None = None,
+        id_conflict_policy: StreamIDConflictPolicy | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> Stream[Any]: ...
+
+    async def create_stream(
+        self,
+        id: str,
+        /,
         *,
         payload_type: type[_StreamPayloadT] | None = None,
-    ) -> Stream[_StreamPayloadT]:
-        """Get the Stream of a ref that came as data, such as from a query. It makes no call.
+        backend: str | None = None,
+        id_conflict_policy: StreamIDConflictPolicy | None = None,
+        rpc_metadata: Mapping[str, str | bytes] = {},
+        rpc_timeout: timedelta | None = None,
+    ) -> Stream[Any]:
+        """Create a Stream, and return it.
 
-        The type argument of the ref is for type checkers only. Without ``payload_type``, a read
-        gives each Record as a JSON value, such as a dict for a dataclass.
+        Give the payload type with ``payload_type=``::
+
+            stream = await client.create_stream("chat-42", payload_type=Turn)
+            async with stream:  # optional, the block end closes it
+                await stream.append(Turn("user", "hi"))
+
+        A Stream must exist before its first append, and the create calls the Store, so a bad
+        setting fails early. Code closes the Stream with ``close()``, or at the end of
+        ``async with``.
+
+        Args:
+            id: The Stream id, which the caller picks, as for a Workflow ID.
+            payload_type: The type that reads decode each Record with. Defaults to no type, so
+                a read decodes each Record as a JSON value.
+            backend: The name of the backend. Defaults to the registered backend with
+                ``default=True``.
+            id_conflict_policy: ``FAIL`` (the default) raises
+                :py:class:`StreamAlreadyExistsError` on an id that exists. ``USE_EXISTING``
+                returns the existing Stream.
+            rpc_metadata: Headers of the call. The Redis and memory backends ignore it.
+            rpc_timeout: The deadline of the call, on every backend.
+
+        Raises:
+            StreamAlreadyExistsError: ``FAIL`` on an id that exists.
+            StreamConfigError: The client has no backend with that name, or no backend has
+                ``default=True`` and the call gives no backend. No call is made.
 
         .. warning::
             This API is experimental.
+        """
+        from temporalio.streams import StreamIDConflictPolicy, _stream_client
+
+        return await _stream_client.create(
+            self,
+            payload_type,
+            id=id,
+            backend=backend,
+            id_conflict_policy=id_conflict_policy
+            if id_conflict_policy is not None
+            else StreamIDConflictPolicy.FAIL,
+            rpc_metadata=rpc_metadata,
+            rpc_timeout=rpc_timeout,
+        )
+
+    @overload
+    def get_stream(
+        self, ref: StreamRef[_StreamPayloadT], /
+    ) -> Stream[_StreamPayloadT]: ...
+
+    @overload
+    def get_stream(
+        self,
+        id: str,
+        /,
+        *,
+        payload_type: type[_StreamPayloadT],
+        owner: Execution | None = None,
+        backend: str | None = None,
+    ) -> Stream[_StreamPayloadT]: ...
+
+    @overload
+    def get_stream(
+        self,
+        id: str,
+        /,
+        *,
+        payload_type: None = None,
+        owner: Execution | None = None,
+        backend: str | None = None,
+    ) -> Stream[Any]: ...
+
+    def get_stream(
+        self,
+        id_or_ref: str | StreamRef[Any],
+        /,
+        *,
+        payload_type: type[Any] | None = None,
+        owner: Execution | None = None,
+        backend: str | None = None,
+    ) -> Stream[Any]:
+        """Get a Stream by its id, or by a ref that came as data. It makes no call.
+
+        Give the payload type with ``payload_type=``, as in
+        ``client.get_stream("chat-42", payload_type=Turn)``. Reads decode each Record with it, or
+        as a JSON value with no type. Pass a :py:class:`StreamRef` that came as data, such as
+        from a Workflow's query, to get its Stream.
 
         Args:
-            ref: The ref of the Stream.
-            payload_type: The type that reads decode each Record with. Defaults to no type, so
-                a read decodes each Record as a JSON value.
+            id_or_ref: The Stream id, or a ref of the Stream.
+            payload_type: The type that reads decode each Record with, for the id form.
+            owner: The owner of a bound Stream, for the id form.
+            backend: The name of the backend, for the id form. Defaults to the registered
+                backend with ``default=True``.
 
         Raises:
-            StreamConfigError: The client has no backend of the ref, or the ref has no backend
-                and no backend has ``default=True``.
+            StreamConfigError: The client has no backend of the Stream, or none has
+                ``default=True`` for a Stream with no backend.
+            ValueError: The id is empty.
+
+        .. warning::
+            This API is experimental.
         """
         from temporalio.streams import _stream_client
 
-        return _stream_client.to_stream(self, ref, payload_type=payload_type)
+        if isinstance(id_or_ref, str):
+            return _stream_client.get_stream(
+                self, payload_type, id=id_or_ref, owner=owner, backend=backend
+            )
+        return _stream_client.from_ref(self, id_or_ref)
 
     def get_workflow_handle_for(
         self,

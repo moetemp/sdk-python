@@ -10,9 +10,10 @@ from typing import Any, TypeVar
 
 from temporalio.client import Stream
 from temporalio.streams import _activity, _backend, _errors
-from temporalio.streams._access import Access, ReadSpec, subscription
+from temporalio.streams._access import Access, ReadSpec, reader
 from temporalio.streams._items import Record, Superseded
-from temporalio.streams._reader import Subscription
+from temporalio.streams._offset import StreamOffset
+from temporalio.streams._reader import Reader
 from temporalio.streams._ref import StreamRef
 from temporalio.streams._stream_client import StreamCalls
 
@@ -52,10 +53,10 @@ def _start(
     future.add_done_callback(future_done)
 
 
-def _not_owner(ref: StreamRef[Any]) -> _errors.StreamNotOwnerError:
+def _not_owner(ref: StreamRef[Any]) -> _errors.StreamError:
     # A Workflow or a client closes a Stream, and the Store refuses an Activity's close. Code in
     # an Activity only writes, so the refusal comes before any call.
-    return _errors.StreamNotOwnerError(
+    return _errors.not_owner(
         f"Can't close the Stream {ref.id} from an Activity. Only Workflow code or a client "
         "closes a Stream."
     )
@@ -65,7 +66,7 @@ def _check_loop() -> None:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        raise _errors.StreamUnsupportedError(
+        raise _errors.unsupported(
             "A sync Activity can't wait for a Stream call. Wrap the Stream in a SyncStream."
         ) from None
 
@@ -95,27 +96,27 @@ class ActivityCalls(StreamCalls):
             writer=lambda: streams.writer(stream_id),
         )
 
-    def publish(
+    def append(
         self,
         values: tuple[Any, ...],
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> asyncio.Future[int]:
+    ) -> asyncio.Future[StreamOffset]:
         """Start a write. The write's task takes the call options."""
         _check_loop()
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            return self._access().publish(values)
+            return self._access().append(values)
 
-    def subscribe(
+    def read(
         self,
         read: ReadSpec,
         rpc_metadata: Mapping[str, str | bytes],
         rpc_timeout: timedelta | None,
-    ) -> Subscription[Any]:
+    ) -> Reader[Any]:
         """Start a read."""
         _check_loop()
         access = self._access()
-        return subscription(
+        return reader(
             lambda position: access.items(read, position),
             read,
             _backend.options_of(rpc_metadata, rpc_timeout),
@@ -123,15 +124,15 @@ class ActivityCalls(StreamCalls):
 
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
-    ) -> int:
+    ) -> StreamOffset:
         """Get the next offset."""
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
-            return await self._access().get_offset()
+            return StreamOffset._from_wire(await self._access().get_offset())
 
     async def close(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
     ) -> None:
-        """Raise :py:class:`StreamNotOwnerError`, since an Activity can't close a Stream."""
+        """Raise a Stream error, since an Activity can't close a Stream."""
         raise _not_owner(self._ref)
 
     async def enter(self) -> None:
@@ -141,12 +142,6 @@ class ActivityCalls(StreamCalls):
     async def exit(self, exc: BaseException | None) -> None:
         """Raise, since an Activity can't close a Stream."""
         raise _not_owner(self._ref)
-
-    def producer(self, name: str, epoch: int) -> StreamCalls:
-        """Raise, since an Activity writes as its attempt."""
-        raise _errors.StreamUnsupportedError(
-            "A Stream in an Activity writes as the attempt, not as a Producer with a name"
-        )
 
 
 def attempt_of(stream: Stream[Any]) -> _activity.ActivityStreams | None:
@@ -202,7 +197,7 @@ def run_blocking(call: Coroutine[Any, Any, _R]) -> _R:
 
 
 def sync_items(
-    items: Subscription[T],
+    items: Reader[T],
 ) -> Generator[Record[T] | Superseded, None, None]:
     """The items of a read, each of which blocks the Activity's thread."""
     try:
@@ -216,5 +211,5 @@ def sync_items(
         run_blocking(items.aclose())
 
 
-async def _next(items: Subscription[T]) -> Record[T] | Superseded:
+async def _next(items: Reader[T]) -> Record[T] | Superseded:
     return await items.__anext__()

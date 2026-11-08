@@ -19,13 +19,14 @@ import pytest
 from temporalio import activity, streams, workflow
 from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.client import (
-    BufferedPublisher,
+    BufferedAppender,
     Client,
     Stream,
     SyncStream,
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 from temporalio.streams import _activity, _activity_stream
 from temporalio.streams.system import models
@@ -36,6 +37,10 @@ from tests.helpers import new_worker
 def own_id(name: str = "tokens") -> str:
     # A Workflow picks the id of each Stream that it creates. These tests use its Workflow ID.
     return f"{workflow.info().workflow_id}-{name}"
+
+
+def reason(err: streams.StreamError) -> str:
+    return StreamErrorReason.Name(StreamErrorReason.ValueType(err.reason))
 
 
 @dataclass
@@ -51,8 +56,8 @@ class SyncInput:
 
 
 async def read(handle: WorkflowHandle[Any, Any], name: str = "tokens") -> list[object]:
-    stream = handle._client.get_stream[str](f"{handle.id}-{name}")
-    return [item async for item in stream.subscribe(wait_new_records=False)]
+    stream = handle._client.get_stream(f"{handle.id}-{name}", payload_type=str)
+    return [item async for item in stream.read(wait_new_records=False)]
 
 
 async def closed(handle: WorkflowHandle[Any, Any], name: str = "tokens") -> bool:
@@ -65,13 +70,13 @@ def records(items: Sequence[object]) -> list[streams.Record[Any]]:
 
 
 @activity.defn
-async def call_model(input: CallModelInput) -> list[int]:
-    stream = activity.client().to_stream(input.stream)
-    offsets = [await stream.publish(word) for word in input.prompt.split()]
-    async with BufferedPublisher(stream, max_delay=timedelta(seconds=10)) as buffered:
-        buffered.publish("model-a")
-        buffered.publish("model-b")
-    offsets.append(await stream.get_offset())
+async def call_model(input: CallModelInput) -> list[str]:
+    stream = activity.client().get_stream(input.stream)
+    offsets = [str(await stream.append(word)) for word in input.prompt.split()]
+    async with BufferedAppender(stream, max_delay=timedelta(seconds=10)) as buffered:
+        buffered.append("model-a")
+        buffered.append("model-b")
+    offsets.append(str(await stream.get_offset()))
     return offsets
 
 
@@ -81,36 +86,36 @@ class SyncActivities:
         self._client = client
 
     @activity.defn
-    def call_model_sync(self, input: SyncInput) -> int:
-        stream = SyncStream(self._client.to_stream(input.stream))
-        last = stream.publish(*input.prompt.split())
-        assert stream.get_offset() == last + 1
-        return last
+    def call_model_sync(self, input: SyncInput) -> str:
+        stream = SyncStream(self._client.get_stream(input.stream))
+        last = stream.append(*input.prompt.split())
+        assert stream.get_offset() > last
+        return str(last)
 
     @activity.defn
-    def publishes_without_the_sync_stream(self, ref: streams.StreamRef[str]) -> str:
+    def appends_without_the_sync_stream(self, ref: streams.StreamRef[str]) -> str:
         try:
-            self._client.to_stream(ref).publish("x")
-        except streams.StreamUnsupportedError as err:
-            return type(err).__name__
+            self._client.get_stream(ref).append("x")
+        except streams.StreamError as err:
+            return reason(err)
         return "wrote"
 
     @activity.defn
     def sync_read(self, ref: streams.StreamRef[str]) -> list[Any]:
-        stream = SyncStream(self._client.to_stream(ref))
+        stream = SyncStream(self._client.get_stream(ref))
         return [
             item.data
-            for item in stream.subscribe(wait_new_records=False)
+            for item in stream.read(wait_new_records=False)
             if isinstance(item, streams.Record)
         ]
 
 
 @activity.defn
 async def read_back(ref: streams.StreamRef[str]) -> list[Any]:
-    stream = activity.client().to_stream(ref)
+    stream = activity.client().get_stream(ref)
     return [
         item.data
-        async for item in stream.subscribe(wait_new_records=False)
+        async for item in stream.read(wait_new_records=False)
         if isinstance(item, streams.Record)
     ]
 
@@ -119,7 +124,7 @@ async def read_back(ref: streams.StreamRef[str]) -> list[Any]:
 class Agent:
     @workflow.run
     async def run(self, prompt: str) -> list[Any]:
-        stream = await workflow.create_stream[str](own_id())
+        stream = await workflow.create_stream(own_id(), payload_type=str)
         offsets = await workflow.execute_activity(
             call_model,
             CallModelInput(prompt, stream.ref),
@@ -139,7 +144,7 @@ class Agent:
         return [offsets, last, read]
 
 
-async def test_activity_publishes_and_returns_offsets(stream_client: Client):
+async def test_activity_appends_and_returns_offsets(stream_client: Client):
     async with new_worker(
         stream_client,
         Agent,
@@ -158,9 +163,9 @@ async def test_activity_publishes_and_returns_offsets(stream_client: Client):
     data = records(items)
     written = ["hi", "there", "model-a", "model-b", "sync", "words"]
     assert [record.data for record in data] == written
-    assert offsets[:2] == [data[0].offset, data[1].offset]
-    assert offsets[2] == data[3].offset + 1
-    assert last == data[5].offset
+    assert offsets[:2] == [str(data[0].offset), str(data[1].offset)]
+    assert streams.StreamOffset.parse(offsets[2]) > data[3].offset
+    assert streams.StreamOffset.parse(last) == data[5].offset
     assert read_tokens == written
     assert await closed(handle)
 
@@ -178,7 +183,7 @@ attempts: dict[str, int] = {}
 async def flaky(input: CallModelInput) -> None:
     attempts[input.prompt] = attempts.get(input.prompt, 0) + 1
     if attempts[input.prompt] == 1:
-        await activity.client().to_stream(input.stream).publish("attempt-1")
+        await activity.client().get_stream(input.stream).append("attempt-1")
         raise RuntimeError("first attempt fails")
 
 
@@ -186,8 +191,8 @@ async def flaky(input: CallModelInput) -> None:
 class Retrying:
     @workflow.run
     async def run(self, key: str) -> None:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("start")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("start")
         await workflow.execute_activity(
             flaky,
             CallModelInput(key, stream.ref),
@@ -223,7 +228,7 @@ async def reads_after_a_failed_attempt(input: FinishedStreams) -> list[Any]:
     attempts[input.key] = attempts.get(input.key, 0) + 1
     if attempts[input.key] == 1:
         raise RuntimeError("first attempt fails")
-    items = activity.client().to_stream(input.closed).subscribe(wait_new_records=False)
+    items = activity.client().get_stream(input.closed).read(wait_new_records=False)
     return [item.data async for item in items if isinstance(item, streams.Record)]
 
 
@@ -231,8 +236,8 @@ async def reads_after_a_failed_attempt(input: FinishedStreams) -> list[Any]:
 class ReadsFinishedStreams:
     @workflow.run
     async def run(self, key: str, expired: streams.StreamRef[str]) -> list[Any]:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("turn")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("turn")
         await stream.close()
         return await workflow.execute_activity(
             reads_after_a_failed_attempt,
@@ -246,19 +251,25 @@ class ReadsFinishedStreams:
         )
 
 
-async def test_retry_goes_on_with_a_closed_or_expired_stream(stream_client: Client):
+async def test_retry_goes_on_with_a_closed_or_expired_stream(client: Client):
     # On a Stream that accepts no write, the second attempt's open withdraws nothing, and the
-    # attempt only reads.
-    expired = await stream_client.create_stream[str](
-        f"expired-{uuid.uuid4()}", retention=timedelta(milliseconds=200)
+    # attempt only reads. Retention is a backend setting, so the aged Stream expires while the
+    # closed one, created fresh in the run, is still within Retention.
+    config = client.config()
+    config["stream_backends"] = [
+        MemoryStreamBackend(retention=timedelta(seconds=2), default=True)
+    ]
+    memory_client = Client(**config)
+    expired = await memory_client.create_stream(
+        f"expired-{uuid.uuid4()}", payload_type=str
     )
-    await expired.publish("old")
-    await asyncio.sleep(0.5)
+    await expired.append("old")
+    await asyncio.sleep(3)
     key = str(uuid.uuid4())
     async with new_worker(
-        stream_client, ReadsFinishedStreams, activities=[reads_after_a_failed_attempt]
+        memory_client, ReadsFinishedStreams, activities=[reads_after_a_failed_attempt]
     ) as worker:
-        result = await stream_client.execute_workflow(
+        result = await memory_client.execute_workflow(
             ReadsFinishedStreams.run,
             args=[key, expired.ref],
             id=f"wf-{uuid.uuid4()}",
@@ -274,19 +285,19 @@ shown: dict[str, asyncio.Event] = {}
 @activity.defn
 async def fails_after_it_is_shown(input: CallModelInput) -> None:
     attempts[input.prompt] = attempts.get(input.prompt, 0) + 1
-    tokens = activity.client().to_stream(input.stream)
+    tokens = activity.client().get_stream(input.stream)
     if attempts[input.prompt] == 1:
-        await tokens.publish("attempt-1")
+        await tokens.append("attempt-1")
         await shown[input.prompt].wait()
         raise RuntimeError("first attempt fails")
-    await tokens.publish("attempt-2")
+    await tokens.append("attempt-2")
 
 
 @workflow.defn
 class ShownThenWithdrawn:
     @workflow.run
     async def run(self, key: str) -> None:
-        stream = await workflow.create_stream[str](own_id())
+        stream = await workflow.create_stream(own_id(), payload_type=str)
         await workflow.execute_activity(
             fails_after_it_is_shown,
             CallModelInput(key, stream.ref),
@@ -310,9 +321,9 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-        stream = stream_client.get_stream[str](f"{handle.id}-tokens")
-        live = stream.subscribe(create_wait=timedelta(seconds=20))
-        reconnects = stream.subscribe(create_wait=timedelta(seconds=20))
+        stream = stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
+        live = stream.read(create_wait=timedelta(seconds=20))
+        reconnects = stream.read(create_wait=timedelta(seconds=20))
         first = await anext(live)
         before = await anext(reconnects)
         # The reader closes its connection and keeps only the Records that it showed and its
@@ -321,7 +332,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         await reconnects.aclose()
         shown[key].set()
         live_items = [first, *[item async for item in live]]
-        resumed = [item async for item in stream.subscribe(offset=resume_at)]
+        resumed = [item async for item in stream.read(offset=resume_at)]
     assert isinstance(first, streams.Record) and first.data == "attempt-1"
     assert isinstance(before, streams.Record) and before.offset == first.offset
     [live_superseded] = [i for i in live_items if isinstance(i, streams.Superseded)]
@@ -337,7 +348,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
 @activity.defn
 async def wrong_backend(ref: streams.StreamRef[str]) -> str:
     try:
-        await activity.client().to_stream(ref).publish("x")
+        await activity.client().get_stream(ref).append("x")
     except streams.StreamConfigError:
         return "config"
     return "wrote"
@@ -345,12 +356,12 @@ async def wrong_backend(ref: streams.StreamRef[str]) -> str:
 
 @activity.defn
 async def close_it(ref: streams.StreamRef[str]) -> str:
-    stream = activity.client().to_stream(ref)
-    await stream.publish("last")
+    stream = activity.client().get_stream(ref)
+    await stream.append("last")
     try:
         await stream.close()
-    except streams.StreamNotOwnerError as err:
-        return StreamErrorReason.Name(StreamErrorReason.ValueType(err.reason))
+    except streams.StreamError as err:
+        return reason(err)
     return "closed"
 
 
@@ -358,7 +369,7 @@ async def close_it(ref: streams.StreamRef[str]) -> str:
 class Closing:
     @workflow.run
     async def run(self) -> list[str]:
-        stream = await workflow.create_stream[str](own_id())
+        stream = await workflow.create_stream(own_id(), payload_type=str)
         backend = await workflow.execute_activity(
             wrong_backend,
             streams.StreamRef[str](id=stream.ref.id, backend="elsewhere"),
@@ -404,17 +415,13 @@ async def test_activity_checks_the_backend_and_the_owner(stream_client: Client):
 
 @activity.defn
 async def refused_calls(ref: streams.StreamRef[str]) -> list[str]:
-    stream = activity.client().to_stream(ref)
+    stream = activity.client().get_stream(ref)
     refused = []
     try:
         async with stream:
             refused.append("entered")
-    except streams.StreamNotOwnerError as err:
-        refused.append(type(err).__name__)
-    try:
-        stream.producer("ingest", 1)
-    except streams.StreamUnsupportedError as err:
-        refused.append(type(err).__name__)
+    except streams.StreamError as err:
+        refused.append(reason(err))
     return refused
 
 
@@ -422,22 +429,22 @@ async def refused_calls(ref: streams.StreamRef[str]) -> list[str]:
 class RefusedCalls:
     @workflow.run
     async def run(self) -> list[str]:
-        stream = await workflow.create_stream[str](own_id())
+        stream = await workflow.create_stream(own_id(), payload_type=str)
         refused = await workflow.execute_activity(
             refused_calls, stream.ref, start_to_close_timeout=timedelta(seconds=30)
         )
         refused.append(
             await workflow.execute_activity_method(
-                SyncActivities.publishes_without_the_sync_stream,
+                SyncActivities.appends_without_the_sync_stream,
                 stream.ref,
                 start_to_close_timeout=timedelta(seconds=30),
             )
         )
         try:
             # Workflow code has no Stream, so this is for a caller that has no type checks.
-            BufferedPublisher(cast(Any, stream))
-        except streams.StreamUnsupportedError as err:
-            refused.append(type(err).__name__)
+            BufferedAppender(cast(Any, stream))
+        except streams.StreamError as err:
+            refused.append(reason(err))
         await stream.close()
         return refused
 
@@ -448,7 +455,7 @@ async def test_calls_that_an_activity_cant_make_raise(stream_client: Client):
         RefusedCalls,
         activities=[
             refused_calls,
-            SyncActivities(stream_client).publishes_without_the_sync_stream,
+            SyncActivities(stream_client).appends_without_the_sync_stream,
         ],
         activity_executor=_executor(),
     ) as worker:
@@ -456,8 +463,8 @@ async def test_calls_that_an_activity_cant_make_raise(stream_client: Client):
             RefusedCalls.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         assert await handle.result() == [
-            "StreamNotOwnerError",
-            *["StreamUnsupportedError"] * 3,
+            "STREAM_ERROR_REASON_NOT_OWNER",
+            *["STREAM_ERROR_REASON_UNSUPPORTED"] * 2,
         ]
         items = await read(handle)
     assert records(items) == []
@@ -466,18 +473,18 @@ async def test_calls_that_an_activity_cant_make_raise(stream_client: Client):
 @activity.defn
 async def leaves_a_failed_write(ref: streams.StreamRef[str]) -> str:
     # Nobody created the Stream, and no caller waits for the write.
-    activity.client().to_stream(ref).publish("lost")
+    activity.client().get_stream(ref).append("lost")
     return "returned"
 
 
 @activity.defn
 async def enters_a_client_stream(ref: streams.StreamRef[str]) -> str:
-    stream = activity.client().to_stream(ref)
+    stream = activity.client().get_stream(ref)
     try:
         async with stream:
-            await stream.publish("in the block")
-    except streams.StreamNotOwnerError as err:
-        return StreamErrorReason.Name(StreamErrorReason.ValueType(err.reason))
+            await stream.append("in the block")
+    except streams.StreamError as err:
+        return reason(err)
     return "closed"
 
 
@@ -508,7 +515,9 @@ class LostAndClientWrites:
 async def test_attempt_end_raises_a_lost_write_and_a_client_stream_refuses_the_block(
     stream_client: Client,
 ):
-    stream = await stream_client.create_stream[str](f"client-{uuid.uuid4()}")
+    stream = await stream_client.create_stream(
+        f"client-{uuid.uuid4()}", payload_type=str
+    )
     async with new_worker(
         stream_client,
         LostAndClientWrites,
@@ -522,7 +531,7 @@ async def test_attempt_end_raises_a_lost_write_and_a_client_stream_refuses_the_b
         )
     # An Activity closes no Stream, so the block fails before it runs, with no call.
     assert result == ["StreamNotFoundError", "STREAM_ERROR_REASON_NOT_OWNER"]
-    items = [item async for item in stream.subscribe(wait_new_records=False)]
+    items = [item async for item in stream.read(wait_new_records=False)]
     assert records(items) == []
 
 
@@ -535,66 +544,73 @@ class _Batches(Stream[int]):
         self.in_flight = 0
         self.most_in_flight = 0
 
-    def publish(self, *values: int, **options: Any) -> asyncio.Future[int]:
+    def append(
+        self, *values: int, **options: Any
+    ) -> asyncio.Future[streams.StreamOffset]:
         return asyncio.ensure_future(self._write(values))
 
-    async def _write(self, values: Sequence[int]) -> int:
+    async def _write(self, values: Sequence[int]) -> streams.StreamOffset:
         if self.fail:
-            raise streams.StreamStorageUnavailableError("store down")
+            raise streams.StreamError(
+                "store down",
+                reason=StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE,
+            )
         self.in_flight += 1
         self.most_in_flight = max(self.most_in_flight, self.in_flight)
         await asyncio.sleep(0.01)
         self.in_flight -= 1
         self.batches.append(tuple(values))
-        return sum(len(batch) for batch in self.batches)
+        return streams.StreamOffset.parse(
+            str(sum(len(batch) for batch in self.batches))
+        )
 
 
-async def test_buffered_publisher_batches_by_delay():
+async def test_buffered_appender_batches_by_delay():
     stream = _Batches()
-    publisher = BufferedPublisher(stream, max_delay=timedelta(milliseconds=20))
-    publisher.publish(1)
-    publisher.publish(2, 3)
+    appender = BufferedAppender(stream, max_delay=timedelta(milliseconds=20))
+    appender.append(1)
+    appender.append(2, 3)
     await asyncio.sleep(0.1)
     assert stream.batches == [(1, 2, 3)]
-    publisher.publish(4)
-    assert await publisher.flush() == 4
+    appender.append(4)
+    assert await appender.flush() == streams.StreamOffset.parse("4")
     assert stream.batches == [(1, 2, 3), (4,)]
-    assert await publisher.flush() == 4
+    assert await appender.flush() == streams.StreamOffset.parse("4")
 
 
-async def test_buffered_publisher_writes_a_full_batch_with_one_write_in_flight():
+async def test_buffered_appender_writes_a_full_batch_with_one_write_in_flight():
     stream = _Batches()
-    publisher = BufferedPublisher(stream, max_delay=timedelta(minutes=10))
-    publisher.publish(*range(1000))
-    publisher.publish(*range(1000, 2500))
+    appender = BufferedAppender(stream, max_delay=timedelta(minutes=10))
+    appender.append(*range(1000))
+    appender.append(*range(1000, 2500))
     await asyncio.sleep(0.2)
-    # A full batch is written without waiting for the delay. The values published during its
+    # A full batch is written without waiting for the delay. The values appended during its
     # write are in the next batch.
     assert [len(batch) for batch in stream.batches] == [1000, 1500]
     assert stream.most_in_flight == 1
-    assert await publisher.flush() == 2500
+    assert await appender.flush() == streams.StreamOffset.parse("2500")
 
 
-async def test_buffered_publisher_raises_a_failed_batch():
+async def test_buffered_appender_raises_a_failed_batch():
     stream = _Batches(fail=True)
-    with pytest.raises(streams.StreamStorageUnavailableError):
-        async with BufferedPublisher(stream) as publisher:
-            publisher.publish(1)
+    with pytest.raises(streams.StreamError):
+        async with BufferedAppender(stream) as appender:
+            appender.append(1)
     with pytest.raises(TypeError):
-        BufferedPublisher(stream).publish()
+        BufferedAppender(stream).append()
 
 
 @activity.defn
 async def local_step(ref: streams.StreamRef[str]) -> list[Any]:
     # Each Workflow write is an awaited Local Activity, so the run's create and Records are in
     # the Store before a later Local Activity starts.
-    stream = activity.client().to_stream(ref)
+    stream = activity.client().get_stream(ref)
     seen = [
         item.data
-        async for item in stream.subscribe(wait_new_records=False)
+        async for item in stream.read(wait_new_records=False)
         if isinstance(item, streams.Record)
     ]
-    await stream.publish("local")
+    await stream.append("local")
     return seen
 
 
@@ -602,14 +618,14 @@ async def local_step(ref: streams.StreamRef[str]) -> list[Any]:
 class LocalOrder:
     @workflow.run
     async def run(self) -> list[Any]:
-        stream = await workflow.create_stream[str](own_id())
-        await stream.publish("before")
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("before")
         seen = await workflow.execute_local_activity(
             local_step,
             stream.ref,
             start_to_close_timeout=timedelta(seconds=30),
         )
-        await stream.publish("after")
+        await stream.append("after")
         await stream.close()
         return seen
 
@@ -620,15 +636,15 @@ class TwoClients:
 
     @activity.defn
     async def writes_with_both(self, ref: streams.StreamRef[str]) -> None:
-        await activity.client().to_stream(ref).publish("worker client")
-        await self._other.to_stream(ref).publish("other client")
+        await activity.client().get_stream(ref).append("worker client")
+        await self._other.get_stream(ref).append("other client")
 
 
 @workflow.defn
 class WritesWithTwoClients:
     @workflow.run
     async def run(self) -> None:
-        stream = await workflow.create_stream[str](own_id())
+        stream = await workflow.create_stream(own_id(), payload_type=str)
         await workflow.execute_activity_method(
             TwoClients.writes_with_both,
             stream.ref,
@@ -677,26 +693,26 @@ async def test_workflow_writes_go_out_before_a_local_activity(stream_client: Cli
     assert await closed(handle)
 
 
-async def test_buffered_publisher_stays_failed():
+async def test_buffered_appender_stays_failed():
     stream = _Batches(fail=True)
-    publisher = BufferedPublisher(stream)
-    publisher.publish(1, 2)
-    with pytest.raises(streams.StreamStorageUnavailableError):
-        await publisher.flush()
+    appender = BufferedAppender(stream)
+    appender.append(1, 2)
+    with pytest.raises(streams.StreamError):
+        await appender.flush()
     stream.fail = False
-    # A later batch would leave a gap, so the publisher refuses it and keeps the error.
-    with pytest.raises(streams.StreamStorageUnavailableError):
-        publisher.publish(3)
-    with pytest.raises(streams.StreamStorageUnavailableError):
-        await publisher.flush()
-    assert stream.batches == [] and publisher.unwritten == 2
+    # A later batch would leave a gap, so the appender refuses it and keeps the error.
+    with pytest.raises(streams.StreamError):
+        appender.append(3)
+    with pytest.raises(streams.StreamError):
+        await appender.flush()
+    assert stream.batches == [] and appender.unwritten == 2
 
 
 @activity.defn
 async def never_flushes(input: CallModelInput) -> None:
-    stream = activity.client().to_stream(input.stream)
-    publisher = BufferedPublisher(stream, max_delay=timedelta(minutes=10))
-    publisher.publish(*input.prompt.split())
+    stream = activity.client().get_stream(input.stream)
+    appender = BufferedAppender(stream, max_delay=timedelta(minutes=10))
+    appender.append(*input.prompt.split())
 
 
 @dataclass
@@ -712,7 +728,7 @@ async def flaky_many(input: ManyStreams) -> None:
     assert input.maybe is not None
     if attempts[input.key] == 1:
         for ref in [*input.targets, input.maybe]:
-            await activity.client().to_stream(ref).publish("attempt-1")
+            await activity.client().get_stream(ref).append("attempt-1")
         raise RuntimeError("first attempt fails")
 
 
@@ -720,8 +736,8 @@ async def flaky_many(input: ManyStreams) -> None:
 class Leftovers:
     @workflow.run
     async def run(self, key: str) -> list[Any]:
-        stream = await workflow.create_stream[str](own_id())
-        other = await workflow.create_stream[str](own_id("other"))
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        other = await workflow.create_stream(own_id("other"), payload_type=str)
         await workflow.execute_activity(
             never_flushes,
             CallModelInput("a b", stream.ref),
@@ -757,7 +773,7 @@ async def test_attempt_end_flushes_and_retry_finds_nested_streams(
         handle = await stream_client.start_workflow(
             Leftovers.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
-        # The publisher was never flushed, so the end of the attempt wrote its values.
+        # The appender was never flushed, so the end of the attempt wrote its values.
         assert await handle.result() == ["a", "b", "attempt-1"]
         items = await read(handle)
         other = await read(handle, "other")
@@ -921,7 +937,7 @@ class RetriesAfterContinueAsNew:
     @workflow.run
     async def run(self, key: str, ref: streams.StreamRef[str] | None) -> None:
         if ref is None:
-            created = await workflow.create_stream[str](own_id())
+            created = await workflow.create_stream(own_id(), payload_type=str)
             workflow.continue_as_new(args=[key, created.ref])
         await workflow.execute_activity(
             flaky,

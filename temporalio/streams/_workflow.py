@@ -28,7 +28,9 @@ import temporalio.exceptions
 import temporalio.nexus.system._support as _support
 import temporalio.workflow
 from temporalio.streams import _errors
-from temporalio.streams._ref import StreamOptions, StreamRef
+from temporalio.streams._conflict import StreamIDConflictPolicy
+from temporalio.streams._offset import StreamOffset
+from temporalio.streams._ref import StreamRef
 from temporalio.streams._writer import WriteFuture, unretrieved_error
 from temporalio.streams.system import models
 from temporalio.streams.system.workflow._resources import (
@@ -68,7 +70,7 @@ class _Write:
     # Record count up to its own last Record, and its future.
     activity: str
     request: google.protobuf.message.Message
-    calls: list[tuple[int, asyncio.Future[int]]]
+    calls: list[tuple[int, WriteFuture]]
     size: int = 0
     started: bool = False
 
@@ -106,9 +108,9 @@ class _RunState:
     uses_streams: bool = False
     # The async with blocks whose close waits for the run's outcome.
     deferred_closes: list[StreamRef[Any]] = field(default_factory=list)
-    # The publishes that failed before a caller got the error. A caller can still get it, so
+    # The appends that failed before a caller got the error. A caller can still get it, so
     # the run's end checks them again.
-    failed_publishes: list[asyncio.Future[int]] = field(default_factory=list)
+    failed_publishes: list[asyncio.Future[StreamOffset]] = field(default_factory=list)
     # The calls of the generated Workflow API in flight. A call ends after its write, so the
     # run's end waits for both.
     calls: set[asyncio.Future[Any]] = field(default_factory=set)
@@ -214,7 +216,7 @@ def _records(request: google.protobuf.message.Message) -> int:
 
 def _write(
     stream_id: str, activity: str, request: google.protobuf.message.Message
-) -> asyncio.Future[int]:
+) -> asyncio.Future[StreamOffset]:
     state = _state()
     loop = asyncio.get_running_loop()
     future = WriteFuture(loop=loop)
@@ -310,7 +312,7 @@ def _write(
                     _errors.from_reason(int(answer["reason"]), str(answer["message"]))
                 )
             else:
-                call.set_result(int(answer))
+                call._set_wire(int(answer))
 
     task = loop.create_task(run())
     task.add_done_callback(lambda _: _raise_nowait_error(state))
@@ -319,10 +321,10 @@ def _write(
     return future
 
 
-def _write_nowait(future: asyncio.Future[int]) -> None:
+def _write_nowait(future: asyncio.Future[StreamOffset]) -> None:
     state = _state()
 
-    def done(future: asyncio.Future[int]) -> None:
+    def done(future: asyncio.Future[StreamOffset]) -> None:
         if future.cancelled() or future.exception() is None:
             return
         if state.nowait_error is None:
@@ -424,10 +426,12 @@ def _check(
     return run_stream
 
 
-def _start_append(ref: StreamRef[Any], values: tuple[Any, ...]) -> asyncio.Future[int]:
+def _start_append(
+    ref: StreamRef[Any], values: tuple[Any, ...]
+) -> asyncio.Future[StreamOffset]:
     # The checks raise at the call, as the write's place in the order does.
     if not values:
-        raise TypeError("publish takes one or more values")
+        raise TypeError("append takes one or more values")
     _check(ref, "write to")
     call = _support.start_now(
         generated_stream.append_records(ref=_generated_ref(ref), records=list(values))
@@ -435,9 +439,11 @@ def _start_append(ref: StreamRef[Any], values: tuple[Any, ...]) -> asyncio.Futur
     return _call_future(call, int)
 
 
-def _append(ref: StreamRef[Any], values: tuple[Any, ...]) -> asyncio.Future[int]:
+def _append(
+    ref: StreamRef[Any], values: tuple[Any, ...]
+) -> asyncio.Future[StreamOffset]:
     if not values:
-        raise TypeError("publish takes one or more values")
+        raise TypeError("append takes one or more values")
     _check(ref, "write to")
     records = [stream_v1.AppendRecord(body=_payload(v)) for v in values]
     return _write(
@@ -447,7 +453,7 @@ def _append(ref: StreamRef[Any], values: tuple[Any, ...]) -> asyncio.Future[int]
     )
 
 
-def _start_close(ref: StreamRef[Any]) -> asyncio.Future[int]:
+def _start_close(ref: StreamRef[Any]) -> asyncio.Future[StreamOffset]:
     _closing(ref)
     call = _support.start_now(generated_stream.close_stream(ref=_generated_ref(ref)))
     return _call_future(call, lambda _: 0)
@@ -468,7 +474,7 @@ def check_owner(ref: StreamRef[Any]) -> None:
     ):
         # The backend refuses the close too, but this check fails before the Workflow
         # schedules a command.
-        raise _errors.StreamNotOwnerError(
+        raise _errors.not_owner(
             f"Can't close the Stream {ref.id}, since it is bound to another run chain"
         )
 
@@ -478,33 +484,35 @@ def _closing(ref: StreamRef[Any]) -> _RunStream:
     return _check(ref, "close")
 
 
-def _close(ref: StreamRef[Any]) -> asyncio.Future[int]:
+def _close(ref: StreamRef[Any]) -> asyncio.Future[StreamOffset]:
     _closing(ref).closed = True
     return _write(
         ref.id, CLOSE_ACTIVITY, stream_pb.CloseStreamRequest(ref=_proto_ref(ref))
     )
 
 
-def publish(ref: StreamRef[Any], values: tuple[Any, ...]) -> asyncio.Future[int]:
+def append(
+    ref: StreamRef[Any], values: tuple[Any, ...]
+) -> asyncio.Future[StreamOffset]:
     """Start the write Local Activity. An error that no caller gets fails the run.
 
-    See :py:meth:`temporalio.workflow.WorkflowStream.publish`.
+    See :py:meth:`temporalio.workflow.WorkflowStream.append`.
     """
     state = _state()
     future = _start_append(ref, values)
     loop = asyncio.get_running_loop()
 
-    def warn(future: asyncio.Future[int]) -> None:
+    def warn(future: asyncio.Future[StreamOffset]) -> None:
         error = unretrieved_error(future)
         if error is not None:
             temporalio.workflow.logger.warning(
-                "A publish to the Stream %s failed, and no caller has its error. If no "
+                "An append to the Stream %s failed, and no caller has its error. If no "
                 "caller gets the error, it fails the run when the run ends: %s",
                 ref.id,
                 error,
             )
 
-    def failed(future: asyncio.Future[int]) -> None:
+    def failed(future: asyncio.Future[StreamOffset]) -> None:
         if unretrieved_error(future) is not None:
             state.failed_publishes.append(future)
             # A caller that already waits for the future gets the error before warn runs.
@@ -538,7 +546,7 @@ async def exit_block(ref: StreamRef[Any], exc: BaseException | None) -> None:
         state.deferred_closes.append(ref)
 
 
-def publish_nowait(ref: StreamRef[Any], values: tuple[Any, ...]) -> None:
+def append_nowait(ref: StreamRef[Any], values: tuple[Any, ...]) -> None:
     """Start the write. Its error raises in the run as an error that the run doesn't catch."""
     _write_nowait(_start_append(ref, values))
 
@@ -613,12 +621,10 @@ def _cancelled(exc: BaseException) -> bool:
     )
 
 
-def _conflict_policy(or_get: bool) -> models.StreamIdConflictPolicy:
-    return (
-        models.StreamIdConflictPolicy.StreamIdConflictPolicyUseExisting
-        if or_get
-        else models.StreamIdConflictPolicy.StreamIdConflictPolicyFail
-    )
+def _models_policy(
+    policy: StreamIDConflictPolicy,
+) -> models.StreamIdConflictPolicy:
+    return models.StreamIdConflictPolicy(int(policy))
 
 
 async def create_stream(
@@ -626,19 +632,18 @@ async def create_stream(
     id: str,
     *,
     backend: str | None,
-    options: StreamOptions,
-    or_get: bool,
+    id_conflict_policy: StreamIDConflictPolicy,
 ) -> WorkflowStream[T]:
-    """Create a standalone Stream, or with ``or_get`` get the one that exists.
+    """Create a standalone Stream.
 
     See :py:data:`temporalio.workflow.create_stream`.
     """
     ref: StreamRef[T] = _creating(id, backend)
-    await generated_create.create_stream[payload_type or object](
+    await generated_create.create_stream(
         id=id,
         backend=ref.backend,
-        retention=options.get("retention"),
-        id_conflict_policy=_conflict_policy(or_get),
+        id_conflict_policy=_models_policy(id_conflict_policy),
+        body_type=payload_type or object,
     )
     return WorkflowStream(ref)
 
@@ -648,20 +653,19 @@ def create_stream_nowait(
     id: str,
     *,
     backend: str | None,
-    options: StreamOptions,
-    or_get: bool,
+    id_conflict_policy: StreamIDConflictPolicy,
 ) -> WorkflowStream[T]:
-    """Create a standalone Stream, or get it, without an await.
+    """Create a standalone Stream without an await.
 
     See :py:data:`temporalio.workflow.create_stream_nowait`.
     """
     ref: StreamRef[T] = _creating(id, backend)
     call = _support.start_now(
-        generated_create.create_stream[payload_type or object](
+        generated_create.create_stream(
             id=id,
             backend=ref.backend,
-            retention=options.get("retention"),
-            id_conflict_policy=_conflict_policy(or_get),
+            id_conflict_policy=_models_policy(id_conflict_policy),
+            body_type=payload_type or object,
         )
     )
     _write_nowait(_call_future(call, lambda _: 0))
@@ -680,7 +684,7 @@ def _creating(id: str, backend: str | None) -> StreamRef[Any]:
 
 def _call_future(
     call: asyncio.Task[Any], result: Callable[[Any], int]
-) -> asyncio.Future[int]:
+) -> asyncio.Future[StreamOffset]:
     # start_now runs a call of the generated Workflow API up to its first wait, so its write
     # takes its place in the order at once. The call gives the write's result, or the handle
     # that gives it. The caller's future follows both, and the run's end waits for them.
@@ -688,7 +692,7 @@ def _call_future(
     future = WriteFuture(loop=loop)
 
     async def follow() -> None:
-        # The task sets the future before it ends, so the run's end sees a failed publish.
+        # The task sets the future before it ends, so the run's end sees a failed append.
         try:
             started = await call
             if isinstance(started, temporalio.workflow.NexusOperationHandle):
@@ -699,7 +703,7 @@ def _call_future(
         except BaseException as err:
             future.set_exception(_errors.from_failure(err) or err)
         else:
-            future.set_result(result(started))
+            future._set_wire(result(started))
 
     task = loop.create_task(follow())
     state = _state()
@@ -711,7 +715,7 @@ def _call_future(
 
 def _start_create(
     ref: StreamRef[Any], request: models.CreateStreamRequest
-) -> asyncio.Future[int]:
+) -> asyncio.Future[StreamOffset]:
     _check(ref, "create", backend_checked=True)
     proto = models._CreateStreamRequestTransferTypeConverter().to_transfer_type(request)
     proto.stream_ref.CopyFrom(_proto_ref(ref))
@@ -729,7 +733,7 @@ class _WriteHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
     # The interceptor runs a call of the generated Workflow API as a write Local Activity, so
     # the call's handle waits for the write.
     def __init__(
-        self, write: asyncio.Future[int], result: Callable[[int], OutputT]
+        self, write: asyncio.Future[StreamOffset], result: Callable[[int], OutputT]
     ) -> None:
         self._write = write
         self._result = result
@@ -742,7 +746,7 @@ class _WriteHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
         return self._wait().__await__()
 
     async def _wait(self) -> OutputT:
-        return self._result(await self._write)
+        return self._result((await self._write)._wire)
 
     @property
     def operation_token(self) -> str | None:
@@ -791,14 +795,14 @@ def run_close_stream(
     return _WriteHandle(write, lambda _: models.CloseStreamResponse())
 
 
-def no_workflow_reads() -> _errors.StreamUnsupportedError:
+def no_workflow_reads() -> _errors.StreamError:
     """The error of a read or a describe in Workflow code."""
-    return _errors.StreamUnsupportedError(
+    return _errors.unsupported(
         "Workflow code can't read a Stream. Read it from an Activity."
     )
 
 
-def to_stream(ref: StreamRef[T]) -> WorkflowStream[T]:
+def get_stream(ref: StreamRef[T]) -> WorkflowStream[T]:
     """Get the Stream of a ref that came as data.
 
     See :py:func:`temporalio.workflow.to_stream`.

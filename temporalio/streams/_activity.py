@@ -14,7 +14,7 @@ from temporalio.streams._writer import RecordWriter
 
 if TYPE_CHECKING:
     import temporalio.client
-    from temporalio.client import BufferedPublisher
+    from temporalio.client import BufferedAppender
 
 
 @dataclass
@@ -32,8 +32,8 @@ class ActivityStreams:
     previous_completed_task: stream_v1.WorkflowTaskEpoch | None = None
     failed_tasks: tuple[int, ...] = ()
     writers: dict[str, RecordWriter] = field(default_factory=dict)
-    # The attempt's BufferedPublishers, which the end of the attempt flushes.
-    publishers: list[BufferedPublisher[Any]] = field(default_factory=list)
+    # The attempt's BufferedAppenders, which the end of the attempt flushes.
+    appenders: list[BufferedAppender[Any]] = field(default_factory=list)
     # The Worker's client. Its Streams in the attempt write as the attempt, and other clients'
     # Streams write as those clients.
     client: temporalio.client.Client | None = None
@@ -54,14 +54,14 @@ class ActivityStreams:
         return writer
 
     async def close(self) -> None:
-        """Flush the attempt's publishers, then close every writer of the attempt.
+        """Flush the attempt's appenders, then close every writer of the attempt.
 
         A write error that no caller got fails the attempt.
         """
         errors: list[BaseException] = []
-        for publisher in self.publishers:
+        for appender in self.appenders:
             try:
-                await publisher._flush_at_attempt_end()
+                await appender._flush_at_attempt_end()
             except Exception as err:
                 errors.append(err)
         for writer in self.writers.values():

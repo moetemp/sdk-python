@@ -6,6 +6,7 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar
 
+from temporalio.streams._offset import StreamOffset
 from temporalio.streams.system import models
 
 T = TypeVar("T")
@@ -48,7 +49,7 @@ class Record(Generic[T]):
     data: T
     """Value of the Record, decoded with the Stream's payload type. A list is one value."""
 
-    offset: int
+    offset: StreamOffset
     """Position of the Record in the Stream. Offsets are ordered and unique, with gaps."""
 
     producer: models.Producer | None
@@ -74,13 +75,13 @@ class Superseded:
     kind: Literal[ItemKind.SUPERSEDED] = field(default=ItemKind.SUPERSEDED, init=False)
     """Always :py:attr:`ItemKind.SUPERSEDED`."""
 
-    offset: int
+    offset: StreamOffset
     """Position of the item in the Stream."""
 
     facts: models.StreamSuperseded
     """The withdrawal facts from the Store. Its ``writer`` gives the Records that it withdraws."""
 
-    withdrawn_offsets: tuple[int, ...] = ()
+    withdrawn_offsets: tuple[StreamOffset, ...] = ()
     """The offsets of the Records that this read gave and this item withdraws, in order.
 
     A read gives each offset once. It doesn't include Records from before the read's start.

@@ -15,6 +15,7 @@ import temporalio.activity
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.common
+from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams import _activity, _backend, _errors, _ids
 from temporalio.streams._workflow import (
     APPEND_ACTIVITY,
@@ -234,7 +235,7 @@ async def append_records(
                 )
                 answer = response.last_offset or 0
             except _errors.StreamError as err:
-                if not isinstance(err, _errors.StreamTooLargeError):
+                if err.reason != StreamErrorReason.STREAM_ERROR_REASON_TOO_LARGE:
                     if err.non_retryable:
                         _PENDING.pop(key, epoch)
                     raise
@@ -258,7 +259,7 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
     if owner is not None and owner.business_id != streams.workflow_id:
         # The Store refuses an Activity Producer's close, so the Activity closes as the run. It
         # refuses a Stream bound to another Workflow, and Workflow code checks the run chain.
-        raise _errors.StreamNotOwnerError(
+        raise _errors.not_owner(
             f"Can't close the Stream {request.ref.id} for another Workflow"
         )
     await service.send_close_stream(

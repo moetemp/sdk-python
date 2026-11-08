@@ -143,9 +143,13 @@ def _producer(id: str, attempt: int) -> streams.Producer:
 
 
 def test_read_items_have_a_kind_that_narrows_their_type():
-    record = streams.Record(data=Turn("model"), offset=3, producer=_producer("a", 1))
+    record = streams.Record(
+        data=Turn("model"),
+        offset=streams.StreamOffset.parse("3"),
+        producer=_producer("a", 1),
+    )
     superseded = streams.Superseded(
-        offset=4,
+        offset=streams.StreamOffset.parse("4"),
         facts=streams.StreamSuperseded(
             writer=streams.StreamWriter(producer=_producer("a", 2), failed_tasks=[])
         ),
@@ -165,7 +169,7 @@ def test_read_items_have_a_kind_that_narrows_their_type():
 
 def test_superseded_withdraws_by_the_producer_of_an_earlier_record():
     superseded = streams.Superseded(
-        offset=9,
+        offset=streams.StreamOffset.parse("9"),
         facts=streams.StreamSuperseded(
             writer=streams.StreamWriter(producer=_producer("a", 2), failed_tasks=[])
         ),

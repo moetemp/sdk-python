@@ -7,7 +7,7 @@ from typing_extensions import override
 
 import temporalio.common
 import temporalio.converter
-from temporalio.streams import StreamNotFoundError, _backend, _reader
+from temporalio.streams import StreamNotFoundError, StreamOffset, _backend, _reader
 from temporalio.streams._items import Record, Superseded
 from temporalio.streams.system import models
 
@@ -69,15 +69,17 @@ async def test_superseded_lists_each_withdrawn_offset_once():
 
     async def items() -> AsyncGenerator[_reader.Item, None]:
         for offset, producer in written:
-            yield Record(data=None, offset=offset, producer=producer)
-        yield Superseded(offset=30, facts=facts)
-        yield Superseded(offset=31, facts=facts)
+            yield Record(
+                data=None, offset=StreamOffset._from_wire(offset), producer=producer
+            )
+        yield Superseded(offset=StreamOffset._from_wire(30), facts=facts)
+        yield Superseded(offset=StreamOffset._from_wire(31), facts=facts)
 
-    read: _reader.Subscription[None] = _reader.Subscription(
-        items(), _reader.Position(0)
-    )
+    read: _reader.Reader[None] = _reader.Reader(items(), _reader.Position(0))
     superseded = [item async for item in read if isinstance(item, Superseded)]
-    assert [item.withdrawn_offsets for item in superseded] == [(10, 11, 12, 20), ()]
+    assert [
+        tuple(str(offset) for offset in item.withdrawn_offsets) for item in superseded
+    ] == [("10", "11", "12", "20"), ()]
 
 
 class _Missing(_backend.StreamServiceCalls):

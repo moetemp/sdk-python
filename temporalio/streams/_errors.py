@@ -15,16 +15,14 @@ __all__ = [
     "StreamClosedError",
     "StreamConfigError",
     "StreamError",
-    "StreamExpiredError",
     "StreamFencedError",
     "StreamNotFoundError",
-    "StreamNotOwnerError",
-    "StreamOffsetTooHighError",
-    "StreamSeqDivergentError",
-    "StreamStorageUnavailableError",
-    "StreamTooLargeError",
-    "StreamUnsupportedError",
 ]
+
+# The one reason a retry can fix. Every other reason raises a non-retryable error.
+_RETRYABLE_REASONS: frozenset[int] = frozenset(
+    {StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE}
+)
 
 
 class StreamConfigError(RuntimeError):
@@ -52,8 +50,9 @@ def no_default_backend(
 class StreamError(temporalio.exceptions.ApplicationError):
     """A failed Stream call, with its ``StreamErrorReason``.
 
-    A reason with no class of its own, such as ``STREAM_ERROR_REASON_STORAGE_CORRUPT``, raises
-    this class.
+    A reason with no class of its own raises this class. The reason tells the cases apart, such
+    as ``STREAM_ERROR_REASON_NOT_OWNER`` or ``STREAM_ERROR_REASON_STORAGE_UNAVAILABLE``. A Store
+    outage is the one retryable error.
 
     .. warning::
         This API is experimental.
@@ -62,7 +61,6 @@ class StreamError(temporalio.exceptions.ApplicationError):
     _reason: ClassVar[StreamErrorReason.ValueType] = (
         StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
     )
-    _retryable: ClassVar[bool] = False
 
     def __init__(
         self, message: str, *, reason: StreamErrorReason.ValueType | None = None
@@ -70,12 +68,12 @@ class StreamError(temporalio.exceptions.ApplicationError):
         """Create the error. ``reason`` defaults to the reason of the class."""
         reason = self._reason if reason is None else reason
         # The details carry the reason, so the error keeps it when it crosses an Activity or a
-        # Nexus operation.
+        # Nexus operation. The reason, not the class, decides whether a retry can fix it.
         super().__init__(
             message,
             temporalio.api.stream.v1.StreamErrorDetails(reason=reason),
             type=type(self).__name__,
-            non_retryable=not self._retryable,
+            non_retryable=reason not in _RETRYABLE_REASONS,
         )
         self.reason: StreamErrorReason.ValueType = reason
 
@@ -88,16 +86,6 @@ class StreamNotFoundError(StreamError):
     """
 
     _reason = StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
-
-
-class StreamExpiredError(StreamError):
-    """The Stream's Retention or safety TTL passed.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
 
 
 class StreamClosedError(StreamError):
@@ -120,69 +108,6 @@ class StreamFencedError(StreamError):
     _reason = StreamErrorReason.STREAM_ERROR_REASON_FENCED
 
 
-class StreamSeqDivergentError(StreamError):
-    """A batch has the sequence of the last batch of its epoch, and other content.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_SEQ_DIVERGENT
-
-
-class StreamNotOwnerError(StreamError):
-    """A create gives another owner than the Stream has, or the owner refuses this close.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_NOT_OWNER
-
-
-class StreamOffsetTooHighError(StreamError):
-    """The offset is past the newest offset + 1.
-
-    A read from it works again once the Stream has Records up to it.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_OFFSET_TOO_HIGH
-
-
-class StreamTooLargeError(StreamError):
-    """A Record or a batch is over the Store's limit.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_TOO_LARGE
-
-
-class StreamStorageUnavailableError(StreamError):
-    """The Store failed or did not answer. It is the only retryable Stream error.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE
-    _retryable = True
-
-
-class StreamUnsupportedError(StreamError):
-    """The Store or the code that makes the call lacks a capability that the call needs.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_UNSUPPORTED
-
-
 class StreamAlreadyExistsError(StreamError):
     """A create of an id that exists, with no earlier create of the same request.
 
@@ -193,19 +118,24 @@ class StreamAlreadyExistsError(StreamError):
     _reason = StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
 
 
+def not_owner(message: str) -> StreamError:
+    """A ``StreamError`` for code that may not close a Stream it does not own."""
+    return StreamError(message, reason=StreamErrorReason.STREAM_ERROR_REASON_NOT_OWNER)
+
+
+def unsupported(message: str) -> StreamError:
+    """A ``StreamError`` for a call that the code or the Store does not support."""
+    return StreamError(
+        message, reason=StreamErrorReason.STREAM_ERROR_REASON_UNSUPPORTED
+    )
+
+
 _ERRORS: dict[int, type[StreamError]] = {
     error._reason: error
     for error in (
         StreamNotFoundError,
-        StreamExpiredError,
         StreamClosedError,
         StreamFencedError,
-        StreamSeqDivergentError,
-        StreamNotOwnerError,
-        StreamOffsetTooHighError,
-        StreamTooLargeError,
-        StreamStorageUnavailableError,
-        StreamUnsupportedError,
         StreamAlreadyExistsError,
     )
 }

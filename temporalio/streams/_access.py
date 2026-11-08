@@ -12,7 +12,8 @@ import temporalio.converter
 from temporalio.streams import _convert, _reader
 from temporalio.streams._backend import BackendCalls, CallOptions
 from temporalio.streams._items import End
-from temporalio.streams._reader import Item, Position, Subscription
+from temporalio.streams._offset import StreamOffset
+from temporalio.streams._reader import Item, Position, Reader
 from temporalio.streams._writer import RecordWriter
 from temporalio.streams.system import models
 
@@ -27,13 +28,13 @@ class Access:
     stream_id: str
     writer: Callable[[], RecordWriter]
 
-    def publish(self, values: Sequence[Any]) -> asyncio.Future[int]:
+    def append(self, values: Sequence[Any]) -> asyncio.Future[StreamOffset]:
         """Start the write of the values as Records, in order, and return its future.
 
         The future gives the offset of the last Record.
         """
         if not values:
-            raise TypeError("publish takes one or more values")
+            raise TypeError("append takes one or more values")
         return self.writer().write(values)
 
     async def items(
@@ -121,15 +122,15 @@ def read_spec(
     )
 
 
-def subscription(
+def reader(
     items: Callable[[Position], AsyncGenerator[Item, None]],
     read: ReadSpec,
     options: CallOptions | None = None,
-) -> Subscription[Any]:
+) -> Reader[Any]:
     """A read over the items that ``items`` gives."""
     # A read from END or of the last Records has no resume offset until its first page.
     if read.last is not None or read.offset is End.END:
         position = Position(None)
     else:
         position = Position(read.offset or 0)
-    return Subscription(items(position), position, options)
+    return Reader(items(position), position, options)

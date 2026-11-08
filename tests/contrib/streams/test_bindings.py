@@ -67,7 +67,9 @@ async def test_a_poll_carries_the_next_offset_until_the_close():
         ),
         models.ReadRecordsResponse(records=[], next_offset=10, done=True),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = [
         item
         async for item in stream.iter_read_items(
@@ -87,7 +89,9 @@ async def test_a_read_with_no_wait_ends_at_an_empty_page_that_didnt_move():
         ),
         models.ReadRecordsResponse(records=[], next_offset=5),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = [
         item
         async for item in stream.iter_read_items(
@@ -105,7 +109,9 @@ async def test_a_poll_resumes_after_the_last_item_it_gave():
     nexus_client = FakeNexusClient(
         models.ReadRecordsResponse(records=[_data(4), _data(7)], next_offset=8),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = stream.iter_read_items(start=models.StreamReadStart.StreamReadStartEnd)
     first = await anext(items)
     assert first.offset == 4
@@ -132,7 +138,9 @@ async def test_a_poll_resumes_at_a_superseded_item_and_keeps_its_record():
     nexus_client = FakeNexusClient(
         models.ReadRecordsResponse(records=[superseded, _data(7)], next_offset=8),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = stream.iter_read_items()
     assert (await anext(items)).offset == 7
     # The first Record of the batch has the Superseded item's offset and comes next, so a read

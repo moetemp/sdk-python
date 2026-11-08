@@ -23,17 +23,17 @@ class TurnResult(pydantic.BaseModel):
 
 
 @activity.defn
-async def call_model(input: CallModelInput) -> int:
-    stream = activity.client().to_stream(input.stream)
-    return await stream.publish(*input.prompt.split())
+async def call_model(input: CallModelInput) -> str:
+    stream = activity.client().get_stream(input.stream)
+    return str(await stream.append(*input.prompt.split()))
 
 
 @workflow.defn
 class TurnWorkflow:
     @workflow.run
     async def run(self, prompt: str) -> TurnResult:
-        stream = await workflow.create_stream[str](
-            f"{workflow.info().workflow_id}-tokens"
+        stream = await workflow.create_stream(
+            f"{workflow.info().workflow_id}-tokens", payload_type=str
         )
         await workflow.execute_activity(
             call_model,
@@ -62,8 +62,8 @@ async def test_refs_in_models_round_trip_on_the_memory_store(client: Client):
     assert result.stream.owner is None
     assert result.stream.id == f"{handle.id}-tokens"
     assert result.stream.backend == "memory"
-    stream = client.to_stream(result.stream)
-    items = [item async for item in stream.subscribe()]
+    stream = client.get_stream(result.stream)
+    items = [item async for item in stream.read()]
     assert [i.data for i in items if isinstance(i, streams.Record)] == ["hi", "there"]
     status = await stream_status(client, result.stream.id)
     assert status == models.StreamStatus.StreamStatusClosed
