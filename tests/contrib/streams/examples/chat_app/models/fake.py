@@ -16,7 +16,7 @@ from . import RoundEvent
 
 CANNED_REPLIES = [
     "I'm the scripted model, so this demo runs with no API key. Each word that you see is a "
-    "Record of the tokens Stream. The model Activity writes them through a BufferedPublisher, "
+    "Record of the tokens Stream. The model Activity writes them through a BufferedAppender, "
     "which sends them in small batches.",
     "The Workflow publishes each turn to the turns Stream, and the Activity publishes the tokens "
     "to a Stream of their own. The browser reads both through the server, which sends each read "

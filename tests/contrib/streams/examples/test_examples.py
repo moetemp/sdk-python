@@ -58,7 +58,7 @@ async def test_activity_streams_tokens(stream_client: Client):
         "three",
         "summary: ONE TWO THREE",
     ]
-    assert summary == records[-1].offset
+    assert summary == str(records[-1].offset)
 
 
 async def test_worker_setup_on_memory(client: Client):

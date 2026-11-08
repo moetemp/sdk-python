@@ -7,7 +7,7 @@ import contextlib
 from collections.abc import AsyncIterator
 
 from temporalio import activity
-from temporalio.client import BufferedPublisher
+from temporalio.client import BufferedAppender
 from temporalio.exceptions import ApplicationError
 
 from .models import Model, RawContent
@@ -39,11 +39,11 @@ class ModelActivities:
     @activity.defn
     async def call_model(self, input: ModelInput) -> ModelReply:
         # A Stream from activity.client() writes as this attempt, so a retry withdraws its Records.
-        tokens = activity.client().to_stream(input.tokens)
+        tokens = activity.client().get_stream(input.tokens)
         fail = input.fail_first_attempt and activity.info().attempt == 1
         reply = ModelReply("")
         text: list[str] = []
-        async with heartbeats(), BufferedPublisher(tokens) as publisher:
+        async with heartbeats(), BufferedAppender(tokens) as publisher:
             streamed = self._model.stream(input.messages, input.tools)
             async with contextlib.aclosing(streamed) as events:
                 async for event in events:
@@ -52,7 +52,7 @@ class ModelActivities:
                     elif isinstance(event, RawContent):
                         reply.raw = event.blocks
                     else:
-                        publisher.publish(Token(input.number, event, input.round))
+                        publisher.append(Token(input.number, event, input.round))
                         text.append(event)
                         if fail and len(text) == FAIL_AFTER:
                             break

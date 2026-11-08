@@ -23,10 +23,10 @@ class Greeter:
     @workflow.init
     def __init__(self, name: str) -> None:
         # The init can't await, so it creates and publishes with the _nowait calls.
-        self.tokens = workflow.create_stream_nowait[str](
-            f"{workflow.info().workflow_id}-tokens"
+        self.tokens = workflow.create_stream_nowait(
+            f"{workflow.info().workflow_id}-tokens", payload_type=str
         )
-        self.tokens.publish_nowait(f"hello {name}")
+        self.tokens.append_nowait(f"hello {name}")
 
     @workflow.query
     def stream(self) -> streams.StreamRef[str]:
@@ -34,7 +34,7 @@ class Greeter:
 
     @workflow.run
     async def run(self, name: str) -> str:
-        await self.tokens.publish(f"bye {name}")
+        await self.tokens.append(f"bye {name}")
         await self.tokens.close()
         return name
 
@@ -75,10 +75,12 @@ async def main(client: Client, task_queue: str) -> list[str]:
             Greeter.run, "ada", id=f"greeter-{uuid.uuid4()}", task_queue=task_queue
         )
         await handle.result()
-        stream = client.to_stream(await handle.query(Greeter.stream))
-    return [r.data async for r in stream.subscribe() if isinstance(r, streams.Record)]
+        stream = client.get_stream(await handle.query(Greeter.stream))
+    return [r.data async for r in stream.read() if isinstance(r, streams.Record)]
 
 
 async def create_on_second_backend(client: Client) -> str | None:
-    stream = await client.create_stream[str](f"chat-{uuid.uuid4()}", backend="redis-b")
+    stream = await client.create_stream(
+        f"chat-{uuid.uuid4()}", backend="redis-b", payload_type=str
+    )
     return stream.ref.backend

@@ -1069,7 +1069,7 @@ function showWelcome() {
 async function send(text, fail) {
   if (busy()) {
     await api("POST", `/api/sessions/${sessionId}/add`, { text });
-    $("sent").textContent = "The add_message Signal published the message with publish_nowait";
+    $("sent").textContent = "The add_message Signal appended the message with append_nowait";
     return;
   }
   const result = await api("POST", `/api/sessions/${sessionId}/messages`, {
@@ -1079,7 +1079,7 @@ async function send(text, fail) {
   if (!main.seen.has(`turns:record:${result.offset}`)) awaited.add(result.offset);
   showComposer();
   const offset = shortOffset(result.offset);
-  $("sent").textContent = `The Update's awaited publish returned offset ${offset}`;
+  $("sent").textContent = `The Update's awaited append returned offset ${offset}`;
   $("sent").title = `offset ${result.offset}`;
 }
 

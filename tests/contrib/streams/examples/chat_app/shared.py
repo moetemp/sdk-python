@@ -168,10 +168,11 @@ class SharedTurn:
     """A Record of a snapshot, a copy of a Turn and where the Turn was in the chat's turns Stream.
 
     The snapshot is a new Stream that the server writes, so its own offsets and Producer differ.
+    The source offset is the opaque offset's string form, which a reader parses back.
     """
 
     turn: Turn
-    source_offset: int
+    source_offset: str
     source_producer: SourceProducer | None = None
 
 

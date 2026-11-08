@@ -1,8 +1,8 @@
 """Streams API proposal, "An agent Workflow publishes its turns".
 
 The Workflow creates its two Streams, turns and token deltas, under ids of its choice, and hands
-out the turns Stream's ref through a ``stream`` query. It publishes each turn with an awaited
-``publish``, and passes the tokens ref to the model Activity in its one input object. A run
+out the turns Stream's ref through a ``stream`` query. It appends each turn with an awaited
+``append``, and passes the tokens ref to the model Activity in its one input object. A run
 after continue-as-new gets the earlier run's refs and creates nothing. It closes both Streams
 before it returns, since a run's end doesn't close a Stream.
 """
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from temporalio import activity, streams, workflow
-from temporalio.client import BufferedPublisher, Client
+from temporalio.client import BufferedAppender, Client
 from temporalio.worker import Worker
 
 MINUTE = timedelta(minutes=1)
@@ -42,10 +42,10 @@ class CallModelInput:
 
 @activity.defn
 async def call_model(input: CallModelInput) -> Reply:
-    stream = activity.client().to_stream(input.tokens)  # writes as this attempt
-    async with BufferedPublisher(stream) as tokens:  # batches deltas
+    stream = activity.client().get_stream(input.tokens)  # writes as this attempt
+    async with BufferedAppender(stream) as tokens:  # batches deltas
         for delta in input.messages[-1].split():
-            tokens.publish(delta)
+            tokens.append(delta)
     if len(input.messages) == 1:
         return Reply("", tool_calls=["search"])
     return Reply("the answer")
@@ -80,29 +80,29 @@ class Agent:
         # A Workflow creates only standalone Streams, under an id of its choice. A run after
         # Continue-as-New gets the earlier run's refs and creates nothing.
         if input.turns and input.tokens:
-            self._turns = turns = workflow.to_stream(input.turns)
-            tokens = workflow.to_stream(input.tokens)
+            self._turns = turns = workflow.get_stream(input.turns)
+            tokens = workflow.get_stream(input.tokens)
         else:
-            self._turns = turns = await workflow.create_stream[Turn](
-                f"{input.session_id}-turns"
-            )  # the default Retention
-            # Token deltas matter only to live readers, so they get a short Retention.
-            tokens = await workflow.create_stream[str](
-                f"{input.session_id}-tokens", retention=timedelta(hours=1)
+            # Retention is a backend setting now, so both Streams use the backend's Retention.
+            self._turns = turns = await workflow.create_stream(
+                f"{input.session_id}-turns", payload_type=Turn
+            )
+            tokens = await workflow.create_stream(
+                f"{input.session_id}-tokens", payload_type=str
             )
         while True:
             if workflow.info().is_continue_as_new_suggested():
                 workflow.continue_as_new(  # forward the refs, so the next run keeps the Streams
                     AgentInput(input.session_id, messages, turns.ref, tokens.ref)
                 )
-            await turns.publish(Turn("model"))  # one Local Activity
+            await turns.append(Turn("model"))  # one Local Activity
             reply = await workflow.execute_activity(
                 call_model,
                 CallModelInput(messages, tokens.ref),
                 start_to_close_timeout=MINUTE,
             )
             if not reply.tool_calls:
-                await turns.publish(Turn("done", reply.text))
+                await turns.append(Turn("done", reply.text))
                 await turns.close()  # the done Turn carries the reply
                 await tokens.close()
                 return reply.text
@@ -132,5 +132,8 @@ async def main(client: Client, task_queue: str) -> list[streams.Record[Turn]]:
         # The Workflow hands out its turns ref, and the query's client reads the Stream.
         ref = await handle.query(Agent.stream)
         assert ref is not None
-        stream = client.to_stream(ref, payload_type=Turn)
-        return [r async for r in stream.subscribe() if isinstance(r, streams.Record)]
+        # A deserialized ref decodes as JSON, so the id form takes the payload type.
+        stream = client.get_stream(
+            ref.id, payload_type=Turn, owner=ref.owner, backend=ref.backend
+        )
+        return [r async for r in stream.read() if isinstance(r, streams.Record)]

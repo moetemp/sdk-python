@@ -2,8 +2,9 @@
 
 The client creates the Stream with its settings, passes its ref to the Workflow as data, reads
 it, and closes it at the end of ``async with``. The create fails if the id exists, and
-``create_or_get_stream`` would get the Stream instead. The Workflow gets the ref as data, turns
-it into a Stream to write, and passes the same ref to an Activity.
+``id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING`` would get the Stream instead. The
+Workflow gets the ref as data, turns it into a Stream to write, and passes the same ref to an
+Activity.
 """
 
 from __future__ import annotations
@@ -37,12 +38,12 @@ class Chat:
     @workflow.run
     async def run(self, ref: streams.StreamRef[Turn]) -> None:
         # The Workflow only writes. The client closes the Stream.
-        turns = workflow.to_stream(ref)
-        turns.publish(Turn("model", "hi"))
+        turns = workflow.get_stream(ref)
+        turns.append(Turn("model", "hi"))
         await workflow.execute_activity(
             notify_user, ref, start_to_close_timeout=SECONDS_30
         )
-        await turns.publish(Turn("last", "bye"))
+        await turns.append(Turn("last", "bye"))
 
 
 def is_last_turn(r: streams.Record[Turn]) -> bool:
@@ -56,8 +57,8 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
         chat_id = f"chat-{uuid.uuid4()}"
         turns: list[Turn] = []
         render = turns.append
-        # create_stream raises if the id exists, and create_or_get_stream gets it instead.
-        stream = await client.create_stream[Turn](chat_id, retention=timedelta(days=1))
+        # create_stream raises if the id exists; USE_EXISTING would get it instead.
+        stream = await client.create_stream(chat_id, payload_type=Turn)
         async with stream:  # optional, the block end closes it
             await client.start_workflow(
                 Chat.run,
@@ -65,7 +66,7 @@ async def main(client: Client, task_queue: str) -> list[Turn]:
                 id=chat_id,
                 task_queue=task_queue,
             )
-            async for r in stream.subscribe():
+            async for r in stream.read():
                 if r.kind != streams.ItemKind.RECORD:
                     continue
                 render(r.data)

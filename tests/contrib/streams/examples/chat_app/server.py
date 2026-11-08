@@ -90,7 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stream_backends=[backend],
     )
     # Each server start sends this create, so it gets the lobby that an earlier start made.
-    lobby = await client.create_or_get_stream[SessionInfo](LOBBY_ID)
+    lobby = await client.create_stream(
+        LOBBY_ID,
+        payload_type=SessionInfo,
+        id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
+    )
     model = pick_model()
     task_queue = "streams-chat-app"
     async with Worker(
@@ -145,7 +149,7 @@ def snapshot_of(share_id: str, chat: ChatDep) -> Stream[SharedTurn]:
     # A share link names a Stream id, so the server reads only the ids that it writes.
     if not re.fullmatch(SHARE_ID, share_id):
         raise HTTPException(404, f"There is no snapshot {share_id}")
-    return chat.client.get_stream[SharedTurn](share_id)
+    return chat.client.get_stream(share_id, payload_type=SharedTurn)
 
 
 SnapshotDep = Annotated[Stream[SharedTurn], Depends(snapshot_of)]
@@ -178,7 +182,7 @@ async def open_session(body: OpenRequest, chat: ChatDep) -> dict[str, Any]:
             id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
         )
         started = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        await chat.client.to_stream(chat.lobby).publish(
+        await chat.client.get_stream(chat.lobby).append(
             SessionInfo(session.id, started)
         )
     except WorkflowAlreadyStartedError:
@@ -250,29 +254,34 @@ async def end(session: SessionDep) -> dict[str, Any]:
 
 @app.post("/api/sessions/{session_id}/share")
 async def share(session_id: str, refs: StreamsDep, chat: ChatDep) -> dict[str, Any]:
-    turns = chat.client.to_stream(refs.turns, payload_type=Turn)
+    turns = chat.client.get_stream(
+        refs.turns.id,
+        payload_type=Turn,
+        owner=refs.turns.owner,
+        backend=refs.turns.backend,
+    )
     # The snapshot holds the chat up to this offset, which names it.
     upto = await turns.get_offset()
     share_id = f"{session_id}-snapshot-{upto}"
-    shown: dict[int, SharedTurn] = {}
-    async with contextlib.aclosing(turns.subscribe(wait_new_records=False)) as read:
+    shown: dict[str, SharedTurn] = {}
+    async with contextlib.aclosing(turns.read(wait_new_records=False)) as read:
         async for item in read:
             if item.offset >= upto:
                 break
             match item.kind:
                 case streams.ItemKind.SUPERSEDED:
                     for offset in item.withdrawn_offsets:
-                        del shown[offset]
+                        del shown[str(offset)]
                 case streams.ItemKind.RECORD:
-                    shown[item.offset] = SharedTurn(
-                        item.data, item.offset, source_producer(item.producer)
+                    shown[str(item.offset)] = SharedTurn(
+                        item.data, str(item.offset), source_producer(item.producer)
                     )
     try:
         # A strict create, since a share id names one snapshot.
-        async with await chat.client.create_stream[SharedTurn](
-            share_id, retention=timedelta(days=1)
+        async with await chat.client.create_stream(
+            share_id, payload_type=SharedTurn
         ) as snapshot:
-            await snapshot.publish(*shown.values())
+            await snapshot.append(*shown.values())
     except streams.StreamClosedError:
         pass  # This point of the chat has a snapshot, and its block closed it.
     except streams.StreamAlreadyExistsError:
@@ -305,7 +314,7 @@ async def share_info(share_id: str, chat: ChatDep) -> dict[str, Any]:
 @app.get("/api/shares/{share_id}/events", response_class=EventSourceResponse)
 async def share_events(snapshot: SnapshotDep) -> AsyncIterable[ServerSentEvent]:
     # A snapshot is closed, so the read ends after its last Turn.
-    async for event in events("turns", snapshot.subscribe()):
+    async for event in events("turns", snapshot.read()):
         yield event
 
 
@@ -318,8 +327,8 @@ async def agent_events(
         re.fullmatch(AGENT_STREAM_ID, turns) and re.fullmatch(AGENT_STREAM_ID, tokens)
     ):
         raise HTTPException(404, "There is no such sub-agent")
-    turns_read = chat.client.get_stream[Turn](turns).subscribe()
-    tokens_read = chat.client.get_stream[Token](tokens).subscribe()
+    turns_read = chat.client.get_stream(turns, payload_type=Turn).read()
+    tokens_read = chat.client.get_stream(tokens, payload_type=Token).read()
     merged = merge(events("sub-turns", turns_read), events("sub-tokens", tokens_read))
     async for event in merged:
         yield event
@@ -343,14 +352,25 @@ async def session_events(
     # The tab sends the offsets that it saved, so a reload or a reconnect resumes there. The
     # init's create can still be in flight when a new chat's tab starts to read.
     wait = timedelta(seconds=30)
-    turns_stream = chat.client.to_stream(refs.turns, payload_type=Turn)
-    turns_read = turns_stream.subscribe(
-        offset=int(turns) if turns else None, create_wait=wait
+    turns_stream = chat.client.get_stream(
+        refs.turns.id,
+        payload_type=Turn,
+        owner=refs.turns.owner,
+        backend=refs.turns.backend,
     )
-    tokens_stream = chat.client.to_stream(refs.tokens, payload_type=Token)
+    turns_read = turns_stream.read(
+        offset=streams.StreamOffset.parse(turns) if turns else None, create_wait=wait
+    )
+    tokens_stream = chat.client.get_stream(
+        refs.tokens.id,
+        payload_type=Token,
+        owner=refs.tokens.owner,
+        backend=refs.tokens.backend,
+    )
     # A tab that joins reads only new tokens, since the turns Stream has the earlier replies.
-    tokens_read = tokens_stream.subscribe(
-        offset=int(tokens) if tokens else streams.END, create_wait=wait
+    tokens_read = tokens_stream.read(
+        offset=streams.StreamOffset.parse(tokens) if tokens else streams.END,
+        create_wait=wait,
     )
     merged = merge(
         events("lobby", lobby_read(chat)),
@@ -361,10 +381,15 @@ async def session_events(
         yield event
 
 
-def lobby_read(chat: Chat) -> streams.Subscription[SessionInfo]:
-    lobby = chat.client.to_stream(chat.lobby, payload_type=SessionInfo)
+def lobby_read(chat: Chat) -> streams.Reader[SessionInfo]:
+    lobby = chat.client.get_stream(
+        chat.lobby.id,
+        payload_type=SessionInfo,
+        owner=chat.lobby.owner,
+        backend=chat.lobby.backend,
+    )
     # The newest 20 chats, then each new one.
-    return lobby.subscribe(last=20)
+    return lobby.read(last=20)
 
 
 async def merge(
@@ -389,7 +414,7 @@ async def merge(
 
 async def events(
     name: str,
-    read: streams.Subscription[Any],
+    read: streams.Reader[Any],
     kept: Sequence[streams.Producer] = (),
 ) -> AsyncIterator[ServerSentEvent]:
     try:
@@ -438,10 +463,8 @@ def plain(value: Any) -> Any:
 
 
 def data_json(value: Any) -> dict[str, Any]:
-    data = plain(dataclasses.asdict(value))
-    if isinstance(value, SharedTurn):
-        data["source_offset"] = str(value.source_offset)
-    return data
+    # A SharedTurn already holds its source offset as the opaque offset's string form.
+    return plain(dataclasses.asdict(value))
 
 
 def producer_json(producer: streams.Producer | None) -> dict[str, Any] | None:

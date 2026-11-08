@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from temporalio import workflow
+from temporalio import streams, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError, ChildWorkflowError
 
@@ -101,13 +101,13 @@ class Agent:
             if final:
                 # A message that comes from here on starts a new turn.
                 self.answering = False
-            await self.turns.publish(
+            await self.turns.append(
                 Turn("assistant", reply.text, number, round, final=final)
             )
             if final:
                 return reply.text
             if reply.tool_calls:
-                await self.turns.publish(
+                await self.turns.append(
                     *(
                         Turn(
                             "tool_call",
@@ -136,7 +136,7 @@ class Agent:
         # The next turn's model still sees a message that came during this one.
         self.history += [Message("user", m.text) for m in self.added]
         self.added.clear()
-        await self.turns.publish(turn)
+        await self.turns.append(turn)
         return ""
 
     async def _call(
@@ -163,7 +163,7 @@ class Agent:
         except (ActivityError, ChildWorkflowError) as err:
             # The tool didn't write its result, so the Workflow writes the failure.
             result = ToolResult(call.id, call.name, f"error: {notice(err)}", error=True)
-            await self.turns.publish(
+            await self.turns.append(
                 Turn(
                     "tool_result",
                     result.text,
@@ -186,20 +186,24 @@ class ChatSession:
         if input.streams is None:
             # A chat id can come back, such as in a restarted session, so the run gets the
             # chat's Streams if they exist.
-            turns = workflow.create_or_get_stream_nowait[Turn](
-                turns_id(input.session_id)
+            turns = workflow.create_stream_nowait(
+                turns_id(input.session_id),
+                payload_type=Turn,
+                id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
             )
-            # Token deltas matter only to live readers, so they get a short Retention.
-            tokens = workflow.create_or_get_stream_nowait[Token](
-                tokens_id(input.session_id), retention=timedelta(hours=1)
+            # Retention is a backend setting now, so the tokens Stream uses the backend's.
+            tokens = workflow.create_stream_nowait(
+                tokens_id(input.session_id),
+                payload_type=Token,
+                id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
             )
         else:
-            turns = workflow.to_stream(input.streams.turns)
-            tokens = workflow.to_stream(input.streams.tokens)
+            turns = workflow.get_stream(input.streams.turns)
+            tokens = workflow.get_stream(input.streams.tokens)
         self._turns = turns
         self._agent = Agent(turns, tokens, list(TOOL_SPECS), list(input.history))
         # The init can't await, so it publishes with the _nowait call.
-        turns.publish_nowait(
+        turns.append_nowait(
             Turn("system", f"Run {input.run} of the session started", self._number)
         )
 
@@ -208,13 +212,14 @@ class ChatSession:
         return SessionStreams(self._turns.ref, self._agent.tokens.ref)
 
     @workflow.update
-    async def send(self, message: UserMessage) -> int:
+    async def send(self, message: UserMessage) -> str:
         self._number += 1
         number = self._number
-        # The awaited publish gives the Record's offset, which the server hands to the browser.
-        offset = await self._turns.publish(Turn("user", message.text, number))
+        # The awaited append gives the Record's offset, which the server hands to the browser as
+        # its opaque string form.
+        offset = await self._turns.append(Turn("user", message.text, number))
         self._waiting.append(Waiting(number, message))
-        return offset
+        return str(offset)
 
     @send.validator
     def check_send(self, message: UserMessage) -> None:
@@ -236,8 +241,8 @@ class ChatSession:
             self._number += 1
             number = self._number
             self._waiting.append(Waiting(number, message))
-        # A signal handler can't await, so the user's Turn goes out with publish_nowait.
-        self._turns.publish_nowait(Turn("user", message.text, number))
+        # A signal handler can't await, so the user's Turn goes out with append_nowait.
+        self._turns.append_nowait(Turn("user", message.text, number))
 
     @workflow.signal
     def end(self) -> None:
@@ -278,7 +283,7 @@ class ChatSession:
                         waiting=self._waiting,
                     )
                 )
-        await self._turns.publish(Turn("system", "The chat ended", self._number))
+        await self._turns.append(Turn("system", "The chat ended", self._number))
         # A run's end doesn't close a Stream, so the session closes both.
         await self._turns.close()
         await agent.tokens.close()
@@ -294,13 +299,11 @@ class Researcher:
         # The ids include this run's id, which the parent can't know. So the sub-agent creates
         # its Streams itself, and hands their refs to the parent in a Turn.
         own_id = f"{info.workflow_id}-{info.run_id[:8]}"
-        turns = await workflow.create_stream[Turn](turns_id(own_id))
-        tokens = await workflow.create_stream[Token](
-            tokens_id(own_id), retention=timedelta(hours=1)
-        )
+        turns = await workflow.create_stream(turns_id(own_id), payload_type=Turn)
+        tokens = await workflow.create_stream(tokens_id(own_id), payload_type=Token)
         call = input.call
-        parent = workflow.to_stream(input.parent_turns)
-        await parent.publish(
+        parent = workflow.get_stream(input.parent_turns)
+        await parent.append(
             Turn(
                 "agent",
                 f"A sub-agent researches {input.topic}",
@@ -314,13 +317,13 @@ class Researcher:
         # The block end closes both Streams, so a reader of the sub-agent sees it end.
         async with turns, tokens:
             prompt = f"Research {input.topic}"
-            await turns.publish(Turn("user", prompt, 1))
+            await turns.append(Turn("user", prompt, 1))
             agent = Agent(turns, tokens, ["search_docs"], [Message("user", prompt)])
             summary = await agent.answer(1)
         result = ToolResult(
             call.id, call.name, summary or "The sub-agent found nothing."
         )
-        await parent.publish(
+        await parent.append(
             Turn(
                 "tool_result",
                 result.text,

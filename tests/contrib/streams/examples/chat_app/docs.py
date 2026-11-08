@@ -26,9 +26,9 @@ DOCS = [
     ),
     (
         "Retention",
-        "A Record stays readable for the Stream's Retention, also while the Stream is open. A "
+        "A Record stays readable for the backend's Retention, also while the Stream is open. A "
         "closed Stream is kept for one Retention after its close. Token deltas matter only to "
-        "live readers, so a chat gives its tokens Stream a short Retention, such as one hour.",
+        "live readers, so a backend that stores a chat's tokens can keep a short Retention.",
     ),
     (
         "Close",
@@ -45,7 +45,7 @@ DOCS = [
     (
         "Continue-as-new",
         "A run that continues as new forwards the refs of its Streams to the next run. The next "
-        "run gets the Streams with to_stream and creates nothing, so readers see one Stream.",
+        "run gets the Streams with get_stream and creates nothing, so readers see one Stream.",
     ),
     (
         "Reading",

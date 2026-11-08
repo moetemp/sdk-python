@@ -82,7 +82,7 @@ another in one chat, so a new viewer sees each case.
 - **Failed attempt.** The first attempt of the round fails after a few tokens. One second later,
   the retry's `Superseded` item crosses them out, and the round streams again.
 - **Message during a run.** While `search_docs` runs, the page sends a second message. The
-  `add_message` Signal publishes its Turn at once with `publish_nowait`, and the message joins
+  `add_message` Signal appends its Turn at once with `append_nowait`, and the message joins
   the next round of the same turn. While a turn runs, the composer sends this way too.
 - **Sub-agent.** `research` starts a child Workflow. It creates its own Streams, under ids with
   its run id that the parent can't know, and writes a Turn with their refs to the parent's turns
@@ -113,43 +113,47 @@ another in one chat, so a new viewer sees each case.
 
 ## Where each feature is
 
-- **`create_or_get_stream` in a Workflow.** [`ChatSession.__init__`](workflow.py) gets the turns
-  and the tokens Stream with `workflow.create_or_get_stream_nowait[...]`. A chat id can come back,
-  such as in a restarted session, and the run then gets the chat's Streams.
-- **`create_or_get_stream` in a client.** The server's [`lifespan`](server.py) gets the lobby
-  Stream, which lists the chats. Each server start runs it.
+- **`create_stream` with `USE_EXISTING` in a Workflow.** [`ChatSession.__init__`](workflow.py)
+  gets the turns and the tokens Stream with `workflow.create_stream_nowait(...,
+  id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING)`. A chat id can come back, such as in a
+  restarted session, and the run then gets the chat's Streams.
+- **`create_stream` with `USE_EXISTING` in a client.** The server's [`lifespan`](server.py) gets
+  the lobby Stream, which lists the chats. Each server start runs it.
 - **Strict create.** [`share`](server.py) creates each snapshot with
-  `client.create_stream[SharedTurn]`, since a share id names one snapshot. A second share of the
-  same point raises `StreamClosedError`, since that snapshot is closed. A share that runs at the
-  same time raises `StreamAlreadyExistsError`. Both give the same link.
+  `client.create_stream(payload_type=SharedTurn)`, since a share id names one snapshot. A second
+  share of the same point raises `StreamClosedError`, since that snapshot is closed. A share that
+  runs at the same time raises `StreamAlreadyExistsError`. Both give the same link.
 - **Standalone Streams that a Workflow creates.** `<chat>-turns` and `<chat>-tokens`, with ids
   that the Workflow picks.
 - **Refs as data.** The `streams` query gives `SessionStreams`. `ModelInput.tokens` takes a ref to
   the Activity, and `SessionInput.streams` takes both refs through continue-as-new.
-- **`to_stream`.** `workflow.to_stream` in the next run, `activity.client().to_stream` in the
-  Activity, and `client.to_stream(ref, payload_type=Turn)` in the server.
-- **`client.get_stream[T]` by id.** The share links, which name a snapshot's Stream id.
-- **Awaited `publish`.** The `send` Update returns the user Turn's offset, which the page shows
-  under the composer. The server's lobby publish is awaited too.
-- **`publish_nowait`.** `@workflow.init` publishes "Run N of the session started", and the
-  `add_message` Signal publishes the user's Turn, since neither can await.
+- **`get_stream`.** `workflow.get_stream(ref)` in the next run,
+  `activity.client().get_stream(ref)` in the Activity, and `client.get_stream(id,
+  payload_type=Turn)` in the server.
+- **`client.get_stream` by id.** The share links, which name a snapshot's Stream id.
+- **Awaited `append`.** The `send` Update returns the user Turn's offset, which the page shows
+  under the composer. The server's lobby append is awaited too.
+- **`append_nowait`.** `@workflow.init` appends "Run N of the session started", and the
+  `add_message` Signal appends the user's Turn, since neither can await.
 - **An agent loop.** [`Agent.answer`](workflow.py) runs the rounds of an answer, for a chat and
   for a sub-agent. Each round is the model Activity, and the round's tools run at the same time.
 - **Activities that write Turns.** [`run_tool`](tools.py) writes its progress and its result to
   the turns Stream, from a ref in its input. Each attempt of each tool is its own Producer.
 - **A child Workflow's own Streams.** [`Researcher`](workflow.py) creates its Streams at run time,
-  writes to its parent's turns Stream through `workflow.to_stream`, and puts its own refs in a
+  writes to its parent's turns Stream through `workflow.get_stream`, and puts its own refs in a
   Turn. A ref is data, also inside a Record.
-- **`BufferedPublisher` and `flush`.** [`call_model`](activities.py) batches the deltas, and
+- **`BufferedAppender` and `flush`.** [`call_model`](activities.py) batches the deltas, and
   flushes before the toggle fails the attempt.
-- **`subscribe(offset=...)`.** [`session_events`](server.py) resumes each read at the offset that
+- **`read(offset=...)`.** [`session_events`](server.py) resumes each read at the offset that
   the tab saved.
 - **`streams.END`.** A tab that joins reads only new tokens, since the turns Stream has the
   earlier replies.
-- **`subscribe(last=...)`.** The lobby sidebar reads the newest 20 chats, then each new one.
+- **`read(last=...)`.** The lobby sidebar reads the newest 20 chats, then each new one.
 - **`create_wait`.** A new chat's tab can start to read before the init's creates.
 - **Resume from `next_offset`.** Each item that the server sends carries its read's
   `next_offset`. The tab saves it, and a reload or a reconnect sends it back.
+- **Opaque offsets.** A `StreamOffset` is an opaque position. The server passes each one to the
+  browser as its string form, and parses a resume offset back with `StreamOffset.parse`.
 - **`Superseded` withdrawal.** The page uses `withdrawn_offsets` for tokens that the read gave,
   and the server uses `withdraws()` for tokens that the tab kept from an earlier read.
 - **Close with `async with`.** The share snapshot's block in the server, and the sub-agent's
@@ -160,9 +164,9 @@ another in one chat, so a new viewer sees each case.
   snapshot's offset, and an unknown snapshot gives `StreamNotFoundError`.
 - **Error classes.** `StreamClosedError` and `StreamAlreadyExistsError` in `share`, and
   `StreamNotFoundError` in `share_info`.
-- **Payload type.** `[Turn]`, `[Token]`, `[SharedTurn]` and `[SessionInfo]` on the creates and
-  gets, and `payload_type=` on `client.to_stream`.
-- **`client.get_stream[T]` by id for a sub-agent.** The server reads a sub-agent's Streams by the
+- **Payload type.** `payload_type=Turn`, `payload_type=Token`, `payload_type=SharedTurn` and
+  `payload_type=SessionInfo` on the creates and the id-form gets.
+- **`client.get_stream` by id for a sub-agent.** The server reads a sub-agent's Streams by the
   ids in its Turn, for the page's panel.
 - **In-memory backend.** The tests run on it and on Redis. The server uses it when
   `CHAT_APP_REDIS_URL` isn't set.
@@ -170,7 +174,7 @@ another in one chat, so a new viewer sees each case.
   Activities, each model or tool attempt is an Activity Producer, a sub-agent writes through its
   own Local Activities, and the server writes as a client.
 
-The app doesn't use `Stream.producer()`, `SyncStream`, `close_nowait` or `StreamFencedError`.
+The app doesn't use `streams.producer()`, `SyncStream`, `close_nowait` or `StreamFencedError`.
 
 ## Coming
 
@@ -178,7 +182,6 @@ These are approved but not built yet, so the app doesn't use them.
 
 - A `closed` item with a close status. The log would show why a Stream closed.
 - `max_record_age` on a read.
-- Opaque offsets. The app already passes offsets to the browser as strings.
 
 The Python facade has no public `describe` yet, so the app uses only `get_offset`.
 

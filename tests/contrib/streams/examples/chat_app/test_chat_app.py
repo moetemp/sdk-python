@@ -52,7 +52,7 @@ async def start(client: Client, worker: Worker) -> WorkflowHandle[ChatSession, N
 
 
 async def read_until_answer(
-    read: streams.Subscription[Turn], number: int
+    read: streams.Reader[Turn], number: int
 ) -> list[streams.Record[Turn]]:
     records = []
     async for item in read:
@@ -70,7 +70,12 @@ async def answer(
     handle = await start(client, worker)
     refs = await handle.query(ChatSession.streams)
     await handle.execute_update(ChatSession.send, UserMessage(text))
-    read = client.to_stream(refs.turns, payload_type=Turn).subscribe()
+    read = client.get_stream(
+        refs.turns.id,
+        payload_type=Turn,
+        owner=refs.turns.owner,
+        backend=refs.turns.backend,
+    ).read()
     records = await read_until_answer(read, 1)
     await read.aclose()
     return handle, records
@@ -84,13 +89,23 @@ async def test_turn_and_its_tokens(stream_client: Client):
         await handle.signal(ChatSession.end)
         await handle.result()
     # The session closed both Streams, so each read ends.
-    turns = stream_client.to_stream(refs.turns, payload_type=Turn)
-    records = [r async for r in turns.subscribe() if isinstance(r, streams.Record)]
-    tokens = stream_client.to_stream(refs.tokens, payload_type=Token)
-    deltas = [r.data async for r in tokens.subscribe() if isinstance(r, streams.Record)]
+    turns = stream_client.get_stream(
+        refs.turns.id,
+        payload_type=Turn,
+        owner=refs.turns.owner,
+        backend=refs.turns.backend,
+    )
+    records = [r async for r in turns.read() if isinstance(r, streams.Record)]
+    tokens = stream_client.get_stream(
+        refs.tokens.id,
+        payload_type=Token,
+        owner=refs.tokens.owner,
+        backend=refs.tokens.backend,
+    )
+    deltas = [r.data async for r in tokens.read() if isinstance(r, streams.Record)]
     system, user, assistant, ended = records
     assert system.data == Turn("system", "Run 1 of the session started", 0)
-    assert user.data == Turn("user", "hello", 1) and user.offset == offset
+    assert user.data == Turn("user", "hello", 1) and str(user.offset) == offset
     assert assistant.data.text.startswith('You said "hello".')
     assert (assistant.data.round, assistant.data.final) == (1, True)
     assert "".join(d.text for d in deltas) == assistant.data.text
@@ -155,7 +170,12 @@ async def test_message_during_a_run_joins_the_next_round(stream_client: Client):
         await handle.execute_update(
             ChatSession.send, UserMessage("Search the docs for retention.")
         )
-        read = stream_client.to_stream(refs.turns, payload_type=Turn).subscribe()
+        read = stream_client.get_stream(
+            refs.turns.id,
+            payload_type=Turn,
+            owner=refs.turns.owner,
+            backend=refs.turns.backend,
+        ).read()
         records = []
         async for item in read:
             if isinstance(item, streams.Record):
@@ -196,10 +216,13 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
     [link] = [r.data for r in records if r.data.role == "agent"]
     assert link.agent is not None
     # The sub-agent closed its Streams, so each read ends.
-    child = stream_client.to_stream(link.agent.turns, payload_type=Turn)
-    child_turns = [
-        r.data async for r in child.subscribe() if isinstance(r, streams.Record)
-    ]
+    child = stream_client.get_stream(
+        link.agent.turns.id,
+        payload_type=Turn,
+        owner=link.agent.turns.owner,
+        backend=link.agent.turns.backend,
+    )
+    child_turns = [r.data async for r in child.read() if isinstance(r, streams.Record)]
     assert [(t.role, t.tool) for t in child_turns] == [
         ("user", None),
         ("assistant", None),
@@ -208,8 +231,13 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
         ("tool_result", "search_docs"),
         ("assistant", None),
     ]
-    tokens = stream_client.to_stream(link.agent.tokens, payload_type=Token)
-    assert [r async for r in tokens.subscribe() if isinstance(r, streams.Record)]
+    tokens = stream_client.get_stream(
+        link.agent.tokens.id,
+        payload_type=Token,
+        owner=link.agent.tokens.owner,
+        backend=link.agent.tokens.backend,
+    )
+    assert [r async for r in tokens.read() if isinstance(r, streams.Record)]
     assert records[-1].data.text.startswith("The sub-agent reports back.")
 
 
@@ -225,8 +253,13 @@ async def failed_attempt(
         )
         await handle.signal(ChatSession.end)
         await handle.result()
-    tokens = client.to_stream(refs.tokens, payload_type=Token)
-    return refs, [item async for item in tokens.subscribe()]
+    tokens = client.get_stream(
+        refs.tokens.id,
+        payload_type=Token,
+        owner=refs.tokens.owner,
+        backend=refs.tokens.backend,
+    )
+    return refs, [item async for item in tokens.read()]
 
 
 async def test_retry_withdraws_the_failed_attempt(stream_client: Client):
@@ -252,10 +285,22 @@ async def test_server_checks_kept_tokens_with_withdraws(stream_client: Client):
     producer = server.producer_json(shown[0].producer)
     assert producer is not None
     kept = server.kept_producers(json.dumps([producer["wire"]]))
-    tokens = stream_client.to_stream(refs.tokens, payload_type=Token)
+    tokens = stream_client.get_stream(
+        refs.tokens.id,
+        payload_type=Token,
+        owner=refs.tokens.owner,
+        backend=refs.tokens.backend,
+    )
+    # Read the shown tokens again to get where the tab's read resumes, as it would from the
+    # next_offset that it saved.
+    resume_read = tokens.read(wait_new_records=False)
+    for _ in range(len(shown)):
+        await anext(resume_read)
+    resume = resume_read.next_offset
+    await resume_read.aclose()
     [superseded] = [
         server.item_json(item, kept)
-        async for item in tokens.subscribe(offset=shown[-1].offset + 1)
+        async for item in tokens.read(offset=resume)
         if isinstance(item, streams.Superseded)
     ]
     assert superseded["withdrawn_offsets"] == []
@@ -266,9 +311,14 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
     async with chat_worker(stream_client) as worker:
         handle = await start(stream_client, worker)
         refs = await handle.query(ChatSession.streams)
-        turns = stream_client.to_stream(refs.turns, payload_type=Turn)
+        turns = stream_client.get_stream(
+            refs.turns.id,
+            payload_type=Turn,
+            owner=refs.turns.owner,
+            backend=refs.turns.backend,
+        )
         await handle.execute_update(ChatSession.send, UserMessage("message 1"))
-        read = turns.subscribe()
+        read = turns.read()
         await read_until_answer(read, 1)
         saved = read.next_offset
         await read.aclose()
@@ -279,7 +329,7 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
             await handle.execute_update(
                 ChatSession.send, UserMessage(f"message {number}")
             )
-        resumed = turns.subscribe(offset=saved)
+        resumed = turns.read(offset=saved)
         later = [r.data for r in await read_until_answer(resumed, last)]
         await resumed.aclose()
         assert await handle.query(ChatSession.streams) == refs
@@ -292,7 +342,9 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
 
 async def test_share_again_is_a_strict_create_of_an_existing_id(stream_client: Client):
     async with chat_worker(stream_client) as worker:
-        lobby = await stream_client.create_stream[SessionInfo](f"lobby-{uuid.uuid4()}")
+        lobby = await stream_client.create_stream(
+            f"lobby-{uuid.uuid4()}", payload_type=SessionInfo
+        )
         server.app.state.chat = server.Chat(
             stream_client, lobby.ref, worker.task_queue, "test", "fake", "scripted"
         )
@@ -306,13 +358,18 @@ async def test_share_again_is_a_strict_create_of_an_existing_id(stream_client: C
             await http.post(f"/api/sessions/{session_id}/messages", json={"text": "hi"})
             handle = stream_client.get_workflow_handle(session_id)
             refs = await handle.query(ChatSession.streams)
-            turns = stream_client.to_stream(refs.turns, payload_type=Turn)
-            read = turns.subscribe()
+            turns = stream_client.get_stream(
+                refs.turns.id,
+                payload_type=Turn,
+                owner=refs.turns.owner,
+                backend=refs.turns.backend,
+            )
+            read = turns.read()
             await read_until_answer(read, 1)
             await read.aclose()
             chat = [
                 r
-                async for r in turns.subscribe(wait_new_records=False)
+                async for r in turns.read(wait_new_records=False)
                 if isinstance(r, streams.Record)
             ]
             first = (await http.post(f"/api/sessions/{session_id}/share")).json()
@@ -328,12 +385,10 @@ async def test_share_again_is_a_strict_create_of_an_existing_id(stream_client: C
     assert info.json()["session_id"] == session_id
     assert outdated.json()["outdated"] is True
     # The read ends at the snapshot's close. Each copy names its Turn's offset in the chat.
-    snapshot = stream_client.get_stream[SharedTurn](first["share_id"])
-    copies = [
-        r.data async for r in snapshot.subscribe() if isinstance(r, streams.Record)
-    ]
+    snapshot = stream_client.get_stream(first["share_id"], payload_type=SharedTurn)
+    copies = [r.data async for r in snapshot.read() if isinstance(r, streams.Record)]
     assert [c.turn for c in copies] == [r.data for r in chat]
-    assert [c.source_offset for c in copies] == [r.offset for r in chat]
+    assert [c.source_offset for c in copies] == [str(r.offset) for r in chat]
     assert {c.source_producer.kind for c in copies if c.source_producer} == {
         "local activity"
     }

@@ -33,18 +33,18 @@ async def call_model(prompt: str) -> str:
 class Agent:
     @workflow.run
     async def run(self, ref: streams.StreamRef[Turn], prompt: str) -> str:
-        turns = workflow.to_stream(ref)
-        await turns.publish(Turn("model"))
+        turns = workflow.get_stream(ref)
+        await turns.append(Turn("model"))
         reply = await workflow.execute_activity(
             call_model, prompt, start_to_close_timeout=timedelta(minutes=5)
         )
-        await turns.publish(Turn("done", reply))
+        await turns.append(Turn("done", reply))
         return reply
 
 
 async def chat_server(client: Client, chat_id: str, task_queue: str) -> None:
     # The block end closes the Stream after the agent's done Turn.
-    async with await client.create_stream[Turn](chat_id) as turns:
+    async with await client.create_stream(chat_id, payload_type=Turn) as turns:
         await client.execute_workflow(
             Agent.run,
             args=[turns.ref, "hello there"],
@@ -57,21 +57,21 @@ class Screen:
     """A fake UI. It keeps what it shows by offset, so a withdrawal can remove items."""
 
     def __init__(self) -> None:
-        self.shown: dict[int, Turn] = {}
+        self.shown: dict[streams.StreamOffset, Turn] = {}
 
-    def render(self, turn: Turn, offset: int) -> None:
+    def render(self, turn: Turn, offset: streams.StreamOffset) -> None:
         self.shown[offset] = turn
 
-    def unrender(self, offsets: tuple[int, ...]) -> None:
+    def unrender(self, offsets: tuple[streams.StreamOffset, ...]) -> None:
         for offset in offsets:
             del self.shown[offset]
 
 
 # Where the view goes on. A first view has none, so it reads from the start.
-saved: list[int] = []
+saved: list[streams.StreamOffset] = []
 
 
-def saved_offset() -> int | None:
+def saved_offset() -> streams.StreamOffset | None:
     return saved[-1] if saved else None
 
 
@@ -82,8 +82,8 @@ async def main(client: Client, task_queue: str) -> Screen:
         chat_id = f"chat-{uuid.uuid4()}"
         server = asyncio.create_task(chat_server(client, chat_id, task_queue))
         screen = Screen()
-        stream = client.get_stream[Turn](chat_id)  # by id, with no call
-        async for r in stream.subscribe(
+        stream = client.get_stream(chat_id, payload_type=Turn)  # by id, with no call
+        async for r in stream.read(
             offset=saved_offset(),  # wherever the app keeps it, or streams.END
             create_wait=timedelta(seconds=10),  # the creator may not have created it
         ):

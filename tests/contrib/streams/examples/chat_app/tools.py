@@ -149,14 +149,14 @@ class ToolActivities:
     async def run_tool(self, input: ToolInput) -> ToolResult:
         call = input.call
         # A Stream from activity.client() writes as this attempt, so each tool is a Producer.
-        turns = activity.client().to_stream(input.turns)
+        turns = activity.client().get_stream(input.turns)
 
         def turn(role: Any, text: str) -> Turn:
             return Turn(
                 role, text, input.number, input.round, tool=call.name, call_id=call.id
             )
 
-        await turns.publish(turn("tool_progress", f"{call.name} started"))
+        await turns.append(turn("tool_progress", f"{call.name} started"))
         await asyncio.sleep(WORK_SECONDS.get(call.name, 0) * self._work_scale)
         tool = TOOLS.get(call.name)
         try:
@@ -166,5 +166,5 @@ class ToolActivities:
             result = ToolResult(call.id, call.name, tool(call.args))
         except (ValueError, SyntaxError, ZeroDivisionError) as err:
             result = ToolResult(call.id, call.name, f"error: {err}", error=True)
-        await turns.publish(turn("tool_result", result.text))
+        await turns.append(turn("tool_result", result.text))
         return result
