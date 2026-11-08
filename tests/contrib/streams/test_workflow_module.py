@@ -179,7 +179,6 @@ class GeneratedCalls:
         tokens = await workflow.create_stream(own_id(), payload_type=str)
         generated = generated_stream(
             id=tokens.ref.id,
-            owner=tokens.ref.owner,
             backend=tokens.ref.backend or None,
             body_type=str,
         )
@@ -205,43 +204,6 @@ async def test_generated_workflow_calls_run_as_local_activities(stream_client: C
     # Each write is a marker, as with the Streams, and History has no Nexus event.
     assert events.count(EventType.EVENT_TYPE_MARKER_RECORDED) >= 2
     assert EventType.EVENT_TYPE_NEXUS_OPERATION_SCHEDULED not in events
-
-
-@workflow.defn
-class RefusedCalls:
-    @workflow.run
-    async def run(self) -> list[str]:
-        tokens = await workflow.create_stream(own_id(), payload_type=str)
-        refused = []
-        # A Stream bound to another run chain fails before the block runs, and before any call.
-        owner = streams.Execution(
-            type=streams.ExecutionType.ExecutionTypeWorkflow,
-            business_id="other",
-            run_id="run-1",
-        )
-        other = workflow.get_stream(streams.StreamRef[str](id="other", owner=owner))
-        try:
-            async with other:
-                refused.append("entered")
-        except streams.StreamError as err:
-            refused.append(reason(err))
-        try:
-            await other.close()
-        except streams.StreamError as err:
-            refused.append(reason(err))
-        await tokens.close()
-        return refused
-
-
-async def test_calls_that_workflow_code_cant_make_raise(stream_client: Client):
-    async with new_worker(stream_client, RefusedCalls) as worker:
-        result = await stream_client.execute_workflow(
-            RefusedCalls.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-    assert result == [
-        "STREAM_ERROR_REASON_NOT_OWNER",
-        "STREAM_ERROR_REASON_NOT_OWNER",
-    ]
 
 
 @workflow.defn
@@ -481,10 +443,8 @@ async def test_block_end_leaves_the_stream_open_for_a_retry_run(stream_client: C
         # Only the block end of the run that succeeds closes the Stream.
         assert await status(handle) == CLOSED
     written = [item for item in items if isinstance(item, streams.Record)]
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
+    # Both runs' Records stay visible, since a run's writes are never withdrawn.
     assert [r.data for r in written] == ["run-1", "run-2"]
-    # The retry run's first write withdraws the Records of the run that it retries.
-    assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
 
 
 @workflow.defn
@@ -672,12 +632,8 @@ async def test_failed_task_writes_no_close(stream_client: Client):
         items = await read(handle)
         assert await status(handle) == CLOSED
     written = [item for item in items if isinstance(item, streams.Record)]
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    # The retried task writes the token again, and withdraws the failed task's copy.
+    # The retried task writes the token again, and both copies stay visible.
     assert [r.data for r in written] == ["token", "token"]
-    assert [r for r in written if any(s.withdraws(r) for s in superseded)] == [
-        written[0]
-    ]
     history = await handle.fetch_history()
     # The failed task's close was never sent, so History has one close Activity.
     scheduled = [
@@ -1179,39 +1135,37 @@ class CreatesOnANamedBackend:
 
 
 @workflow.defn
-class CreatesAfterAnIdleTime:
+class CreatesThenCloses:
     @workflow.run
-    async def run(self) -> str:
-        await workflow.create_stream(own_id(), payload_type=str)
-        await workflow.sleep(timedelta(seconds=1.5))
-        try:
-            await workflow.create_stream(
-                own_id(), payload_type=str, id_conflict_policy=USE_EXISTING
-            )
-        except streams.StreamError as err:
-            if err.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED:
-                return reason(err)
-            raise
-        return "created"
+    async def run(self) -> None:
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("token")
+        await stream.close()
 
 
 async def test_create_of_an_expired_workflow_stream_raises(client: Client):
     # Retention is a backend setting now. A Workflow's standalone Stream expires one Retention
-    # after its last write.
+    # after its close, since safety_ttl keeps it open. A later client create finds it expired.
     config = client.config()
     config["stream_backends"] = [
         MemoryStreamBackend(retention=timedelta(milliseconds=500), default=True)
     ]
     memory_client = Client(**config)
-    async with new_worker(memory_client, CreatesAfterAnIdleTime) as worker:
-        assert (
-            await memory_client.execute_workflow(
-                CreatesAfterAnIdleTime.run,
-                id=f"wf-{uuid.uuid4()}",
-                task_queue=worker.task_queue,
-            )
-            == "STREAM_ERROR_REASON_EXPIRED"
+    async with new_worker(memory_client, CreatesThenCloses) as worker:
+        handle = await memory_client.start_workflow(
+            CreatesThenCloses.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
         )
+        await handle.result()
+        await asyncio.sleep(1.5)
+        with pytest.raises(streams.StreamError) as expired:
+            await memory_client.create_stream(
+                stream_id(handle),
+                payload_type=str,
+                id_conflict_policy=USE_EXISTING,
+            )
+        assert expired.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
 
 
 async def test_default_is_native_with_no_default_backend(client: Client):

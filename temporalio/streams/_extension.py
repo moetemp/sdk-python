@@ -445,12 +445,6 @@ class _ActivityInbound(temporalio.worker.ActivityInboundInterceptor):
         streams = _activity_streams(input, self._interceptor)
         token = _activity.current.set(streams)
         try:
-            if temporalio.activity.info().attempt > 1:
-                # Withdraw the Records of earlier attempts, even if this attempt publishes
-                # nothing. This creates no Stream.
-                stream_ids = [ref.id for ref in _stream_arguments(input.args)]
-                for stream_id in dict.fromkeys(stream_ids):
-                    await streams.writer(stream_id).withdraw_earlier_attempts()
             result = await super().execute_activity(input)
         except BaseException:
             await _close_quietly(streams)
@@ -518,20 +512,12 @@ def _activity_streams(
     converter = temporalio.converter.PayloadConverter.default
     key = input.headers.get(_KEY_HEADER)
     key_text = converter.from_payload(key, str) if key is not None else ""
-    previous: stream_v1.WorkflowTaskEpoch | None = None
-    failed: tuple[int, ...] = ()
     if info.is_local:
         local = stream_v1.LocalActivityEpoch(attempt=info.attempt)
         task = info.workflow_task
         if task is not None:
-            # Always set it, with 0 if no task completed. If it's unset, the Store doesn't
-            # withdraw the run's orphaned Local Activity Records.
-            previous = stream_v1.WorkflowTaskEpoch(
-                started_event_id=task.previous_started_event_id
-            )
-            failed = tuple(task.failed_tasks)
-            # The dispatching task orders the epoch first, so a later task's write withdraws a
-            # failed task's Records.
+            # The dispatching task orders the epoch first, so a later task's write has a higher
+            # epoch than a failed task's.
             local.task.started_event_id = task.started_event_id
             local.task.attempt = task.attempt
             if task.started_time is not None:
@@ -539,8 +525,7 @@ def _activity_streams(
         run_id = info.workflow_run_id or ""
         producer = stream_v1.Producer(
             id=_ids.local_activity_producer_id(run_id, key_text),
-            epoch=stream_v1.ProducerEpoch(local_activity=local),
-            run_id=run_id,
+            local_activity=stream_v1.LocalActivityProducer(run_id=run_id, epoch=local),
         )
     else:
         attempt = stream_v1.ActivityEpoch(attempt=info.attempt)
@@ -549,15 +534,14 @@ def _activity_streams(
             run_id = info.workflow_run_id or ""
             producer = stream_v1.Producer(
                 id=_ids.activity_producer_id(run_id, info.activity_id, key_text),
-                epoch=stream_v1.ProducerEpoch(activity=attempt),
-                run_id=run_id,
+                activity=stream_v1.ActivityProducer(run_id=run_id, epoch=attempt),
             )
         else:
             producer = stream_v1.Producer(
                 id=_ids.standalone_activity_producer_id(
                     info.activity_id, info.activity_run_id or ""
                 ),
-                epoch=stream_v1.ProducerEpoch(standalone_activity=attempt),
+                standalone_activity=stream_v1.ActivityProducer(epoch=attempt),
             )
     return _activity.ActivityStreams(
         backend=interceptor.backend,
@@ -566,7 +550,5 @@ def _activity_streams(
         producer=producer,
         loop=asyncio.get_running_loop(),
         workflow_id=info.workflow_id,
-        previous_completed_task=previous,
-        failed_tasks=failed,
         client=interceptor.client,
     )

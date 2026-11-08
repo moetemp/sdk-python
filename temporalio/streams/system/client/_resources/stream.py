@@ -68,7 +68,6 @@ class Stream(typing.Generic[BodyT]):
         if not typing.get_args(getattr(self._ref, "__orig_class__", None)):
             self._ref = StreamRef[self.body_type](
                 id=self._ref.id,
-                owner=self._ref.owner,
                 backend=self._ref.backend,
             )
         return self._ref
@@ -179,8 +178,7 @@ class Stream(typing.Generic[BodyT]):
                 1 fails.
             start: Where to start when from-offset is empty. Unspecified is the
                 beginning.
-            max_records: About this many items per page, 1 to 1000. A Superseded item
-                stays with its Record.
+            max_records: About this many items per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
             create_wait: How long to wait for an uncreated Stream. Empty fails at once.
@@ -238,8 +236,7 @@ class Stream(typing.Generic[BodyT]):
                 1 fails.
             start: Where to start when from-offset is empty. Unspecified is the
                 beginning.
-            max_records: About this many items per page, 1 to 1000. A Superseded item
-                stays with its Record.
+            max_records: About this many items per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
             create_wait: How long to wait for an uncreated Stream. Empty fails at once.

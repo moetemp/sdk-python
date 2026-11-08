@@ -113,7 +113,6 @@ from ._workflow import (
 
 if TYPE_CHECKING:
     from temporalio.streams import (
-        Execution,
         StreamBackend,
         StreamIDConflictPolicy,
         StreamRef,
@@ -1016,7 +1015,6 @@ class Client:
         /,
         *,
         payload_type: type[_StreamPayloadT],
-        owner: Execution | None = None,
         backend: str | None = None,
     ) -> Stream[_StreamPayloadT]: ...
 
@@ -1027,7 +1025,6 @@ class Client:
         /,
         *,
         payload_type: None = None,
-        owner: Execution | None = None,
         backend: str | None = None,
     ) -> Stream[Any]: ...
 
@@ -1037,7 +1034,6 @@ class Client:
         /,
         *,
         payload_type: type[Any] | None = None,
-        owner: Execution | None = None,
         backend: str | None = None,
     ) -> Stream[Any]:
         """Get a Stream by its id, or by a ref that came as data. It makes no call.
@@ -1050,7 +1046,6 @@ class Client:
         Args:
             id_or_ref: The Stream id, or a ref of the Stream.
             payload_type: The type that reads decode each Record with, for the id form.
-            owner: The owner of a bound Stream, for the id form.
             backend: The name of the backend, for the id form. Defaults to the registered
                 backend with ``default=True``.
 
@@ -1066,7 +1061,7 @@ class Client:
 
         if isinstance(id_or_ref, str):
             return _stream_client.get_stream(
-                self, payload_type, id=id_or_ref, owner=owner, backend=backend
+                self, payload_type, id=id_or_ref, backend=backend
             )
         return _stream_client.from_ref(self, id_or_ref)
 

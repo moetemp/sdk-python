@@ -46,6 +46,47 @@ STREAM_STATUS_CLOSED: StreamStatus.ValueType  # 2
 STREAM_STATUS_EXPIRED: StreamStatus.ValueType  # 3
 global___StreamStatus = StreamStatus
 
+class _StreamCloseStatus:
+    ValueType = typing.NewType("ValueType", builtins.int)
+    V: typing_extensions.TypeAlias = ValueType
+
+class _StreamCloseStatusEnumTypeWrapper(
+    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
+        _StreamCloseStatus.ValueType
+    ],
+    builtins.type,
+):  # noqa: F821
+    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
+    STREAM_CLOSE_STATUS_UNSPECIFIED: _StreamCloseStatus.ValueType  # 0
+    STREAM_CLOSE_STATUS_CLOSED: _StreamCloseStatus.ValueType  # 1
+    STREAM_CLOSE_STATUS_OWNER_COMPLETED: _StreamCloseStatus.ValueType  # 2
+    STREAM_CLOSE_STATUS_OWNER_FAILED: _StreamCloseStatus.ValueType  # 3
+    STREAM_CLOSE_STATUS_OWNER_CANCELED: _StreamCloseStatus.ValueType  # 4
+    STREAM_CLOSE_STATUS_OWNER_TERMINATED: _StreamCloseStatus.ValueType  # 5
+    STREAM_CLOSE_STATUS_OWNER_TIMED_OUT: _StreamCloseStatus.ValueType  # 6
+    STREAM_CLOSE_STATUS_IDLE: _StreamCloseStatus.ValueType  # 7
+
+class StreamCloseStatus(
+    _StreamCloseStatus, metaclass=_StreamCloseStatusEnumTypeWrapper
+):
+    """Experimental. Might change in the future.
+    How a Stream closed. CLOSED comes from a Producer that called close(). The OWNER_ values and
+    IDLE come from the server (native Streams) when the owner ends or the Stream goes idle. A Brook
+    SDK store only emits CLOSED.
+    (-- api-linter: core::0216::synonyms=disabled
+        aip.dev/not-precedent: Named consistently with WorkflowExecutionStatus. --)
+    """
+
+STREAM_CLOSE_STATUS_UNSPECIFIED: StreamCloseStatus.ValueType  # 0
+STREAM_CLOSE_STATUS_CLOSED: StreamCloseStatus.ValueType  # 1
+STREAM_CLOSE_STATUS_OWNER_COMPLETED: StreamCloseStatus.ValueType  # 2
+STREAM_CLOSE_STATUS_OWNER_FAILED: StreamCloseStatus.ValueType  # 3
+STREAM_CLOSE_STATUS_OWNER_CANCELED: StreamCloseStatus.ValueType  # 4
+STREAM_CLOSE_STATUS_OWNER_TERMINATED: StreamCloseStatus.ValueType  # 5
+STREAM_CLOSE_STATUS_OWNER_TIMED_OUT: StreamCloseStatus.ValueType  # 6
+STREAM_CLOSE_STATUS_IDLE: StreamCloseStatus.ValueType  # 7
+global___StreamCloseStatus = StreamCloseStatus
+
 class _StreamReadStart:
     ValueType = typing.NewType("ValueType", builtins.int)
     V: typing_extensions.TypeAlias = ValueType

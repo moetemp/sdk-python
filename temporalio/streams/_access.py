@@ -82,7 +82,7 @@ class Access:
         await service.send_close_stream(
             models.CloseStreamRequest(
                 ref=models.StreamRef(id=self.stream_id),
-                writer=models.StreamWriter(producer=producer, failed_tasks=[]),
+                writer=models.StreamWriter(producer=producer),
             )
         )
 

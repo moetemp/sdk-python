@@ -30,9 +30,8 @@ def workflow_producer(run_id: str) -> models.Producer:
     """
     return models.Producer(
         id=workflow_producer_id(run_id),
-        run_id=run_id,
-        epoch=models.ProducerEpoch(
-            kind=models.ProducerEpochKindWorkflow(models.WorkflowTaskEpoch())
+        kind=models.ProducerKindWorkflow(
+            models.WorkflowProducer(run_id=run_id, epoch=models.WorkflowTaskEpoch())
         ),
     )
 

@@ -110,25 +110,6 @@ async def test_next_call_raises_a_write_error_that_no_caller_got(client: Client)
     assert await stream.get_offset() == _BEGINNING
 
 
-async def test_a_client_cant_close_a_stream_bound_to_a_workflow(client: Client):
-    client, extension = fake_client(client)
-    await client.create_stream("bound", payload_type=str)
-    owner = streams.Execution(
-        type=streams.ExecutionType.ExecutionTypeWorkflow,
-        business_id="wf",
-        run_id="run",
-    )
-    ref: streams.StreamRef[str] = streams.StreamRef(id="bound", owner=owner)
-    bound = client.get_stream(ref)
-    with pytest.raises(streams.StreamError) as not_owner:
-        await bound.close()
-    assert not_owner.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_OWNER
-    with pytest.raises(streams.StreamError):
-        async with bound:
-            pass
-    assert not extension.streams["bound"].closed
-
-
 @workflow.defn
 class HandsOutStream:
     @workflow.run
@@ -386,22 +367,9 @@ async def test_record_over_the_store_limit_raises_too_large(stream_client: Clien
     assert await stream.get_offset() == _BEGINNING
 
 
-async def test_read_keeps_no_offsets_of_client_records(stream_client: Client):
-    # Nothing withdraws a client's Records, so a long UI read of them keeps no state.
-    stream = await stream_client.create_stream(f"chat-{uuid.uuid4()}", payload_type=str)
-    await stream.append("a", "b", "c")
-    read = stream.read(wait_new_records=False)
-    assert [item.data async for item in read if isinstance(item, streams.Record)] == [
-        "a",
-        "b",
-        "c",
-    ]
-    assert read._shown == {}
-
-
 async def test_create_of_an_expired_stream_raises(client: Client):
-    # Retention is a backend setting now. An open standalone Stream expires one Retention
-    # after its last write.
+    # Retention is a backend setting now. safety_ttl keeps an open Stream, so only a closed
+    # Stream expires, one Retention after its close.
     config = client.config()
     config["stream_backends"] = [
         MemoryStreamBackend(retention=timedelta(milliseconds=200), default=True)
@@ -410,6 +378,7 @@ async def test_create_of_an_expired_stream_raises(client: Client):
     stream_id = f"expired-{uuid.uuid4()}"
     stream = await one.create_stream(stream_id, payload_type=str)
     await stream.append("old")
+    await stream.close()
     await asyncio.sleep(0.5)
     with pytest.raises(streams.StreamError) as expired:
         await one.create_stream(
@@ -569,8 +538,7 @@ async def test_client_reads_a_workflow_stream(stream_client: Client):
         "hi",
         "there",
     ]
-    # A Workflow creates only standalone Streams, so the ref has no owner.
-    assert reader.ref.owner is None and reader.ref.backend is not None
+    assert reader.ref.backend is not None
 
 
 async def test_empty_stream_id_raises_with_no_call(client: Client):

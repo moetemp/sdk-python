@@ -29,6 +29,7 @@ from temporalio.common import RetryPolicy
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 from temporalio.streams import _activity, _activity_stream
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 from tests.contrib.streams._support import stream_status
 from tests.helpers import new_worker
@@ -58,6 +59,14 @@ class SyncInput:
 async def read(handle: WorkflowHandle[Any, Any], name: str = "tokens") -> list[object]:
     stream = handle._client.get_stream(f"{handle.id}-{name}", payload_type=str)
     return [item async for item in stream.read(wait_new_records=False)]
+
+
+async def read_superseded(
+    handle: WorkflowHandle[Any, Any], name: str = "tokens"
+) -> list[object]:
+    # The opt-in library adds the Superseded items that an Activity retry withdraws.
+    stream = handle._client.get_stream(f"{handle.id}-{name}", payload_type=str)
+    return [item async for item in with_superseded(stream.read(wait_new_records=False))]
 
 
 async def closed(handle: WorkflowHandle[Any, Any], name: str = "tokens") -> bool:
@@ -201,21 +210,6 @@ class Retrying:
         )
 
 
-async def test_retry_withdraws_a_received_stream(stream_client: Client):
-    key = str(uuid.uuid4())
-    async with new_worker(stream_client, Retrying, activities=[flaky]) as worker:
-        handle = await stream_client.start_workflow(
-            Retrying.run, key, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
-        )
-        await handle.result()
-        items = await read(handle)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    # The second attempt writes nothing, and its start still withdraws the first one's Record.
-    assert len(superseded) == 1
-    withdrawn = [r.data for r in records(items) if superseded[0].withdraws(r)]
-    assert withdrawn == ["attempt-1"]
-
-
 @dataclass
 class FinishedStreams:
     key: str
@@ -322,7 +316,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
             task_queue=worker.task_queue,
         )
         stream = stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
-        live = stream.read(create_wait=timedelta(seconds=20))
+        live = with_superseded(stream.read(create_wait=timedelta(seconds=20)))
         reconnects = stream.read(create_wait=timedelta(seconds=20))
         first = await anext(live)
         before = await anext(reconnects)
@@ -332,16 +326,17 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         await reconnects.aclose()
         shown[key].set()
         live_items = [first, *[item async for item in live]]
-        resumed = [item async for item in stream.read(offset=resume_at)]
+        resumed = [
+            item async for item in with_superseded(stream.read(offset=resume_at))
+        ]
     assert isinstance(first, streams.Record) and first.data == "attempt-1"
     assert isinstance(before, streams.Record) and before.offset == first.offset
-    [live_superseded] = [i for i in live_items if isinstance(i, streams.Superseded)]
+    [live_superseded] = [i for i in live_items if isinstance(i, Superseded)]
     assert live_superseded.withdrawn_offsets == (first.offset,)
-    # A new read got no Record of the failed attempt, so the item lists no offset. The kept
-    # Record is still withdrawn.
-    [superseded] = [i for i in resumed if isinstance(i, streams.Superseded)]
-    assert superseded.withdrawn_offsets == ()
-    assert superseded.withdraws(before)
+    # A fresh read after the failed attempt has no Record of it, so it adds no Superseded item.
+    # A reader that kept the shown Record checks it with withdraws().
+    assert live_superseded.withdraws(before)
+    assert not any(isinstance(i, Superseded) for i in resumed)
     assert [r.data for r in records(resumed)] == ["attempt-2"]
 
 
@@ -668,14 +663,10 @@ async def test_only_the_workers_client_writes_as_the_attempt(stream_client: Clie
         )
         await handle.result()
         items = await read(handle)
-    kinds = {
-        r.data: type(r.producer.epoch.kind)
-        for r in records(items)
-        if r.producer and r.producer.epoch
-    }
+    kinds = {r.data: type(r.producer.kind) for r in records(items) if r.producer}
     assert kinds == {
-        "worker client": streams.ProducerEpochKindActivity,
-        "other client": streams.ProducerEpochKindClient,
+        "worker client": streams.ProducerKindActivity,
+        "other client": streams.ProducerKindClient,
     }
 
 
@@ -777,10 +768,9 @@ async def test_attempt_end_flushes_and_retry_finds_nested_streams(
         assert await handle.result() == ["a", "b", "attempt-1"]
         items = await read(handle)
         other = await read(handle, "other")
-    for read_items in (items, other):
-        superseded = [i for i in read_items if isinstance(i, streams.Superseded)]
-        withdrawn = [r.data for r in records(read_items) if superseded[0].withdraws(r)]
-        assert withdrawn == ["attempt-1"]
+    # The retry writes nothing, so the failed attempt's Records stay visible on both Streams.
+    assert "attempt-1" in [r.data for r in records(items)]
+    assert [r.data for r in records(other)] == ["attempt-1"]
 
 
 @contextlib.contextmanager
@@ -992,8 +982,8 @@ async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: C
         )
         await receives.result()
         assert await keyed(receives, "plain") == [True]
-        # The next run gets the Stream as its argument. Its retried Activity withdraws the first
-        # attempt's Records, as in the run that created the Stream.
+        # The next run gets the Stream as its argument, so its Activities carry the Producer key
+        # too, as in the run that created the Stream.
         continued_key = str(uuid.uuid4())
         continued = await stream_client.start_workflow(
             RetriesAfterContinueAsNew.run,
@@ -1003,9 +993,3 @@ async def test_only_a_run_that_uses_streams_keys_its_activities(stream_client: C
         )
         await continued.result()
         assert await keyed(continued, "flaky") == [True]
-        items = await read(continued)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    assert len(superseded) == 1
-    assert [r.data for r in records(items) if superseded[0].withdraws(r)] == [
-        "attempt-1"
-    ]

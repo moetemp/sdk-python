@@ -20,7 +20,6 @@ from ...models import (
     CloseStreamResponse,
     DescribeStreamRequest,
     DescribeStreamResponse,
-    Execution,
     ReadRecordsRequest,
     ReadRecordsResponse,
     StreamReadStart,
@@ -63,7 +62,6 @@ class Stream(typing.Generic[BodyT]):
         if not typing.get_args(getattr(self._ref, "__orig_class__", None)):
             self._ref = StreamRef[self.body_type](
                 id=self._ref.id,
-                owner=self._ref.owner,
                 backend=self._ref.backend,
             )
         return self._ref
@@ -157,7 +155,6 @@ def get_stream(
 def get_stream(
     *,
     id: str,
-    owner: Execution | None = None,
     backend: str | None = None,
     created: bool | None = None,
     body_type: type[BodyT],
@@ -168,7 +165,6 @@ def get_stream(
 def get_stream(
     *,
     id: str,
-    owner: Execution | None = None,
     backend: str | None = None,
     created: bool | None = None,
     body_type: None = None,
@@ -179,7 +175,6 @@ def get_stream(
     *,
     ref: StreamRef | None = None,
     id: str | None = None,
-    owner: Execution | None = None,
     backend: str | None = None,
     created: bool | None = None,
     body_type: typing.Any = None,
@@ -187,7 +182,7 @@ def get_stream(
     """A handle on an existing ``Stream``, with no call."""
     if ref is None:
         assert id is not None
-        ref = StreamRef(id=id, owner=owner, backend=backend)
+        ref = StreamRef(id=id, backend=backend)
     if body_type is None:
         body_type = typing.Any
     return Stream[body_type](
@@ -319,8 +314,7 @@ async def read_records(
         from_offset: Start offset. Empty uses start. An offset past the newest one + 1
             fails.
         start: Where to start when from-offset is empty. Unspecified is the beginning.
-        max_records: About this many items per page, 1 to 1000. A Superseded item stays
-            with its Record.
+        max_records: About this many items per page, 1 to 1000.
         wait: How long to wait for a new Record before an empty answer. At most 60 s.
         create_wait: How long to wait for an uncreated Stream. Empty fails at once. At
             most 60 s.

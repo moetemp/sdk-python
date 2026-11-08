@@ -1,8 +1,7 @@
 from pathlib import Path
 from typing import Any
 
-from temporalio.streams import _ids, _items
-from temporalio.streams.system import models
+from temporalio.streams import _ids
 from tests.contrib.streams._support import crate_file, vectors
 
 _SCRIPTS = Path(__file__).parents[3] / "scripts" / "_proto"
@@ -45,80 +44,3 @@ def test_producer_ids_match_the_crate():
     )
     named = producers["named_client"]
     assert _ids.named_client_producer_id(named["name"]) == named["id"]
-
-
-def _time(value: list[int] | None) -> models.Timestamp | None:
-    return models.Timestamp(seconds=value[0], nanos=value[1]) if value else None
-
-
-def _task(value: dict[str, Any], prefix: str = "") -> models.WorkflowTaskEpoch:
-    return models.WorkflowTaskEpoch(
-        started_event_id=value.get(f"{prefix}started_event_id"),
-        attempt=value.get(f"{prefix}attempt"),
-        started_time=_time(value.get(f"{prefix}started_time")),
-    )
-
-
-def _epoch(kind: str, value: dict[str, Any] | None) -> models.ProducerEpoch | None:
-    # The vectors keep the flat fields of every kind, so the case comes from the kind.
-    if value is None:
-        return None
-    activity = models.ActivityEpoch(
-        attempt_scheduled_time=_time(value.get("attempt_scheduled_time")),
-        attempt=value.get("attempt"),
-    )
-    cases: dict[str, models.ProducerEpochKind] = {
-        "workflow": models.ProducerEpochKindWorkflow(_task(value, "task_")),
-        "local_activity": models.ProducerEpochKindLocalActivity(
-            models.LocalActivityEpoch(
-                task=_task(value, "task_"), attempt=value.get("attempt")
-            )
-        ),
-        "activity": models.ProducerEpochKindActivity(activity),
-        "standalone_activity": models.ProducerEpochKindStandaloneActivity(activity),
-        "client": models.ProducerEpochKindClient(
-            models.ClientEpoch(attempt=value.get("attempt"))
-        ),
-    }
-    return models.ProducerEpoch(kind=cases[kind])
-
-
-def test_withdrawals_match_the_crate():
-    cases: Any = vectors("withdrawals.json")
-    assert cases
-    for case in cases:
-        record = case["record"]["producer"]
-        producer = models.Producer(
-            id=record["id"],
-            run_id=record.get("run_id"),
-            epoch=_epoch(record["kind"], record.get("epoch")),
-        )
-        given = case["superseded"]
-        completed = given.get("previous_completed_task")
-        writer = models.StreamWriter(
-            producer=models.Producer(
-                id=given["producer_id"],
-                epoch=_epoch(given["producer_kind"], given.get("epoch")),
-                run_id=given.get("run_id"),
-            ),
-            previous_completed_task=_task(completed) if completed else None,
-            failed_tasks=given.get("failed_tasks", []),
-            withdraw_run=given.get("withdraw_run"),
-        )
-        facts = models.StreamSuperseded(writer=writer)
-        assert _items.withdraws(facts, producer) == case["withdraws"], case["name"]
-
-
-def test_epoch_order_matches_the_crate():
-    cases: Any = vectors("epochs.json")
-    keys: list[tuple[tuple[Any, ...], bytes]] = []
-    for case in cases:
-        epoch = _epoch(case["kind"], case["epoch"]) if case["kind"] != "empty" else None
-        python = _items._epoch_key(epoch or models.ProducerEpoch())
-        keys.append((python, bytes.fromhex(case["key"])))
-    assert len(keys) > 1
-    # A byte compare of the crate's keys orders the epochs, so the Python keys compare the same.
-    for python_a, crate_a in keys:
-        for python_b, crate_b in keys:
-            assert (python_a < python_b) == (crate_a < crate_b)
-            assert (python_a == python_b) == (crate_a == crate_b)

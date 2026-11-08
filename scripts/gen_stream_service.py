@@ -32,7 +32,7 @@ output_dir = base_dir / "temporalio" / "streams" / "system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
 # The fork chain of nexgen that reads the directives of the WIT.
-NEX_GEN_REVISION = "a3842089c229131c625885aa13254699f40df501"
+NEX_GEN_REVISION = "f646c68f222d4da2f31364249c5c9bb4b4b5b182"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 

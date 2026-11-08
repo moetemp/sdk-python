@@ -1,4 +1,3 @@
-from collections.abc import AsyncGenerator
 from datetime import timedelta
 from typing import Any, cast
 
@@ -7,8 +6,7 @@ from typing_extensions import override
 
 import temporalio.common
 import temporalio.converter
-from temporalio.streams import StreamNotFoundError, StreamOffset, _backend, _reader
-from temporalio.streams._items import Record, Superseded
+from temporalio.streams import StreamNotFoundError, _backend, _reader
 from temporalio.streams.system import models
 
 
@@ -47,39 +45,6 @@ async def test_a_waiting_read_carries_the_offset_until_records_come():
     assert (first.from_offset, second.from_offset) == (1, 8)
     assert second.wait is not None
     assert timedelta() < second.wait <= timedelta(seconds=60)
-
-
-def _activity(id: str, attempt: int) -> models.Producer:
-    return models.Producer(
-        id=id,
-        epoch=models.ProducerEpoch(
-            kind=models.ProducerEpochKindActivity(models.ActivityEpoch(attempt=attempt))
-        ),
-    )
-
-
-async def test_superseded_lists_each_withdrawn_offset_once():
-    failed = _activity("act:run:1:1", 1)
-    other = _activity("act:run:2:2", 1)
-    # A batch has consecutive offsets, and other Producers' Records come between batches.
-    written = [(10, failed), (11, failed), (12, failed), (13, other), (20, failed)]
-    facts = models.StreamSuperseded(
-        writer=models.StreamWriter(producer=_activity(failed.id, 2), failed_tasks=[])
-    )
-
-    async def items() -> AsyncGenerator[_reader.Item, None]:
-        for offset, producer in written:
-            yield Record(
-                data=None, offset=StreamOffset._from_wire(offset), producer=producer
-            )
-        yield Superseded(offset=StreamOffset._from_wire(30), facts=facts)
-        yield Superseded(offset=StreamOffset._from_wire(31), facts=facts)
-
-    read: _reader.Reader[None] = _reader.Reader(items(), _reader.Position(0))
-    superseded = [item async for item in read if isinstance(item, Superseded)]
-    assert [
-        tuple(str(offset) for offset in item.withdrawn_offsets) for item in superseded
-    ] == [("10", "11", "12", "20"), ()]
 
 
 class _Missing(_backend.StreamServiceCalls):

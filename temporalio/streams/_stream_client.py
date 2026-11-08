@@ -18,7 +18,7 @@ from typing import Any, TypeVar
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.client
 from temporalio.client._streams import Stream
-from temporalio.streams import _activity, _backend, _errors, _ids
+from temporalio.streams import _activity, _backend, _ids
 from temporalio.streams._access import Access, ReadSpec, reader
 from temporalio.streams._backend import BackendCalls
 from temporalio.streams._conflict import StreamIDConflictPolicy
@@ -89,24 +89,22 @@ def producer(name: str, epoch: int) -> Iterator[None]:
         _producer_override.reset(token)
 
 
-def _client_epoch(attempt: int) -> stream_v1.ProducerEpoch:
-    return stream_v1.ProducerEpoch(client=stream_v1.ClientEpoch(attempt=attempt))
-
-
 def _client_producer(
     client: temporalio.client.Client, named: tuple[str, int] | None
 ) -> stream_v1.Producer:
     if named is not None:
         name, epoch = named
         return stream_v1.Producer(
-            id=_ids.named_client_producer_id(name), epoch=_client_epoch(epoch)
+            id=_ids.named_client_producer_id(name),
+            client=stream_v1.ClientProducer(epoch=stream_v1.ClientEpoch(attempt=epoch)),
         )
     key = _CLIENT_KEYS.get(client)
     if key is None:
         key = f"{_process_key}-{next(_clients)}"
         _CLIENT_KEYS[client] = key
     return stream_v1.Producer(
-        id=_ids.client_producer_id(client.identity, key), epoch=_client_epoch(1)
+        id=_ids.client_producer_id(client.identity, key),
+        client=stream_v1.ClientProducer(epoch=stream_v1.ClientEpoch(attempt=1)),
     )
 
 
@@ -254,20 +252,10 @@ class ClientCalls(StreamCalls):
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             return StreamOffset._from_wire(await self._access().get_offset())
 
-    def _check_close(self) -> None:
-        if self._ref.owner is not None:
-            # Only the run chain closes a Stream bound to a Workflow. The Store refuses a
-            # client's close too, but this check makes no call.
-            raise _errors.not_owner(
-                f"Can't close the Stream {self._ref.id} from a client, since it is bound to a "
-                "Workflow"
-            )
-
     async def close(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
     ) -> None:
         """Write the Records of these calls, then close the Stream."""
-        self._check_close()
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             await self._access().close()
         # Only a close that the Store took counts, so the end of async with tries a failed one
@@ -277,9 +265,7 @@ class ClientCalls(StreamCalls):
         self._raise_lost_write()
 
     async def enter(self) -> None:
-        """Check that the client can close the Stream at the end of the block."""
-        # Fail early, since the close at the end would raise and hide the block's own error.
-        self._check_close()
+        """Enter the block that closes the Stream at its end."""
 
     async def exit(self, exc: BaseException | None) -> None:
         """Close the Stream, unless these calls closed it already."""
@@ -324,7 +310,6 @@ def get_stream(
     payload_type: type[T] | None,
     *,
     id: str,
-    owner: models.Execution | None,
     backend: str | None,
 ) -> Stream[T]:
     """Get a Stream by its id.
@@ -335,7 +320,7 @@ def get_stream(
         # An empty id would fail only at the first call, with an unclear error.
         raise ValueError("The Stream id is empty")
     backend_name, calls = client_backend(client, backend)
-    ref: StreamRef[T] = StreamRef(id=id, owner=owner, backend=backend_name)
+    ref: StreamRef[T] = StreamRef(id=id, backend=backend_name)
     return _stream(client, calls, ref, payload_type)
 
 

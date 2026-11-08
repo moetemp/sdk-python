@@ -38,6 +38,7 @@ from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.worker import Worker
 
 from .activities import ModelActivities
@@ -255,27 +256,27 @@ async def end(session: SessionDep) -> dict[str, Any]:
 @app.post("/api/sessions/{session_id}/share")
 async def share(session_id: str, refs: StreamsDep, chat: ChatDep) -> dict[str, Any]:
     turns = chat.client.get_stream(
-        refs.turns.id,
-        payload_type=Turn,
-        owner=refs.turns.owner,
-        backend=refs.turns.backend,
+        refs.turns.id, payload_type=Turn, backend=refs.turns.backend
     )
     # The snapshot holds the chat up to this offset, which names it.
     upto = await turns.get_offset()
     share_id = f"{session_id}-snapshot-{upto}"
     shown: dict[str, SharedTurn] = {}
-    async with contextlib.aclosing(turns.read(wait_new_records=False)) as read:
+    # with_superseded crosses out a failed attempt's Records, so the snapshot copies only what a
+    # live reader would show.
+    async with contextlib.aclosing(
+        with_superseded(turns.read(wait_new_records=False))
+    ) as read:
         async for item in read:
             if item.offset >= upto:
                 break
-            match item.kind:
-                case streams.ItemKind.SUPERSEDED:
-                    for offset in item.withdrawn_offsets:
-                        del shown[str(offset)]
-                case streams.ItemKind.RECORD:
-                    shown[str(item.offset)] = SharedTurn(
-                        item.data, str(item.offset), source_producer(item.producer)
-                    )
+            if isinstance(item, Superseded):
+                for offset in item.withdrawn_offsets:
+                    del shown[str(offset)]
+            elif isinstance(item, streams.Record):
+                shown[str(item.offset)] = SharedTurn(
+                    item.data, str(item.offset), source_producer(item.producer)
+                )
     try:
         # A strict create, since a share id names one snapshot.
         async with await chat.client.create_stream(
@@ -353,19 +354,13 @@ async def session_events(
     # init's create can still be in flight when a new chat's tab starts to read.
     wait = timedelta(seconds=30)
     turns_stream = chat.client.get_stream(
-        refs.turns.id,
-        payload_type=Turn,
-        owner=refs.turns.owner,
-        backend=refs.turns.backend,
+        refs.turns.id, payload_type=Turn, backend=refs.turns.backend
     )
     turns_read = turns_stream.read(
         offset=streams.StreamOffset.parse(turns) if turns else None, create_wait=wait
     )
     tokens_stream = chat.client.get_stream(
-        refs.tokens.id,
-        payload_type=Token,
-        owner=refs.tokens.owner,
-        backend=refs.tokens.backend,
+        refs.tokens.id, payload_type=Token, backend=refs.tokens.backend
     )
     # A tab that joins reads only new tokens, since the turns Stream has the earlier replies.
     tokens_read = tokens_stream.read(
@@ -375,7 +370,7 @@ async def session_events(
     merged = merge(
         events("lobby", lobby_read(chat)),
         events("turns", turns_read),
-        events("tokens", tokens_read, kept_producers(kept)),
+        events("tokens", tokens_read, kept_producers(kept), supersede=True),
     )
     async for event in merged:
         yield event
@@ -383,10 +378,7 @@ async def session_events(
 
 def lobby_read(chat: Chat) -> streams.Reader[SessionInfo]:
     lobby = chat.client.get_stream(
-        chat.lobby.id,
-        payload_type=SessionInfo,
-        owner=chat.lobby.owner,
-        backend=chat.lobby.backend,
+        chat.lobby.id, payload_type=SessionInfo, backend=chat.lobby.backend
     )
     # The newest 20 chats, then each new one.
     return lobby.read(last=20)
@@ -416,12 +408,22 @@ async def events(
     name: str,
     read: streams.Reader[Any],
     kept: Sequence[streams.Producer] = (),
+    *,
+    supersede: bool = False,
 ) -> AsyncIterator[ServerSentEvent]:
+    # The tokens read opts into with_superseded, which crosses out a failed attempt's tokens from
+    # the Producer epochs. The base read's next_offset is where a later read resumes.
+    items = with_superseded(read) if supersede else read
     try:
-        async for item in read:
+        async for item in items:
+            # The close ends the read, which the "end" event marks.
+            if isinstance(item, streams.Closed):
+                continue
             data = {"stream": name, **item_json(item, kept)}
             # Where a later read of this Stream resumes, which the tab saves.
-            data["next_offset"] = str(read.next_offset) if read.next_offset else None
+            data["next_offset"] = (
+                str(read.next_offset) if read.next_offset is not None else None
+            )
             yield ServerSentEvent(event="item", data=data)
         yield ServerSentEvent(event="end", data={"stream": name})
     except Exception as err:
@@ -430,27 +432,24 @@ async def events(
 
 
 def item_json(
-    item: streams.Record[Any] | streams.Superseded, kept: Sequence[streams.Producer]
+    item: streams.Record[Any] | Superseded, kept: Sequence[streams.Producer]
 ) -> dict[str, Any]:
     # Offsets are past the range of a JavaScript number, so they go as strings.
-    match item.kind:
-        case streams.ItemKind.SUPERSEDED:
-            writer = item.facts.writer
-            return {
-                "kind": "superseded",
-                "offset": str(item.offset),
-                "producer": producer_json(writer.producer if writer else None),
-                "withdrawn_offsets": [str(o) for o in item.withdrawn_offsets],
-                # A tab sends the Producers of the Records that it kept from before a reload.
-                "withdrawn_kept": [i for i, p in enumerate(kept) if item.withdraws(p)],
-            }
-        case streams.ItemKind.RECORD:
-            return {
-                "kind": "record",
-                "offset": str(item.offset),
-                "producer": producer_json(item.producer),
-                "data": data_json(item.data),
-            }
+    if isinstance(item, Superseded):
+        return {
+            "kind": "superseded",
+            "offset": str(item.offset),
+            "producer": producer_json(item.producer),
+            "withdrawn_offsets": [str(o) for o in item.withdrawn_offsets],
+            # A tab sends the Producers of the Records that it kept from before a reload.
+            "withdrawn_kept": [i for i, p in enumerate(kept) if item.withdraws(p)],
+        }
+    return {
+        "kind": "record",
+        "offset": str(item.offset),
+        "producer": producer_json(item.producer),
+        "data": data_json(item.data),
+    }
 
 
 def plain(value: Any) -> Any:
@@ -470,7 +469,7 @@ def data_json(value: Any) -> dict[str, Any]:
 def producer_json(producer: streams.Producer | None) -> dict[str, Any] | None:
     if producer is None:
         return None
-    kind, attempt = epoch_of(producer.epoch)
+    kind, attempt = epoch_of(producer)
     return {
         "id": producer.id,
         "kind": kind,
@@ -483,23 +482,23 @@ def producer_json(producer: streams.Producer | None) -> dict[str, Any] | None:
 def source_producer(producer: streams.Producer | None) -> SourceProducer | None:
     if producer is None:
         return None
-    kind, attempt = epoch_of(producer.epoch)
+    kind, attempt = epoch_of(producer)
     return SourceProducer(producer.id, kind, attempt)
 
 
-def epoch_of(epoch: streams.ProducerEpoch | None) -> tuple[str, int | None]:
-    match epoch.kind if epoch else None:
-        case streams.ProducerEpochKindWorkflow():
+def epoch_of(producer: streams.Producer) -> tuple[str, int | None]:
+    match producer.kind:
+        case streams.ProducerKindWorkflow():
             return "workflow", None
-        case streams.ProducerEpochKindLocalActivity(value=local):
-            return "local activity", local.attempt
+        case streams.ProducerKindLocalActivity(value=local):
+            return "local activity", local.epoch.attempt if local.epoch else None
         case (
-            streams.ProducerEpochKindActivity(value=attempt)
-            | streams.ProducerEpochKindStandaloneActivity(value=attempt)
+            streams.ProducerKindActivity(value=act)
+            | streams.ProducerKindStandaloneActivity(value=act)
         ):
-            return "activity", attempt.attempt
-        case streams.ProducerEpochKindClient(value=client):
-            return "client", client.attempt
+            return "activity", act.epoch.attempt if act.epoch else None
+        case streams.ProducerKindClient(value=client):
+            return "client", client.epoch.attempt if client.epoch else None
         case _:
             return "unknown", None
 

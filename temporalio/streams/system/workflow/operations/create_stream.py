@@ -13,7 +13,6 @@ from ..._resource_call import resource_call
 from ...models import (
     CreateStreamRequest,
     CreateStreamResult,
-    Execution,
     StreamIdConflictPolicy,
     StreamRef,
 )
@@ -49,7 +48,6 @@ async def _create_stream(
 async def create_stream(
     *,
     id: str,
-    owner: Execution | None = None,
     backend: str | None = None,
     retention: datetime.timedelta | None = None,
     id_conflict_policy: StreamIdConflictPolicy | None = None,
@@ -62,7 +60,6 @@ async def create_stream(
 async def create_stream(
     *,
     id: str,
-    owner: Execution | None = None,
     backend: str | None = None,
     retention: datetime.timedelta | None = None,
     id_conflict_policy: StreamIdConflictPolicy | None = None,
@@ -74,7 +71,6 @@ async def create_stream(
 async def create_stream(
     *,
     id: str,
-    owner: Execution | None = None,
     backend: str | None = None,
     retention: datetime.timedelta | None = None,
     id_conflict_policy: StreamIdConflictPolicy | None = None,
@@ -83,8 +79,6 @@ async def create_stream(
     """
     Args:
         id: The Stream id, 1 to 4096 bytes.
-        owner: The run chain or Standalone Activity of a bound Stream. Empty if
-            standalone.
         backend: Registered backend name, empty for the default. The Store never reads
             it.
         retention: The age after which a Record is dropped. Empty is the Store default.
@@ -95,13 +89,11 @@ async def create_stream(
         body_type = typing.Any
     stream_ref = StreamRef(
         id=id,
-        owner=owner,
         backend=backend,
     )
     request = CreateStreamRequest(
         stream_ref=stream_ref,
         retention=retention,
-        withdraw_run=_support.withdraw_run(),
         id_conflict_policy=id_conflict_policy,
         request_id=_support.request_id(),
     )

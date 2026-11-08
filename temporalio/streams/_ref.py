@@ -16,7 +16,7 @@ T = TypeVar("T")
 
 
 def _model(ref: StreamRef[Any]) -> models.StreamRef:
-    return models.StreamRef(id=ref.id, owner=ref.owner, backend=ref.backend)
+    return models.StreamRef(id=ref.id, backend=ref.backend)
 
 
 def to_proto(ref: StreamRef[Any]) -> stream_v1.StreamRef:
@@ -44,9 +44,7 @@ def _from_json(value: Any, type_hint: Any) -> StreamRef[Any]:
     model = models._StreamRefTransferTypeConverter().from_transfer_type(
         message, models.StreamRef
     )
-    # A ref is data, so it keeps any owner, such as a Standalone Activity's. A close checks it.
-    owner = model.owner if model.owner != models.Execution() else None
-    return origin(id=model.id, owner=owner, backend=model.backend)
+    return origin(id=model.id, backend=model.backend)
 
 
 class _StreamRefJson(
@@ -82,23 +80,16 @@ class StreamRef(Generic[T]):
     def __init__(
         self,
         id: str,
-        owner: models.Execution | None = None,
         backend: str | None = None,
     ) -> None:
         """Create a ref. Code gets one from a Stream's ``ref`` instead."""
         self._id = id
-        self._owner = owner
         self._backend = backend
 
     @property
     def id(self) -> str:
         """The Stream id. It is opaque to callers."""
         return self._id
-
-    @property
-    def owner(self) -> models.Execution | None:
-        """The owner of a bound Stream, such as a Workflow run chain. None for a standalone one."""
-        return self._owner
 
     @property
     def backend(self) -> str | None:
@@ -110,11 +101,7 @@ class StreamRef(Generic[T]):
         if type(other) is not type(self):
             return NotImplemented
         assert isinstance(other, StreamRef)
-        return (self._id, self._owner, self._backend) == (
-            other._id,
-            other._owner,
-            other._backend,
-        )
+        return (self._id, self._backend) == (other._id, other._backend)
 
     def __hash__(self) -> int:
         """Hash of the id and the backend, which identify the Stream."""
@@ -122,10 +109,7 @@ class StreamRef(Generic[T]):
 
     def __repr__(self) -> str:
         """Show the fields."""
-        return (
-            f"{type(self).__name__}(id={self._id!r}, owner={self._owner!r}, "
-            f"backend={self._backend!r})"
-        )
+        return f"{type(self).__name__}(id={self._id!r}, backend={self._backend!r})"
 
     def __copy__(self) -> Self:
         """A ref doesn't change, so a copy is the same ref."""
@@ -148,17 +132,6 @@ class StreamRef(Generic[T]):
             json_schema_input_schema=core_schema.typed_dict_schema(
                 {
                     "id": core_schema.typed_dict_field(core_schema.str_schema()),
-                    "owner": core_schema.typed_dict_field(
-                        core_schema.typed_dict_schema(
-                            {
-                                key: core_schema.typed_dict_field(
-                                    core_schema.str_schema(), required=False
-                                )
-                                for key in ("type", "businessId", "runId")
-                            }
-                        ),
-                        required=False,
-                    ),
                     "backend": core_schema.typed_dict_field(
                         core_schema.str_schema(), required=False
                     ),

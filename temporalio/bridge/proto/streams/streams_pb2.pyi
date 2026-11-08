@@ -95,9 +95,10 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
     @property
     def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """Each batch sends it as AppendRecords does. For a Local Activity it has the run's task facts,
-        so the writes withdraw the run's orphaned Local Activity Records. Its withdraw_run must be
-        empty, since only a retry run's first append withdraws a run, and a writer sends many.
+        """Each batch sends it as AppendRecords does. For a Local Activity its withdrawal has the run's
+        task facts, so the writes withdraw the run's orphaned Local Activity Records. The withdrawal's
+        withdraw_run must be empty, since only a retry run's first append withdraws a run, and a
+        writer sends many.
         """
     max_batch_size: builtins.int
     """A write sends at most this many Records in one batch. Zero, or a value above 1000, is 1000."""

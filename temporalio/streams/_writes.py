@@ -34,44 +34,25 @@ def _context() -> tuple[_activity.ActivityStreams, _backend.StreamServiceCalls]:
 
 def _producer(streams: _activity.ActivityStreams) -> models.Producer:
     # All attempts of one Workflow Task write with one epoch and sequence, so the Store dedupes a
-    # retry. A later task's higher epoch withdraws a failed task's Records for the same call key.
-    producer = streams.producer
-    local = producer.epoch.local_activity
-    started = local.task.started_time if local.task.HasField("started_time") else None
+    # retry. A later task's higher epoch supersedes a failed task's Records for the same call key.
+    local = streams.producer.local_activity
+    task_pb = local.epoch.task
+    started = task_pb.started_time if task_pb.HasField("started_time") else None
     task = models.WorkflowTaskEpoch(
-        started_event_id=local.task.started_event_id or None,
-        attempt=local.task.attempt or None,
+        started_event_id=task_pb.started_event_id or None,
+        attempt=task_pb.attempt or None,
         started_time=models.Timestamp(seconds=started.seconds, nanos=started.nanos)
         if started is not None
         else None,
     )
     return models.Producer(
-        id=producer.id,
-        run_id=producer.run_id or None,
-        epoch=models.ProducerEpoch(
-            kind=models.ProducerEpochKindLocalActivity(
-                models.LocalActivityEpoch(task=task, attempt=1)
+        id=streams.producer.id,
+        kind=models.ProducerKindLocalActivity(
+            models.LocalActivityProducer(
+                run_id=local.run_id or None,
+                epoch=models.LocalActivityEpoch(task=task, attempt=1),
             )
         ),
-    )
-
-
-def _writer(
-    streams: _activity.ActivityStreams,
-    producer: models.Producer,
-    withdraw_run: str | None,
-) -> models.StreamWriter:
-    # The run's task history, so the write withdraws the run's orphaned Local Activity Records.
-    previous = streams.previous_completed_task
-    return models.StreamWriter(
-        producer=producer,
-        previous_completed_task=models.WorkflowTaskEpoch(
-            started_event_id=previous.started_event_id
-        )
-        if previous is not None
-        else None,
-        failed_tasks=list(streams.failed_tasks),
-        withdraw_run=withdraw_run,
     )
 
 
@@ -194,7 +175,7 @@ async def append_records(
     producer = _producer(streams)
     producer_pb = models._ProducerTransferTypeConverter().to_transfer_type(producer)
     key = (streams.namespace, request.ref.id, producer_pb.id)
-    task = producer_pb.epoch.local_activity.task
+    task = producer_pb.local_activity.epoch.task
     epoch = (
         task.started_event_id,
         task.attempt,
@@ -217,13 +198,7 @@ async def append_records(
                 response = await service.send_append_records(
                     models.AppendRecordsRequest(
                         ref=_model_ref(request.ref),
-                        writer=_writer(
-                            streams,
-                            producer,
-                            (request.writer.withdraw_run or None)
-                            if index == 0
-                            else None,
-                        ),
+                        writer=models.StreamWriter(producer=producer),
                         sequence=index + 1,
                         records=[
                             models.AppendRecord(
@@ -255,19 +230,13 @@ async def append_records(
 async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
     """Close a Stream as the Workflow run that scheduled this Activity."""
     streams, service = _context()
-    owner = request.ref.owner if request.ref.HasField("owner") else None
-    if owner is not None and owner.business_id != streams.workflow_id:
-        # The Store refuses an Activity Producer's close, so the Activity closes as the run. It
-        # refuses a Stream bound to another Workflow, and Workflow code checks the run chain.
-        raise _errors.not_owner(
-            f"Can't close the Stream {request.ref.id} for another Workflow"
-        )
+    # The close Activity runs in the Workflow, so its Producer carries the run id, and the Store
+    # closes the Stream as the run's Workflow Producer.
     await service.send_close_stream(
         models.CloseStreamRequest(
             ref=_model_ref(request.ref),
             writer=models.StreamWriter(
-                producer=_ids.workflow_producer(streams.producer.run_id),
-                failed_tasks=[],
+                producer=_ids.workflow_producer(streams.producer.activity.run_id)
             ),
         )
     )

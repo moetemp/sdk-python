@@ -8,7 +8,6 @@ from collections.abc import Callable, Generator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import temporalio.api.stream.v1 as stream_v1
-from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams import _errors
 from temporalio.streams._offset import StreamOffset
 
@@ -68,8 +67,6 @@ class RecordWriter:
         stream_id: str,
         producer: stream_v1.Producer,
         free: Callable[[int], None] | None = None,
-        previous_completed_task: stream_v1.WorkflowTaskEpoch | None = None,
-        failed_tasks: Sequence[int] = (),
     ) -> None:
         """Create a writer. It opens on the first write.
 
@@ -81,8 +78,6 @@ class RecordWriter:
         self._producer = producer
         self._free = free
         self._release: weakref.finalize[Any, RecordWriter] | None = None
-        self._previous_completed_task = previous_completed_task
-        self._failed_tasks = list(failed_tasks)
         self._writer: Writer | None = None
         self._open_lock = asyncio.Lock()
         # The last write that started. Each write waits for the one before it, so the order is
@@ -97,28 +92,8 @@ class RecordWriter:
         """The Producer that the writer writes as."""
         return self._producer
 
-    async def withdraw_earlier_attempts(self) -> None:
-        """Open the writer of a new attempt, which withdraws the Records of earlier attempts.
-
-        A Stream that doesn't exist has nothing to withdraw. A closed or expired Stream accepts
-        no write, so the attempt continues, and a later write raises the real error.
-        """
-        try:
-            await self.open()
-        except _errors.StreamError as err:
-            if err.reason not in (
-                StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND,
-                StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
-                StreamErrorReason.STREAM_ERROR_REASON_EXPIRED,
-            ):
-                raise
-
     async def open(self) -> Writer:
-        """Open the crate's writer once.
-
-        The open of a new attempt withdraws the Records of earlier attempts, even if it writes
-        nothing.
-        """
+        """Open the crate's writer once."""
         from temporalio.streams.writer_system import models
 
         async with self._open_lock:
@@ -126,18 +101,9 @@ class RecordWriter:
                 producer = models._ProducerTransferTypeConverter().from_transfer_type(
                     self._producer, models.Producer
                 )
-                previous = self._previous_completed_task
                 self._writer = await self._writers.open_writer(
                     ref=models.StreamRef(id=self._stream_id),
-                    writer=models.StreamWriter(
-                        producer=producer,
-                        previous_completed_task=models.WorkflowTaskEpoch(
-                            started_event_id=previous.started_event_id
-                        )
-                        if previous is not None
-                        else None,
-                        failed_tasks=self._failed_tasks,
-                    ),
+                    writer=models.StreamWriter(producer=producer),
                 )
                 if self._free is not None:
                     # The crate keeps a writer for each open that nobody closed or freed. So

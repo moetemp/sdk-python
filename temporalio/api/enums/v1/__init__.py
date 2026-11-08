@@ -45,6 +45,7 @@ from .query_pb2 import QueryRejectCondition, QueryResultType
 from .reset_pb2 import ResetReapplyExcludeType, ResetReapplyType, ResetType
 from .schedule_pb2 import ScheduleOverlapPolicy
 from .stream_pb2 import (
+    StreamCloseStatus,
     StreamErrorReason,
     StreamIdConflictPolicy,
     StreamReadStart,
@@ -126,6 +127,7 @@ __all__ = [
     "Severity",
     "SignalExternalWorkflowExecutionFailedCause",
     "StartChildWorkflowExecutionFailedCause",
+    "StreamCloseStatus",
     "StreamErrorReason",
     "StreamIdConflictPolicy",
     "StreamReadStart",

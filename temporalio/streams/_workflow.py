@@ -101,8 +101,6 @@ class _RunState:
     tails: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     # The last write of each Stream that hasn't started, which later appends can join.
     waiting: dict[str, _Write] = field(default_factory=dict)
-    # The Streams on which a retry run's first append withdrew the previous run's Records.
-    withdrawn: set[str] = field(default_factory=set)
     # Whether the run created, bound or received a Stream. Only then do its Activities get a
     # Producer key, so a run with no Stream adds nothing to History.
     uses_streams: bool = False
@@ -224,16 +222,6 @@ def _write(
     if waiting is not None and waiting.take(request):
         waiting.calls.append((_records(waiting.request), future))
         return future
-    if isinstance(request, stream_pb.AppendRecordsRequest) and (
-        stream_id not in state.withdrawn
-    ):
-        previous_run = _support.withdraw_run()
-        if previous_run:
-            # A retry run's first append to a Stream withdraws the Records of the run it
-            # retries. The Store refuses a run withdrawal on a create with no owner, and a
-            # Workflow's Stream has none, so only an append sends it.
-            request.writer.withdraw_run = previous_run
-            state.withdrawn.add(stream_id)
     write = _Write(activity, request, [(_records(request), future)])
     if isinstance(request, stream_pb.AppendRecordsRequest):
         write.size = sum(record.ByteSize() for record in request.records)
@@ -389,7 +377,7 @@ def _payload(value: Any) -> Any:
 
 
 def _model_ref(ref: StreamRef[Any]) -> models.StreamRef:
-    return models.StreamRef(id=ref.id, owner=ref.owner)
+    return models.StreamRef(id=ref.id)
 
 
 def _proto_ref(ref: StreamRef[Any]) -> stream_v1.StreamRef:
@@ -397,14 +385,12 @@ def _proto_ref(ref: StreamRef[Any]) -> stream_v1.StreamRef:
 
 
 def _generated_ref(ref: StreamRef[Any]) -> models.StreamRef:
-    return models.StreamRef(id=ref.id, owner=ref.owner, backend=ref.backend or None)
+    return models.StreamRef(id=ref.id, backend=ref.backend or None)
 
 
 def _generated(ref: StreamRef[Any]) -> generated_stream.Stream[Any]:
     # The generated factory takes the ref's fields.
-    return generated_stream.get_stream(
-        id=ref.id, owner=ref.owner, backend=ref.backend or None
-    )
+    return generated_stream.get_stream(id=ref.id, backend=ref.backend or None)
 
 
 def _check(
@@ -459,28 +445,7 @@ def _start_close(ref: StreamRef[Any]) -> asyncio.Future[StreamOffset]:
     return _call_future(call, lambda _: 0)
 
 
-def check_owner(ref: StreamRef[Any]) -> None:
-    """Check that this run chain may close the Stream.
-
-    A Workflow closes a standalone Stream. Only its own run chain closes a bound Stream.
-    """
-    owner = ref.owner
-    if owner is None:
-        return
-    info = temporalio.workflow.info()
-    if (owner.business_id, owner.run_id) != (
-        info.workflow_id,
-        info.first_execution_run_id,
-    ):
-        # The backend refuses the close too, but this check fails before the Workflow
-        # schedules a command.
-        raise _errors.not_owner(
-            f"Can't close the Stream {ref.id}, since it is bound to another run chain"
-        )
-
-
 def _closing(ref: StreamRef[Any]) -> _RunStream:
-    check_owner(ref)
     return _check(ref, "close")
 
 
@@ -719,9 +684,6 @@ def _start_create(
     _check(ref, "create", backend_checked=True)
     proto = models._CreateStreamRequestTransferTypeConverter().to_transfer_type(request)
     proto.stream_ref.CopyFrom(_proto_ref(ref))
-    # The Store refuses a run withdrawal on a create with no owner, and a Workflow's Stream has
-    # none. The run's first append withdraws the previous run instead.
-    proto.ClearField("withdraw_run")
     # A later run of the chain repeats the same create, so the id is the same in each run. The
     # Store then gives a retry run or a cron run the Stream that the first run made.
     info = temporalio.workflow.info()
@@ -754,7 +716,7 @@ class _WriteHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
 
 
 def _from_model(ref: models.StreamRef, backend: str | None) -> StreamRef[Any]:
-    return StreamRef(id=ref.id, owner=ref.owner, backend=backend)
+    return StreamRef(id=ref.id, backend=backend)
 
 
 # The Worker's interceptor runs the Stream calls of the generated Workflow API with these. They

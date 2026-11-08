@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import array
 import asyncio
 import dataclasses
 from collections.abc import AsyncGenerator
@@ -12,20 +11,14 @@ from typing import Any, Generic, TypeVar
 import temporalio.common
 import temporalio.converter
 from temporalio.streams import _backend, _convert, _errors
-from temporalio.streams._items import (
-    End,
-    Record,
-    Superseded,
-    is_client,
-    producer_key,
-    withdraws,
-)
+from temporalio.streams._close import StreamCloseStatus
+from temporalio.streams._items import Closed, End, Record
 from temporalio.streams._offset import StreamOffset
 from temporalio.streams.system import models
 
 T = TypeVar("T")
 
-Item = Record[Any] | Superseded
+Item = Record[Any] | Closed
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
@@ -46,9 +39,9 @@ class Position:
 class Reader(Generic[T]):
     """The items of one read of a Stream, in order. Iterate it with ``async for``.
 
-    It yields :py:class:`Record` items, and :py:class:`Superseded` items that withdraw earlier
-    Records. Each item's ``kind`` gives its type. A read of a closed Stream ends after the last
-    item.
+    It yields :py:class:`Record` items, and a :py:class:`Closed` item last when the Stream is
+    closed. Each item's ``kind`` gives its type. A read of a closed Stream ends after the
+    ``Closed`` item.
 
     .. warning::
         This API is experimental.
@@ -65,23 +58,14 @@ class Reader(Generic[T]):
         self._position = position
         # A client read's rpc_metadata and rpc_timeout, for each call of each step.
         self._options = options
-        # The Producer and the offsets of each Record that this read gave, without values, so a
-        # Superseded item can list the offsets that it withdraws. Each write Local Activity of a
-        # run is its own Producer, so a read of a Workflow's writes keeps one entry for each
-        # write, not for each Record, and a Superseded item scans those entries.
-        self._shown: dict[
-            tuple[Any, ...], tuple[models.Producer, array.array[int]]
-        ] = {}
 
     @property
     def next_offset(self) -> StreamOffset | None:
         """The offset to resume from, after the last item or the last page that the read got.
 
-        Pass it as ``offset`` to a later read. After a ``Superseded`` item, it's that item's own
-        offset, since the first Record of its batch has the same offset and comes next. A read
-        from there gives the ``Superseded`` item again, which withdraws nothing new. After a
-        Record that failed to decode, it's past that Record. It's None before the first page of
-        a read from ``END`` or of a read with ``last``.
+        Pass it as ``offset`` to a later read. After a Record that failed to decode, it's past
+        that Record. It's None before the first page of a read from ``END`` or of a read with
+        ``last``.
         """
         wire = self._position.next_offset
         return StreamOffset._from_wire(wire) if wire is not None else None
@@ -90,7 +74,7 @@ class Reader(Generic[T]):
         """The read is its own iterator."""
         return self
 
-    async def __anext__(self) -> Record[T] | Superseded:
+    async def __anext__(self) -> Record[T] | Closed:
         """The next item.
 
         Raises:
@@ -100,41 +84,8 @@ class Reader(Generic[T]):
         with _backend.using(self._options):
             item = await self._items.__anext__()
         offset = item.offset._wire
-        if isinstance(item, Superseded):
-            # The Record of the same entry has the same offset and comes next.
-            self._position.next_offset = offset
-        else:
-            self._position.next_offset = max(
-                self._position.next_offset or 0, offset + 1
-            )
-        if (
-            isinstance(item, Record)
-            and item.producer is not None
-            # Nothing withdraws a client's Records, so a long read of them keeps no offsets.
-            and not is_client(item.producer)
-        ):
-            key = producer_key(item.producer)
-            _, runs = self._shown.setdefault(key, (item.producer, array.array("Q")))
-            # A batch has consecutive offsets, so a run of them costs one first and last pair.
-            if runs and runs[-1] + 1 == offset:
-                runs[-1] = offset
-            else:
-                runs.extend((offset, offset))
-        elif isinstance(item, Superseded):
-            item = dataclasses.replace(
-                item, withdrawn_offsets=self._withdraw(item.facts)
-            )
+        self._position.next_offset = max(self._position.next_offset or 0, offset + 1)
         return item
-
-    def _withdraw(self, facts: models.StreamSuperseded) -> tuple[StreamOffset, ...]:
-        offsets: list[int] = []
-        for key, (producer, runs) in list(self._shown.items()):
-            if withdraws(facts, producer):
-                for first, last in zip(runs[::2], runs[1::2]):
-                    offsets.extend(range(first, last + 1))
-                # A withdrawn Record stays withdrawn, so the read forgets it.
-                del self._shown[key]
-        return tuple(StreamOffset._from_wire(offset) for offset in sorted(offsets))
 
     async def aclose(self) -> None:
         """End the read early, from the task that reads it. It makes no more calls.
@@ -316,5 +267,11 @@ async def _item(
                 offset=StreamOffset._from_wire(offset),
                 producer=data.producer,
             )
-        case models.StreamItemSuperseded(value=facts):
-            return Superseded(offset=StreamOffset._from_wire(offset), facts=facts)
+        case models.StreamItemClose(value=close):
+            return Closed(
+                offset=StreamOffset._from_wire(offset),
+                status=StreamCloseStatus(int(close.status))
+                if close.status is not None
+                else StreamCloseStatus.UNSPECIFIED,
+                failure=close.failure,
+            )

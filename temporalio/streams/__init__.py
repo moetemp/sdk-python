@@ -19,9 +19,11 @@ Workflow, an Activity, a child Workflow or the next run, or hands it out through
 :py:func:`temporalio.workflow.get_stream` and :py:meth:`temporalio.client.Client.get_stream` give
 the Stream of a ref. In an Activity, a Stream from ``activity.client()`` writes as the attempt.
 
-A read gives :py:class:`Record` and :py:class:`Superseded` items, and the ``kind`` of each item
-narrows its type. A :py:class:`StreamOffset` is the opaque position of a Record. A close carries
-no value. A read of a closed Stream ends once it gives the last item.
+A read gives :py:class:`Record` items and a :py:class:`Closed` item last, and the ``kind`` of each
+item narrows its type. A :py:class:`StreamOffset` is the opaque position of a Record. For
+supersession, the opt-in :py:func:`temporalio.streams.superseded.with_superseded` wraps a reader
+and adds ``Superseded`` items from the Producer epochs. A read of a closed Stream ends after its
+``Closed`` item.
 
 A :py:class:`StreamBackend` makes the Stream calls and registers a backend name. Examples are
 :py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
@@ -36,6 +38,7 @@ with no ``backend=`` uses that backend. A Worker serves only one backend.
 
 # The reason of a StreamError is the proto enum, as in the StreamErrorDetails of a failed call.
 from temporalio.api.enums.v1 import StreamErrorReason
+from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._conflict import StreamIDConflictPolicy
 from temporalio.streams._errors import (
     StreamAlreadyExistsError,
@@ -45,55 +48,59 @@ from temporalio.streams._errors import (
     StreamFencedError,
     StreamNotFoundError,
 )
-from temporalio.streams._items import END, End, ItemKind, Record, Superseded
+from temporalio.streams._items import END, Closed, End, ItemKind, Record
 from temporalio.streams._offset import StreamOffset
 from temporalio.streams._plugin import StreamBackend
 from temporalio.streams._reader import Reader
 from temporalio.streams._ref import StreamRef
 from temporalio.streams._stream_client import producer
 
-# nexgen generates these wire models. Refs, Records and Superseded items carry them.
+# nexgen generates these wire models. Refs, Records and close items carry them.
 from temporalio.streams.system.models import (
     ActivityEpoch,
+    ActivityProducer,
     ClientEpoch,
-    Execution,
-    ExecutionType,
+    ClientProducer,
     LocalActivityEpoch,
+    LocalActivityProducer,
     Producer,
-    ProducerEpoch,
-    ProducerEpochKind,
-    ProducerEpochKindActivity,
-    ProducerEpochKindClient,
-    ProducerEpochKindLocalActivity,
-    ProducerEpochKindStandaloneActivity,
-    ProducerEpochKindWorkflow,
-    StreamSuperseded,
+    ProducerKind,
+    ProducerKindActivity,
+    ProducerKindClient,
+    ProducerKindLocalActivity,
+    ProducerKindStandaloneActivity,
+    ProducerKindWorkflow,
+    StreamClose,
     StreamWriter,
     Timestamp,
+    WorkflowProducer,
     WorkflowTaskEpoch,
 )
 
 __all__ = [
     "END",
     "ActivityEpoch",
+    "ActivityProducer",
     "ClientEpoch",
+    "ClientProducer",
+    "Closed",
     "End",
-    "Execution",
-    "ExecutionType",
     "ItemKind",
     "LocalActivityEpoch",
+    "LocalActivityProducer",
     "Producer",
-    "ProducerEpoch",
-    "ProducerEpochKind",
-    "ProducerEpochKindActivity",
-    "ProducerEpochKindClient",
-    "ProducerEpochKindLocalActivity",
-    "ProducerEpochKindStandaloneActivity",
-    "ProducerEpochKindWorkflow",
+    "ProducerKind",
+    "ProducerKindActivity",
+    "ProducerKindClient",
+    "ProducerKindLocalActivity",
+    "ProducerKindStandaloneActivity",
+    "ProducerKindWorkflow",
     "Reader",
     "Record",
     "StreamAlreadyExistsError",
     "StreamBackend",
+    "StreamClose",
+    "StreamCloseStatus",
     "StreamClosedError",
     "StreamConfigError",
     "StreamError",
@@ -103,10 +110,9 @@ __all__ = [
     "StreamNotFoundError",
     "StreamOffset",
     "StreamRef",
-    "StreamSuperseded",
     "StreamWriter",
-    "Superseded",
     "Timestamp",
+    "WorkflowProducer",
     "WorkflowTaskEpoch",
     "producer",
 ]

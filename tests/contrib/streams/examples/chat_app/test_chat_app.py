@@ -1,12 +1,12 @@
 """Runs the chat session on the scripted model, on the memory Store and on Redis."""
 
-import json
 import uuid
 
 import httpx
 
 from temporalio import streams
 from temporalio.client import Client, WorkflowHandle
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.worker import Worker
 from tests.contrib.streams.examples.chat_app import server
 from tests.contrib.streams.examples.chat_app.activities import (
@@ -73,7 +73,6 @@ async def answer(
     read = client.get_stream(
         refs.turns.id,
         payload_type=Turn,
-        owner=refs.turns.owner,
         backend=refs.turns.backend,
     ).read()
     records = await read_until_answer(read, 1)
@@ -92,14 +91,12 @@ async def test_turn_and_its_tokens(stream_client: Client):
     turns = stream_client.get_stream(
         refs.turns.id,
         payload_type=Turn,
-        owner=refs.turns.owner,
         backend=refs.turns.backend,
     )
     records = [r async for r in turns.read() if isinstance(r, streams.Record)]
     tokens = stream_client.get_stream(
         refs.tokens.id,
         payload_type=Token,
-        owner=refs.tokens.owner,
         backend=refs.tokens.backend,
     )
     deltas = [r.data async for r in tokens.read() if isinstance(r, streams.Record)]
@@ -173,7 +170,6 @@ async def test_message_during_a_run_joins_the_next_round(stream_client: Client):
         read = stream_client.get_stream(
             refs.turns.id,
             payload_type=Turn,
-            owner=refs.turns.owner,
             backend=refs.turns.backend,
         ).read()
         records = []
@@ -219,7 +215,6 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
     child = stream_client.get_stream(
         link.agent.turns.id,
         payload_type=Turn,
-        owner=link.agent.turns.owner,
         backend=link.agent.turns.backend,
     )
     child_turns = [r.data async for r in child.read() if isinstance(r, streams.Record)]
@@ -234,7 +229,6 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
     tokens = stream_client.get_stream(
         link.agent.tokens.id,
         payload_type=Token,
-        owner=link.agent.tokens.owner,
         backend=link.agent.tokens.backend,
     )
     assert [r async for r in tokens.read() if isinstance(r, streams.Record)]
@@ -243,7 +237,7 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
 
 async def failed_attempt(
     client: Client,
-) -> tuple[SessionStreams, list[streams.Record[Token] | streams.Superseded]]:
+) -> tuple[SessionStreams, list[streams.Record[Token] | Superseded | streams.Closed]]:
     """The refs of a session whose one round failed its first attempt, and the token items."""
     async with chat_worker(client) as worker:
         handle = await start(client, worker)
@@ -256,15 +250,14 @@ async def failed_attempt(
     tokens = client.get_stream(
         refs.tokens.id,
         payload_type=Token,
-        owner=refs.tokens.owner,
         backend=refs.tokens.backend,
     )
-    return refs, [item async for item in tokens.read()]
+    return refs, [item async for item in with_superseded(tokens.read())]
 
 
 async def test_retry_withdraws_the_failed_attempt(stream_client: Client):
     _, items = await failed_attempt(stream_client)
-    [superseded] = [i for i in items if isinstance(i, streams.Superseded)]
+    [superseded] = [i for i in items if isinstance(i, Superseded)]
     records = [i for i in items if isinstance(i, streams.Record)]
     withdrawn = [r for r in records if r.offset in superseded.withdrawn_offsets]
     kept = [r for r in records if r.offset not in superseded.withdrawn_offsets]
@@ -277,36 +270,6 @@ async def test_retry_withdraws_the_failed_attempt(stream_client: Client):
     )
 
 
-async def test_server_checks_kept_tokens_with_withdraws(stream_client: Client):
-    refs, items = await failed_attempt(stream_client)
-    shown = [i for i in items if isinstance(i, streams.Record)][:FAIL_AFTER]
-    # A tab that reloaded after it showed the failed attempt's tokens sends their Producer, and
-    # its read resumes after them.
-    producer = server.producer_json(shown[0].producer)
-    assert producer is not None
-    kept = server.kept_producers(json.dumps([producer["wire"]]))
-    tokens = stream_client.get_stream(
-        refs.tokens.id,
-        payload_type=Token,
-        owner=refs.tokens.owner,
-        backend=refs.tokens.backend,
-    )
-    # Read the shown tokens again to get where the tab's read resumes, as it would from the
-    # next_offset that it saved.
-    resume_read = tokens.read(wait_new_records=False)
-    for _ in range(len(shown)):
-        await anext(resume_read)
-    resume = resume_read.next_offset
-    await resume_read.aclose()
-    [superseded] = [
-        server.item_json(item, kept)
-        async for item in tokens.read(offset=resume)
-        if isinstance(item, streams.Superseded)
-    ]
-    assert superseded["withdrawn_offsets"] == []
-    assert superseded["withdrawn_kept"] == [0]
-
-
 async def test_resume_from_a_saved_offset(stream_client: Client):
     async with chat_worker(stream_client) as worker:
         handle = await start(stream_client, worker)
@@ -314,7 +277,6 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
         turns = stream_client.get_stream(
             refs.turns.id,
             payload_type=Turn,
-            owner=refs.turns.owner,
             backend=refs.turns.backend,
         )
         await handle.execute_update(ChatSession.send, UserMessage("message 1"))
@@ -361,7 +323,6 @@ async def test_share_again_is_a_strict_create_of_an_existing_id(stream_client: C
             turns = stream_client.get_stream(
                 refs.turns.id,
                 payload_type=Turn,
-                owner=refs.turns.owner,
                 backend=refs.turns.backend,
             )
             read = turns.read()

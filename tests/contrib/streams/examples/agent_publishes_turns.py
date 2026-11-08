@@ -133,7 +133,5 @@ async def main(client: Client, task_queue: str) -> list[streams.Record[Turn]]:
         ref = await handle.query(Agent.stream)
         assert ref is not None
         # A deserialized ref decodes as JSON, so the id form takes the payload type.
-        stream = client.get_stream(
-            ref.id, payload_type=Turn, owner=ref.owner, backend=ref.backend
-        )
+        stream = client.get_stream(ref.id, payload_type=Turn, backend=ref.backend)
         return [r async for r in stream.read() if isinstance(r, streams.Record)]

@@ -4,16 +4,15 @@ isort:skip_file
 """
 
 import builtins
-import collections.abc
 import sys
 
 import google.protobuf.descriptor
-import google.protobuf.internal.containers
 import google.protobuf.message
 import google.protobuf.timestamp_pb2
 
 import temporalio.api.common.v1.message_pb2
 import temporalio.api.enums.v1.stream_pb2
+import temporalio.api.failure.v1.message_pb2
 
 if sys.version_info >= (3, 8):
     import typing as typing_extensions
@@ -30,16 +29,8 @@ class StreamRef(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     ID_FIELD_NUMBER: builtins.int
-    OWNER_FIELD_NUMBER: builtins.int
     BACKEND_FIELD_NUMBER: builtins.int
     id: builtins.str
-    @property
-    def owner(self) -> temporalio.api.common.v1.message_pb2.Execution:
-        """Unset for a standalone Stream. For a Stream bound to a Workflow, business_id is the Workflow
-        ID and run_id is the first execution run id of its run chain. For a Standalone Activity,
-        business_id is the activity ID and run_id is its run id. A create and a close of a
-        Workflow-owned Stream must carry its owner.
-        """
     backend: builtins.str
     """The name of the backend that holds the Stream, as the Worker and client config register
     it, so every process routes a ref it receives. Empty is the default backend. The Store
@@ -49,107 +40,13 @@ class StreamRef(google.protobuf.message.Message):
         self,
         *,
         id: builtins.str = ...,
-        owner: temporalio.api.common.v1.message_pb2.Execution | None = ...,
         backend: builtins.str = ...,
     ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["owner", b"owner"]
-    ) -> builtins.bool: ...
     def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "backend", b"backend", "id", b"id", "owner", b"owner"
-        ],
+        self, field_name: typing_extensions.Literal["backend", b"backend", "id", b"id"]
     ) -> None: ...
 
 global___StreamRef = StreamRef
-
-class ProducerEpoch(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    The ordered attempt of a Producer. A higher epoch supersedes the Records of a lower epoch of the
-    same Producer. The case is the kind of the Producer. It decides how the Store orders the epochs,
-    and which earlier Records a higher epoch withdraws.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WORKFLOW_FIELD_NUMBER: builtins.int
-    LOCAL_ACTIVITY_FIELD_NUMBER: builtins.int
-    ACTIVITY_FIELD_NUMBER: builtins.int
-    STANDALONE_ACTIVITY_FIELD_NUMBER: builtins.int
-    CLIENT_FIELD_NUMBER: builtins.int
-    @property
-    def workflow(self) -> global___WorkflowTaskEpoch:
-        """A Workflow run, which writes in its Workflow Task. A higher epoch withdraws the Records
-        of the run's Workflow Tasks that never completed, also those of their Local Activities.
-        """
-    @property
-    def local_activity(self) -> global___LocalActivityEpoch:
-        """A Local Activity. A higher epoch withdraws the Producer's lower epochs."""
-    @property
-    def activity(self) -> global___ActivityEpoch:
-        """An Activity of a Workflow. A higher epoch withdraws the Producer's lower epochs."""
-    @property
-    def standalone_activity(self) -> global___ActivityEpoch:
-        """A Standalone Activity. A higher epoch withdraws the Producer's lower epochs."""
-    @property
-    def client(self) -> global___ClientEpoch:
-        """A client. A higher epoch only fences the lower ones, since a restarted client's earlier
-        Records are real messages, not the Records of a failed attempt.
-        """
-    def __init__(
-        self,
-        *,
-        workflow: global___WorkflowTaskEpoch | None = ...,
-        local_activity: global___LocalActivityEpoch | None = ...,
-        activity: global___ActivityEpoch | None = ...,
-        standalone_activity: global___ActivityEpoch | None = ...,
-        client: global___ClientEpoch | None = ...,
-    ) -> None: ...
-    def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "activity",
-            b"activity",
-            "client",
-            b"client",
-            "kind",
-            b"kind",
-            "local_activity",
-            b"local_activity",
-            "standalone_activity",
-            b"standalone_activity",
-            "workflow",
-            b"workflow",
-        ],
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "activity",
-            b"activity",
-            "client",
-            b"client",
-            "kind",
-            b"kind",
-            "local_activity",
-            b"local_activity",
-            "standalone_activity",
-            b"standalone_activity",
-            "workflow",
-            b"workflow",
-        ],
-    ) -> None: ...
-    def WhichOneof(
-        self, oneof_group: typing_extensions.Literal["kind", b"kind"]
-    ) -> (
-        typing_extensions.Literal[
-            "workflow", "local_activity", "activity", "standalone_activity", "client"
-        ]
-        | None
-    ): ...
-
-global___ProducerEpoch = ProducerEpoch
 
 class WorkflowTaskEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
@@ -278,103 +175,224 @@ class ClientEpoch(google.protobuf.message.Message):
 
 global___ClientEpoch = ClientEpoch
 
-class Producer(google.protobuf.message.Message):
+class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The code that wrote a batch. Its id stays the same across attempts, and its epoch orders them.
+    A Workflow run Producer. It writes in its Workflow Task. A higher epoch withdraws the Records of
+    the run's Workflow Tasks that never completed, with those of their Local Activities.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    ID_FIELD_NUMBER: builtins.int
-    EPOCH_FIELD_NUMBER: builtins.int
     RUN_ID_FIELD_NUMBER: builtins.int
-    id: builtins.str
-    """Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run."""
-    @property
-    def epoch(self) -> global___ProducerEpoch:
-        """Required. Its case gives the kind of the Producer."""
+    EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
-    """The run of the Producer, so nobody parses the id. Empty for a client."""
+    """The first execution run id of the run chain."""
+    @property
+    def epoch(self) -> global___WorkflowTaskEpoch: ...
     def __init__(
         self,
         *,
-        id: builtins.str = ...,
-        epoch: global___ProducerEpoch | None = ...,
         run_id: builtins.str = ...,
+        epoch: global___WorkflowTaskEpoch | None = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["epoch", b"epoch"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
-        field_name: typing_extensions.Literal[
-            "epoch", b"epoch", "id", b"id", "run_id", b"run_id"
-        ],
+        field_name: typing_extensions.Literal["epoch", b"epoch", "run_id", b"run_id"],
     ) -> None: ...
 
-global___Producer = Producer
+global___WorkflowProducer = WorkflowProducer
 
-class StreamWriter(google.protobuf.message.Message):
+class LocalActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The Producer of a write, and which earlier Records the write withdraws. An append, a close and
-    a writer carry the same fields, so the Store orders and withdraws each write the same way.
+    A Local Activity Producer. A higher epoch withdraws the Producer's lower epochs.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    PRODUCER_FIELD_NUMBER: builtins.int
-    PREVIOUS_COMPLETED_TASK_FIELD_NUMBER: builtins.int
-    FAILED_TASKS_FIELD_NUMBER: builtins.int
-    WITHDRAW_RUN_FIELD_NUMBER: builtins.int
+    RUN_ID_FIELD_NUMBER: builtins.int
+    EPOCH_FIELD_NUMBER: builtins.int
+    run_id: builtins.str
     @property
-    def producer(self) -> global___Producer:
-        """Required on a write. Its epoch's case picks the withdrawal rule."""
-    @property
-    def previous_completed_task(self) -> global___WorkflowTaskEpoch:
-        """Workflow and Local Activity only. The run's last completed Workflow Task, from a Local
-        Activity's start. Its started_event_id is 0 before the first. The write withdraws the run's
-        Local Activity Records whose Workflow Task never completed.
-        """
-    @property
-    def failed_tasks(
-        self,
-    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
-        """Workflow and Local Activity only. The started event ids of the run's failed or timed out
-        Workflow Tasks. The write withdraws the run's Local Activity Records of these tasks.
-        """
-    withdraw_run: builtins.str
-    """Retry run only. The previous run, on the retry run's first write. Every Record whose
-    Producer carries it is withdrawn.
-    """
+    def epoch(self) -> global___LocalActivityEpoch: ...
     def __init__(
         self,
         *,
-        producer: global___Producer | None = ...,
-        previous_completed_task: global___WorkflowTaskEpoch | None = ...,
-        failed_tasks: collections.abc.Iterable[builtins.int] | None = ...,
-        withdraw_run: builtins.str = ...,
+        run_id: builtins.str = ...,
+        epoch: global___LocalActivityEpoch | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal["epoch", b"epoch", "run_id", b"run_id"],
+    ) -> None: ...
+
+global___LocalActivityProducer = LocalActivityProducer
+
+class ActivityProducer(google.protobuf.message.Message):
+    """Experimental. Might change in the future.
+    An Activity Producer, for an Activity of a Workflow or a Standalone Activity. A higher epoch
+    withdraws the Producer's lower epochs.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    RUN_ID_FIELD_NUMBER: builtins.int
+    EPOCH_FIELD_NUMBER: builtins.int
+    run_id: builtins.str
+    @property
+    def epoch(self) -> global___ActivityEpoch: ...
+    def __init__(
+        self,
+        *,
+        run_id: builtins.str = ...,
+        epoch: global___ActivityEpoch | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal["epoch", b"epoch", "run_id", b"run_id"],
+    ) -> None: ...
+
+global___ActivityProducer = ActivityProducer
+
+class ClientProducer(google.protobuf.message.Message):
+    """Experimental. Might change in the future.
+    A client Producer. A higher epoch only fences the lower ones, since a restarted client's earlier
+    Records are real messages, not the Records of a failed attempt. A client has no run.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    EPOCH_FIELD_NUMBER: builtins.int
+    @property
+    def epoch(self) -> global___ClientEpoch: ...
+    def __init__(
+        self,
+        *,
+        epoch: global___ClientEpoch | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
+    ) -> None: ...
+
+global___ClientProducer = ClientProducer
+
+class Producer(google.protobuf.message.Message):
+    """Experimental. Might change in the future.
+    The code that wrote a batch. Its id stays the same across attempts, and the kind's case orders
+    its epochs and picks which earlier Records a higher epoch withdraws. A run-based kind carries its
+    run, so a client can't.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ID_FIELD_NUMBER: builtins.int
+    WORKFLOW_FIELD_NUMBER: builtins.int
+    LOCAL_ACTIVITY_FIELD_NUMBER: builtins.int
+    ACTIVITY_FIELD_NUMBER: builtins.int
+    STANDALONE_ACTIVITY_FIELD_NUMBER: builtins.int
+    CLIENT_FIELD_NUMBER: builtins.int
+    id: builtins.str
+    """Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run."""
+    @property
+    def workflow(self) -> global___WorkflowProducer: ...
+    @property
+    def local_activity(self) -> global___LocalActivityProducer: ...
+    @property
+    def activity(self) -> global___ActivityProducer: ...
+    @property
+    def standalone_activity(self) -> global___ActivityProducer: ...
+    @property
+    def client(self) -> global___ClientProducer: ...
+    def __init__(
+        self,
+        *,
+        id: builtins.str = ...,
+        workflow: global___WorkflowProducer | None = ...,
+        local_activity: global___LocalActivityProducer | None = ...,
+        activity: global___ActivityProducer | None = ...,
+        standalone_activity: global___ActivityProducer | None = ...,
+        client: global___ClientProducer | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "previous_completed_task",
-            b"previous_completed_task",
-            "producer",
-            b"producer",
+            "activity",
+            b"activity",
+            "client",
+            b"client",
+            "kind",
+            b"kind",
+            "local_activity",
+            b"local_activity",
+            "standalone_activity",
+            b"standalone_activity",
+            "workflow",
+            b"workflow",
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "failed_tasks",
-            b"failed_tasks",
-            "previous_completed_task",
-            b"previous_completed_task",
-            "producer",
-            b"producer",
-            "withdraw_run",
-            b"withdraw_run",
+            "activity",
+            b"activity",
+            "client",
+            b"client",
+            "id",
+            b"id",
+            "kind",
+            b"kind",
+            "local_activity",
+            b"local_activity",
+            "standalone_activity",
+            b"standalone_activity",
+            "workflow",
+            b"workflow",
         ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["kind", b"kind"]
+    ) -> (
+        typing_extensions.Literal[
+            "workflow", "local_activity", "activity", "standalone_activity", "client"
+        ]
+        | None
+    ): ...
+
+global___Producer = Producer
+
+class StreamWriter(google.protobuf.message.Message):
+    """Experimental. Might change in the future.
+    The Producer of a write. An append and a close carry the same writer, so the Store orders each
+    write the same way.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PRODUCER_FIELD_NUMBER: builtins.int
+    @property
+    def producer(self) -> global___Producer:
+        """Required on a write."""
+    def __init__(
+        self,
+        *,
+        producer: global___Producer | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing_extensions.Literal["producer", b"producer"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing_extensions.Literal["producer", b"producer"]
     ) -> None: ...
 
 global___StreamWriter = StreamWriter
@@ -402,35 +420,6 @@ class AppendRecord(google.protobuf.message.Message):
     ) -> None: ...
 
 global___AppendRecord = AppendRecord
-
-class StreamSuperseded(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    Which earlier Records a retried Producer withdraws. The Store keeps these facts for the first
-    batch of a higher epoch, or for a retry run's first write, and a read builds a Superseded item
-    from them. A reader drops the earlier Records that the facts match.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_FIELD_NUMBER: builtins.int
-    @property
-    def writer(self) -> global___StreamWriter:
-        """The writer of the batch that withdraws. Its Producer's epoch is empty when only
-        withdraw_run applies.
-        """
-    def __init__(
-        self,
-        *,
-        writer: global___StreamWriter | None = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["writer", b"writer"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["writer", b"writer"]
-    ) -> None: ...
-
-global___StreamSuperseded = StreamSuperseded
 
 class StreamData(google.protobuf.message.Message):
     """Experimental. Might change in the future.
@@ -462,6 +451,56 @@ class StreamData(google.protobuf.message.Message):
 
 global___StreamData = StreamData
 
+class StreamClose(google.protobuf.message.Message):
+    """Experimental. Might change in the future.
+    The close of a Stream. A Stream has at most one, and a read returns it last.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    PRODUCER_FIELD_NUMBER: builtins.int
+    RESULT_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    STATUS_FIELD_NUMBER: builtins.int
+    @property
+    def producer(self) -> global___Producer:
+        """The Producer that closed the Stream."""
+    @property
+    def result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType
+    """Which of result or failure is set, and why the Stream closed."""
+    def __init__(
+        self,
+        *,
+        producer: global___Producer | None = ...,
+        result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+        status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing_extensions.Literal[
+            "failure", b"failure", "producer", b"producer", "result", b"result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing_extensions.Literal[
+            "failure",
+            b"failure",
+            "producer",
+            b"producer",
+            "result",
+            b"result",
+            "status",
+            b"status",
+        ],
+    ) -> None: ...
+
+global___StreamClose = StreamClose
+
 class StreamRecord(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     An offset is ordered and unique in one Stream, and it is sparse. Offsets have gaps, so they
@@ -473,45 +512,34 @@ class StreamRecord(google.protobuf.message.Message):
 
     OFFSET_FIELD_NUMBER: builtins.int
     DATA_FIELD_NUMBER: builtins.int
-    SUPERSEDED_FIELD_NUMBER: builtins.int
+    CLOSE_FIELD_NUMBER: builtins.int
     offset: builtins.int
     @property
     def data(self) -> global___StreamData: ...
     @property
-    def superseded(self) -> global___StreamSuperseded:
-        """The Store keeps only the withdrawal facts of the first batch of a higher epoch. A read
-        builds this item from them. It withdraws the earlier Records that the facts match, and a
-        reader drops them.
-        """
+    def close(self) -> global___StreamClose: ...
     def __init__(
         self,
         *,
         offset: builtins.int = ...,
         data: global___StreamData | None = ...,
-        superseded: global___StreamSuperseded | None = ...,
+        close: global___StreamClose | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "data", b"data", "item", b"item", "superseded", b"superseded"
+            "close", b"close", "data", b"data", "item", b"item"
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "data",
-            b"data",
-            "item",
-            b"item",
-            "offset",
-            b"offset",
-            "superseded",
-            b"superseded",
+            "close", b"close", "data", b"data", "item", b"item", "offset", b"offset"
         ],
     ) -> None: ...
     def WhichOneof(
         self, oneof_group: typing_extensions.Literal["item", b"item"]
-    ) -> typing_extensions.Literal["data", "superseded"] | None: ...
+    ) -> typing_extensions.Literal["data", "close"] | None: ...
 
 global___StreamRecord = StreamRecord
 

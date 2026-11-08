@@ -19,12 +19,12 @@ import temporalio.workflow
 if TYPE_CHECKING:
     import temporalio.api.stream.v1
     from temporalio.streams import (
+        Closed,
         End,
         Reader,
         Record,
         StreamOffset,
         StreamRef,
-        Superseded,
     )
     from temporalio.streams._stream_client import StreamCalls
 
@@ -231,7 +231,7 @@ class SyncReader(Generic[T]):
         from temporalio.streams import _activity_stream
 
         self._reader = reader
-        self._steps: Generator[Record[T] | Superseded, None, None] = (
+        self._steps: Generator[Record[T] | Closed, None, None] = (
             _activity_stream.sync_items(reader)
         )
 
@@ -244,7 +244,7 @@ class SyncReader(Generic[T]):
         """The read is its own iterator."""
         return self
 
-    def __next__(self) -> Record[T] | Superseded:
+    def __next__(self) -> Record[T] | Closed:
         """The next item."""
         return next(self._steps)
 

@@ -128,16 +128,7 @@ class WorkflowStream(Generic[T]):
         _workflow.close_nowait(self._ref)
 
     async def __aenter__(self) -> Self:
-        """Use the Stream in ``async with``, which closes it at the end.
-
-        Raises:
-            StreamError: This run chain can't close the Stream. See :py:meth:`close`.
-        """
-        from temporalio.streams import _workflow
-
-        # Fail before the block, since the close at its end would raise and hide the block's
-        # own error.
-        _workflow.check_owner(self._ref)
+        """Use the Stream in ``async with``, which closes it at the end."""
         return self
 
     async def __aexit__(

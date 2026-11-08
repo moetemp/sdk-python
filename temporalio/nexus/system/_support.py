@@ -364,14 +364,8 @@ class _ReadItem(typing.Protocol):
 
 def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
     """The request that resumes a Stream read after ``item``."""
-    from temporalio.streams.system.models import StreamItemSuperseded
-
-    offset = item.offset or 0
-    if not isinstance(item.item, StreamItemSuperseded):
-        offset += 1
-    # A Superseded item has the offset of the first Record of its batch, which comes next. So a
-    # read resumes at that offset, and gets the Superseded item again, which withdraws nothing
-    # new. The first page's start and last no longer apply.
+    # A read resumes past the last item. The first page's start and last no longer apply.
+    offset = (item.offset or 0) + 1
     return dataclasses.replace(request, from_offset=offset, start=None, last=None)
 
 
@@ -477,22 +471,7 @@ def workflow_writer() -> typing.Any:
     from temporalio.streams.system import models
     from temporalio.workflow import info
 
-    return models.StreamWriter(
-        producer=_ids.workflow_producer(info().run_id),
-        failed_tasks=[],
-        withdraw_run=withdraw_run(),
-    )
-
-
-def withdraw_run() -> str | None:
-    """The previous run whose Records a retry run's first write withdraws."""
-    from temporalio.workflow import in_workflow, info
-
-    if not in_workflow():
-        # Code outside a Workflow isn't a retry run.
-        return None
-    run = info()
-    return run.continued_run_id if run.attempt > 1 and run.continued_run_id else None
+    return models.StreamWriter(producer=_ids.workflow_producer(info().run_id))
 
 
 def client_writer() -> typing.Any:
@@ -506,12 +485,7 @@ def client_writer() -> typing.Any:
         # Each client has its own Producer, and a generated call doesn't say which client makes
         # it. So the SDK's Streams send their writer, and a call without one fails.
         raise RuntimeError("A Stream write outside a Workflow needs its Producer")
-    writer = stream_v1.StreamWriter(
-        producer=streams.producer,
-        # Only a Local Activity has the run's task facts.
-        previous_completed_task=streams.previous_completed_task,
-        failed_tasks=streams.failed_tasks,
-    )
+    writer = stream_v1.StreamWriter(producer=streams.producer)
     return models._StreamWriterTransferTypeConverter().from_transfer_type(
         writer, models.StreamWriter
     )

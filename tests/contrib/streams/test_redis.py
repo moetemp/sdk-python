@@ -71,7 +71,7 @@ class PublishThenFailTask:
         await stream.close()
 
 
-async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
+async def test_failed_workflow_task_republishes_its_records(stream_client: Client):
     key = str(uuid.uuid4())
     # The test's counter must keep its value across the task's retry, so the Workflow has no
     # sandbox.
@@ -93,12 +93,9 @@ async def test_failed_workflow_task_is_withdrawn(stream_client: Client):
             await stream_status(stream_client, stream_id)
             == models.StreamStatus.StreamStatusClosed
         )
-    # The retried task writes "after" again, and withdraws the copy of the failed task.
+    # The retried task writes "after" again, and both copies stay visible.
     written = records(items)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
     assert [record.data for record in written] == ["before", "after", "after"]
-    withdrawn = [r for r in written if any(i.withdraws(r) for i in superseded)]
-    assert withdrawn == [written[1]]
 
 
 @dataclass
@@ -132,15 +129,16 @@ class LocalThenFailTask:
 
 
 def _task_of(producer: streams.Producer | None) -> tuple[int, int]:
-    assert producer is not None and producer.epoch is not None
-    kind = producer.epoch.kind
-    assert isinstance(kind, streams.ProducerEpochKindLocalActivity)
-    task = kind.value.task
+    assert producer is not None
+    kind = producer.kind
+    assert isinstance(kind, streams.ProducerKindLocalActivity)
+    epoch = kind.value.epoch
+    task = epoch.task if epoch else None
     assert task is not None
     return (task.attempt or 0, task.started_event_id or 0)
 
 
-async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Client):
+async def test_rerun_local_activity_keeps_both_attempts(stream_client: Client):
     async with new_worker(
         stream_client,
         LocalThenFailTask,
@@ -158,13 +156,13 @@ async def test_rerun_local_activity_withdraws_its_failed_task(stream_client: Cli
             stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
         )
     written = records(items)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    visible = [r for r in written if not any(i.withdraws(r) for i in superseded)]
-    assert [r.data for r in visible] == ["2", "3"]
+    # A Local Activity is never superseded, so both the failed task's and the rerun's Records
+    # stay visible.
+    assert [r.data for r in written] == ["0", "1", "2", "3"]
     # The rerun keeps the Producer id, and its epoch has the retry task, which orders it later.
-    first, second = written[0].producer, visible[0].producer
-    assert first is not None and second is not None and first.id == second.id
-    assert _task_of(first) < _task_of(second)
+    first, last = written[0].producer, written[-1].producer
+    assert first is not None and last is not None and first.id == last.id
+    assert _task_of(first) < _task_of(last)
 
 
 @workflow.defn
@@ -186,9 +184,9 @@ class LocalOnlyInFailedTask:
         await stream.close()
 
 
-async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Client):
-    # The retry task skips the Local Activity, so only its own write can withdraw "0 1". The
-    # write also uses the skipped call's key.
+async def test_skipped_local_activitys_records_stay_visible(stream_client: Client):
+    # The retry task skips the Local Activity. A Local Activity is never superseded, so the
+    # skipped call's "0 1" stay visible alongside the retry's own write.
     async with new_worker(
         stream_client,
         LocalOnlyInFailedTask,
@@ -209,9 +207,7 @@ async def test_later_write_withdraws_a_skipped_local_activity(stream_client: Cli
             == models.StreamStatus.StreamStatusClosed
         )
     written = records(items)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    visible = [r for r in written if not any(s.withdraws(r) for s in superseded)]
-    assert [r.data for r in visible] == ["other"]
+    assert [r.data for r in written] == ["0", "1", "other"]
 
 
 @dataclass
@@ -260,42 +256,6 @@ class Agent:
         await turns.close()
         await tokens.close()
         return reply
-
-
-async def test_resume_after_a_superseded_item_keeps_its_record(stream_client: Client):
-    key = str(uuid.uuid4())
-    async with new_worker(
-        stream_client,
-        PublishThenFailTask,
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ) as worker:
-        handle = await stream_client.start_workflow(
-            PublishThenFailTask.run,
-            key,
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-        await handle.result()
-    stream = stream_of(stream_client, handle)
-    items = [item async for item in stream.read(wait_new_records=False)]
-    # The retried task's batch has its Superseded item and its first Record in one entry.
-    record_offsets = {r.offset for r in records(items)}
-    [shared] = [
-        i
-        for i in items
-        if isinstance(i, streams.Superseded) and i.offset in record_offsets
-    ]
-    reader = stream.read(wait_new_records=False)
-    async for item in reader:
-        if item == shared:
-            break
-    resume_at = reader.next_offset
-    await reader.aclose()
-    assert resume_at == shared.offset
-    resumed = [
-        item async for item in stream.read(offset=resume_at, wait_new_records=False)
-    ]
-    assert [r.data for r in records(resumed) if r.offset == shared.offset] == ["after"]
 
 
 @activity.defn
@@ -636,18 +596,12 @@ async def test_final_failure_under_a_retry_policy(
         # The end of the chain doesn't close the Stream.
         assert not await closed(stream_client, handle, "tokens")
     written = records(items)
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
     if non_retryable:
         # A non-retryable failure ends the chain on attempt 1.
         assert [r.data for r in written] == ["run-1"]
-        assert superseded == []
         return
-    # Each retry run withdraws the Records of the run before it.
+    # Each retry run's Records stay visible alongside the runs before it.
     assert [r.data for r in written] == ["run-1", "run-2", "run-3"]
-    assert len(superseded) == 2
-    assert [r.data for r in written if superseded[0].withdraws(r)] == ["run-1"]
-    assert [r.data for r in written if superseded[1].withdraws(r)] == ["run-2"]
-    assert not any(s.withdraws(written[-1]) for s in superseded)
 
 
 async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
@@ -813,8 +767,9 @@ async def test_write_to_a_closed_stream_raises_at_the_await(stream_client: Clien
             )
             == "STREAM_ERROR_REASON_CLOSED"
         )
-    # The close wrote no item, so a read of the closed Stream ends at once with none.
-    assert [item async for item in stream.read()] == []
+    # The close wrote no Record, so a read of the closed Stream yields only the Closed item.
+    items = [item async for item in stream.read()]
+    assert len(items) == 1 and isinstance(items[0], streams.Closed)
 
 
 @workflow.defn
@@ -850,5 +805,3 @@ async def test_retry_of_a_continued_run_writes_the_same_stream(stream_client: Cl
         assert await closed(stream_client, handle, "tokens")
     written = records(items)
     assert [r.data for r in written] == ["first", "attempt-1", "attempt-2"]
-    superseded = [item for item in items if isinstance(item, streams.Superseded)]
-    assert [r.data for r in written if superseded[0].withdraws(r)] == ["attempt-1"]

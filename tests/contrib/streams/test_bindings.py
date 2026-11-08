@@ -124,31 +124,6 @@ async def test_a_poll_resumes_after_the_last_item_it_gave():
     assert (resumed.from_offset, resumed.last) == (5, None)
 
 
-async def test_a_poll_resumes_at_a_superseded_item_and_keeps_its_record():
-    superseded = models.StreamRecord[str](
-        item=models.StreamItemSuperseded(
-            models.StreamSuperseded(
-                writer=models.StreamWriter(
-                    producer=models.Producer(id="act:run:a:k"), failed_tasks=[]
-                )
-            )
-        ),
-        offset=7,
-    )
-    nexus_client = FakeNexusClient(
-        models.ReadRecordsResponse(records=[superseded, _data(7)], next_offset=8),
-    )
-    stream = FakeService(nexus_client).get_stream(
-        models.StreamRef(id="wf:run"), body_type=str
-    )
-    items = stream.iter_read_items()
-    assert (await anext(items)).offset == 7
-    # The first Record of the batch has the Superseded item's offset and comes next, so a read
-    # that resumes here must not skip it.
-    assert items.next_request is not None
-    assert items.next_request.from_offset == 7
-
-
 async def test_start_now_runs_a_call_to_its_first_wait_at_once():
     steps: list[str] = []
     gate: asyncio.Future[str] = asyncio.get_running_loop().create_future()

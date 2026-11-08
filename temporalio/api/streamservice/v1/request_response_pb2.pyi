@@ -26,8 +26,8 @@ class CreateStreamRequest(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     Creates the Stream. When the Stream exists, FAIL fails with ALREADY_EXISTS, and USE_EXISTING
     gets it with created false and its own Retention. A retry of the create that made the Stream,
-    with the same request_id, gets created true. Each policy fails with CLOSED on a closed Stream,
-    EXPIRED on an expired one, and NOT_OWNER on one with another owner.
+    with the same request_id, gets created true. Each policy fails with CLOSED on a closed Stream
+    and EXPIRED on an expired one.
     (-- api-linter: core::0133=disabled
         aip.dev/not-precedent: The request identifies a Stream by namespace and ref. --)
     """
@@ -37,39 +37,20 @@ class CreateStreamRequest(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     STREAM_REF_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
-    WITHDRAW_RUN_FIELD_NUMBER: builtins.int
-    OWNER_FIELD_NUMBER: builtins.int
-    CLOSE_WITH_RUN_FIELD_NUMBER: builtins.int
     TASK_TOKEN_FIELD_NUMBER: builtins.int
     ID_CONFLICT_POLICY_FIELD_NUMBER: builtins.int
     REQUEST_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
-        """The ref of the Stream to create. Its id is the Stream id, and is never empty. A bound
-        Stream's ref has the owner's run chain as its owner.
-        """
+        """The ref of the Stream to create. Its id is the Stream id, and is never empty."""
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration:
         """The age after which a Record is dropped. Empty is the Store default."""
-    withdraw_run: builtins.str
-    """Workflow only. The previous run on a retry run's first create, to withdraw its Records."""
-    @property
-    def owner(self) -> temporalio.api.stream.v1.message_pb2.Producer:
-        """The Workflow run that owns a bound Stream, with its run_id and a Workflow epoch. It needs a
-        ref whose owner is the run's chain. Unset for a standalone Stream.
-        """
-    close_with_run: builtins.bool
-    """Only read by the server. When set, the server closes the Stream when the owner's run chain
-    ends, also on a terminate or a timeout. It needs owner, and a ref with a Workflow owner.
-    (-- api-linter: core::0140::prepositions=disabled
-        aip.dev/not-precedent: "with" ties the close to the owner's run chain. --)
-    """
     task_token: builtins.bytes
     """Only read by the server, for a Stream bound to a Standalone Activity. The server checks that
     the token is the Activity's current attempt, so a caller can't bind a Stream to a Standalone
-    Activity that it isn't. The server knows the run of a Workflow's call, and a standalone
-    Stream has no owner, so neither needs a token.
+    Activity that it isn't.
     """
     id_conflict_policy: (
         temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType
@@ -85,9 +66,6 @@ class CreateStreamRequest(google.protobuf.message.Message):
         namespace: builtins.str = ...,
         stream_ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
-        withdraw_run: builtins.str = ...,
-        owner: temporalio.api.stream.v1.message_pb2.Producer | None = ...,
-        close_with_run: builtins.bool = ...,
         task_token: builtins.bytes = ...,
         id_conflict_policy: temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType = ...,
         request_id: builtins.str = ...,
@@ -95,20 +73,16 @@ class CreateStreamRequest(google.protobuf.message.Message):
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "owner", b"owner", "retention", b"retention", "stream_ref", b"stream_ref"
+            "retention", b"retention", "stream_ref", b"stream_ref"
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "close_with_run",
-            b"close_with_run",
             "id_conflict_policy",
             b"id_conflict_policy",
             "namespace",
             b"namespace",
-            "owner",
-            b"owner",
             "request_id",
             b"request_id",
             "retention",
@@ -117,8 +91,6 @@ class CreateStreamRequest(google.protobuf.message.Message):
             b"stream_ref",
             "task_token",
             b"task_token",
-            "withdraw_run",
-            b"withdraw_run",
         ],
     ) -> None: ...
 
@@ -135,7 +107,7 @@ class CreateStreamResponse(google.protobuf.message.Message):
     CREATED_FIELD_NUMBER: builtins.int
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
-        """The ref, with the owner of a bound Stream."""
+        """The ref of the Stream."""
     created: builtins.bool
     """False when USE_EXISTING got a Stream that existed."""
     def __init__(
@@ -167,7 +139,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     WRITER_FIELD_NUMBER: builtins.int
     SEQUENCE_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
-    DEFER_WITHDRAWAL_FIELD_NUMBER: builtins.int
     TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
@@ -185,10 +156,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         temporalio.api.stream.v1.message_pb2.AppendRecord
     ]: ...
-    defer_withdrawal: builtins.bool
-    """Only read by the server, on a Workflow Producer's batch. The batch withdraws no Workflow
-    Task and keeps no task facts, but the writer's withdraw_run still applies.
-    """
     task_token: builtins.bytes
     """Only read by the server. The server checks the Producer against the Activity's current
     attempt, so nobody else writes as that Activity.
@@ -204,7 +171,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
             temporalio.api.stream.v1.message_pb2.AppendRecord
         ]
         | None = ...,
-        defer_withdrawal: builtins.bool = ...,
         task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
@@ -213,8 +179,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "defer_withdrawal",
-            b"defer_withdrawal",
             "namespace",
             b"namespace",
             "records",
@@ -262,8 +226,6 @@ class CloseStreamRequest(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     Closes a Stream. Readers drain what is left, then end, and later appends fail with CLOSED. A
     close writes no Record and carries no value, so code that has a last value publishes it first.
-    Only the owner's run chain closes a bound Stream. Only a Workflow or a client closes a
-    standalone Stream.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -277,9 +239,7 @@ class CloseStreamRequest(google.protobuf.message.Message):
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
     @property
     def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """The writer that closes the Stream. An SDK Store reads only its Producer, and the server
-        also reads its withdrawal fields.
-        """
+        """The writer that closes the Stream. A Store reads only its Producer."""
     task_token: builtins.bytes
     """Only read by the server. It checks the token as on the append."""
     def __init__(
@@ -354,9 +314,7 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType
     """Where to start when from_offset is zero. Unspecified is the beginning."""
     max_records: builtins.int
-    """The most items in one page, Superseded items included. Zero is 1000. A Superseded item and
-    the Record after it stay in one page, so a page of one Record can hold two items.
-    """
+    """The most Records in one page. Zero is 1000."""
     @property
     def wait(self) -> google.protobuf.duration_pb2.Duration:
         """How long the read waits for a new Record before it answers with an empty page. Empty answers
@@ -542,7 +500,7 @@ class DescribeStreamResponse(google.protobuf.message.Message):
     RETENTION_FIELD_NUMBER: builtins.int
     status: temporalio.api.enums.v1.stream_pb2.StreamStatus.ValueType
     last_offset: builtins.int
-    """The newest offset, of a Record or a Superseded item. Zero when the Stream has none."""
+    """The newest offset, of a Record. Zero when the Stream has none."""
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration: ...
     def __init__(

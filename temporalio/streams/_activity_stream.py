@@ -11,7 +11,7 @@ from typing import Any, TypeVar
 from temporalio.client import Stream
 from temporalio.streams import _activity, _backend, _errors
 from temporalio.streams._access import Access, ReadSpec, reader
-from temporalio.streams._items import Record, Superseded
+from temporalio.streams._items import Closed, Record
 from temporalio.streams._offset import StreamOffset
 from temporalio.streams._reader import Reader
 from temporalio.streams._ref import StreamRef
@@ -198,7 +198,7 @@ def run_blocking(call: Coroutine[Any, Any, _R]) -> _R:
 
 def sync_items(
     items: Reader[T],
-) -> Generator[Record[T] | Superseded, None, None]:
+) -> Generator[Record[T] | Closed, None, None]:
     """The items of a read, each of which blocks the Activity's thread."""
     try:
         while True:
@@ -211,5 +211,5 @@ def sync_items(
         run_blocking(items.aclose())
 
 
-async def _next(items: Reader[T]) -> Record[T] | Superseded:
+async def _next(items: Reader[T]) -> Record[T] | Closed:
     return await items.__anext__()

@@ -26,11 +26,8 @@ class ActivityStreams:
     namespace: str
     producer: stream_v1.Producer
     loop: asyncio.AbstractEventLoop
-    # The attempt's Workflow ID, which the close Activity checks against a bound Stream's owner.
+    # The attempt's Workflow ID.
     workflow_id: str | None = None
-    # A Local Activity's writes use these to withdraw the run's orphaned Records.
-    previous_completed_task: stream_v1.WorkflowTaskEpoch | None = None
-    failed_tasks: tuple[int, ...] = ()
     writers: dict[str, RecordWriter] = field(default_factory=dict)
     # The attempt's BufferedAppenders, which the end of the attempt flushes.
     appenders: list[BufferedAppender[Any]] = field(default_factory=list)
@@ -47,8 +44,6 @@ class ActivityStreams:
                 stream_id=stream_id,
                 producer=self.producer,
                 free=self.backend.free_writer,
-                previous_completed_task=self.previous_completed_task,
-                failed_tasks=self.failed_tasks,
             )
             self.writers[stream_id] = writer
         return writer

@@ -58,8 +58,6 @@ async def test_refs_in_models_round_trip_on_the_memory_store(client: Client):
         )
         result = await handle.result()
     assert result.text == "HI THERE"
-    # A Workflow creates only standalone Streams, so the ref has no owner.
-    assert result.stream.owner is None
     assert result.stream.id == f"{handle.id}-tokens"
     assert result.stream.backend == "memory"
     stream = client.get_stream(result.stream)

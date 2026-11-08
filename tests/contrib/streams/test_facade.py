@@ -85,8 +85,8 @@ async def test_client_writes_reads_and_closes(client: Client):
     turn, token = items
     assert isinstance(turn, streams.Record) and turn.data == Turn("model")
     assert isinstance(token, streams.Record) and token.data == Turn("user", "hello")
-    assert turn.producer is not None and turn.producer.epoch is not None
-    assert isinstance(turn.producer.epoch.kind, streams.ProducerEpochKindClient)
+    assert turn.producer is not None
+    assert isinstance(turn.producer.kind, streams.ProducerKindClient)
     assert extension.namespaces == {client.namespace}
 
     resumed = [item async for item in stream.read(offset=token.offset)]

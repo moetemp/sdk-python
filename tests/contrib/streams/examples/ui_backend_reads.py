@@ -15,6 +15,7 @@ from datetime import timedelta
 
 from temporalio import activity, streams, workflow
 from temporalio.client import Client
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.worker import Worker
 
 
@@ -83,14 +84,19 @@ async def main(client: Client, task_queue: str) -> Screen:
         server = asyncio.create_task(chat_server(client, chat_id, task_queue))
         screen = Screen()
         stream = client.get_stream(chat_id, payload_type=Turn)  # by id, with no call
-        async for r in stream.read(
-            offset=saved_offset(),  # wherever the app keeps it, or streams.END
-            create_wait=timedelta(seconds=10),  # the creator may not have created it
+        # The UI opts into supersession, so a retried attempt's Records drop from the view.
+        async for item in with_superseded(
+            stream.read(
+                offset=saved_offset(),  # wherever the app keeps it, or streams.END
+                create_wait=timedelta(
+                    seconds=10
+                ),  # the creator may not have created it
+            )
         ):
-            match r.kind:  # the kind narrows the item's type
-                case streams.ItemKind.SUPERSEDED:
-                    screen.unrender(r.withdrawn_offsets)
-                case _:
-                    screen.render(r.data, r.offset)  # a Turn
+            if isinstance(item, Superseded):
+                screen.unrender(item.withdrawn_offsets)
+            elif isinstance(item, streams.Record):
+                screen.render(item.data, item.offset)  # a Turn
+            # A Closed item ends the view.
         await server
         return screen
