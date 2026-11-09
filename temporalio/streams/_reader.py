@@ -10,6 +10,7 @@ from typing import Any, Generic, TypeVar
 
 import temporalio.common
 import temporalio.converter
+from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams import _backend, _convert, _errors
 from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._items import Closed, End, Record
@@ -165,7 +166,11 @@ async def read(
                         position.next_offset or 0, page.next_offset
                     )
             return
-        except _errors.StreamNotFoundError:
+        except _errors.StreamError as err:
+            if not _errors.has_reason(
+                err, StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+            ):
+                raise
             left = create_until - loop.time() if create_until is not None else 0
             if left <= 0:
                 raise

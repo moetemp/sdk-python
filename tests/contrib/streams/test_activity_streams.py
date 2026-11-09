@@ -498,7 +498,9 @@ class LostAndClientWrites:
             )
         except ActivityError as err:
             assert isinstance(err.cause, ApplicationError)
-            lost = err.cause.type or ""
+            # The type is always `StreamError`, so the reason in the details tells the cases apart.
+            (details,) = err.cause.details
+            lost = f"{err.cause.type}/{StreamErrorReason.Name(details.reason)}"
         closed = await workflow.execute_activity(
             enters_a_client_stream,
             client_stream,
@@ -525,7 +527,10 @@ async def test_attempt_end_raises_a_lost_write_and_a_client_stream_refuses_the_b
             task_queue=worker.task_queue,
         )
     # An Activity closes no Stream, so the block fails before it runs, with no call.
-    assert result == ["StreamNotFoundError", "STREAM_ERROR_REASON_NOT_OWNER"]
+    assert result == [
+        "StreamError/STREAM_ERROR_REASON_NOT_FOUND",
+        "STREAM_ERROR_REASON_NOT_OWNER",
+    ]
     items = [item async for item in stream.read(wait_new_records=False)]
     assert records(items) == []
 

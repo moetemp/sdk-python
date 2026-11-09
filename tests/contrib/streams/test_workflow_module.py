@@ -122,7 +122,7 @@ class CreatesTwice:
         await first.close()
         try:
             await workflow.create_stream(client_id, payload_type=str)
-        except streams.StreamAlreadyExistsError as err:
+        except streams.StreamError as err:
             results.append(reason(err))
         # USE_EXISTING gets the Stream that exists.
         theirs = await workflow.create_stream(
@@ -300,7 +300,7 @@ class Mistakes:
         await stream.close()
         try:
             await stream.append("late")
-        except streams.StreamClosedError as err:
+        except streams.StreamError as err:
             errors.append(reason(err))
         # A closed Stream fails a create with CLOSED, which comes before ALREADY_EXISTS.
         for policy in (streams.StreamIDConflictPolicy.FAIL, USE_EXISTING):
@@ -308,7 +308,7 @@ class Mistakes:
                 await workflow.create_stream(
                     own_id(), payload_type=str, id_conflict_policy=policy
                 )
-            except streams.StreamClosedError as err:
+            except streams.StreamError as err:
                 errors.append(reason(err))
         return errors
 
@@ -697,7 +697,7 @@ class SyncHandlers:
         self._stream.close_nowait()
         try:
             self._stream.append_nowait("late")
-        except streams.StreamClosedError as err:
+        except streams.StreamError as err:
             return reason(err)
         finally:
             self._done = True
@@ -781,7 +781,9 @@ async def test_nowait_error_raises_after_the_other_writes(stream_client: Client)
         )
         await replayer.replay_workflow(await handle.fetch_history())
     assert isinstance(failed.value.cause, ApplicationError)
-    assert failed.value.cause.type == "StreamAlreadyExistsError"
+    assert failed.value.cause.type == "StreamError"
+    (details,) = failed.value.cause.details
+    assert details.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
 
 
 @workflow.defn
@@ -812,7 +814,9 @@ async def test_writes_behind_a_failed_create_send_nothing(
         with pytest.raises(WorkflowFailureError) as failed:
             await asyncio.wait_for(handle.result(), 20)
     assert isinstance(failed.value.cause, ApplicationError)
-    assert failed.value.cause.type == "StreamAlreadyExistsError"
+    assert failed.value.cause.type == "StreamError"
+    (details,) = failed.value.cause.details
+    assert details.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
     assert [item async for item in taken.read(wait_new_records=False)] == []
 
 
@@ -873,7 +877,9 @@ async def test_append_error_that_no_caller_gets_raises_at_the_run_end(
             with pytest.raises(WorkflowFailureError) as failed:
                 await lost.result()
             assert isinstance(failed.value.cause, ApplicationError)
-            assert failed.value.cause.type == "StreamNotFoundError"
+            assert failed.value.cause.type == "StreamError"
+            (details,) = failed.value.cause.details
+            assert details.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
             # A done callback that reads the error owns it, so the run completes.
             owned = await stream_client.start_workflow(
                 LeavesAFailedAppend.run,
@@ -1356,7 +1362,7 @@ class ContinuesInItsBlock:
                 workflow.continue_as_new(stream.ref)
         try:
             await workflow.get_stream(ref).append("run 2")
-        except streams.StreamClosedError as err:
+        except streams.StreamError as err:
             return reason(err)
         return "wrote"
 

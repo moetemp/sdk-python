@@ -121,10 +121,10 @@ class RecordWriter:
         future gives the last offset.
 
         Raises:
-            StreamClosedError: The writer is closed, since its Stream object closed it.
+            StreamError: ``STREAM_ERROR_REASON_CLOSED`` when its Stream object closed the writer.
         """
         if self._closed:
-            raise _errors.StreamClosedError(
+            raise _errors.closed(
                 f"Can't write to the Stream {self._stream_id}, since this object closed its "
                 "writer"
             )

@@ -94,8 +94,9 @@ async def test_append_starts_the_write_at_the_call(client: Client):
         "3",
     ]
     assert [await futures[0], await futures[2]] == [items[0].offset, items[2].offset]
-    with pytest.raises(streams.StreamClosedError):
+    with pytest.raises(streams.StreamError) as closed:
         stream.append("4")
+    assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
 
 
 async def test_next_call_raises_a_write_error_that_no_caller_got(client: Client):
@@ -104,8 +105,9 @@ async def test_next_call_raises_a_write_error_that_no_caller_got(client: Client)
     await client.get_stream("lost", payload_type=str).close()
     late = stream.append("late")
     await asyncio.wait([late])
-    with pytest.raises(streams.StreamClosedError):
+    with pytest.raises(streams.StreamError) as closed:
         await stream.get_offset()
+    assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
     # The call owns the error, so the next one makes its call.
     assert await stream.get_offset() == _BEGINNING
 
@@ -172,10 +174,11 @@ async def test_async_with_closes_a_client_stream(stream_client: Client):
             _records(stream_client.get_stream(stream.ref.id, payload_type=str)), 5
         )
         assert items == (["a"] if stream is done else [])
-        with pytest.raises(streams.StreamClosedError):
+        with pytest.raises(streams.StreamError) as closed:
             await stream_client.get_stream(stream.ref.id, payload_type=str).append(
                 "late"
             )
+        assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
 
 
 async def _records(stream: Stream[Any]) -> list[Any]:
@@ -186,7 +189,7 @@ async def test_create_fails_on_a_stream_that_exists(stream_client: Client):
     stream_id = f"again-{uuid.uuid4()}"
     first = await stream_client.create_stream(stream_id, payload_type=str)
     await first.append("a")
-    with pytest.raises(streams.StreamAlreadyExistsError) as exists:
+    with pytest.raises(streams.StreamError) as exists:
         await stream_client.create_stream(stream_id, payload_type=str)
     assert exists.value.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
     # USE_EXISTING returns the Stream instead of failing.
@@ -205,7 +208,7 @@ async def test_create_fails_on_a_stream_that_exists(stream_client: Client):
         streams.StreamIDConflictPolicy.FAIL,
         streams.StreamIDConflictPolicy.USE_EXISTING,
     ):
-        with pytest.raises(streams.StreamClosedError) as closed:
+        with pytest.raises(streams.StreamError) as closed:
             await stream_client.create_stream(
                 stream_id, payload_type=str, id_conflict_policy=policy
             )
@@ -221,15 +224,16 @@ async def test_a_create_retry_with_the_same_request_id_succeeds(stream_client: C
     )
     await service._stream_service_create_stream(request, object)
     await service._stream_service_create_stream(request, object)
-    with pytest.raises(streams.StreamAlreadyExistsError):
+    with pytest.raises(streams.StreamError) as exists:
         await service._stream_service_create_stream(
             dataclasses.replace(request, request_id="create-2"), object
         )
+    assert exists.value.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
 
 
 async def test_append_to_a_stream_that_nobody_created_raises(stream_client: Client):
     stream = stream_client.get_stream(f"missing-{uuid.uuid4()}", payload_type=str)
-    with pytest.raises(streams.StreamNotFoundError) as missing:
+    with pytest.raises(streams.StreamError) as missing:
         await stream.append("lost")
     assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
 
@@ -400,8 +404,9 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
     with streams.producer("ingest", epoch=2):
         await stream.append("after restart")
     with streams.producer("ingest", epoch=1):
-        with pytest.raises(streams.StreamFencedError):
+        with pytest.raises(streams.StreamError) as fenced:
             await stream.append("zombie")
+        assert fenced.value.reason == StreamErrorReason.STREAM_ERROR_REASON_FENCED
     # The earlier epoch's Records are real messages, so nothing withdraws them.
     items = [item async for item in stream.read(wait_new_records=False)]
     assert [item.kind for item in items] == [streams.ItemKind.RECORD] * 2
@@ -453,8 +458,9 @@ async def test_stream_takes_the_named_backend_or_the_default(client: Client):
     assert on_b.ref == created.ref and await on_b.get_offset() > _BEGINNING
     assert two.get_stream("moving", payload_type=str).ref.backend == "a"
     # A ref with no backend name uses the default backend, which doesn't have the Stream.
-    with pytest.raises(streams.StreamNotFoundError):
+    with pytest.raises(streams.StreamError) as missing:
         await two.get_stream(streams.StreamRef(id="moving")).get_offset()
+    assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
     with pytest.raises(ValueError):
         two.get_stream("", payload_type=str)
 

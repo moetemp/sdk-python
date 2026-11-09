@@ -6,7 +6,7 @@ from typing_extensions import override
 
 import temporalio.common
 import temporalio.converter
-from temporalio.streams import StreamNotFoundError, _backend, _reader
+from temporalio.streams import StreamError, StreamErrorReason, _backend, _reader
 from temporalio.streams.system import models
 
 
@@ -59,7 +59,9 @@ class _Missing(_backend.StreamServiceCalls):
         self, request: models.ReadRecordsRequest, body_type: type[Any]
     ) -> models.ReadRecordsResponse[Any]:
         self.calls += 1
-        raise StreamNotFoundError("nobody created it")
+        raise StreamError(
+            "nobody created it", reason=StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+        )
 
 
 async def test_a_wait_for_the_create_pauses_between_reads():
@@ -74,7 +76,8 @@ async def test_a_wait_for_the_create_pauses_between_reads():
         wait_new_records=False,
         create_wait=timedelta(milliseconds=500),
     )
-    with pytest.raises(StreamNotFoundError):
+    with pytest.raises(StreamError) as missing:
         await anext(items)
+    assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
     # The pauses double from 50 ms, so the half second has a few reads, not a hot loop.
     assert 2 <= service.calls <= 8

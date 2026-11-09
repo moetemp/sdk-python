@@ -10,8 +10,9 @@ import temporalio.api.enums.v1
 class StreamIDConflictPolicy(IntEnum):
     """How a create of a Stream whose id already exists is handled.
 
-    ``FAIL`` raises :py:class:`temporalio.streams.StreamAlreadyExistsError`. ``USE_EXISTING``
-    returns the existing Stream and ignores the new options. See
+    ``FAIL`` raises a :py:class:`temporalio.streams.StreamError` with ``reason``
+    ``STREAM_ERROR_REASON_ALREADY_EXISTS``. ``USE_EXISTING`` returns the existing Stream and
+    ignores the new options. See
     :py:class:`temporalio.api.enums.v1.StreamIdConflictPolicy`.
 
     .. warning::

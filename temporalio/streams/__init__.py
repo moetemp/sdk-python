@@ -6,8 +6,8 @@ clients and Activities read. A Stream has one payload type, and a call takes it 
 payload type, a read gives JSON values.
 
 Code creates a Stream before its first append. :py:data:`temporalio.workflow.create_stream` and
-:py:meth:`temporalio.client.Client.create_stream` fail with :py:class:`StreamAlreadyExistsError`
-if the id exists. Pass ``id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING` to get the
+:py:meth:`temporalio.client.Client.create_stream` fail with a :py:class:`StreamError` whose
+``reason`` is ``STREAM_ERROR_REASON_ALREADY_EXISTS`` if the id exists. Pass ``id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING` to get the
 Stream instead. In Workflow code, each run of a chain sends the same create for an id, so a retry
 run or a cron run gets the Stream that an earlier run made. Workflow code gets a
 :py:class:`temporalio.workflow.WorkflowStream`, and other code a
@@ -41,12 +41,8 @@ from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._conflict import StreamIDConflictPolicy
 from temporalio.streams._errors import (
-    StreamAlreadyExistsError,
-    StreamClosedError,
     StreamConfigError,
     StreamError,
-    StreamFencedError,
-    StreamNotFoundError,
 )
 from temporalio.streams._items import END, Closed, End, ItemKind, Record
 from temporalio.streams._offset import StreamOffset
@@ -97,17 +93,13 @@ __all__ = [
     "ProducerKindWorkflow",
     "Reader",
     "Record",
-    "StreamAlreadyExistsError",
     "StreamBackend",
     "StreamClose",
     "StreamCloseStatus",
-    "StreamClosedError",
     "StreamConfigError",
     "StreamError",
     "StreamErrorReason",
-    "StreamFencedError",
     "StreamIDConflictPolicy",
-    "StreamNotFoundError",
     "StreamOffset",
     "StreamRef",
     "StreamWriter",

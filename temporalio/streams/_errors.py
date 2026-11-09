@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import ClassVar
 
 import temporalio.api.stream.v1
 import temporalio.bridge.streams
@@ -11,12 +10,8 @@ import temporalio.exceptions
 from temporalio.api.enums.v1 import StreamErrorReason
 
 __all__ = [
-    "StreamAlreadyExistsError",
-    "StreamClosedError",
     "StreamConfigError",
     "StreamError",
-    "StreamFencedError",
-    "StreamNotFoundError",
 ]
 
 # The one reason a retry can fix. Every other reason raises a non-retryable error.
@@ -48,25 +43,28 @@ def no_default_backend(
 
 
 class StreamError(temporalio.exceptions.ApplicationError):
-    """A failed Stream call, with its ``StreamErrorReason``.
+    """A failed Stream call. ``reason`` tells the cases apart.
 
-    A reason with no class of its own raises this class. The reason tells the cases apart, such
-    as ``STREAM_ERROR_REASON_NOT_OWNER`` or ``STREAM_ERROR_REASON_STORAGE_UNAVAILABLE``. A Store
-    outage is the one retryable error.
+    One class covers every failed call, so match on ``reason`` rather than the type. The reason
+    is a ``StreamErrorReason``, such as ``STREAM_ERROR_REASON_NOT_FOUND`` (nobody created the
+    Stream), ``STREAM_ERROR_REASON_CLOSED`` (the Stream is closed),
+    ``STREAM_ERROR_REASON_FENCED`` (a newer attempt of the Producer wrote), or
+    ``STREAM_ERROR_REASON_ALREADY_EXISTS`` (a ``FAIL`` create of an id that exists). A Store
+    outage (``STREAM_ERROR_REASON_STORAGE_UNAVAILABLE``) is the one retryable reason.
 
     .. warning::
         This API is experimental.
     """
 
-    _reason: ClassVar[StreamErrorReason.ValueType] = (
-        StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
-    )
-
     def __init__(
         self, message: str, *, reason: StreamErrorReason.ValueType | None = None
     ) -> None:
-        """Create the error. ``reason`` defaults to the reason of the class."""
-        reason = self._reason if reason is None else reason
+        """Create the error. ``reason`` defaults to ``STREAM_ERROR_REASON_UNSPECIFIED``."""
+        reason = (
+            StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
+            if reason is None
+            else reason
+        )
         # The details carry the reason, so the error keeps it when it crosses an Activity or a
         # Nexus operation. The reason, not the class, decides whether a retry can fix it.
         super().__init__(
@@ -78,44 +76,9 @@ class StreamError(temporalio.exceptions.ApplicationError):
         self.reason: StreamErrorReason.ValueType = reason
 
 
-class StreamNotFoundError(StreamError):
-    """Nobody created the Stream, even after ``create_wait``.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
-
-
-class StreamClosedError(StreamError):
-    """The Stream is closed.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_CLOSED
-
-
-class StreamFencedError(StreamError):
-    """A newer attempt of the Producer wrote, or a retry withdrew this attempt.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_FENCED
-
-
-class StreamAlreadyExistsError(StreamError):
-    """A create of an id that exists, with no earlier create of the same request.
-
-    .. warning::
-        This API is experimental.
-    """
-
-    _reason = StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+def closed(message: str) -> StreamError:
+    """A ``StreamError`` for a write to, or close of, a Stream that is already closed."""
+    return StreamError(message, reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED)
 
 
 def not_owner(message: str) -> StreamError:
@@ -130,25 +93,17 @@ def unsupported(message: str) -> StreamError:
     )
 
 
-_ERRORS: dict[int, type[StreamError]] = {
-    error._reason: error
-    for error in (
-        StreamNotFoundError,
-        StreamClosedError,
-        StreamFencedError,
-        StreamAlreadyExistsError,
-    )
-}
+def has_reason(err: BaseException, reason: StreamErrorReason.ValueType) -> bool:
+    """Whether ``err`` is a :py:class:`StreamError` with ``reason``."""
+    return isinstance(err, StreamError) and err.reason == reason
 
 
 def from_reason(reason: int, message: str) -> StreamError:
     """The Stream error of a ``StreamErrorReason`` number."""
     if reason not in StreamErrorReason.values():
-        # A reason that this SDK doesn't know gives the base class.
+        # A reason that this SDK doesn't know gives the unspecified reason.
         reason = StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
-    return _ERRORS.get(reason, StreamError)(
-        message, reason=StreamErrorReason.ValueType(reason)
-    )
+    return StreamError(message, reason=StreamErrorReason.ValueType(reason))
 
 
 def from_failure(err: BaseException) -> StreamError | None:

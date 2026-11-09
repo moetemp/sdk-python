@@ -404,7 +404,7 @@ def _check(
     state.uses_streams = True
     run_stream = state.stream(_model_ref(ref))
     if run_stream.closed:
-        raise _errors.StreamClosedError(
+        raise _errors.closed(
             f"Can't {action} the Stream {ref.id}, since this run closed it"
         )
     if not backend_checked:

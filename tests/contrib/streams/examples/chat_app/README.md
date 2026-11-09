@@ -121,8 +121,9 @@ another in one chat, so a new viewer sees each case.
   the lobby Stream, which lists the chats. Each server start runs it.
 - **Strict create.** [`share`](server.py) creates each snapshot with
   `client.create_stream(payload_type=SharedTurn)`, since a share id names one snapshot. A second
-  share of the same point raises `StreamClosedError`, since that snapshot is closed. A share that
-  runs at the same time raises `StreamAlreadyExistsError`. Both give the same link.
+  share of the same point raises a `StreamError` with reason `STREAM_ERROR_REASON_CLOSED`, since
+  that snapshot is closed. A share that runs at the same time raises a `StreamError` with reason
+  `STREAM_ERROR_REASON_ALREADY_EXISTS`. Both give the same link.
 - **Standalone Streams that a Workflow creates.** `<chat>-turns` and `<chat>-tokens`, with ids
   that the Workflow picks.
 - **Refs as data.** The `streams` query gives `SessionStreams`. `ModelInput.tokens` takes a ref to
@@ -161,9 +162,11 @@ another in one chat, so a new viewer sees each case.
 - **`close()`.** `ChatSession.run` closes both Streams when the chat ends, since a run's end
   doesn't close a Stream.
 - **`get_offset`.** The snapshot id names the turns Stream's offset. The share page gets the
-  snapshot's offset, and an unknown snapshot gives `StreamNotFoundError`.
-- **Error classes.** `StreamClosedError` and `StreamAlreadyExistsError` in `share`, and
-  `StreamNotFoundError` in `share_info`.
+  snapshot's offset, and an unknown snapshot gives a `StreamError` with reason
+  `STREAM_ERROR_REASON_NOT_FOUND`.
+- **Error reasons.** `STREAM_ERROR_REASON_CLOSED` and `STREAM_ERROR_REASON_ALREADY_EXISTS` in
+  `share`, and `STREAM_ERROR_REASON_NOT_FOUND` in `share_info`. Both catch `StreamError` and check
+  `reason`.
 - **Payload type.** `payload_type=Turn`, `payload_type=Token`, `payload_type=SharedTurn` and
   `payload_type=SessionInfo` on the creates and the id-form gets.
 - **`client.get_stream` by id for a sub-agent.** The server reads a sub-agent's Streams by the
@@ -174,7 +177,7 @@ another in one chat, so a new viewer sees each case.
   Activities, each model or tool attempt is an Activity Producer, a sub-agent writes through its
   own Local Activities, and the server writes as a client.
 
-The app doesn't use `streams.producer()`, `SyncStream`, `close_nowait` or `StreamFencedError`.
+The app doesn't use `streams.producer()`, `SyncStream`, `close_nowait` or the `FENCED` reason.
 
 ## Coming
 

@@ -46,9 +46,8 @@ def test_runtime_errors_map_to_stream_errors():
             int(RPCStatusCode.FAILED_PRECONDITION), "fenced", _details(fenced)
         )
     )
-    assert isinstance(err, streams.StreamFencedError)
     assert err.reason == fenced
-    # A reason with no class of its own gives the base class, with the reason.
+    # Every other reason also gives a `StreamError`, with that reason.
     for reason in (
         StreamErrorReason.STREAM_ERROR_REASON_SEQUENCE_TOO_LOW,
         StreamErrorReason.STREAM_ERROR_REASON_STORAGE_CORRUPT,
@@ -68,7 +67,7 @@ def test_runtime_errors_map_to_stream_errors():
             _details(StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS),
         )
     )
-    assert isinstance(exists, streams.StreamAlreadyExistsError)
+    assert exists.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
 
 
 async def test_client_writes_reads_and_closes(client: Client):
@@ -96,8 +95,9 @@ async def test_client_writes_reads_and_closes(client: Client):
 async def test_create_fails_on_an_id_that_exists(client: Client):
     client, extension = fake_client(client)
     stream = await client.create_stream("taken", payload_type=str)
-    with pytest.raises(streams.StreamAlreadyExistsError):
+    with pytest.raises(streams.StreamError) as exists:
         await client.create_stream("taken", payload_type=str)
+    assert exists.value.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
     # USE_EXISTING gets the Stream instead of failing.
     got = await client.create_stream(
         "taken",
@@ -128,9 +128,10 @@ async def test_a_stream_gives_its_ref_and_its_wire_message(client: Client):
 async def test_read_waits_for_create(client: Client):
     client, _ = fake_client(client)
     stream = client.get_stream("tokens-7", payload_type=str)
-    with pytest.raises(streams.StreamNotFoundError):
+    with pytest.raises(streams.StreamError) as missing:
         async for _ in stream.read():
             pass
+    assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
 
     async def create_later() -> None:
         created = await client.create_stream(stream.ref.id, payload_type=str)
@@ -160,9 +161,9 @@ async def test_a_waiting_read_ends_at_a_close(client: Client):
 
 def test_stream_errors_fail_the_workflow_not_the_task():
     closed = StreamErrorReason.STREAM_ERROR_REASON_CLOSED
-    err = streams.StreamClosedError("closed")
+    err = streams.StreamError("closed", reason=closed)
     assert isinstance(err, ApplicationError)
-    assert err.non_retryable and err.type == "StreamClosedError"
+    assert err.non_retryable and err.type == "StreamError"
     assert err.reason == closed
     # A Store outage is the one error that a retry can fix. Its reason, not a class, marks it.
     outage = streams.StreamError(
@@ -174,14 +175,13 @@ def test_stream_errors_fail_the_workflow_not_the_task():
             int(RPCStatusCode.FAILED_PRECONDITION), "closed", _details(closed)
         )
     )
-    assert isinstance(mapped, streams.StreamClosedError) and mapped.reason == closed
+    assert mapped.reason == closed
     # A Workflow await gets the error from a Local Activity, with the reason in its details.
     returned = _mapped(
         ApplicationError(
-            "closed", StreamErrorDetails(reason=closed), type="StreamClosedError"
+            "closed", StreamErrorDetails(reason=closed), type="StreamError"
         )
     )
-    assert isinstance(returned, streams.StreamClosedError)
     assert returned.reason == closed
     # An error with no Stream reason in it isn't a Stream error.
     assert _errors.from_failure(ValueError("other")) is None
@@ -335,8 +335,9 @@ async def test_a_failed_close_is_tried_again(client: Client):
         failed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE
     )
     # The writer closed before the Store refused, so this object writes no more.
-    with pytest.raises(streams.StreamClosedError, match="closed its writer"):
+    with pytest.raises(streams.StreamError, match="closed its writer") as late:
         stream.append("late")
+    assert late.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
     # The Stream is still open, and the next close goes through.
     assert not extension.streams["closes-twice"].closed
     await stream.close()

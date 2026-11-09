@@ -69,11 +69,12 @@ class WorkflowStream(Generic[T]):
 
         Returns:
             The future of the write. It gives the offset of the last Record, or raises
-            ``StreamError`` when the backend refused the write, such as
-            ``StreamNotFoundError`` for a Stream that nobody created.
+            ``StreamError`` when the backend refused the write, such as ``reason``
+            ``STREAM_ERROR_REASON_NOT_FOUND`` for a Stream that nobody created.
 
         Raises:
-            StreamClosedError: This run closed the Stream.
+            StreamError: With ``reason`` ``STREAM_ERROR_REASON_CLOSED``, this run closed the
+                Stream.
             StreamConfigError: The Worker has no Stream backend or not the Stream's backend,
                 which fails the Workflow Task and not the run.
             temporalio.workflow.ReadOnlyContextError: The Workflow code must not change state,
@@ -99,8 +100,8 @@ class WorkflowStream(Generic[T]):
         """Close the Stream after the writes before it, once the Workflow Task commits.
 
         A close carries no value, so code with a last value appends it first. Readers get the
-        Records before the close, then their read ends. Later writes in the run raise
-        :py:class:`temporalio.streams.StreamClosedError`.
+        Records before the close, then their read ends. Later writes in the run raise a
+        :py:class:`temporalio.streams.StreamError` with ``reason`` ``STREAM_ERROR_REASON_CLOSED``.
 
         If the task fails first, or the Worker crashes, the Stream stays open, and the task's
         retry writes to it again. On Redis the close is a regular Activity on the Workflow's
@@ -204,12 +205,13 @@ async def create_stream(
         backend: The name of the backend. Defaults to the Worker's backend. A replay must create
             the Stream on the same backend, so keep the Worker's default, or gate a new one with
             ``workflow.patched``.
-        id_conflict_policy: ``FAIL`` raises :py:class:`StreamAlreadyExistsError` on an id that
-            exists, which no earlier create of this run chain made. ``USE_EXISTING`` returns the
-            existing Stream.
+        id_conflict_policy: ``FAIL`` raises a :py:class:`StreamError` with ``reason``
+            ``STREAM_ERROR_REASON_ALREADY_EXISTS`` on an id that exists, which no earlier create
+            of this run chain made. ``USE_EXISTING`` returns the existing Stream.
 
     Raises:
-        StreamAlreadyExistsError: ``FAIL`` on an id that exists.
+        StreamError: ``FAIL`` on an id that exists, with ``reason``
+            ``STREAM_ERROR_REASON_ALREADY_EXISTS``.
         ReadOnlyContextError: The code must not change state, such as a query handler.
         StreamConfigError: The Worker has no Stream backend or none with that name. It fails the
             Workflow Task, not the run.

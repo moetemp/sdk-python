@@ -283,10 +283,14 @@ async def share(session_id: str, refs: StreamsDep, chat: ChatDep) -> dict[str, A
             share_id, payload_type=SharedTurn
         ) as snapshot:
             await snapshot.append(*shown.values())
-    except streams.StreamClosedError:
-        pass  # This point of the chat has a snapshot, and its block closed it.
-    except streams.StreamAlreadyExistsError:
-        pass  # Another request writes this snapshot now, and readers wait for its close.
+    except streams.StreamError as err:
+        # CLOSED: this point of the chat has a snapshot, and its block closed it.
+        # ALREADY_EXISTS: another request writes this snapshot now, and readers wait for its close.
+        if err.reason not in (
+            streams.StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
+            streams.StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS,
+        ):
+            raise
     return {"share_id": share_id, "url": f"/share/{share_id}"}
 
 
@@ -298,7 +302,9 @@ async def share_info(share_id: str, chat: ChatDep) -> dict[str, Any]:
     snapshot = snapshot_of(share_id, chat)
     try:
         next_offset = await snapshot.get_offset()
-    except streams.StreamNotFoundError as err:
+    except streams.StreamError as err:
+        if err.reason != streams.StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND:
+            raise
         raise HTTPException(404, f"There is no snapshot {share_id}") from err
     # The id names the chat and the offset that the snapshot goes up to.
     named = re.fullmatch(SHARE_ID, share_id)

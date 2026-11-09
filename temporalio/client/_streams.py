@@ -95,12 +95,13 @@ class Stream(Generic[T]):
 
         Returns:
             The future of the write. It gives the offset of the last Record, or raises
-            ``StreamError`` when the backend refused the write, such as
-            ``StreamNotFoundError`` for a Stream that nobody created.
+            ``StreamError`` when the backend refused the write, such as ``reason``
+            ``STREAM_ERROR_REASON_NOT_FOUND`` for a Stream that nobody created.
 
         Raises:
-            StreamClosedError: This object closed the Stream.
-            StreamError: The code is a sync Activity, which uses :py:class:`SyncStream`.
+            StreamError: With ``reason`` ``STREAM_ERROR_REASON_CLOSED``, this object closed the
+                Stream. It is also raised when the code is a sync Activity, which uses
+                :py:class:`SyncStream`.
         """
         return self._calls.append(values, rpc_metadata, rpc_timeout)
 
@@ -178,8 +179,8 @@ class Stream(Generic[T]):
         """Write the Records that this object appended, then close the Stream.
 
         A close carries no value, so code with a last value appends it first. Readers get the
-        Records before the close, then their read ends. Later writes fail with
-        ``StreamClosedError``.
+        Records before the close, then their read ends. Later writes fail with a ``StreamError``
+        with ``reason`` ``STREAM_ERROR_REASON_CLOSED``.
 
         Args:
             rpc_metadata: Headers of each call. The Redis and memory backends ignore it.
@@ -275,7 +276,8 @@ class SyncStream(Generic[T]):
         A list is one value.
 
         Raises:
-            StreamNotFoundError: Nobody created the Stream.
+            StreamError: With ``reason`` ``STREAM_ERROR_REASON_NOT_FOUND``, nobody created the
+                Stream.
         """
         from temporalio.streams import _activity_stream
 

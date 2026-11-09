@@ -975,14 +975,15 @@ class Client:
                 a read decodes each Record as a JSON value.
             backend: The name of the backend. Defaults to the registered backend with
                 ``default=True``.
-            id_conflict_policy: ``FAIL`` (the default) raises
-                :py:class:`StreamAlreadyExistsError` on an id that exists. ``USE_EXISTING``
-                returns the existing Stream.
+            id_conflict_policy: ``FAIL`` (the default) raises a :py:class:`StreamError` with
+                ``reason`` ``STREAM_ERROR_REASON_ALREADY_EXISTS`` on an id that exists.
+                ``USE_EXISTING`` returns the existing Stream.
             rpc_metadata: Headers of the call. The Redis and memory backends ignore it.
             rpc_timeout: The deadline of the call, on every backend.
 
         Raises:
-            StreamAlreadyExistsError: ``FAIL`` on an id that exists.
+            StreamError: ``FAIL`` on an id that exists, with ``reason``
+                ``STREAM_ERROR_REASON_ALREADY_EXISTS``.
             StreamConfigError: The client has no backend with that name, or no backend has
                 ``default=True`` and the call gives no backend. No call is made.
 
