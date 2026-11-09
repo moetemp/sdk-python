@@ -62,8 +62,7 @@ class Closed:
     """The close of a Stream, the last item of a read.
 
     A read of a closed Stream ends after this item. On the memory and Redis backends the status is
-    :py:attr:`StreamCloseStatus.StreamCloseStatusClosed` and ``failure`` is ``None``. The owner
-    statuses and a close failure come from the native runtime.
+    :py:attr:`StreamCloseStatus.CLOSED`. Native Streams add their own statuses later.
 
     .. warning::
         This API is experimental.
@@ -77,6 +76,3 @@ class Closed:
 
     status: StreamCloseStatus
     """Why the Stream closed."""
-
-    failure: BaseException | None = None
-    """The owner's failure for ``OWNER_FAILED``, or ``None``."""

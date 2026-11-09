@@ -102,8 +102,7 @@ def test_read_items_have_a_kind_that_narrows_their_type():
     )
     closed = streams.Closed(
         offset=streams.StreamOffset.parse("4"),
-        status=streams.StreamCloseStatus.OWNER_COMPLETED,
-        failure=None,
+        status=streams.StreamCloseStatus.CLOSED,
     )
     items: list[streams.Record[Turn] | streams.Closed] = [record, closed]
     shown: list[Turn] = []
@@ -115,7 +114,7 @@ def test_read_items_have_a_kind_that_narrows_their_type():
             case _:
                 shown.append(item.data)
     assert shown == [Turn("model")]
-    assert ended == [streams.StreamCloseStatus.OWNER_COMPLETED]
+    assert ended == [streams.StreamCloseStatus.CLOSED]
     assert record.kind is streams.ItemKind.RECORD
     assert closed.kind is streams.ItemKind.CLOSED
 

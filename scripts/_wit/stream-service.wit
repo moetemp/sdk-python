@@ -14,8 +14,6 @@ world system {
 interface stream-service {
   use nexus:temporal-types/model@1.0.0.{
     duration,
-    failure,
-    payload,
     placeholder,
   };
 
@@ -142,18 +140,12 @@ interface stream-service {
     producer: option<producer>,
   }
 
-  /// How a Stream closed. Only the owner's end on the server terminates or times out.
+  /// How a Stream closed. A Producer's close gives CLOSED. Native Streams add their own later.
   /// @nexus.proto "temporal.api.enums.v1.StreamCloseStatus"
   enum stream-close-status {
     /// @nexus.fallback
     stream-close-status-unspecified,
     stream-close-status-closed,
-    stream-close-status-owner-completed,
-    stream-close-status-owner-failed,
-    stream-close-status-owner-canceled,
-    stream-close-status-owner-terminated,
-    stream-close-status-owner-timed-out,
-    stream-close-status-idle,
   }
 
   /// @nexus.doc "The close of a Stream. A read gives it last."
@@ -161,9 +153,7 @@ interface stream-service {
   record stream-close {
     /// @nexus.doc "The Producer that closed the Stream."
     producer: option<producer>,
-    %result: option<payload>,
-    failure: option<failure>,
-    /// @nexus.doc "Which of result or failure is set, and why the Stream closed."
+    /// @nexus.doc "Why the Stream closed."
     status: option<stream-close-status>,
   }
 

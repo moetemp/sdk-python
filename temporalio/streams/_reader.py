@@ -273,5 +273,4 @@ async def _item(
                 status=StreamCloseStatus(int(close.status))
                 if close.status is not None
                 else StreamCloseStatus.UNSPECIFIED,
-                failure=close.failure,
             )

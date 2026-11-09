@@ -12,7 +12,6 @@ import google.protobuf.timestamp_pb2
 
 import temporalio.api.common.v1.message_pb2
 import temporalio.api.enums.v1.stream_pb2
-import temporalio.api.failure.v1.message_pb2
 
 if sys.version_info >= (3, 8):
     import typing as typing_extensions
@@ -177,7 +176,7 @@ global___ClientEpoch = ClientEpoch
 
 class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Workflow run Producer. It writes in its Workflow Task. A higher epoch withdraws the Records of
+    A Workflow run Producer. It writes in its Workflow Task. A higher epoch supersedes the Records of
     the run's Workflow Tasks that never completed, with those of their Local Activities.
     """
 
@@ -207,7 +206,7 @@ global___WorkflowProducer = WorkflowProducer
 
 class LocalActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Local Activity Producer. A higher epoch withdraws the Producer's lower epochs.
+    A Local Activity Producer. A higher epoch supersedes the Producer's lower epochs.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -236,7 +235,7 @@ global___LocalActivityProducer = LocalActivityProducer
 class ActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     An Activity Producer, for an Activity of a Workflow or a Standalone Activity. A higher epoch
-    withdraws the Producer's lower epochs.
+    supersedes the Producer's lower epochs.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -290,7 +289,7 @@ global___ClientProducer = ClientProducer
 class Producer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     The code that wrote a batch. Its id stays the same across attempts, and the kind's case orders
-    its epochs and picks which earlier Records a higher epoch withdraws. A run-based kind carries its
+    its epochs and picks which earlier Records a higher epoch supersedes. A run-based kind carries its
     run, so a client can't.
     """
 
@@ -459,43 +458,25 @@ class StreamClose(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     PRODUCER_FIELD_NUMBER: builtins.int
-    RESULT_FIELD_NUMBER: builtins.int
-    FAILURE_FIELD_NUMBER: builtins.int
     STATUS_FIELD_NUMBER: builtins.int
     @property
     def producer(self) -> global___Producer:
         """The Producer that closed the Stream."""
-    @property
-    def result(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
-    @property
-    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
     status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType
-    """Which of result or failure is set, and why the Stream closed."""
+    """Why the Stream closed."""
     def __init__(
         self,
         *,
         producer: global___Producer | None = ...,
-        result: temporalio.api.common.v1.message_pb2.Payload | None = ...,
-        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
         status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType = ...,
     ) -> None: ...
     def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "failure", b"failure", "producer", b"producer", "result", b"result"
-        ],
+        self, field_name: typing_extensions.Literal["producer", b"producer"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "failure",
-            b"failure",
-            "producer",
-            b"producer",
-            "result",
-            b"result",
-            "status",
-            b"status",
+            "producer", b"producer", "status", b"status"
         ],
     ) -> None: ...
 

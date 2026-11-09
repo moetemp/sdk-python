@@ -59,32 +59,19 @@ class _StreamCloseStatusEnumTypeWrapper(
     DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
     STREAM_CLOSE_STATUS_UNSPECIFIED: _StreamCloseStatus.ValueType  # 0
     STREAM_CLOSE_STATUS_CLOSED: _StreamCloseStatus.ValueType  # 1
-    STREAM_CLOSE_STATUS_OWNER_COMPLETED: _StreamCloseStatus.ValueType  # 2
-    STREAM_CLOSE_STATUS_OWNER_FAILED: _StreamCloseStatus.ValueType  # 3
-    STREAM_CLOSE_STATUS_OWNER_CANCELED: _StreamCloseStatus.ValueType  # 4
-    STREAM_CLOSE_STATUS_OWNER_TERMINATED: _StreamCloseStatus.ValueType  # 5
-    STREAM_CLOSE_STATUS_OWNER_TIMED_OUT: _StreamCloseStatus.ValueType  # 6
-    STREAM_CLOSE_STATUS_IDLE: _StreamCloseStatus.ValueType  # 7
 
 class StreamCloseStatus(
     _StreamCloseStatus, metaclass=_StreamCloseStatusEnumTypeWrapper
 ):
     """Experimental. Might change in the future.
-    How a Stream closed. CLOSED comes from a Producer that called close(). The OWNER_ values and
-    IDLE come from the server (native Streams) when the owner ends or the Stream goes idle. A Brook
-    SDK store only emits CLOSED.
+    How a Stream closed. CLOSED comes from a Producer that called close(). Native Streams add their
+    own close statuses later.
     (-- api-linter: core::0216::synonyms=disabled
         aip.dev/not-precedent: Named consistently with WorkflowExecutionStatus. --)
     """
 
 STREAM_CLOSE_STATUS_UNSPECIFIED: StreamCloseStatus.ValueType  # 0
 STREAM_CLOSE_STATUS_CLOSED: StreamCloseStatus.ValueType  # 1
-STREAM_CLOSE_STATUS_OWNER_COMPLETED: StreamCloseStatus.ValueType  # 2
-STREAM_CLOSE_STATUS_OWNER_FAILED: StreamCloseStatus.ValueType  # 3
-STREAM_CLOSE_STATUS_OWNER_CANCELED: StreamCloseStatus.ValueType  # 4
-STREAM_CLOSE_STATUS_OWNER_TERMINATED: StreamCloseStatus.ValueType  # 5
-STREAM_CLOSE_STATUS_OWNER_TIMED_OUT: StreamCloseStatus.ValueType  # 6
-STREAM_CLOSE_STATUS_IDLE: StreamCloseStatus.ValueType  # 7
 global___StreamCloseStatus = StreamCloseStatus
 
 class _StreamReadStart:
@@ -162,9 +149,7 @@ class _StreamErrorReasonEnumTypeWrapper(
     STREAM_ERROR_REASON_CLOSED: _StreamErrorReason.ValueType  # 3
     """The Stream is closed. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_FENCED: _StreamErrorReason.ValueType  # 4
-    """The Producer's epoch is lower than the newest one, its Workflow Task was withdrawn, or a
-    Workflow retry withdrew its run. FAILED_PRECONDITION.
-    """
+    """The Producer's epoch is lower than the newest one. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_SEQUENCE_TOO_LOW: _StreamErrorReason.ValueType  # 5
     """The batch has a lower `sequence` than the last one of its epoch. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_SEQ_DIVERGENT: _StreamErrorReason.ValueType  # 6
@@ -172,9 +157,7 @@ class _StreamErrorReasonEnumTypeWrapper(
     FAILED_PRECONDITION.
     """
     STREAM_ERROR_REASON_NOT_OWNER: _StreamErrorReason.ValueType  # 7
-    """A create gives another owner than the Stream has, or the owner doesn't allow this close.
-    FAILED_PRECONDITION.
-    """
+    """The caller may not create or close this Stream. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_FORMAT_TOO_NEW: _StreamErrorReason.ValueType  # 8
     """A newer format version wrote the Stream. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_OFFSET_TOO_HIGH: _StreamErrorReason.ValueType  # 9
@@ -214,9 +197,7 @@ STREAM_ERROR_REASON_EXPIRED: StreamErrorReason.ValueType  # 2
 STREAM_ERROR_REASON_CLOSED: StreamErrorReason.ValueType  # 3
 """The Stream is closed. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_FENCED: StreamErrorReason.ValueType  # 4
-"""The Producer's epoch is lower than the newest one, its Workflow Task was withdrawn, or a
-Workflow retry withdrew its run. FAILED_PRECONDITION.
-"""
+"""The Producer's epoch is lower than the newest one. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_SEQUENCE_TOO_LOW: StreamErrorReason.ValueType  # 5
 """The batch has a lower `sequence` than the last one of its epoch. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_SEQ_DIVERGENT: StreamErrorReason.ValueType  # 6
@@ -224,9 +205,7 @@ STREAM_ERROR_REASON_SEQ_DIVERGENT: StreamErrorReason.ValueType  # 6
 FAILED_PRECONDITION.
 """
 STREAM_ERROR_REASON_NOT_OWNER: StreamErrorReason.ValueType  # 7
-"""A create gives another owner than the Stream has, or the owner doesn't allow this close.
-FAILED_PRECONDITION.
-"""
+"""The caller may not create or close this Stream. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_FORMAT_TOO_NEW: StreamErrorReason.ValueType  # 8
 """A newer format version wrote the Stream. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_OFFSET_TOO_HIGH: StreamErrorReason.ValueType  # 9

@@ -32,12 +32,6 @@ class StreamReadStart(enum.IntEnum):
 class StreamCloseStatus(enum.IntEnum):
     StreamCloseStatusUnspecified = 0
     StreamCloseStatusClosed = 1
-    StreamCloseStatusOwnerCompleted = 2
-    StreamCloseStatusOwnerFailed = 3
-    StreamCloseStatusOwnerCanceled = 4
-    StreamCloseStatusOwnerTerminated = 5
-    StreamCloseStatusOwnerTimedOut = 6
-    StreamCloseStatusIdle = 7
 
 
 def _stream_close_status_from_proto(value: int) -> StreamCloseStatus:
@@ -1426,8 +1420,6 @@ class StreamClose:
     """The close of a Stream. A read gives it last."""
 
     producer: Producer | None = None
-    result: typing.Any | None = None
-    failure: BaseException | None = None
     status: StreamCloseStatus | None = None
 
 
@@ -1452,12 +1444,6 @@ class _StreamCloseTransferTypeConverter(
             )
             if value.HasField("producer")
             else None,
-            result=_support.payload_from_proto(value.result)
-            if value.HasField("result")
-            else None,
-            failure=_support.failure_from_proto(value.failure)
-            if value.HasField("failure")
-            else None,
             status=_stream_close_status_from_proto(value.status)
             if value.status != 0
             else None,
@@ -1473,10 +1459,6 @@ class _StreamCloseTransferTypeConverter(
             message.producer.CopyFrom(
                 _ProducerTransferTypeConverter().to_transfer_type(value.producer)
             )
-        if value.result is not None:
-            message.result.CopyFrom(_support.payload_to_proto(value.result))
-        if value.failure is not None:
-            message.failure.CopyFrom(_support.failure_to_proto(value.failure))
         if value.status is not None:
             message.status = (
                 temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType(
