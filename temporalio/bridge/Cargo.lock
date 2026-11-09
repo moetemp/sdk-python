@@ -2954,7 +2954,7 @@ dependencies = [
 [[package]]
 name = "temporalio-streams-redis"
 version = "0.1.0"
-source = "git+https://github.com/temporal-community/sdk-streams?rev=dc93cba6bd49c89bb255a3aae9f4d970f4ffc997#dc93cba6bd49c89bb255a3aae9f4d970f4ffc997"
+source = "git+https://github.com/temporal-community/sdk-streams?rev=03b93fae17f527986a9ffa8824927da4816b2fba#03b93fae17f527986a9ffa8824927da4816b2fba"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
