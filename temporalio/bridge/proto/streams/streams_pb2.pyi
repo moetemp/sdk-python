@@ -203,14 +203,14 @@ class WriteRecordsResponse(google.protobuf.message.Message):
 
     FIRST_OFFSET_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
-    first_offset: builtins.int
-    """The offsets of the first and the last Record. Zero when the request has no Record."""
-    last_offset: builtins.int
+    first_offset: builtins.bytes
+    """The offsets of the first and the last Record. Empty when the request has no Record."""
+    last_offset: builtins.bytes
     def __init__(
         self,
         *,
-        first_offset: builtins.int = ...,
-        last_offset: builtins.int = ...,
+        first_offset: builtins.bytes = ...,
+        last_offset: builtins.bytes = ...,
     ) -> None: ...
     def ClearField(
         self,
@@ -246,12 +246,12 @@ class CloseWriterResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     LAST_OFFSET_FIELD_NUMBER: builtins.int
-    last_offset: builtins.int
-    """The offset of the newest Record the writer wrote. Zero if it wrote none."""
+    last_offset: builtins.bytes
+    """The offset of the newest Record the writer wrote. Empty if it wrote none."""
     def __init__(
         self,
         *,
-        last_offset: builtins.int = ...,
+        last_offset: builtins.bytes = ...,
     ) -> None: ...
     def ClearField(
         self, field_name: typing_extensions.Literal["last_offset", b"last_offset"]

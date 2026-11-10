@@ -204,13 +204,13 @@ class ExtensionStreamBackend(StreamBackend):
         ]
         return config
 
-    async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> int:
+    async def _close_in_workflow(self, request: stream_pb.CloseStreamRequest) -> str:
         # An Activity runs only after the Workflow Task commits, so a failed task leaves the
         # Stream open for its retry. The Activity closes the Stream as the run chain that owns it.
         return await temporalio.workflow.execute_activity(
             streams_workflow.CLOSE_ACTIVITY,
             request,
-            result_type=int,
+            result_type=str,
             start_to_close_timeout=_CLOSE_TIMEOUT,
             retry_policy=_CLOSE_RETRY,
         )

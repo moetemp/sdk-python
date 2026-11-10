@@ -63,7 +63,7 @@ def _model_ref(ref: stream_v1.StreamRef) -> models.StreamRef:
 
 
 @temporalio.activity.defn(name=CREATE_ACTIVITY)
-async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
+async def create_stream(request: stream_pb.CreateStreamRequest) -> str:
     """Create a Workflow's standalone Stream, or with ``USE_EXISTING`` get it."""
     _, service = _context()
     # The request has the Workflow's request id, so a retry of this Activity isn't a conflict. A
@@ -74,12 +74,7 @@ async def create_stream(request: stream_pb.CreateStreamRequest) -> int:
         ),
         temporalio.common.RawValue,
     )
-    return 0
-
-
-# The Store's limits on the Records that it keeps, as the crate counts them.
-_MAX_RECORD_BYTES = 1536 * 1024
-_MAX_BATCH_BYTES = 4 * 1024 * 1024
+    return ""
 
 
 @dataclasses.dataclass
@@ -150,10 +145,9 @@ async def _encode(
         ).ByteSize()
         for record in records
     ]
-    if sum(sizes) <= _MAX_BATCH_BYTES and max(sizes, default=0) <= _MAX_RECORD_BYTES:
-        return _Encoded([(list(range(len(counts))), records)], sum(sizes))
-    # The codec grew the merge past the Store's limit, so send each call as its own batch, as
-    # with no merge. A call that's too large by itself fails by itself.
+    # Opaque offsets have no arithmetic, so a merged append's per-publish offsets can't be read
+    # back from its endpoints. Each publish is its own batch, so the Store returns its last
+    # offset. The publishes still share one Local Activity, so History keeps one marker.
     batches: list[tuple[list[int], list[stream_v1.AppendRecord]]] = []
     start = 0
     for call, count in enumerate(counts):
@@ -190,7 +184,7 @@ async def append_records(
     service = streams.backend.service(
         streams.namespace, dataclasses.replace(streams.converter, payload_codec=None)
     )
-    answers: list[Any] = [0] * len(counts)
+    answers: list[Any] = [""] * len(counts)
     for index, (calls, records) in enumerate(encoded.batches):
         answer = encoded.answers.get(index)
         if answer is None:
@@ -208,7 +202,7 @@ async def append_records(
                         ],
                     )
                 )
-                answer = response.last_offset or 0
+                answer = response.last_offset or b""
             except _errors.StreamError as err:
                 if err.reason != StreamErrorReason.STREAM_ERROR_REASON_TOO_LARGE:
                     if err.non_retryable:
@@ -216,18 +210,16 @@ async def append_records(
                     raise
                 answer = {"reason": int(err.reason), "message": err.message}
             encoded.answers[index] = answer
-        # A Store gives one batch consecutive offsets, so each call's last Record is the
-        # batch's last one less the Records after it.
-        after = sum(counts[call] for call in calls)
+        # Each batch is one call, so its last offset is the call's last Record. A hex string
+        # carries the opaque offset through the Local Activity result.
         for call in calls:
-            after -= counts[call]
-            answers[call] = answer - after if isinstance(answer, int) else answer
+            answers[call] = answer.hex() if isinstance(answer, bytes) else answer
     _PENDING.pop(key, epoch)
     return answers
 
 
 @temporalio.activity.defn(name=CLOSE_ACTIVITY)
-async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
+async def close_stream(request: stream_pb.CloseStreamRequest) -> str:
     """Close a Stream as the Workflow run that scheduled this Activity."""
     streams, service = _context()
     # The close Activity runs in the Workflow, so its Producer carries the run id, and the Store
@@ -240,7 +232,7 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> int:
             ),
         )
     )
-    return 0
+    return ""
 
 
 ACTIVITIES = [create_stream, append_records, close_stream]

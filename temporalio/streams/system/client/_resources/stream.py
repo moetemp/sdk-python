@@ -34,6 +34,7 @@ BodyT = typing.TypeVar("BodyT")
 class Stream(typing.Generic[BodyT]):
     """One Stream. Build it from a stream-ref, or get it from a create."""
 
+    ref: StreamRef
     created: bool | None
 
     def __init__(
@@ -41,11 +42,11 @@ class Stream(typing.Generic[BodyT]):
         nexus_client: temporalio.client.NexusClient[typing.Any],
         /,
         *,
-        ref: StreamRef[BodyT],
+        ref: StreamRef,
         created: bool | None,
     ) -> None:
         self._nexus_client: temporalio.client.NexusClient[typing.Any] = nexus_client
-        self._ref: StreamRef[BodyT] = ref
+        self.ref = ref
         self.created = created
 
     @property
@@ -61,16 +62,6 @@ class Stream(typing.Generic[BodyT]):
             (),
         )
         return typing.cast("type[BodyT]", arguments[0] if arguments else typing.Any)
-
-    @property
-    def ref(self) -> StreamRef[BodyT]:
-        # The ref carries the handle's payload type, so a reader of it keeps the type.
-        if not typing.get_args(getattr(self._ref, "__orig_class__", None)):
-            self._ref = StreamRef[self.body_type](
-                id=self._ref.id,
-                backend=self._ref.backend,
-            )
-        return self._ref
 
     async def __aenter__(self) -> typing_extensions.Self:
         return self
@@ -88,7 +79,7 @@ class Stream(typing.Generic[BodyT]):
         *records: BodyT,
         rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
         rpc_timeout: datetime.timedelta | None = None,
-    ) -> int:
+    ) -> bytes:
         """Append values, and return the offset of the last one."""
         request = AppendRecordsRequest(
             ref=self.ref,
@@ -127,7 +118,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def read(
         self,
-        from_offset: int | None = None,
+        from_offset: bytes | None = None,
         start: StreamReadStart | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
@@ -159,7 +150,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def iter_read(
         self,
-        from_offset: int | None = None,
+        from_offset: bytes | None = None,
         start: StreamReadStart | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
@@ -214,7 +205,7 @@ class Stream(typing.Generic[BodyT]):
 
     def iter_read_items(
         self,
-        from_offset: int | None = None,
+        from_offset: bytes | None = None,
         start: StreamReadStart | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,

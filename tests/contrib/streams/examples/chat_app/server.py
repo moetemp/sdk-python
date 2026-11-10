@@ -59,7 +59,7 @@ from .workflow import ChatSession, Researcher
 LOBBY_ID = "streams-chat-app-lobby"
 INDEX = Path(__file__).parent / "static" / "index.html"
 SESSION_ID = r"[a-z0-9][a-z0-9-]{0,39}"
-SHARE_ID = rf"({SESSION_ID})-snapshot-(\d+)"
+SHARE_ID = rf"({SESSION_ID})-snapshot-([0-9a-f]*)"
 # An older version of the app wrote snapshots of plain Turns under these ids.
 OLD_SHARE_ID = rf"{SESSION_ID}-share-\d+"
 # A sub-agent's Stream ids, which it picks from its Workflow ID and its run id.
@@ -268,7 +268,7 @@ async def share(session_id: str, refs: StreamsDep, chat: ChatDep) -> dict[str, A
         with_superseded(turns.read(wait_new_records=False))
     ) as read:
         async for item in read:
-            if item.offset >= upto:
+            if item.offset > upto:
                 break
             if isinstance(item, Superseded):
                 for offset in item.withdrawn_offsets:

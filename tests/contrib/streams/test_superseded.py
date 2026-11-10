@@ -13,6 +13,14 @@ from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 
 
+def _off(n: int) -> bytes:
+    return n.to_bytes(8, "big")
+
+
+def _hex(n: int) -> str:
+    return _off(n).hex()
+
+
 def _ts(seconds: int) -> models.Timestamp:
     return models.Timestamp(seconds=seconds, nanos=0)
 
@@ -69,7 +77,9 @@ def _client(attempt: int) -> models.Producer:
 
 
 def _record(offset: int, producer: models.Producer) -> Record[None]:
-    return Record(data=None, offset=StreamOffset._from_wire(offset), producer=producer)
+    return Record(
+        data=None, offset=StreamOffset._from_wire(_off(offset)), producer=producer
+    )
 
 
 async def _wrapped(*items: Item) -> list[Record[None] | Superseded | Closed]:
@@ -77,7 +87,7 @@ async def _wrapped(*items: Item) -> list[Record[None] | Superseded | Closed]:
         for item in items:
             yield item
 
-    reader: _reader.Reader[None] = _reader.Reader(source(), _reader.Position(0))
+    reader: _reader.Reader[None] = _reader.Reader(source(), _reader.Position(None))
     return [item async for item in with_superseded(reader)]
 
 
@@ -86,11 +96,11 @@ async def test_an_activity_retry_supersedes_the_failed_attempt():
     retry = _activity("act:wf:a:k", "r", attempt=2, seconds=101)
     items = await _wrapped(_record(10, first), _record(11, first), _record(20, retry))
     [superseded] = [i for i in items if isinstance(i, Superseded)]
-    assert tuple(str(o) for o in superseded.withdrawn_offsets) == ("10", "11")
+    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10), _hex(11))
     records = [i for i in items if isinstance(i, Record)]
-    assert [str(r.offset) for r in records] == ["10", "11", "20"]
+    assert [str(r.offset) for r in records] == [_hex(10), _hex(11), _hex(20)]
     # The Superseded item comes before the Record whose higher epoch withdrew the earlier ones.
-    assert str(items[2].offset) == "20" and isinstance(items[2], Superseded)
+    assert str(items[2].offset) == _hex(20) and isinstance(items[2], Superseded)
     assert superseded.withdraws(_record(10, first))
     assert not superseded.withdraws(_record(20, retry))
 
@@ -100,7 +110,7 @@ async def test_a_standalone_activity_retry_supersedes_the_failed_attempt():
     retry = _activity("sa:a:r", "r", attempt=2, seconds=101, standalone=True)
     items = await _wrapped(_record(10, first), _record(20, retry))
     [superseded] = [i for i in items if isinstance(i, Superseded)]
-    assert tuple(str(o) for o in superseded.withdrawn_offsets) == ("10",)
+    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10),)
 
 
 async def test_a_client_producer_never_supersedes():
@@ -109,7 +119,7 @@ async def test_a_client_producer_never_supersedes():
     assert not any(isinstance(i, Superseded) for i in items)
     # withdraws() also never matches a client's Records.
     synthetic = Superseded(
-        offset=StreamOffset.parse("20"),
+        offset=StreamOffset._from_wire(_off(20)),
         producer=_activity("act:x", "r", attempt=2, seconds=101),
     )
     assert not synthetic.withdraws(_record(10, _client(1)))

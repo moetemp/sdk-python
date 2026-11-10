@@ -307,7 +307,7 @@ class _ReadRequest(typing.Protocol):
     __dataclass_fields__: typing.ClassVar[dict[str, typing.Any]]
 
     @property
-    def from_offset(self) -> int | None: ...
+    def from_offset(self) -> bytes | None: ...
 
     @property
     def start(self) -> object: ...
@@ -324,7 +324,7 @@ class _ReadResponse(typing.Protocol):
     def records(self) -> collections.abc.Sized | None: ...
 
     @property
-    def next_offset(self) -> int | None: ...
+    def next_offset(self) -> bytes | None: ...
 
     @property
     def done(self) -> bool | None: ...
@@ -344,7 +344,7 @@ def next_read_request(
     """
     if response.done or response.next_offset is None:
         return None
-    moved = response.next_offset > (request.from_offset or 0)
+    moved = response.next_offset > (request.from_offset or b"")
     if not response.records and not moved and request.wait is None:
         return None
     # The next page starts where this one ended, so the first page's start and last no longer
@@ -359,24 +359,25 @@ class _ReadItem(typing.Protocol):
     def item(self) -> object: ...
 
     @property
-    def offset(self) -> int | None: ...
+    def offset(self) -> bytes | None: ...
 
 
 def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
     """The request that resumes a Stream read after ``item``."""
-    # A read resumes past the last item. The first page's start and last no longer apply.
-    offset = (item.offset or 0) + 1
+    # A resume reads after the offset, so it starts at the item's offset. The first page's start
+    # and last no longer apply.
+    offset = item.offset or b""
     return dataclasses.replace(request, from_offset=offset, start=None, last=None)
 
 
 class _AppendResponse(typing.Protocol):
     @property
-    def last_offset(self) -> int | None: ...
+    def last_offset(self) -> bytes | None: ...
 
 
-def last_offset(response: _AppendResponse) -> int:
-    """The offset of the last Record that an append wrote, or 0 when it wrote none."""
-    return response.last_offset or 0
+def last_offset(response: _AppendResponse) -> bytes:
+    """The offset of the last Record that an append wrote, or empty when it wrote none."""
+    return response.last_offset or b""
 
 
 _T = typing.TypeVar("_T")

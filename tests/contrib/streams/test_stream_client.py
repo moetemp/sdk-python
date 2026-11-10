@@ -24,7 +24,7 @@ class Turn:
     text: str = ""
 
 
-_BEGINNING = streams.StreamOffset.parse("0")
+_BEGINNING = streams.StreamOffset(b"")
 
 
 async def test_unknown_backend_raises_before_any_call(client: Client):
@@ -249,12 +249,12 @@ async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
         "a",
         "b",
     ]
-    assert tokens.next_offset is not None and tokens.next_offset > last
+    assert tokens.next_offset == last
     resume_from = tokens.next_offset
     new = stream.read(offset=streams.END, wait_new_records=False)
     assert new.next_offset is None
     assert [item async for item in new] == []
-    assert new.next_offset is not None and new.next_offset > last
+    assert new.next_offset == last
     await stream.append("c")
     resumed = stream.read(offset=resume_from, wait_new_records=False)
     assert [
@@ -352,7 +352,7 @@ async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
     read = reader.read(wait_new_records=False)
     with pytest.raises(streams.StreamError, match=f"offset {bad}"):
         await anext(read)
-    assert read.next_offset is not None and read.next_offset > bad
+    assert read.next_offset == bad
     resumed = reader.read(offset=read.next_offset, wait_new_records=False)
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
@@ -492,13 +492,13 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     data = [item.data for item in items if isinstance(item, streams.Record)]
     assert data == [Turn("client"), Turn("a"), Turn("b"), Turn("workflow")]
 
-    # Another Stream of the same id reads it from the offset after the first Record.
+    # Another Stream of the same id resumes after the first Record.
     again = stream_client.get_stream(stream.ref.id, payload_type=Turn)
-    head = again.read(offset=first)
+    head = again.read()
     await anext(head)
     after_first = head.next_offset
     await head.aclose()
-    assert after_first is not None
+    assert after_first == first
     resumed = [
         item.data
         async for item in again.read(offset=after_first)

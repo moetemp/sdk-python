@@ -10,6 +10,10 @@ from temporalio.streams import StreamError, StreamErrorReason, _backend, _reader
 from temporalio.streams.system import models
 
 
+def _off(n: int) -> bytes:
+    return n.to_bytes(8, "big")
+
+
 class _Pages(_backend.StreamServiceCalls):
     """Answers each read with the next page, and keeps the requests."""
 
@@ -29,20 +33,22 @@ class _Pages(_backend.StreamServiceCalls):
 
 async def test_a_waiting_read_carries_the_offset_until_records_come():
     record = models.StreamRecord(
-        item=models.StreamItemData(models.StreamData(body=None)), offset=9
+        item=models.StreamItemData(models.StreamData(body=None)), offset=_off(9)
     )
     service = _Pages(
-        models.ReadRecordsResponse(records=[], next_offset=8),
-        models.ReadRecordsResponse(records=[record], next_offset=10),
+        models.ReadRecordsResponse(records=[], next_offset=_off(8)),
+        models.ReadRecordsResponse(records=[record], next_offset=_off(10)),
     )
     page = await _reader._read_until_records(
         service,
-        models.ReadRecordsRequest(ref=models.StreamRef(id="wf:run"), from_offset=1),
+        models.ReadRecordsRequest(
+            ref=models.StreamRef(id="wf:run"), from_offset=_off(1)
+        ),
         timedelta(seconds=5),
     )
-    assert page.records and page.records[0].offset == 9
+    assert page.records and page.records[0].offset == _off(9)
     first, second = service.requests
-    assert (first.from_offset, second.from_offset) == (1, 8)
+    assert (first.from_offset, second.from_offset) == (_off(1), _off(8))
     assert second.wait is not None
     assert timedelta() < second.wait <= timedelta(seconds=60)
 
@@ -70,7 +76,7 @@ async def test_a_wait_for_the_create_pauses_between_reads():
         service,
         temporalio.converter.DataConverter.default,
         "missing",
-        position=_reader.Position(0),
+        position=_reader.Position(None),
         payload_type=None,
         from_offset=None,
         wait_new_records=False,

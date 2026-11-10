@@ -97,11 +97,11 @@ def test_ref_in_a_pydantic_field():
 def test_read_items_have_a_kind_that_narrows_their_type():
     record = streams.Record(
         data=Turn("model"),
-        offset=streams.StreamOffset.parse("3"),
+        offset=streams.StreamOffset((3).to_bytes(8, "big")),
         producer=None,
     )
     closed = streams.Closed(
-        offset=streams.StreamOffset.parse("4"),
+        offset=streams.StreamOffset((4).to_bytes(8, "big")),
         status=streams.StreamCloseStatus.CLOSED,
     )
     items: list[streams.Record[Turn] | streams.Closed] = [record, closed]

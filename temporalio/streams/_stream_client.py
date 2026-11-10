@@ -134,7 +134,7 @@ class StreamCalls(abc.ABC):
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
     ) -> StreamOffset:
-        """Get the next offset. See :py:meth:`Stream.get_offset`."""
+        """Get the newest offset. See :py:meth:`Stream.get_offset`."""
 
     @abc.abstractmethod
     async def close(
@@ -248,7 +248,7 @@ class ClientCalls(StreamCalls):
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
     ) -> StreamOffset:
-        """Get the next offset."""
+        """Get the newest offset."""
         self._raise_lost_write()
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             return StreamOffset._from_wire(await self._access().get_offset())
@@ -294,11 +294,10 @@ async def create(
     backend_name, calls = client_backend(client, backend)
     # Delegate to the generated client. It sends a new request id for each call. A closed,
     # expired or another owner's Stream fails the create.
-    await calls.service(client.namespace).create_stream(
+    await calls.service(client.namespace).create_stream[object](
         id=id,
         backend=backend_name,
         id_conflict_policy=models.StreamIdConflictPolicy(int(id_conflict_policy)),
-        body_type=object,
         rpc_metadata=rpc_metadata,
         rpc_timeout=rpc_timeout,
     )

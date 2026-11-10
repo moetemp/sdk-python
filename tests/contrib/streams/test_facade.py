@@ -76,7 +76,7 @@ async def test_client_writes_reads_and_closes(client: Client):
     first = await stream.append(Turn("model"))
     second = await stream.append(Turn("user", "hello"))
     assert first < second
-    assert await stream.get_offset() > second
+    assert await stream.get_offset() == second
     await stream.close()
     # A close writes no item. The read ends once it gave the last Record.
     items = [item async for item in stream.read()]
@@ -88,7 +88,7 @@ async def test_client_writes_reads_and_closes(client: Client):
     assert isinstance(turn.producer.kind, streams.ProducerKindClient)
     assert extension.namespaces == {client.namespace}
 
-    resumed = [item async for item in stream.read(offset=token.offset)]
+    resumed = [item async for item in stream.read(offset=turn.offset)]
     assert [item.offset for item in resumed] == [token.offset]
 
 

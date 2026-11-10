@@ -177,10 +177,9 @@ class GeneratedCalls:
     @workflow.run
     async def run(self) -> list[str]:
         tokens = await workflow.create_stream(own_id(), payload_type=str)
-        generated = generated_stream(
+        generated = generated_stream[str](
             id=tokens.ref.id,
             backend=tokens.ref.backend or None,
-            body_type=str,
         )
         offset = await generated.append("a", "b")
         refused = []
@@ -189,7 +188,7 @@ class GeneratedCalls:
         except streams.StreamError as err:
             refused.append(reason(err))
         await tokens.close()
-        return [str(offset > 0), *refused]
+        return [str(offset > b""), *refused]
 
 
 async def test_generated_workflow_calls_run_as_local_activities(stream_client: Client):

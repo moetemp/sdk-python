@@ -494,7 +494,7 @@ class StreamRecord(google.protobuf.message.Message):
     OFFSET_FIELD_NUMBER: builtins.int
     DATA_FIELD_NUMBER: builtins.int
     CLOSE_FIELD_NUMBER: builtins.int
-    offset: builtins.int
+    offset: builtins.bytes
     @property
     def data(self) -> global___StreamData: ...
     @property
@@ -502,7 +502,7 @@ class StreamRecord(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        offset: builtins.int = ...,
+        offset: builtins.bytes = ...,
         data: global___StreamData | None = ...,
         close: global___StreamClose | None = ...,
     ) -> None: ...

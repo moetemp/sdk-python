@@ -123,8 +123,8 @@ class Stream(Generic[T]):
         ``Superseded`` item withdraws earlier Records of a failed attempt.
 
         Args:
-            offset: Start at this offset, inclusive, or at ``streams.END`` for new Records
-                only. Defaults to the first Record.
+            offset: Resume after this offset, such as one from a Record or ``get_offset``, or
+                read from ``streams.END`` for new Records only. Defaults to the first Record.
             last: Start with the newest ``last`` Records, oldest first, such as for the first
                 view of a chat. Can't be used with ``offset``. A Record that a later
                 ``Superseded`` item withdraws doesn't count. At most 1000.
@@ -142,7 +142,7 @@ class Stream(Generic[T]):
         from temporalio.streams._access import read_spec
         from temporalio.streams._items import End
 
-        wire_offset: int | End | None
+        wire_offset: bytes | End | None
         if offset is None or isinstance(offset, End):
             wire_offset = offset
         else:
@@ -162,7 +162,7 @@ class Stream(Generic[T]):
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
     ) -> StreamOffset:
-        """The next offset of the Stream, past the newest Record, or the beginning if it's empty.
+        """The offset to resume from, the newest Record's offset, or the beginning if it's empty.
 
         Args:
             rpc_metadata: Headers of the call. The Redis and memory backends ignore it.
@@ -308,7 +308,7 @@ class SyncStream(Generic[T]):
         return SyncReader(_activity_stream.run_blocking(read()))
 
     def get_offset(self) -> StreamOffset:
-        """The next offset of the Stream, past the newest Record, or the beginning if empty."""
+        """The offset to resume from, the newest Record's offset, or the beginning if it's empty."""
         from temporalio.streams import _activity_stream
 
         return _activity_stream.run_blocking(self._stream.get_offset())

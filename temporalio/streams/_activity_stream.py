@@ -125,7 +125,7 @@ class ActivityCalls(StreamCalls):
     async def get_offset(
         self, rpc_metadata: Mapping[str, str | bytes], rpc_timeout: timedelta | None
     ) -> StreamOffset:
-        """Get the next offset."""
+        """Get the newest offset."""
         with _backend.using(_backend.options_of(rpc_metadata, rpc_timeout)):
             return StreamOffset._from_wire(await self._access().get_offset())
 

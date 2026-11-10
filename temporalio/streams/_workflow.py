@@ -168,12 +168,14 @@ def worker_backend() -> WorkerBackend | None:
     )
 
 
-async def _close_in_workflow(request: stream_pb.CloseStreamRequest) -> int:
-    # The Worker's backend runs the close after the Workflow Task commits.
+async def _close_in_workflow(request: stream_pb.CloseStreamRequest) -> str:
+    # The Worker's backend runs the close after the Workflow Task commits. A close writes no
+    # Record, so it carries no offset.
     outbound = _transport()
     if outbound is None:
         raise no_worker_backend()
-    return await outbound._temporal_stream_backend._close_in_workflow(request)
+    await outbound._temporal_stream_backend._close_in_workflow(request)
+    return ""
 
 
 def no_worker_backend() -> _errors.StreamConfigError:
@@ -257,7 +259,7 @@ def _write(
                         [(0, None), *write.calls], write.calls
                     )
                 ]
-                answers = await temporalio.workflow.execute_local_activity(
+                answers: list[Any] = await temporalio.workflow.execute_local_activity(
                     activity,
                     args=[write.request, counts],
                     result_type=list[Any],
@@ -271,7 +273,7 @@ def _write(
                     await temporalio.workflow.execute_local_activity(
                         activity,
                         write.request,
-                        result_type=int,
+                        result_type=str,
                         start_to_close_timeout=_WRITE_TIMEOUT,
                     )
                 ]
@@ -300,7 +302,7 @@ def _write(
                     _errors.from_reason(int(answer["reason"]), str(answer["message"]))
                 )
             else:
-                call._set_wire(int(answer))
+                call._set_wire(bytes.fromhex(answer))
 
     task = loop.create_task(run())
     task.add_done_callback(lambda _: _raise_nowait_error(state))
@@ -422,7 +424,7 @@ def _start_append(
     call = _support.start_now(
         generated_stream.append_records(ref=_generated_ref(ref), records=list(values))
     )
-    return _call_future(call, int)
+    return _call_future(call, lambda offset: offset)
 
 
 def _append(
@@ -442,7 +444,7 @@ def _append(
 def _start_close(ref: StreamRef[Any]) -> asyncio.Future[StreamOffset]:
     _closing(ref)
     call = _support.start_now(generated_stream.close_stream(ref=_generated_ref(ref)))
-    return _call_future(call, lambda _: 0)
+    return _call_future(call, lambda _: b"")
 
 
 def _closing(ref: StreamRef[Any]) -> _RunStream:
@@ -604,11 +606,10 @@ async def create_stream(
     See :py:data:`temporalio.workflow.create_stream`.
     """
     ref: StreamRef[T] = _creating(id, backend)
-    await generated_create.create_stream(
+    await generated_create.create_stream[payload_type or object](
         id=id,
         backend=ref.backend,
         id_conflict_policy=_models_policy(id_conflict_policy),
-        body_type=payload_type or object,
     )
     return WorkflowStream(ref)
 
@@ -626,14 +627,13 @@ def create_stream_nowait(
     """
     ref: StreamRef[T] = _creating(id, backend)
     call = _support.start_now(
-        generated_create.create_stream(
+        generated_create.create_stream[payload_type or object](
             id=id,
             backend=ref.backend,
             id_conflict_policy=_models_policy(id_conflict_policy),
-            body_type=payload_type or object,
         )
     )
-    _write_nowait(_call_future(call, lambda _: 0))
+    _write_nowait(_call_future(call, lambda _: b""))
     return WorkflowStream(ref)
 
 
@@ -648,7 +648,7 @@ def _creating(id: str, backend: str | None) -> StreamRef[Any]:
 
 
 def _call_future(
-    call: asyncio.Task[Any], result: Callable[[Any], int]
+    call: asyncio.Task[Any], result: Callable[[Any], bytes]
 ) -> asyncio.Future[StreamOffset]:
     # start_now runs a call of the generated Workflow API up to its first wait, so its write
     # takes its place in the order at once. The call gives the write's result, or the handle
@@ -695,7 +695,7 @@ class _WriteHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
     # The interceptor runs a call of the generated Workflow API as a write Local Activity, so
     # the call's handle waits for the write.
     def __init__(
-        self, write: asyncio.Future[StreamOffset], result: Callable[[int], OutputT]
+        self, write: asyncio.Future[StreamOffset], result: Callable[[bytes], OutputT]
     ) -> None:
         self._write = write
         self._result = result

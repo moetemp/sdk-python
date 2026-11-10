@@ -98,7 +98,7 @@ class SyncActivities:
     def call_model_sync(self, input: SyncInput) -> str:
         stream = SyncStream(self._client.get_stream(input.stream))
         last = stream.append(*input.prompt.split())
-        assert stream.get_offset() > last
+        assert stream.get_offset() == last
         return str(last)
 
     @activity.defn
@@ -173,7 +173,7 @@ async def test_activity_appends_and_returns_offsets(stream_client: Client):
     written = ["hi", "there", "model-a", "model-b", "sync", "words"]
     assert [record.data for record in data] == written
     assert offsets[:2] == [str(data[0].offset), str(data[1].offset)]
-    assert streams.StreamOffset.parse(offsets[2]) > data[3].offset
+    assert streams.StreamOffset.parse(offsets[2]) == data[3].offset
     assert streams.StreamOffset.parse(last) == data[5].offset
     assert read_tokens == written
     assert await closed(handle)
@@ -535,6 +535,10 @@ async def test_attempt_end_raises_a_lost_write_and_a_client_stream_refuses_the_b
     assert records(items) == []
 
 
+def _offset(n: int) -> streams.StreamOffset:
+    return streams.StreamOffset(n.to_bytes(8, "big"))
+
+
 class _Batches(Stream[int]):
     # A Stream whose writes go to a list, so the batches show with no backend.
     def __init__(self, fail: bool = False) -> None:
@@ -560,9 +564,7 @@ class _Batches(Stream[int]):
         await asyncio.sleep(0.01)
         self.in_flight -= 1
         self.batches.append(tuple(values))
-        return streams.StreamOffset.parse(
-            str(sum(len(batch) for batch in self.batches))
-        )
+        return _offset(sum(len(batch) for batch in self.batches))
 
 
 async def test_buffered_appender_batches_by_delay():
@@ -573,9 +575,9 @@ async def test_buffered_appender_batches_by_delay():
     await asyncio.sleep(0.1)
     assert stream.batches == [(1, 2, 3)]
     appender.append(4)
-    assert await appender.flush() == streams.StreamOffset.parse("4")
+    assert await appender.flush() == _offset(4)
     assert stream.batches == [(1, 2, 3), (4,)]
-    assert await appender.flush() == streams.StreamOffset.parse("4")
+    assert await appender.flush() == _offset(4)
 
 
 async def test_buffered_appender_writes_a_full_batch_with_one_write_in_flight():
@@ -588,7 +590,7 @@ async def test_buffered_appender_writes_a_full_batch_with_one_write_in_flight():
     # write are in the next batch.
     assert [len(batch) for batch in stream.batches] == [1000, 1500]
     assert stream.most_in_flight == 1
-    assert await appender.flush() == streams.StreamOffset.parse("2500")
+    assert await appender.flush() == _offset(2500)
 
 
 async def test_buffered_appender_raises_a_failed_batch():

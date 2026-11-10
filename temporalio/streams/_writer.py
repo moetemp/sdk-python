@@ -25,8 +25,8 @@ class WriteFuture(asyncio.Future[StreamOffset]):
 
     retrieved = False
 
-    def _set_wire(self, offset: int) -> None:
-        """Set the result from a wire offset. The plumbing works in wire ints."""
+    def _set_wire(self, offset: bytes) -> None:
+        """Set the result from a wire offset. The plumbing works in wire bytes."""
         self.set_result(StreamOffset._from_wire(offset))
 
     def result(self) -> StreamOffset:
@@ -82,7 +82,7 @@ class RecordWriter:
         self._open_lock = asyncio.Lock()
         # The last write that started. Each write waits for the one before it, so the order is
         # the order of the calls, even before a write's task first runs.
-        self._last: asyncio.Task[int] | None = None
+        self._last: asyncio.Task[bytes] | None = None
         # The writes that failed. The first error that no caller got raises later.
         self._failed: list[WriteFuture] = []
         self._closed = False
@@ -133,7 +133,7 @@ class RecordWriter:
         self._last = task
         future = WriteFuture(loop=loop)
 
-        def done(task: asyncio.Task[int]) -> None:
+        def done(task: asyncio.Task[bytes]) -> None:
             if self._last is task:
                 self._last = None
             error = None if task.cancelled() else task.exception()
@@ -162,8 +162,8 @@ class RecordWriter:
         return error
 
     async def _write_after(
-        self, previous: asyncio.Task[int] | None, values: Sequence[Any]
-    ) -> int:
+        self, previous: asyncio.Task[bytes] | None, values: Sequence[Any]
+    ) -> bytes:
         from temporalio.streams.writer_system import models
 
         if previous is not None:
@@ -173,7 +173,7 @@ class RecordWriter:
         answer = await writer.write_records(
             [models.AppendRecord(body=value) for value in values]
         )
-        return answer.last_offset or 0
+        return answer.last_offset or b""
 
     async def close(self) -> None:
         """Wait for the writes that started, then close the writer. The Stream stays open."""

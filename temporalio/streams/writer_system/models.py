@@ -208,8 +208,8 @@ temporalio.converter.transfer_type_convertible(
 
 @dataclasses.dataclass(slots=True)
 class WriteRecordsResponse:
-    first_offset: int | None = None
-    last_offset: int | None = None
+    first_offset: bytes | None = None
+    last_offset: bytes | None = None
 
 
 class _WriteRecordsResponseTransferTypeConverter(
@@ -229,8 +229,8 @@ class _WriteRecordsResponseTransferTypeConverter(
         type_hint: type[WriteRecordsResponse],
     ) -> WriteRecordsResponse:
         return WriteRecordsResponse(
-            first_offset=value.first_offset if value.first_offset != 0 else None,
-            last_offset=value.last_offset if value.last_offset != 0 else None,
+            first_offset=value.first_offset if value.first_offset else None,
+            last_offset=value.last_offset if value.last_offset else None,
         )
 
     @typing_extensions.override
@@ -294,7 +294,7 @@ temporalio.converter.transfer_type_convertible(
 
 @dataclasses.dataclass(slots=True)
 class CloseWriterResponse:
-    last_offset: int | None = None
+    last_offset: bytes | None = None
 
 
 class _CloseWriterResponseTransferTypeConverter(
@@ -314,7 +314,7 @@ class _CloseWriterResponseTransferTypeConverter(
         type_hint: type[CloseWriterResponse],
     ) -> CloseWriterResponse:
         return CloseWriterResponse(
-            last_offset=value.last_offset if value.last_offset != 0 else None,
+            last_offset=value.last_offset if value.last_offset else None,
         )
 
     @typing_extensions.override

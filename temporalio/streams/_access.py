@@ -58,16 +58,16 @@ class Access:
         finally:
             await items.aclose()
 
-    async def get_offset(self) -> int:
-        """The next offset of the Stream, the newest offset plus one, or 0 if it has no Record.
+    async def get_offset(self) -> bytes:
+        """The offset to resume from, the newest Record's offset, or empty if it has no Record.
 
-        Offsets are sparse and above zero, so ``offset=0`` reads from the start.
+        A resume reads after the offset, so an empty offset reads from the start.
         """
         service = self.backend.service(self.namespace)
         response = await service.send_describe_stream(
             models.DescribeStreamRequest(ref=models.StreamRef(id=self.stream_id))
         )
-        return response.last_offset + 1 if response.last_offset else 0
+        return response.last_offset or b""
 
     async def close(self) -> None:
         """Write this Producer's Records, then close the Stream."""
@@ -92,7 +92,7 @@ class ReadSpec:
     """What one read asks for."""
 
     payload_type: Any
-    offset: int | End | None
+    offset: bytes | End | None
     last: int | None
     wait_new_records: bool
     create_wait: timedelta | None
@@ -101,7 +101,7 @@ class ReadSpec:
 def read_spec(
     payload_type: Any,
     *,
-    offset: int | End | None,
+    offset: bytes | End | None,
     last: int | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
@@ -132,5 +132,5 @@ def reader(
     if read.last is not None or read.offset is End.END:
         position = Position(None)
     else:
-        position = Position(read.offset or 0)
+        position = Position(read.offset or b"")
     return Reader(items(position), position, options)

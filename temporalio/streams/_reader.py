@@ -34,7 +34,7 @@ _LAST_PAUSE = 2.0
 class Position:
     """Where a read resumes from. The read moves it past each page that it finished."""
 
-    next_offset: int | None
+    next_offset: bytes | None
 
 
 class Reader(Generic[T]):
@@ -84,8 +84,9 @@ class Reader(Generic[T]):
         """
         with _backend.using(self._options):
             item = await self._items.__anext__()
+        # A resume reads after the offset, so the next read starts at this item's offset.
         offset = item.offset._wire
-        self._position.next_offset = max(self._position.next_offset or 0, offset + 1)
+        self._position.next_offset = max(self._position.next_offset or b"", offset)
         return item
 
     async def aclose(self) -> None:
@@ -105,7 +106,7 @@ async def read(
     *,
     position: Position,
     payload_type: Any,
-    from_offset: int | End | None,
+    from_offset: bytes | End | None,
     last: int | None = None,
     wait_new_records: bool,
     create_wait: timedelta | None,
@@ -128,7 +129,7 @@ async def read(
         return models.ReadRecordsRequest(
             ref=models.StreamRef(id=stream_id),
             # END applies only to the first page. Later pages start at the last page's next offset.
-            from_offset=from_offset if isinstance(from_offset, int) else None,
+            from_offset=from_offset if isinstance(from_offset, bytes) else None,
             start=models.StreamReadStart.StreamReadStartEnd
             if from_offset is End.END
             else models.StreamReadStart.StreamReadStartBeginning
@@ -152,18 +153,16 @@ async def read(
                     except Exception as err:
                         # Move next_offset past the Record, so a resume doesn't fail on it again.
                         # The error gives the offset, for a read of that Record.
-                        offset = record.offset or 0
-                        position.next_offset = max(
-                            position.next_offset or 0, offset + 1
-                        )
+                        offset = record.offset or b""
+                        position.next_offset = max(position.next_offset or b"", offset)
                         raise _errors.StreamError(
-                            f"Can't decode the Record at the offset {offset}: {err}"
+                            f"Can't decode the Record at the offset {offset.hex()}: {err}"
                         ) from err
                     yield item
                 if page.next_offset is not None:
                     # A resume starts where the page ended.
                     position.next_offset = max(
-                        position.next_offset or 0, page.next_offset
+                        position.next_offset or b"", page.next_offset
                     )
             return
         except _errors.StreamError as err:
@@ -210,7 +209,7 @@ async def _pages(
         if not wait_new_records and (
             page.next_offset is None
             # An empty page that didn't advance is at the newest Record.
-            or (not page.records and page.next_offset <= (request.from_offset or 0))
+            or (not page.records and page.next_offset <= (request.from_offset or b""))
         ):
             return
         if page.next_offset is not None:
@@ -259,7 +258,7 @@ async def _item(
     record: models.StreamRecord[temporalio.common.RawValue],
     payload_type: Any,
 ) -> Item | None:
-    offset = record.offset or 0
+    offset = record.offset or b""
     match record.item:
         case None:
             # A newer backend's item kind that this SDK doesn't know is empty, so the read skips

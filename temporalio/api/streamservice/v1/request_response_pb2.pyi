@@ -205,13 +205,13 @@ class AppendRecordsResponse(google.protobuf.message.Message):
 
     FIRST_OFFSET_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
-    first_offset: builtins.int
-    last_offset: builtins.int
+    first_offset: builtins.bytes
+    last_offset: builtins.bytes
     def __init__(
         self,
         *,
-        first_offset: builtins.int = ...,
-        last_offset: builtins.int = ...,
+        first_offset: builtins.bytes = ...,
+        last_offset: builtins.bytes = ...,
     ) -> None: ...
     def ClearField(
         self,
@@ -305,7 +305,7 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     namespace: builtins.str
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
-    from_offset: builtins.int
+    from_offset: builtins.bytes
     """Start at this offset. Zero uses start. It fails with OFFSET_TOO_HIGH if it is past the newest
     offset + 1.
     (-- api-linter: core::0140::prepositions=disabled
@@ -325,7 +325,7 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         """How long to wait for a Stream that nobody created yet. Empty fails at once with NOT_FOUND.
         At most 60 s.
         """
-    to_offset: builtins.int
+    to_offset: builtins.bytes
     """The exclusive end of the read. The read scans no entry at or after it, so a replay reads the
     same range. Zero means no end. Only the server serves it, and a Store refuses it.
     (-- api-linter: core::0140::prepositions=disabled
@@ -357,12 +357,12 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         *,
         namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
-        from_offset: builtins.int = ...,
+        from_offset: builtins.bytes = ...,
         start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType = ...,
         max_records: builtins.int = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
         create_wait: google.protobuf.duration_pb2.Duration | None = ...,
-        to_offset: builtins.int = ...,
+        to_offset: builtins.bytes = ...,
         wake_only: builtins.bool = ...,
         last: builtins.int = ...,
         max_bytes: builtins.int = ...,
@@ -423,7 +423,7 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         temporalio.api.stream.v1.message_pb2.StreamRecord
     ]: ...
-    next_offset: builtins.int
+    next_offset: builtins.bytes
     """The from_offset of the next read, which is the newest offset read + 1."""
     done: builtins.bool
     """True when the Stream is closed and this read gave its last item. A read of a closed Stream
@@ -440,7 +440,7 @@ class ReadRecordsResponse(google.protobuf.message.Message):
             temporalio.api.stream.v1.message_pb2.StreamRecord
         ]
         | None = ...,
-        next_offset: builtins.int = ...,
+        next_offset: builtins.bytes = ...,
         done: builtins.bool = ...,
         continue_as_new_suggested: builtins.bool = ...,
     ) -> None: ...
@@ -499,7 +499,7 @@ class DescribeStreamResponse(google.protobuf.message.Message):
     LAST_OFFSET_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
     status: temporalio.api.enums.v1.stream_pb2.StreamStatus.ValueType
-    last_offset: builtins.int
+    last_offset: builtins.bytes
     """The newest offset, of a Record. Zero when the Stream has none."""
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration: ...
@@ -507,7 +507,7 @@ class DescribeStreamResponse(google.protobuf.message.Message):
         self,
         *,
         status: temporalio.api.enums.v1.stream_pb2.StreamStatus.ValueType = ...,
-        last_offset: builtins.int = ...,
+        last_offset: builtins.bytes = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
     def HasField(

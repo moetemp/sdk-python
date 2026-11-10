@@ -41,7 +41,7 @@ class FakeExtension:
         self.creates: list[stream_pb.CreateStreamRequest] = []
         self.next_offset = 1
 
-    def _append(self, stream_id: str, record: stream_v1.StreamRecord) -> int:
+    def _append(self, stream_id: str, record: stream_v1.StreamRecord) -> bytes:
         stream = self.streams.get(stream_id)
         if stream is None:
             raise _error(
@@ -52,7 +52,8 @@ class FakeExtension:
                 RPCStatusCode.FAILED_PRECONDITION,
                 StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
             )
-        record.offset = self.next_offset
+        # A fixed-width big-endian offset compares as raw bytes in the Store's order.
+        record.offset = self.next_offset.to_bytes(8, "big")
         self.next_offset += 1
         stream.records.append(record)
         stream.wake()
@@ -112,12 +113,14 @@ class FakeExtension:
                 for record in write.records
             ]
             return runtime_pb.WriteRecordsResponse(
-                first_offset=offsets[0] if offsets else 0,
-                last_offset=offsets[-1] if offsets else 0,
+                first_offset=offsets[0] if offsets else b"",
+                last_offset=offsets[-1] if offsets else b"",
             ).SerializeToString()
         if method == "CloseWriter":
             return runtime_pb.CloseWriterResponse(
-                last_offset=self.next_offset - 1
+                last_offset=(self.next_offset - 1).to_bytes(8, "big")
+                if self.next_offset > 1
+                else b""
             ).SerializeToString()
         if method == "CloseStream":
             # A close writes no Record. It wakes the waiting reads, which then end.
@@ -130,7 +133,7 @@ class FakeExtension:
             describe = stream_pb.DescribeStreamRequest.FromString(input)
             records = self.streams[describe.ref.id].records
             return stream_pb.DescribeStreamResponse(
-                last_offset=records[-1].offset if records else 0
+                last_offset=records[-1].offset if records else b""
             ).SerializeToString()
         if method == "ReadRecords":
             return (
@@ -154,15 +157,16 @@ class FakeExtension:
                 )
             await asyncio.sleep(0.01)
         stream = self.streams[request.ref.id]
-        offset = request.from_offset or 1
+        # A resume reads after the offset, so from_offset is exclusive. Empty reads from the start.
+        offset = request.from_offset or b""
         wait = request.wait.ToTimedelta().total_seconds()
         until = loop.time() + wait
         while True:
-            found = [record for record in stream.records if record.offset >= offset]
+            found = [record for record in stream.records if record.offset > offset]
             if found or stream.closed:
                 return stream_pb.ReadRecordsResponse(
                     records=found,
-                    next_offset=found[-1].offset + 1 if found else offset,
+                    next_offset=found[-1].offset if found else offset,
                     done=stream.closed,
                 )
             left = until - loop.time()
