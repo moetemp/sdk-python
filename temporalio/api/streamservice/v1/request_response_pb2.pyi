@@ -25,9 +25,10 @@ DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 class CreateStreamRequest(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     Creates the Stream. When the Stream exists, FAIL fails with ALREADY_EXISTS, and USE_EXISTING
-    gets it with created false and its own Retention. A retry of the create that made the Stream,
-    with the same request_id, gets created true. Each policy fails with CLOSED on a closed Stream
-    and EXPIRED on an expired one.
+    gets it with created false. A retry of the create that made the Stream, with the same
+    request_id, gets created true. Each policy fails with CLOSED on a closed Stream and EXPIRED on
+    an expired one. A create takes no Retention. The backend config holds it, as a namespace holds
+    the Retention of its Workflows.
     (-- api-linter: core::0133=disabled
         aip.dev/not-precedent: The request identifies a Stream by namespace and ref. --)
     """
@@ -36,22 +37,12 @@ class CreateStreamRequest(google.protobuf.message.Message):
 
     NAMESPACE_FIELD_NUMBER: builtins.int
     STREAM_REF_FIELD_NUMBER: builtins.int
-    RETENTION_FIELD_NUMBER: builtins.int
-    TASK_TOKEN_FIELD_NUMBER: builtins.int
     ID_CONFLICT_POLICY_FIELD_NUMBER: builtins.int
     REQUEST_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
         """The ref of the Stream to create. Its id is the Stream id, and is never empty."""
-    @property
-    def retention(self) -> google.protobuf.duration_pb2.Duration:
-        """How long the Stream stays readable after its close. Empty is the Store default."""
-    task_token: builtins.bytes
-    """Only read by the server, for a Stream bound to a Standalone Activity. The server checks that
-    the token is the Activity's current attempt, so a caller can't bind a Stream to a Standalone
-    Activity that it isn't.
-    """
     id_conflict_policy: (
         temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType
     )
@@ -65,16 +56,11 @@ class CreateStreamRequest(google.protobuf.message.Message):
         *,
         namespace: builtins.str = ...,
         stream_ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
-        retention: google.protobuf.duration_pb2.Duration | None = ...,
-        task_token: builtins.bytes = ...,
         id_conflict_policy: temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType = ...,
         request_id: builtins.str = ...,
     ) -> None: ...
     def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "retention", b"retention", "stream_ref", b"stream_ref"
-        ],
+        self, field_name: typing_extensions.Literal["stream_ref", b"stream_ref"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
@@ -85,12 +71,8 @@ class CreateStreamRequest(google.protobuf.message.Message):
             b"namespace",
             "request_id",
             b"request_id",
-            "retention",
-            b"retention",
             "stream_ref",
             b"stream_ref",
-            "task_token",
-            b"task_token",
         ],
     ) -> None: ...
 
@@ -107,7 +89,9 @@ class CreateStreamResponse(google.protobuf.message.Message):
     CREATED_FIELD_NUMBER: builtins.int
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
-        """The ref of the Stream."""
+        """The ref of the Stream, with the name of the backend that holds it, also when the request
+        left the name empty. The caller passes this ref on as data.
+        """
     created: builtins.bool
     """False when USE_EXISTING got a Stream that existed."""
     def __init__(
@@ -157,8 +141,9 @@ class AppendRecordsRequest(google.protobuf.message.Message):
         temporalio.api.stream.v1.message_pb2.AppendRecord
     ]: ...
     task_token: builtins.bytes
-    """Only read by the server. The server checks the Producer against the Activity's current
-    attempt, so nobody else writes as that Activity.
+    """Only read by the server, and opaque to every SDK and Store, which never parse it. It lets
+    the server check that the caller is the task that the Producer names. It is an identity
+    check, not a guard against a stale attempt, which the epoch fences.
     """
     def __init__(
         self,
@@ -299,20 +284,18 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     CREATE_WAIT_FIELD_NUMBER: builtins.int
     TO_OFFSET_FIELD_NUMBER: builtins.int
     WAKE_ONLY_FIELD_NUMBER: builtins.int
-    LAST_FIELD_NUMBER: builtins.int
     MAX_BYTES_FIELD_NUMBER: builtins.int
     FLOOR_FROM_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
     from_offset: builtins.bytes
-    """Read after this offset. Empty uses start. It fails with OFFSET_TOO_HIGH if it is past the
-    newest offset.
+    """Read after this offset. It fails with OFFSET_TOO_HIGH if it is past the newest offset.
     (-- api-linter: core::0140::prepositions=disabled
         aip.dev/not-precedent: "from" and "to" mark the ends of a range of offsets. --)
     """
     start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType
-    """Where to start when from_offset is empty. Unspecified is the beginning."""
+    """Start at the beginning or at the end of the Stream. Unspecified is the beginning."""
     max_records: builtins.int
     """The most Records in one page. Zero is 1000."""
     @property
@@ -332,14 +315,12 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         aip.dev/not-precedent: "from" and "to" mark the ends of a range of offsets. --)
     """
     wake_only: builtins.bool
-    """Park as a normal read, then answer with no Records and next_offset = from_offset, when a
-    Record after from_offset exists, when the Stream closes (done), or when wait ends. Its
-    wait may be days, since a parked read adds nothing to History while it waits. Only the
-    server serves it, and a Store refuses it.
-    """
-    last: builtins.int
-    """Read the newest `last` Records, oldest first. It needs no from_offset and no start. Not with
-    wake_only, and not in Workflow code, where replay needs a fixed range.
+    """Asks only for a wake-up, for a reader that must not get Records in this answer, such as a
+    Workflow whose Records stay out of History. The read waits as a normal read does. It then
+    answers with no Records and last_offset = from_offset, when a Record after from_offset
+    exists, when the Stream closes (done), or when wait ends. The reader then gets the Records
+    with a normal read. The wait may be days, since a parked read adds nothing to History.
+    Only the server serves it, and a Store refuses it.
     """
     max_bytes: builtins.int
     """The most Record bytes in one page, so a page fits the caller's limit, such as a History
@@ -364,14 +345,24 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         create_wait: google.protobuf.duration_pb2.Duration | None = ...,
         to_offset: builtins.bytes = ...,
         wake_only: builtins.bool = ...,
-        last: builtins.int = ...,
         max_bytes: builtins.int = ...,
         floor_from: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "create_wait", b"create_wait", "ref", b"ref", "wait", b"wait"
+            "create_wait",
+            b"create_wait",
+            "from_offset",
+            b"from_offset",
+            "position",
+            b"position",
+            "ref",
+            b"ref",
+            "start",
+            b"start",
+            "wait",
+            b"wait",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -383,14 +374,14 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"floor_from",
             "from_offset",
             b"from_offset",
-            "last",
-            b"last",
             "max_bytes",
             b"max_bytes",
             "max_records",
             b"max_records",
             "namespace",
             b"namespace",
+            "position",
+            b"position",
             "ref",
             b"ref",
             "start",
@@ -403,6 +394,9 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"wake_only",
         ],
     ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing_extensions.Literal["position", b"position"]
+    ) -> typing_extensions.Literal["from_offset", "start"] | None: ...
 
 global___ReadRecordsRequest = ReadRecordsRequest
 
@@ -414,7 +408,7 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     RECORDS_FIELD_NUMBER: builtins.int
-    NEXT_OFFSET_FIELD_NUMBER: builtins.int
+    LAST_OFFSET_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
     CONTINUE_AS_NEW_SUGGESTED_FIELD_NUMBER: builtins.int
     @property
@@ -423,17 +417,24 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         temporalio.api.stream.v1.message_pb2.StreamRecord
     ]: ...
-    next_offset: builtins.bytes
-    """The from_offset of the next read, which is the offset of the newest Record read. An empty
-    page gives the request's from_offset.
+    last_offset: builtins.bytes
+    """The last offset that this read covered, which is the offset of the newest Record of the
+    page. The next read gives it as from_offset and starts after it. An empty page gives the
+    request's from_offset, and that is empty when the request had none. So it is always
+    known, and an empty value means that the next read starts as this one did.
     """
     done: builtins.bool
-    """True when the Stream is closed and this read gave its last item. A read of a closed Stream
-    with no item left answers at once.
+    """True when the Stream is closed and this read gave its last item. The close item says the
+    same on a page that has it. An answer with no item needs this flag, which is a wake_only
+    read and a read after the close item. A read of a closed Stream with no item left answers
+    at once.
     """
     continue_as_new_suggested: builtins.bool
-    """This reader's floor keeps more than half of the Stream's byte cap. The writer fails when the
-    cap fills, and only the reader's continue-as-new frees it. Only set by the server.
+    """Tells a Workflow reader to continue as new. The server keeps every Record from the lowest
+    offset that a run read, since a replay of the run reads them again. That floor moves only
+    when the run ends. This flag is true when the Records that this reader's floor keeps are
+    more than half of the Stream's byte cap. The writer fails when the cap fills, and only the
+    reader's continue-as-new frees it. Only set by the server.
     """
     def __init__(
         self,
@@ -442,7 +443,7 @@ class ReadRecordsResponse(google.protobuf.message.Message):
             temporalio.api.stream.v1.message_pb2.StreamRecord
         ]
         | None = ...,
-        next_offset: builtins.bytes = ...,
+        last_offset: builtins.bytes = ...,
         done: builtins.bool = ...,
         continue_as_new_suggested: builtins.bool = ...,
     ) -> None: ...
@@ -453,8 +454,8 @@ class ReadRecordsResponse(google.protobuf.message.Message):
             b"continue_as_new_suggested",
             "done",
             b"done",
-            "next_offset",
-            b"next_offset",
+            "last_offset",
+            b"last_offset",
             "records",
             b"records",
         ],

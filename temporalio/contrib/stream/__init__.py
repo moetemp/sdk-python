@@ -86,7 +86,7 @@ class RedisStreamBackend(ExtensionStreamBackend):
         )
         for field, value in (
             ("retention", retention),
-            ("safety_ttl", safety_ttl),
+            ("last_write_ttl", safety_ttl),
             ("response_timeout", response_timeout),
         ):
             if value is not None:

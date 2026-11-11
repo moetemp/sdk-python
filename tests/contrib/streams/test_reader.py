@@ -36,19 +36,23 @@ async def test_a_waiting_read_carries_the_offset_until_records_come():
         item=models.StreamItemData(models.StreamData(body=None)), offset=_off(9)
     )
     service = _Pages(
-        models.ReadRecordsResponse(records=[], next_offset=_off(8)),
-        models.ReadRecordsResponse(records=[record], next_offset=_off(10)),
+        models.ReadRecordsResponse(records=[], last_offset=_off(8)),
+        models.ReadRecordsResponse(records=[record], last_offset=_off(10)),
     )
     page = await _reader._read_until_records(
         service,
         models.ReadRecordsRequest(
-            ref=models.StreamRef(id="wf:run"), from_offset=_off(1)
+            ref=models.StreamRef(id="wf:run"),
+            position=models.ReadPositionFromOffset(_off(1)),
         ),
         timedelta(seconds=5),
     )
     assert page.records and page.records[0].offset == _off(9)
     first, second = service.requests
-    assert (first.from_offset, second.from_offset) == (_off(1), _off(8))
+    assert (first.position, second.position) == (
+        models.ReadPositionFromOffset(_off(1)),
+        models.ReadPositionFromOffset(_off(8)),
+    )
     assert second.wait is not None
     assert timedelta() < second.wait <= timedelta(seconds=60)
 

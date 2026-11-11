@@ -248,23 +248,23 @@ async def test_append_to_a_stream_that_nobody_created_raises(stream_client: Clie
     assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
 
 
-async def test_next_offset_resumes_after_the_last_item(stream_client: Client):
+async def test_last_offset_resumes_after_the_last_item(stream_client: Client):
     stream = await stream_client.create_stream(
         f"resume-{uuid.uuid4()}", payload_type=str
     )
     last = await stream.append("a", "b")
     tokens = stream.read(wait_new_records=False)
-    assert tokens.next_offset == _BEGINNING
+    assert tokens.last_offset == _BEGINNING
     assert [item.data async for item in tokens if isinstance(item, streams.Record)] == [
         "a",
         "b",
     ]
-    assert tokens.next_offset == last
-    resume_from = tokens.next_offset
+    assert tokens.last_offset == last
+    resume_from = tokens.last_offset
     new = stream.read(offset=streams.END, wait_new_records=False)
-    assert new.next_offset is None
+    assert new.last_offset is None
     assert [item async for item in new] == []
-    assert new.next_offset == last
+    assert new.last_offset == last
     await stream.append("c")
     resumed = stream.read(offset=resume_from, wait_new_records=False)
     assert [
@@ -293,29 +293,6 @@ async def test_a_waiting_read_ends_when_the_stream_closes(stream_client: Client)
 
 async def _items(read: streams.Reader[Any]) -> list[Any]:
     return [item async for item in read]
-
-
-async def test_last_reads_the_newest_records_then_follows(stream_client: Client):
-    stream = await stream_client.create_stream(f"last-{uuid.uuid4()}", payload_type=str)
-    await stream.append("a", "b", "c")
-    # A chat view shows the last few Records first, then waits for new ones.
-    tail = stream.read(last=2)
-    assert tail.next_offset is None
-    shown = [await anext(tail), await anext(tail)]
-    await stream.append("d")
-    shown.append(await anext(tail))
-    await tail.aclose()
-    assert [item.data for item in shown if isinstance(item, streams.Record)] == [
-        "b",
-        "c",
-        "d",
-    ]
-    newest = stream.read(last=1, wait_new_records=False)
-    assert [item.data async for item in newest if isinstance(item, streams.Record)] == [
-        "d"
-    ]
-    with pytest.raises(ValueError, match="no offset"):
-        stream.read(last=2, offset=_BEGINNING)
 
 
 async def test_payload_type_of_the_call_decodes_each_value(stream_client: Client):
@@ -362,8 +339,8 @@ async def test_record_that_fails_to_decode_raises_and_resumes_past_it(
     read = reader.read(wait_new_records=False)
     with pytest.raises(streams.StreamError, match=f"offset {bad}"):
         await anext(read)
-    assert read.next_offset == bad
-    resumed = reader.read(offset=read.next_offset, wait_new_records=False)
+    assert read.last_offset == bad
+    resumed = reader.read(offset=read.last_offset, wait_new_records=False)
     assert [
         item.data async for item in resumed if isinstance(item, streams.Record)
     ] == [Turn("after")]
@@ -570,7 +547,7 @@ async def test_client_stream_takes_workflow_writes(stream_client: Client):
     again = stream_client.get_stream(stream.ref.id, payload_type=Turn)
     head = again.read()
     await anext(head)
-    after_first = head.next_offset
+    after_first = head.last_offset
     await head.aclose()
     assert after_first == first
     resumed = [

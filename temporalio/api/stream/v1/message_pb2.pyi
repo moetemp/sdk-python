@@ -32,8 +32,9 @@ class StreamRef(google.protobuf.message.Message):
     id: builtins.str
     backend: builtins.str
     """The name of the backend that holds the Stream, as the Worker and client config register
-    it, so every process routes a ref it receives. Empty is the default backend. The Store
-    never reads it.
+    it, so every process routes a ref it receives. With no name, the SDK picks the backend from
+    its config. Only an SDK reads it. A request carries the whole ref, and the server and a
+    Store ignore this field.
     """
     def __init__(
         self,
@@ -50,7 +51,8 @@ global___StreamRef = StreamRef
 class WorkflowTaskEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     One Workflow Task attempt of a run. It orders by started_event_id, then attempt, then
-    started_time.
+    started_time. An epoch orders the writes of one Producer only, and a Producer is one run. A
+    reset run and the next run of a chain are other Producers, so their epochs start again.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -89,8 +91,9 @@ global___WorkflowTaskEpoch = WorkflowTaskEpoch
 
 class LocalActivityEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The attempt of a Local Activity. It orders by task, then attempt, so a Local Activity of a
-    later Workflow Task supersedes one of an earlier task.
+    The attempt of a Local Activity. It orders by task, then attempt, so the same call in a later
+    Workflow Task is a higher epoch. The Producer carries the run. Records of two runs have no
+    order by epoch, only their order in the Stream.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -156,7 +159,9 @@ global___ActivityEpoch = ActivityEpoch
 
 class ClientEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The attempt of a client Producer, which the client picks.
+    The attempt of a client Producer, which the client picks. A client that keeps one Producer
+    name across restarts stores this number and raises it at each start, so the new process
+    fences the old one. A client with no name of its own is a new Producer in each process.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -176,8 +181,7 @@ global___ClientEpoch = ClientEpoch
 
 class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Workflow run Producer. It writes in its Workflow Task. A higher epoch supersedes the Records of
-    the run's Workflow Tasks that never completed, with those of their Local Activities.
+    A Workflow run Producer. It writes in its Workflow Task. A higher epoch fences the lower ones.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -185,7 +189,7 @@ class WorkflowProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
-    """The first execution run id of the run chain."""
+    """The run id of the Workflow run, not of its chain. Each run is its own Producer."""
     @property
     def epoch(self) -> global___WorkflowTaskEpoch: ...
     def __init__(
@@ -206,7 +210,7 @@ global___WorkflowProducer = WorkflowProducer
 
 class LocalActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Local Activity Producer. A higher epoch supersedes the Producer's lower epochs.
+    A Local Activity Producer, one for each call of a run. A higher epoch fences the lower ones.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -214,6 +218,7 @@ class LocalActivityProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
+    """The run id of the Workflow run."""
     @property
     def epoch(self) -> global___LocalActivityEpoch: ...
     def __init__(
@@ -235,7 +240,7 @@ global___LocalActivityProducer = LocalActivityProducer
 class ActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     An Activity Producer, for an Activity of a Workflow or a Standalone Activity. A higher epoch
-    supersedes the Producer's lower epochs.
+    fences the lower ones. Their Records are those of a failed attempt, which a reader may hide.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -243,6 +248,9 @@ class ActivityProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
+    """The run id of the Workflow run that scheduled the Activity. Empty for a Standalone
+    Activity, whose own run id is in the Producer id.
+    """
     @property
     def epoch(self) -> global___ActivityEpoch: ...
     def __init__(
@@ -289,8 +297,9 @@ global___ClientProducer = ClientProducer
 class Producer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     The code that wrote a batch. Its id stays the same across attempts, and the kind's case orders
-    its epochs and picks which earlier Records a higher epoch supersedes. A run-based kind carries its
-    run, so a client can't.
+    its epochs. After a write of a higher epoch, a write of a lower epoch of the same Producer
+    fails with FENCED. The epochs of two Producers never compare. A run-based kind carries its run,
+    so a client can't.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -298,19 +307,25 @@ class Producer(google.protobuf.message.Message):
     ID_FIELD_NUMBER: builtins.int
     WORKFLOW_FIELD_NUMBER: builtins.int
     LOCAL_ACTIVITY_FIELD_NUMBER: builtins.int
-    ACTIVITY_FIELD_NUMBER: builtins.int
+    WORKFLOW_ACTIVITY_FIELD_NUMBER: builtins.int
     STANDALONE_ACTIVITY_FIELD_NUMBER: builtins.int
     CLIENT_FIELD_NUMBER: builtins.int
     id: builtins.str
-    """Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run."""
+    """Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run. It is
+    unique in one Stream, and a Stream is in one namespace, so it carries no namespace.
+    """
     @property
     def workflow(self) -> global___WorkflowProducer: ...
     @property
     def local_activity(self) -> global___LocalActivityProducer: ...
     @property
-    def activity(self) -> global___ActivityProducer: ...
+    def workflow_activity(self) -> global___ActivityProducer:
+        """An Activity that a Workflow scheduled."""
     @property
-    def standalone_activity(self) -> global___ActivityProducer: ...
+    def standalone_activity(self) -> global___ActivityProducer:
+        """An Activity with no Workflow. Both Activity cases order their epochs the same way. The
+        case tells which identity the Producer has, since only the first has a Workflow run.
+        """
     @property
     def client(self) -> global___ClientProducer: ...
     def __init__(
@@ -319,15 +334,13 @@ class Producer(google.protobuf.message.Message):
         id: builtins.str = ...,
         workflow: global___WorkflowProducer | None = ...,
         local_activity: global___LocalActivityProducer | None = ...,
-        activity: global___ActivityProducer | None = ...,
+        workflow_activity: global___ActivityProducer | None = ...,
         standalone_activity: global___ActivityProducer | None = ...,
         client: global___ClientProducer | None = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "activity",
-            b"activity",
             "client",
             b"client",
             "kind",
@@ -338,13 +351,13 @@ class Producer(google.protobuf.message.Message):
             b"standalone_activity",
             "workflow",
             b"workflow",
+            "workflow_activity",
+            b"workflow_activity",
         ],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "activity",
-            b"activity",
             "client",
             b"client",
             "id",
@@ -357,13 +370,19 @@ class Producer(google.protobuf.message.Message):
             b"standalone_activity",
             "workflow",
             b"workflow",
+            "workflow_activity",
+            b"workflow_activity",
         ],
     ) -> None: ...
     def WhichOneof(
         self, oneof_group: typing_extensions.Literal["kind", b"kind"]
     ) -> (
         typing_extensions.Literal[
-            "workflow", "local_activity", "activity", "standalone_activity", "client"
+            "workflow",
+            "local_activity",
+            "workflow_activity",
+            "standalone_activity",
+            "client",
         ]
         | None
     ): ...
@@ -452,7 +471,9 @@ global___StreamData = StreamData
 
 class StreamClose(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The close of a Stream. A Stream has at most one, and a read returns it last.
+    The close of a Stream, as a read item. A close is its own call and stores no Record. A read
+    builds this item from the close state of the Stream and returns it last, so a reader learns in
+    order that the Stream ended, who closed it and why.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor

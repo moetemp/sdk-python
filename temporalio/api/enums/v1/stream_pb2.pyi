@@ -145,7 +145,7 @@ class _StreamErrorReasonEnumTypeWrapper(
     STREAM_ERROR_REASON_NOT_FOUND: _StreamErrorReason.ValueType  # 1
     """Nobody created the Stream, even after `create_wait`. NOT_FOUND."""
     STREAM_ERROR_REASON_EXPIRED: _StreamErrorReason.ValueType  # 2
-    """The Stream's Retention or safety TTL passed. NOT_FOUND."""
+    """The Stream's Retention or its last-write TTL passed. NOT_FOUND."""
     STREAM_ERROR_REASON_CLOSED: _StreamErrorReason.ValueType  # 3
     """The Stream is closed. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_FENCED: _StreamErrorReason.ValueType  # 4
@@ -161,8 +161,8 @@ class _StreamErrorReasonEnumTypeWrapper(
     STREAM_ERROR_REASON_FORMAT_TOO_NEW: _StreamErrorReason.ValueType  # 8
     """A newer format version wrote the Stream. FAILED_PRECONDITION."""
     STREAM_ERROR_REASON_OFFSET_TOO_HIGH: _StreamErrorReason.ValueType  # 9
-    """The offset is past the newest offset + 1, for example after a failover lost the newest
-    Records. A read from it works again once the Stream has Records up to it. OUT_OF_RANGE.
+    """The offset is past the newest offset, for example after a failover lost the newest Records.
+    A read from it works again once the Stream has Records up to it. OUT_OF_RANGE.
     """
     STREAM_ERROR_REASON_TOO_LARGE: _StreamErrorReason.ValueType  # 10
     """A Record or a batch is over the Store's limit. INVALID_ARGUMENT."""
@@ -185,15 +185,16 @@ class StreamErrorReason(
     _StreamErrorReason, metaclass=_StreamErrorReasonEnumTypeWrapper
 ):
     """Experimental. Might change in the future.
-    Why a Stream call failed. Each reason has one gRPC status code. An SDK raises its own error
-    class for each reason that code can act on, and a base class for the others.
+    Why a Stream call failed. Each reason has one gRPC status code, and several reasons share a
+    code. So code matches on the reason, and not on the status code. An SDK raises one error type
+    that carries the reason.
     """
 
 STREAM_ERROR_REASON_UNSPECIFIED: StreamErrorReason.ValueType  # 0
 STREAM_ERROR_REASON_NOT_FOUND: StreamErrorReason.ValueType  # 1
 """Nobody created the Stream, even after `create_wait`. NOT_FOUND."""
 STREAM_ERROR_REASON_EXPIRED: StreamErrorReason.ValueType  # 2
-"""The Stream's Retention or safety TTL passed. NOT_FOUND."""
+"""The Stream's Retention or its last-write TTL passed. NOT_FOUND."""
 STREAM_ERROR_REASON_CLOSED: StreamErrorReason.ValueType  # 3
 """The Stream is closed. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_FENCED: StreamErrorReason.ValueType  # 4
@@ -209,8 +210,8 @@ STREAM_ERROR_REASON_NOT_OWNER: StreamErrorReason.ValueType  # 7
 STREAM_ERROR_REASON_FORMAT_TOO_NEW: StreamErrorReason.ValueType  # 8
 """A newer format version wrote the Stream. FAILED_PRECONDITION."""
 STREAM_ERROR_REASON_OFFSET_TOO_HIGH: StreamErrorReason.ValueType  # 9
-"""The offset is past the newest offset + 1, for example after a failover lost the newest
-Records. A read from it works again once the Stream has Records up to it. OUT_OF_RANGE.
+"""The offset is past the newest offset, for example after a failover lost the newest Records.
+A read from it works again once the Stream has Records up to it. OUT_OF_RANGE.
 """
 STREAM_ERROR_REASON_TOO_LARGE: StreamErrorReason.ValueType  # 10
 """A Record or a batch is over the Store's limit. INVALID_ARGUMENT."""

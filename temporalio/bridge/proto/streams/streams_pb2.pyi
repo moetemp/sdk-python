@@ -34,14 +34,16 @@ class MemoryStreamConfig(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     RETENTION_FIELD_NUMBER: builtins.int
-    SAFETY_TTL_FIELD_NUMBER: builtins.int
+    LAST_WRITE_TTL_FIELD_NUMBER: builtins.int
     BACKEND_FIELD_NUMBER: builtins.int
     @property
     def retention(self) -> google.protobuf.duration_pb2.Duration:
         """The default Retention of a new Stream. Empty is 7 days."""
     @property
-    def safety_ttl(self) -> google.protobuf.duration_pb2.Duration:
-        """How long an open Workflow-owned Stream stays after its last write. Empty is 90 days."""
+    def last_write_ttl(self) -> google.protobuf.duration_pb2.Duration:
+        """How long an open Stream stays after its last write. Empty keeps an open Stream until its
+        close.
+        """
     backend: builtins.str
     """The backend name that lang registered this runtime under. The runtime sets it on each
     StreamRef that it builds, such as the one in a create response.
@@ -50,13 +52,13 @@ class MemoryStreamConfig(google.protobuf.message.Message):
         self,
         *,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
-        safety_ttl: google.protobuf.duration_pb2.Duration | None = ...,
+        last_write_ttl: google.protobuf.duration_pb2.Duration | None = ...,
         backend: builtins.str = ...,
     ) -> None: ...
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "retention", b"retention", "safety_ttl", b"safety_ttl"
+            "last_write_ttl", b"last_write_ttl", "retention", b"retention"
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -64,10 +66,10 @@ class MemoryStreamConfig(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "backend",
             b"backend",
+            "last_write_ttl",
+            b"last_write_ttl",
             "retention",
             b"retention",
-            "safety_ttl",
-            b"safety_ttl",
         ],
     ) -> None: ...
 
@@ -76,30 +78,24 @@ global___MemoryStreamConfig = MemoryStreamConfig
 class OpenWriterRequest(google.protobuf.message.Message):
     """Method `OpenWriter`, asynchronous. A writer for an Activity, a Local Activity or a client
     Producer, which keeps its epoch and `sequence` order. A writer of a Local Activity, or of an
-    Activity attempt above 1, first sends an empty batch, so that the new epoch withdraws the earlier
-    one's Records. The opens of one Producer epoch on one Stream share one writer. Each open adds a
-    reference, and each `CloseWriter` or `FreeWriter` releases one. The batches of every writer in a
-    process take their `sequence` from one counter, so a writer that opens again after its close
+    Activity attempt above 1, first sends an empty batch, so that the new epoch fences the earlier
+    one. The opens of one Producer epoch on one Stream share one writer. Each open adds a
+    reference, and each `CloseWriter` or `FreeWriter` releases one. The batches of every writer in
+    a process take their `sequence` from one counter, so a writer that opens again after its close
     continues above its earlier batches.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
     WRITER_FIELD_NUMBER: builtins.int
     MAX_BATCH_SIZE_FIELD_NUMBER: builtins.int
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
-    namespace: builtins.str
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
     @property
     def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """Each batch sends it as AppendRecords does. For a Local Activity its withdrawal has the run's
-        task facts, so the writes withdraw the run's orphaned Local Activity Records. The withdrawal's
-        withdraw_run must be empty, since only a retry run's first append withdraws a run, and a
-        writer sends many.
-        """
+        """Each batch sends it as AppendRecords does."""
     max_batch_size: builtins.int
     """A write sends at most this many Records in one batch. Zero, or a value above 1000, is 1000."""
     @property
@@ -108,7 +104,6 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
         writer: temporalio.api.stream.v1.message_pb2.StreamWriter | None = ...,
         max_batch_size: builtins.int = ...,
@@ -132,8 +127,6 @@ class OpenWriterRequest(google.protobuf.message.Message):
             b"max_batch_size",
             "max_retry_duration",
             b"max_retry_duration",
-            "namespace",
-            b"namespace",
             "ref",
             b"ref",
             "writer",

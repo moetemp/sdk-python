@@ -109,7 +109,6 @@ class Stream(Generic[T]):
         self,
         *,
         offset: StreamOffset | End | None = None,
-        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
@@ -119,15 +118,13 @@ class Stream(Generic[T]):
 
         The read ends when the Stream is closed and the read gave its last item, or at the
         newest Record when ``wait_new_records`` is False. To stop after a quiet period, use your
-        own timer, and resume later with ``offset=`` set to the read's ``next_offset``. To cross
+        own timer, and resume later with ``offset=`` set to the read's ``last_offset``. To cross
         out the Records of a failed Activity attempt, wrap the read in
         :py:func:`temporalio.streams.superseded.with_superseded`.
 
         Args:
             offset: Resume after this offset, such as one from a Record or ``get_offset``, or
                 read from ``streams.END`` for new Records only. Defaults to the first Record.
-            last: Start with the newest ``last`` Records, oldest first, such as for the first
-                view of a chat. Can't be used with ``offset``. At most 1000.
             wait_new_records: Wait for new Records at the end of the Stream.
             create_wait: How long to wait for a Stream that doesn't exist yet, such as one
                 that a Workflow creates after it starts. Defaults to no wait.
@@ -150,7 +147,6 @@ class Stream(Generic[T]):
         read = read_spec(
             self._payload_type,
             offset=wire_offset,
-            last=last,
             wait_new_records=wait_new_records,
             create_wait=create_wait,
         )
@@ -237,9 +233,12 @@ class SyncReader(Generic[T]):
         )
 
     @property
-    def next_offset(self) -> StreamOffset | None:
-        """The offset to resume from. See :py:attr:`temporalio.streams.Reader.next_offset`."""
-        return self._reader.next_offset
+    def last_offset(self) -> StreamOffset | None:
+        """The last offset that the read covered.
+
+        See :py:attr:`temporalio.streams.Reader.last_offset`.
+        """
+        return self._reader.last_offset
 
     def __iter__(self) -> SyncReader[T]:
         """The read is its own iterator."""
@@ -290,7 +289,6 @@ class SyncStream(Generic[T]):
         self,
         *,
         offset: StreamOffset | End | None = None,
-        last: int | None = None,
         wait_new_records: bool = True,
         create_wait: timedelta | None = None,
     ) -> SyncReader[T]:
@@ -300,7 +298,6 @@ class SyncStream(Generic[T]):
         async def read() -> Reader[T]:
             return self._stream.read(
                 offset=offset,
-                last=last,
                 wait_new_records=wait_new_records,
                 create_wait=create_wait,
             )

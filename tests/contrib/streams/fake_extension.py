@@ -7,7 +7,11 @@ import asyncio
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.proto.streams as runtime_pb
-from temporalio.api.enums.v1 import StreamErrorReason, StreamIdConflictPolicy
+from temporalio.api.enums.v1 import (
+    StreamErrorReason,
+    StreamIdConflictPolicy,
+    StreamReadStart,
+)
 from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
 from temporalio.service import RPCStatusCode
@@ -157,8 +161,13 @@ class FakeExtension:
                 )
             await asyncio.sleep(0.01)
         stream = self.streams[request.ref.id]
-        # A resume reads after the offset, so from_offset is exclusive. Empty reads from the start.
-        offset = request.from_offset or b""
+        # A resume reads after the offset, so from_offset is exclusive. A read from the end
+        # starts after the newest Record. Empty reads from the start.
+        offset = b""
+        if request.WhichOneof("position") == "from_offset":
+            offset = request.from_offset
+        elif request.start == StreamReadStart.STREAM_READ_START_END and stream.records:
+            offset = stream.records[-1].offset
         wait = request.wait.ToTimedelta().total_seconds()
         until = loop.time() + wait
         while True:
@@ -166,12 +175,12 @@ class FakeExtension:
             if found or stream.closed:
                 return stream_pb.ReadRecordsResponse(
                     records=found,
-                    next_offset=found[-1].offset if found else offset,
+                    last_offset=found[-1].offset if found else offset,
                     done=stream.closed,
                 )
             left = until - loop.time()
             if left <= 0:
-                return stream_pb.ReadRecordsResponse(next_offset=offset)
+                return stream_pb.ReadRecordsResponse(last_offset=offset)
             try:
                 await asyncio.wait_for(stream.changed.wait(), left)
             except asyncio.TimeoutError:

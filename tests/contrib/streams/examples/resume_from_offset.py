@@ -1,7 +1,7 @@
 """Streams API proposal, the resume notes of "A UI backend reads a Stream by its id".
 
 The chat server creates the Stream and passes its ref to the Workflow. The Reader gets the
-Stream by its id, saves the read's ``next_offset`` after each Record, stops, and later resumes
+Stream by its id, saves the read's ``last_offset`` after each Record, stops, and later resumes
 from it with ``offset``. A view that wants only new Records starts at ``streams.END``.
 """
 
@@ -61,7 +61,7 @@ async def read_some(
         if r.kind != streams.ItemKind.RECORD:
             continue
         seen.append(r.data.text)
-        store.save_offset("turns", read.next_offset)  # the next read starts after it
+        store.save_offset("turns", read.last_offset)  # the next read starts after it
         if len(seen) == count:
             break
     await read.aclose()

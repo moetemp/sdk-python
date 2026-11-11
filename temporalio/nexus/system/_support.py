@@ -1,6 +1,7 @@
 import asyncio
 import collections.abc
 import dataclasses
+import sys
 import typing
 import uuid
 from datetime import timedelta
@@ -307,16 +308,10 @@ class _ReadRequest(typing.Protocol):
     __dataclass_fields__: typing.ClassVar[dict[str, typing.Any]]
 
     @property
-    def from_offset(self) -> bytes | None: ...
-
-    @property
-    def start(self) -> object: ...
+    def position(self) -> object: ...
 
     @property
     def wait(self) -> timedelta | None: ...
-
-    @property
-    def last(self) -> int | None: ...
 
 
 class _ReadResponse(typing.Protocol):
@@ -324,7 +319,7 @@ class _ReadResponse(typing.Protocol):
     def records(self) -> collections.abc.Sized | None: ...
 
     @property
-    def next_offset(self) -> bytes | None: ...
+    def last_offset(self) -> bytes | None: ...
 
     @property
     def done(self) -> bool | None: ...
@@ -342,16 +337,12 @@ def next_read_request(
     also ends at an empty page that didn't move, since the Store had nothing past the newest
     Record.
     """
-    if response.done or response.next_offset is None:
+    if response.done or response.last_offset is None:
         return None
-    moved = response.next_offset > (request.from_offset or b"")
+    moved = response.last_offset > _from_offset(request)
     if not response.records and not moved and request.wait is None:
         return None
-    # The next page starts where this one ended, so the first page's start and last no longer
-    # apply.
-    return dataclasses.replace(
-        request, from_offset=response.next_offset, start=None, last=None
-    )
+    return _read_after(request, response.last_offset)
 
 
 class _ReadItem(typing.Protocol):
@@ -364,10 +355,27 @@ class _ReadItem(typing.Protocol):
 
 def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
     """The request that resumes a Stream read after ``item``."""
-    # A resume reads after the offset, so it starts at the item's offset. The first page's start
-    # and last no longer apply.
-    offset = item.offset or b""
-    return dataclasses.replace(request, from_offset=offset, start=None, last=None)
+    return _read_after(request, item.offset or b"")
+
+
+def _read_after(request: _ReadRequestT, offset: bytes) -> _ReadRequestT:
+    # A from-offset is exclusive, so the read starts after the Record at that offset. It
+    # replaces the first page's start.
+    return dataclasses.replace(
+        request, position=_read_models(request).ReadPositionFromOffset(offset)
+    )
+
+
+def _from_offset(request: _ReadRequest) -> bytes:
+    position: typing.Any = request.position
+    if isinstance(position, _read_models(request).ReadPositionFromOffset):
+        return position.value
+    return b""
+
+
+def _read_models(request: _ReadRequest) -> typing.Any:
+    # Each generated package has its own position classes, and its converter matches only those.
+    return sys.modules[type(request).__module__]
 
 
 class _AppendResponse(typing.Protocol):

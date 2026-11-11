@@ -149,10 +149,10 @@ another in one chat, so a new viewer sees each case.
   the tab saved.
 - **`streams.END`.** A tab that joins reads only new tokens, since the turns Stream has the
   earlier replies.
-- **`read(last=...)`.** The lobby sidebar reads the newest 20 chats, then each new one.
+- **A read from the start.** The lobby sidebar reads every chat, then each new one.
 - **`create_wait`.** A new chat's tab can start to read before the init's creates.
-- **Resume from `next_offset`.** Each item that the server sends carries its read's
-  `next_offset`. The tab saves it, and a reload or a reconnect sends it back.
+- **Resume from `last_offset`.** Each item that the server sends carries its read's
+  `last_offset`. The tab saves it, and a reload or a reconnect sends it back.
 - **Opaque offsets.** A `StreamOffset` is an opaque position. The server passes each one to the
   browser as its string form, and parses a resume offset back with `StreamOffset.parse`.
 - **`Superseded` withdrawal.** The page uses `withdrawn_offsets` for tokens that the read gave,

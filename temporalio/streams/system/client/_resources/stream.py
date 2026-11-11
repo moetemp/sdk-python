@@ -19,9 +19,9 @@ from ...models import (
     CloseStreamRequest,
     DescribeStreamRequest,
     DescribeStreamResponse,
+    ReadPosition,
     ReadRecordsRequest,
     ReadRecordsResponse,
-    StreamReadStart,
     StreamRecord,
     StreamRef,
 )
@@ -118,8 +118,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def read(
         self,
-        from_offset: bytes | None = None,
-        start: StreamReadStart | None = None,
+        position: ReadPosition | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         create_wait: datetime.timedelta | None = None,
@@ -131,8 +130,7 @@ class Stream(typing.Generic[BodyT]):
         """Read one page of Records. The poll iterator reads them all."""
         request = ReadRecordsRequest(
             ref=self.ref,
-            from_offset=from_offset,
-            start=start,
+            position=position,
             max_records=max_records,
             wait=wait,
             create_wait=create_wait,
@@ -150,8 +148,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def iter_read(
         self,
-        from_offset: bytes | None = None,
-        start: StreamReadStart | None = None,
+        position: ReadPosition | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         create_wait: datetime.timedelta | None = None,
@@ -165,10 +162,8 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            from_offset: Read after this offset. Empty uses start. An offset past the
+            position: Where the read starts. Unset is the beginning. An offset past the
                 newest one fails.
-            start: Where to start when from-offset is empty. Unspecified is the
-                beginning.
             max_records: About this many items per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
@@ -179,8 +174,7 @@ class Stream(typing.Generic[BodyT]):
         """
         request = ReadRecordsRequest(
             ref=self.ref,
-            from_offset=from_offset,
-            start=start,
+            position=position,
             max_records=max_records,
             wait=wait,
             create_wait=create_wait,
@@ -205,8 +199,7 @@ class Stream(typing.Generic[BodyT]):
 
     def iter_read_items(
         self,
-        from_offset: bytes | None = None,
-        start: StreamReadStart | None = None,
+        position: ReadPosition | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         create_wait: datetime.timedelta | None = None,
@@ -223,10 +216,8 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            from_offset: Read after this offset. Empty uses start. An offset past the
+            position: Where the read starts. Unset is the beginning. An offset past the
                 newest one fails.
-            start: Where to start when from-offset is empty. Unspecified is the
-                beginning.
             max_records: About this many items per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
@@ -237,8 +228,7 @@ class Stream(typing.Generic[BodyT]):
         """
         request = ReadRecordsRequest(
             ref=self.ref,
-            from_offset=from_offset,
-            start=start,
+            position=position,
             max_records=max_records,
             wait=wait,
             create_wait=create_wait,
@@ -247,8 +237,7 @@ class Stream(typing.Generic[BodyT]):
         return PollIterator(
             request,
             self.iter_read(
-                from_offset=from_offset,
-                start=start,
+                position=position,
                 max_records=max_records,
                 wait=wait,
                 create_wait=create_wait,

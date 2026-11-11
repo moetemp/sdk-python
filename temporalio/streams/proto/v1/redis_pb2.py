@@ -17,7 +17,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import duration_pb2 as google_dot_protobuf_dot_duration__pb2
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n#temporal/sdk/streams/v1/redis.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto"\xd2\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12-\n\nsafety_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t\x12\x15\n\rwait_replicas\x18\x0b \x01(\x05\x12/\n\x0cwait_timeout\x18\x0c \x01(\x0b\x32\x19.google.protobuf.Durationb\x06proto3'
+    b'\n#temporal/sdk/streams/v1/redis.proto\x12\x17temporal.sdk.streams.v1\x1a\x1egoogle/protobuf/duration.proto"\xd6\x02\n\x11RedisStreamConfig\x12\x0c\n\x04urls\x18\x01 \x03(\t\x12\x0f\n\x07\x63luster\x18\x02 \x01(\x08\x12\x12\n\nkey_prefix\x18\x03 \x01(\t\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x31\n\x0elast_write_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x1f\n\x17\x62locking_reads_per_node\x18\x08 \x01(\x05\x12\x33\n\x10response_timeout\x18\t \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t\x12\x15\n\rwait_replicas\x18\x0b \x01(\x05\x12/\n\x0cwait_timeout\x18\x0c \x01(\x0b\x32\x19.google.protobuf.Durationb\x06proto3'
 )
 
 
@@ -36,5 +36,5 @@ _sym_db.RegisterMessage(RedisStreamConfig)
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     _REDISSTREAMCONFIG._serialized_start = 97
-    _REDISSTREAMCONFIG._serialized_end = 435
+    _REDISSTREAMCONFIG._serialized_end = 439
 # @@protoc_insertion_point(module_scope)

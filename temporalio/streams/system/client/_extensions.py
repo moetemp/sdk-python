@@ -83,7 +83,6 @@ class _CreateStream(typing.Generic[BodyT]):
         *,
         id: str,
         backend: str | None = None,
-        retention: datetime.timedelta | None = None,
         id_conflict_policy: StreamIdConflictPolicy | None = None,
         rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
         rpc_timeout: datetime.timedelta | None = None,
@@ -91,10 +90,8 @@ class _CreateStream(typing.Generic[BodyT]):
         """
         Args:
             id: The Stream id, 1 to 4096 bytes.
-            backend: Registered backend name, empty for the default. The Store never
-                reads it.
-            retention: How long the Stream stays readable after its close. Empty is the
-                Store default.
+            backend: The registered name of the backend. With none, the SDK picks one.
+                Only an SDK reads it.
             id_conflict_policy: What the create does when the Stream exists. Unspecified
                 is fail.
         """
@@ -104,7 +101,6 @@ class _CreateStream(typing.Generic[BodyT]):
         )
         request = CreateStreamRequest(
             stream_ref=stream_ref,
-            retention=retention,
             id_conflict_policy=id_conflict_policy,
             request_id=_support.request_id(),
         )

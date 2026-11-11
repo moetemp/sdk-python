@@ -329,7 +329,7 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
         before = await anext(reconnects)
         # The reader closes its connection and keeps only the Records that it showed and its
         # resume offset, as a UI does across a page reload.
-        resume_at = reconnects.next_offset
+        resume_at = reconnects.last_offset
         await reconnects.aclose()
         shown[key].set()
         live_items = [first, *[item async for item in live]]
@@ -679,7 +679,7 @@ async def test_only_the_workers_client_writes_as_the_attempt(stream_client: Clie
         items = await read(handle)
     kinds = {r.data: type(r.producer.kind) for r in records(items) if r.producer}
     assert kinds == {
-        "worker client": streams.ProducerKindActivity,
+        "worker client": streams.ProducerKindWorkflowActivity,
         "other client": streams.ProducerKindClient,
     }
 

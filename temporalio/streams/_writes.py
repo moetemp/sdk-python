@@ -228,7 +228,9 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> str:
         models.CloseStreamRequest(
             ref=_model_ref(request.ref),
             writer=models.StreamWriter(
-                producer=_ids.workflow_producer(streams.producer.activity.run_id)
+                producer=_ids.workflow_producer(
+                    streams.producer.workflow_activity.run_id
+                )
             ),
         )
     )

@@ -31,8 +31,8 @@ proto_path = (
 output_dir = base_dir / "temporalio" / "streams" / "system"
 
 NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-# The head of moe/up/streams-combined-1110, which reads the directives of the WIT.
-NEX_GEN_REVISION = "1c4af4ef3ce011aba6b91decd50c10016bf8b71d"
+# The head of moe/up/combined-regen-1110, which reads the directives of the WIT.
+NEX_GEN_REVISION = "ea0597bfb9a743f2410f4fddf0b9dca21a63c7fe"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 

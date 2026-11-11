@@ -417,7 +417,7 @@
       </div>
     </div>
     <div class="side-title">
-      <span>Chats</span><span title="The lobby Stream, read with last=20">lobby</span>
+      <span>Chats</span><span title="The lobby Stream, read from the start">lobby</span>
     </div>
     <nav class="sessions" id="sessions"></nav>
   </aside>
@@ -787,7 +787,7 @@ function handle(view, item, fresh) {
 
 function keep(view, item, fresh, base) {
   if (!fresh || !storeKey || view !== main || item.stream === "lobby") return;
-  if (item.next_offset) saved.offsets[item.stream] = item.next_offset;
+  if (item.last_offset) saved.offsets[item.stream] = item.last_offset;
   const data = item.data || {};
   const rk = roundKey(item.kind === "record" ? data.number : item.number, data.round || item.round);
   if (base === "turns" && (data.role === "assistant" || data.role === "error")) {
@@ -962,7 +962,7 @@ function showComposer() {
 }
 
 function lobbyOnly() {
-  connect(() => "/api/lobby", () => ({ lobby: "newest 20, with last=20" }), [], main);
+  connect(() => "/api/lobby", () => ({ lobby: "every chat, from the start" }), [], main);
 }
 
 async function startSession() {
@@ -1005,7 +1005,7 @@ async function startSession() {
     return url;
   };
   const statuses = () => ({
-    lobby: "newest 20, with last=20",
+    lobby: "every chat, from the start",
     turns: saved.offsets.turns
       ? `resumed at ${shortOffset(saved.offsets.turns)}`
       : "from the start",

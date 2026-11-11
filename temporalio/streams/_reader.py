@@ -34,7 +34,7 @@ _LAST_PAUSE = 2.0
 class Position:
     """Where a read resumes from. The read moves it past each page that it finished."""
 
-    next_offset: bytes | None
+    last_offset: bytes | None
 
 
 class Reader(Generic[T]):
@@ -61,14 +61,14 @@ class Reader(Generic[T]):
         self._options = options
 
     @property
-    def next_offset(self) -> StreamOffset | None:
-        """The offset to resume from, after the last item or the last page that the read got.
+    def last_offset(self) -> StreamOffset | None:
+        """The last offset that the read covered, of its last item or its last page.
 
-        Pass it as ``offset`` to a later read. After a Record that failed to decode, it's past
-        that Record. It's None before the first page of a read from ``END`` or of a read with
-        ``last``.
+        Pass it as ``offset`` to a later read, which goes on after it. After a Record that
+        failed to decode, it's that Record's offset. It's None before the first page of a read
+        from ``END``.
         """
-        wire = self._position.next_offset
+        wire = self._position.last_offset
         return StreamOffset._from_wire(wire) if wire is not None else None
 
     def __aiter__(self) -> Reader[T]:
@@ -80,13 +80,13 @@ class Reader(Generic[T]):
 
         Raises:
             StreamError: A Record's value failed to decode with the Stream's payload type. The
-                read ends, and :py:attr:`next_offset` is past that Record.
+                read ends, and :py:attr:`last_offset` is that Record's offset.
         """
         with _backend.using(self._options):
             item = await self._items.__anext__()
         # A resume reads after the offset, so the next read starts at this item's offset.
         offset = item.offset._wire
-        self._position.next_offset = max(self._position.next_offset or b"", offset)
+        self._position.last_offset = max(self._position.last_offset or b"", offset)
         return item
 
     async def aclose(self) -> None:
@@ -107,14 +107,12 @@ async def read(
     position: Position,
     payload_type: Any,
     from_offset: bytes | End | None,
-    last: int | None = None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
     """Yield the items of a Stream in order, until the Stream is closed and drained.
 
-    With ``wait_new_records`` False, stop at the newest Record. With ``last``, start with the
-    newest ``last`` Records.
+    With ``wait_new_records`` False, stop at the newest Record.
     """
     loop = asyncio.get_running_loop()
     create_until = loop.time() + create_wait.total_seconds() if create_wait else None
@@ -128,14 +126,14 @@ async def read(
         )
         return models.ReadRecordsRequest(
             ref=models.StreamRef(id=stream_id),
-            # END applies only to the first page. Later pages start at the last page's next offset.
-            from_offset=from_offset if isinstance(from_offset, bytes) else None,
-            start=models.StreamReadStart.StreamReadStartEnd
-            if from_offset is End.END
-            else models.StreamReadStart.StreamReadStartBeginning
-            if from_offset is None and not last
-            else None,
-            last=last,
+            # END applies only to the first page. Later pages start after the last page's offset.
+            position=_after(from_offset)
+            if isinstance(from_offset, bytes)
+            else models.ReadPositionStart(
+                models.StreamReadStart.StreamReadStartEnd
+                if from_offset is End.END
+                else models.StreamReadStart.StreamReadStartBeginning
+            ),
             create_wait=min(create_left, _backend.longest_wait(_MAX_WAIT))
             if create_left
             else None,
@@ -151,18 +149,18 @@ async def read(
                         if item is None:
                             continue
                     except Exception as err:
-                        # Move next_offset past the Record, so a resume doesn't fail on it again.
+                        # Move last_offset to the Record, so a resume doesn't fail on it again.
                         # The error gives the offset, for a read of that Record.
                         offset = record.offset or b""
-                        position.next_offset = max(position.next_offset or b"", offset)
+                        position.last_offset = max(position.last_offset or b"", offset)
                         raise _errors.StreamError(
                             f"Can't decode the Record at the offset {offset.hex()}: {err}"
                         ) from err
                     yield item
-                if page.next_offset is not None:
-                    # A resume starts where the page ended.
-                    position.next_offset = max(
-                        position.next_offset or b"", page.next_offset
+                if page.last_offset is not None:
+                    # A resume starts after the page's last offset.
+                    position.last_offset = max(
+                        position.last_offset or b"", page.last_offset
                     )
             return
         except _errors.StreamError as err:
@@ -188,14 +186,6 @@ async def _pages(
 ) -> AsyncGenerator[models.ReadRecordsResponse, None]:
     # A read that waits long-polls each page. A read with no wait reads pages until a page has
     # no Record and doesn't advance.
-    if request.last:
-        # The newest Records come in one page that never waits. A waiting read then continues
-        # after them.
-        page = await _read_page(service, request)
-        yield page
-        if page.done or not wait_new_records or page.next_offset is None:
-            return
-        request = dataclasses.replace(request, last=None, from_offset=page.next_offset)
     while True:
         if wait_new_records:
             page = await _read_until_records(
@@ -207,13 +197,25 @@ async def _pages(
         if page.done:
             return
         if not wait_new_records and (
-            page.next_offset is None
+            page.last_offset is None
             # An empty page that didn't advance is at the newest Record.
-            or (not page.records and page.next_offset <= (request.from_offset or b""))
+            or (not page.records and page.last_offset <= _from_offset(request))
         ):
             return
-        if page.next_offset is not None:
-            request = dataclasses.replace(request, from_offset=page.next_offset)
+        if page.last_offset is not None:
+            request = dataclasses.replace(request, position=_after(page.last_offset))
+
+
+def _after(offset: bytes) -> models.ReadPosition:
+    # A from-offset is exclusive, so the read starts after the Record at that offset.
+    return models.ReadPositionFromOffset(offset)
+
+
+def _from_offset(request: models.ReadRecordsRequest) -> bytes:
+    position = request.position
+    if isinstance(position, models.ReadPositionFromOffset):
+        return position.value
+    return b""
 
 
 async def _read_page(
@@ -230,7 +232,8 @@ async def _read_until_records(
     deadline: timedelta,
 ) -> models.ReadRecordsResponse:
     # Each read waits for what is left of the deadline, and an empty page moves the next read to
-    # its next offset. At the deadline the last page comes back, so the caller keeps its place.
+    # after its last offset. At the deadline the last page comes back, so the caller keeps its
+    # place.
     loop = asyncio.get_running_loop()
     end = loop.time() + deadline.total_seconds()
     pause = _FIRST_PAUSE
@@ -241,8 +244,8 @@ async def _read_until_records(
         page = await _read_page(service, request)
         if page.records or page.done:
             return page
-        if page.next_offset is not None:
-            request = dataclasses.replace(request, from_offset=page.next_offset)
+        if page.last_offset is not None:
+            request = dataclasses.replace(request, position=_after(page.last_offset))
         left = end - loop.time()
         if left <= 0:
             return page

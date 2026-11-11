@@ -48,7 +48,6 @@ class Access:
             position=position,
             payload_type=read.payload_type,
             from_offset=read.offset,
-            last=read.last,
             wait_new_records=read.wait_new_records,
             create_wait=read.create_wait,
         )
@@ -93,7 +92,6 @@ class ReadSpec:
 
     payload_type: Any
     offset: bytes | End | None
-    last: int | None
     wait_new_records: bool
     create_wait: timedelta | None
 
@@ -102,21 +100,13 @@ def read_spec(
     payload_type: Any,
     *,
     offset: bytes | End | None,
-    last: int | None,
     wait_new_records: bool,
     create_wait: timedelta | None,
 ) -> ReadSpec:
-    """The options of a read, and the type that it decodes each value with.
-
-    Raises:
-        ValueError: ``last`` is not above zero, or the call also gives ``offset``.
-    """
-    if last is not None and (not 1 <= last <= 1000 or offset is not None):
-        raise ValueError("last takes a count from 1 to 1000 and no offset")
+    """The options of a read, and the type that it decodes each value with."""
     return ReadSpec(
         payload_type=payload_type,
         offset=offset,
-        last=last,
         wait_new_records=wait_new_records,
         create_wait=create_wait,
     )
@@ -128,8 +118,8 @@ def reader(
     options: CallOptions | None = None,
 ) -> Reader[Any]:
     """A read over the items that ``items`` gives."""
-    # A read from END or of the last Records has no resume offset until its first page.
-    if read.last is not None or read.offset is End.END:
+    # A read from END has no resume offset until its first page.
+    if read.offset is End.END:
         position = Position(None)
     else:
         position = Position(read.offset or b"")

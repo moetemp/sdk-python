@@ -65,7 +65,6 @@ class CreateStreamRequest:
     """Create a Stream. If it exists, fail, or with use-existing get the open one."""
 
     stream_ref: StreamRef
-    retention: datetime.timedelta | None = None
     id_conflict_policy: StreamIdConflictPolicy | None = None
     request_id: str | None = None
 
@@ -94,9 +93,6 @@ class _CreateStreamRequestTransferTypeConverter(
         )
         return CreateStreamRequest(
             stream_ref=stream_ref,
-            retention=_support.duration_from_proto(value.retention)
-            if value.HasField("retention")
-            else None,
             id_conflict_policy=StreamIdConflictPolicy(value.id_conflict_policy)
             if value.id_conflict_policy != 0
             else None,
@@ -114,8 +110,6 @@ class _CreateStreamRequestTransferTypeConverter(
         message.stream_ref.CopyFrom(
             _StreamRefTransferTypeConverter().to_transfer_type(value.stream_ref)
         )
-        if value.retention is not None:
-            message.retention.CopyFrom(_support.duration_to_proto(value.retention))
         if value.id_conflict_policy is not None:
             message.id_conflict_policy = (
                 temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType(
@@ -439,7 +433,7 @@ class _ProducerTransferTypeConverter(
         _oneof_kind: (
             ProducerKindWorkflow
             | ProducerKindLocalActivity
-            | ProducerKindActivity
+            | ProducerKindWorkflowActivity
             | ProducerKindStandaloneActivity
             | ProducerKindClient
             | None
@@ -457,10 +451,10 @@ class _ProducerTransferTypeConverter(
                         value.local_activity, LocalActivityProducer
                     )
                 )
-            case "activity":
-                _oneof_kind = ProducerKindActivity(
+            case "workflow_activity":
+                _oneof_kind = ProducerKindWorkflowActivity(
                     _ActivityProducerTransferTypeConverter().from_transfer_type(
-                        value.activity, ActivityProducer
+                        value.workflow_activity, ActivityProducer
                     )
                 )
             case "standalone_activity":
@@ -503,8 +497,8 @@ class _ProducerTransferTypeConverter(
                             value.kind.value
                         )
                     )
-                case ProducerKindActivity():
-                    message.activity.CopyFrom(
+                case ProducerKindWorkflowActivity():
+                    message.workflow_activity.CopyFrom(
                         _ActivityProducerTransferTypeConverter().to_transfer_type(
                             value.kind.value
                         )
@@ -529,7 +523,7 @@ temporalio.converter.transfer_type_convertible(_ProducerTransferTypeConverter)(P
 
 @dataclasses.dataclass(slots=True)
 class WorkflowProducer:
-    """A Workflow run Producer. A higher epoch withdraws the run's orphaned Records."""
+    """A Workflow run Producer. A higher epoch fences the lower ones."""
 
     run_id: str | None = None
     epoch: WorkflowTaskEpoch | None = None
@@ -683,7 +677,9 @@ temporalio.converter.transfer_type_convertible(_TimestampTransferTypeConverter)(
 
 @dataclasses.dataclass(slots=True)
 class LocalActivityProducer:
-    """A Local Activity Producer. A higher epoch withdraws the Producer's lower epochs."""
+    """A Local Activity Producer, one for each call of a run. A higher epoch fences lower
+    ones.
+    """
 
     run_id: str | None = None
     epoch: LocalActivityEpoch | None = None
@@ -788,7 +784,7 @@ temporalio.converter.transfer_type_convertible(
 
 @dataclasses.dataclass(slots=True)
 class ActivityProducer:
-    """An Activity Producer. A higher epoch withdraws the Producer's lower epochs."""
+    """An Activity Producer. A higher epoch fences the lower ones."""
 
     run_id: str | None = None
     epoch: ActivityEpoch | None = None
@@ -1132,15 +1128,13 @@ temporalio.converter.transfer_type_convertible(
 
 @dataclasses.dataclass(slots=True)
 class ReadRecordsRequest:
-    """Read Records from an offset."""
+    """Read Records from a position."""
 
     ref: StreamRef
-    from_offset: bytes | None = None
-    start: StreamReadStart | None = None
+    position: ReadPosition | None = None
     max_records: int | None = None
     wait: datetime.timedelta | None = None
     create_wait: datetime.timedelta | None = None
-    last: int | None = None
     max_bytes: int | None = None
 
 
@@ -1164,10 +1158,17 @@ class _ReadRecordsRequestTransferTypeConverter(
         if not value.HasField("ref"):
             raise ValueError("missing required field ReadRecordsRequest.ref")
         ref = _StreamRefTransferTypeConverter().from_transfer_type(value.ref, StreamRef)
+        _oneof_position: ReadPositionFromOffset | ReadPositionStart | None
+        match value.WhichOneof("position"):
+            case "from_offset":
+                _oneof_position = ReadPositionFromOffset(value.from_offset)
+            case "start":
+                _oneof_position = ReadPositionStart(StreamReadStart(value.start))
+            case None:
+                _oneof_position = None
         return ReadRecordsRequest(
             ref=ref,
-            from_offset=value.from_offset if bool(value.from_offset) else None,
-            start=StreamReadStart(value.start) if value.start != 0 else None,
+            position=_oneof_position,
             max_records=value.max_records if value.max_records != 0 else None,
             wait=_support.duration_from_proto(value.wait)
             if value.HasField("wait")
@@ -1175,7 +1176,6 @@ class _ReadRecordsRequestTransferTypeConverter(
             create_wait=_support.duration_from_proto(value.create_wait)
             if value.HasField("create_wait")
             else None,
-            last=value.last if value.last != 0 else None,
             max_bytes=value.max_bytes if value.max_bytes != 0 else None,
         )
 
@@ -1190,22 +1190,22 @@ class _ReadRecordsRequestTransferTypeConverter(
         message.ref.CopyFrom(
             _StreamRefTransferTypeConverter().to_transfer_type(value.ref)
         )
-        if value.from_offset is not None:
-            message.from_offset = value.from_offset
-        if value.start is not None:
-            message.start = (
-                temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType(
-                    value.start
-                )
-            )
+        if value.position is not None:
+            match value.position:
+                case ReadPositionFromOffset():
+                    message.from_offset = value.position.value
+                case ReadPositionStart():
+                    message.start = (
+                        temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType(
+                            value.position.value
+                        )
+                    )
         if value.max_records is not None:
             message.max_records = value.max_records
         if value.wait is not None:
             message.wait.CopyFrom(_support.duration_to_proto(value.wait))
         if value.create_wait is not None:
             message.create_wait.CopyFrom(_support.duration_to_proto(value.create_wait))
-        if value.last is not None:
-            message.last = value.last
         if value.max_bytes is not None:
             message.max_bytes = value.max_bytes
         return message
@@ -1219,7 +1219,7 @@ temporalio.converter.transfer_type_convertible(
 @dataclasses.dataclass(slots=True)
 class ReadRecordsResponse(typing.Generic[BodyT]):
     records: list[StreamRecord[BodyT]]
-    next_offset: bytes | None = None
+    last_offset: bytes | None = None
     done: bool | None = None
 
 
@@ -1252,7 +1252,7 @@ class _ReadRecordsResponseTransferTypeConverter(
         ]
         return ReadRecordsResponse(
             records=records,
-            next_offset=value.next_offset if bool(value.next_offset) else None,
+            last_offset=value.last_offset if bool(value.last_offset) else None,
             done=value.done if bool(value.done) else None,
         )
 
@@ -1269,8 +1269,8 @@ class _ReadRecordsResponseTransferTypeConverter(
             item.CopyFrom(
                 _StreamRecordTransferTypeConverter().to_transfer_type(element)
             )
-        if value.next_offset is not None:
-            message.next_offset = value.next_offset
+        if value.last_offset is not None:
+            message.last_offset = value.last_offset
         if value.done is not None:
             message.done = value.done
         return message
@@ -1589,7 +1589,7 @@ class ProducerKindLocalActivity:
 
 
 @dataclasses.dataclass(slots=True)
-class ProducerKindActivity:
+class ProducerKindWorkflowActivity:
     value: ActivityProducer
 
 
@@ -1606,11 +1606,25 @@ class ProducerKindClient:
 ProducerKind = (
     ProducerKindWorkflow
     | ProducerKindLocalActivity
-    | ProducerKindActivity
+    | ProducerKindWorkflowActivity
     | ProducerKindStandaloneActivity
     | ProducerKindClient
 )
 """The kind of a Producer, with its run and epoch."""
+
+
+@dataclasses.dataclass(slots=True)
+class ReadPositionFromOffset:
+    value: bytes
+
+
+@dataclasses.dataclass(slots=True)
+class ReadPositionStart:
+    value: StreamReadStart
+
+
+ReadPosition = ReadPositionFromOffset | ReadPositionStart
+"""Where a read starts, after an offset, or at the beginning or the end."""
 
 
 @dataclasses.dataclass(slots=True)

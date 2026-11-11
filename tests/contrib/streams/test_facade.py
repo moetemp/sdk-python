@@ -287,13 +287,10 @@ def test_import_of_temporalio_client_loads_no_stream_code():
     assert loaded.strip() == "False"
 
 
-async def test_bad_create_and_read_arguments_raise_with_no_call(client: Client):
+async def test_bad_create_arguments_raise_with_no_call(client: Client):
     client, extension = fake_client(client)
     with pytest.raises(ValueError, match="id is empty"):
         await client.create_stream("", payload_type=str)
-    stream = client.get_stream("args", payload_type=str)
-    with pytest.raises(ValueError, match="from 1 to 1000"):
-        stream.read(last=1001)
     assert not extension.creates and not extension.namespaces
 
 

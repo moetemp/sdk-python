@@ -50,5 +50,5 @@ class MemoryStreamBackend(ExtensionStreamBackend):
         if retention is not None:
             config.retention.FromTimedelta(retention)
         if safety_ttl is not None:
-            config.safety_ttl.FromTimedelta(safety_ttl)
+            config.last_write_ttl.FromTimedelta(safety_ttl)
         super().__init__("temporalio.MemoryStreamBackend", True, config, runtime, name)

@@ -523,7 +523,9 @@ def _activity_streams(
             run_id = info.workflow_run_id or ""
             producer = stream_v1.Producer(
                 id=_ids.activity_producer_id(run_id, info.activity_id, key_text),
-                activity=stream_v1.ActivityProducer(run_id=run_id, epoch=attempt),
+                workflow_activity=stream_v1.ActivityProducer(
+                    run_id=run_id, epoch=attempt
+                ),
             )
         else:
             producer = stream_v1.Producer(

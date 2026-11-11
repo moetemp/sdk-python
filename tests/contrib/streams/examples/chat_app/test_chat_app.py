@@ -274,7 +274,7 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
         await handle.execute_update(ChatSession.send, UserMessage("message 1"))
         read = turns.read()
         await read_until_answer(read, 1)
-        saved = read.next_offset
+        saved = read.last_offset
         await read.aclose()
         # Each of these answers takes one round, so the last one comes from the run after
         # continue-as-new.

@@ -299,7 +299,7 @@ async def share_info(share_id: str, chat: ChatDep) -> dict[str, Any]:
         return {"share_id": share_id, "outdated": True}
     snapshot = snapshot_of(share_id, chat)
     try:
-        next_offset = await snapshot.get_offset()
+        last_offset = await snapshot.get_offset()
     except streams.StreamError as err:
         if err.reason != streams.StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND:
             raise
@@ -312,7 +312,7 @@ async def share_info(share_id: str, chat: ChatDep) -> dict[str, Any]:
         "share_id": share_id,
         "session_id": session_id,
         "upto": upto,
-        "next_offset": str(next_offset),
+        "last_offset": str(last_offset),
     }
 
 
@@ -378,8 +378,8 @@ async def session_events(
 
 def lobby_read(chat: Chat) -> streams.Reader[SessionInfo]:
     lobby = chat.client.get_stream(chat.lobby.id, payload_type=SessionInfo)
-    # The newest 20 chats, then each new one.
-    return lobby.read(last=20)
+    # Every chat, oldest first, then each new one.
+    return lobby.read()
 
 
 async def merge(
@@ -410,7 +410,7 @@ async def events(
     supersede: bool = False,
 ) -> AsyncIterator[ServerSentEvent]:
     # The tokens read opts into with_superseded, which crosses out a failed attempt's tokens from
-    # the Producer epochs. The base read's next_offset is where a later read resumes.
+    # the Producer epochs. The base read's last_offset is where a later read resumes.
     items = with_superseded(read) if supersede else read
     try:
         async for item in items:
@@ -419,8 +419,8 @@ async def events(
                 continue
             data = {"stream": name, **item_json(item, kept)}
             # Where a later read of this Stream resumes, which the tab saves.
-            data["next_offset"] = (
-                str(read.next_offset) if read.next_offset is not None else None
+            data["last_offset"] = (
+                str(read.last_offset) if read.last_offset is not None else None
             )
             yield ServerSentEvent(event="item", data=data)
         yield ServerSentEvent(event="end", data={"stream": name})
@@ -491,7 +491,7 @@ def epoch_of(producer: streams.Producer) -> tuple[str, int | None]:
         case streams.ProducerKindLocalActivity(value=local):
             return "local activity", local.epoch.attempt if local.epoch else None
         case (
-            streams.ProducerKindActivity(value=act)
+            streams.ProducerKindWorkflowActivity(value=act)
             | streams.ProducerKindStandaloneActivity(value=act)
         ):
             return "activity", act.epoch.attempt if act.epoch else None

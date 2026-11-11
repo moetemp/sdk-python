@@ -621,7 +621,7 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(read_until_quiet(), timeout=0.5)
     assert [item.offset for item in seen] == [first]
-    resume_at = reader.next_offset
+    resume_at = reader.last_offset
     await stream.append("two")
     resumed = [
         item.data

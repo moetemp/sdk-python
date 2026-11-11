@@ -35,7 +35,8 @@ interface stream-service {
   record stream-ref {
     /// @nexus.doc "The Stream id, 1 to 4096 bytes."
     id: string,
-    /// @nexus.doc "Registered backend name, empty for the default. The Store never reads it."
+    /// @nexus.doc
+    ///   "The registered name of the backend. With none, the SDK picks one. Only an SDK reads it."
     backend: option<string>,
   }
 
@@ -71,22 +72,23 @@ interface stream-service {
     attempt: option<s32>,
   }
 
-  /// @nexus.doc "A Workflow run Producer. A higher epoch withdraws the run's orphaned Records."
+  /// @nexus.doc "A Workflow run Producer. A higher epoch fences the lower ones."
   /// @nexus.proto "temporal.api.stream.v1.WorkflowProducer"
   record workflow-producer {
-    /// @nexus.doc "The first execution run id of the run chain."
+    /// @nexus.doc "The run id of the Workflow run, not of its chain."
     run-id: option<string>,
     epoch: option<workflow-task-epoch>,
   }
 
-  /// @nexus.doc "A Local Activity Producer. A higher epoch withdraws the Producer's lower epochs."
+  /// @nexus.doc
+  ///   "A Local Activity Producer, one for each call of a run. A higher epoch fences lower ones."
   /// @nexus.proto "temporal.api.stream.v1.LocalActivityProducer"
   record local-activity-producer {
     run-id: option<string>,
     epoch: option<local-activity-epoch>,
   }
 
-  /// @nexus.doc "An Activity Producer. A higher epoch withdraws the Producer's lower epochs."
+  /// @nexus.doc "An Activity Producer. A higher epoch fences the lower ones."
   /// @nexus.proto "temporal.api.stream.v1.ActivityProducer"
   record activity-producer {
     run-id: option<string>,
@@ -105,7 +107,7 @@ interface stream-service {
   variant producer-kind {
     workflow(workflow-producer),
     local-activity(local-activity-producer),
-    activity(activity-producer),
+    workflow-activity(activity-producer),
     standalone-activity(activity-producer),
     client(client-producer),
   }
@@ -178,6 +180,7 @@ interface stream-service {
     offset: option<stream-offset>,
   }
 
+  // A create takes no Retention. The backend config holds it.
   /// @nexus.doc
   ///   "Create a Stream. If it exists, fail, or with use-existing get the open one."
   /// @nexus.proto "temporal.api.streamservice.v1.CreateStreamRequest"
@@ -186,8 +189,6 @@ interface stream-service {
     /// @nexus.doc "The ref of the Stream to create. Its id is the Stream id."
     /// @nexus.flatten-in-api
     stream-ref: stream-ref,
-    /// @nexus.doc "How long the Stream stays readable after its close. Empty is the Store default."
-    retention: option<duration>,
     /// @nexus.doc "What the create does when the Stream exists. Unspecified is fail."
     id-conflict-policy: option<stream-id-conflict-policy>,
     // A retry of the create that made the Stream sends the same id, so it doesn't fail as a
@@ -198,9 +199,6 @@ interface stream-service {
     request-id: option<string>,
     /// @nexus.omit
     namespace: placeholder,
-    // Native only. The SDK Stores don't read it.
-    /// @nexus.omit
-    task-token: placeholder,
   }
 
   /// What a create does when its Stream exists. Unspecified is fail.
@@ -280,24 +278,26 @@ interface stream-service {
     stream-read-start-end,
   }
 
-  /// @nexus.doc "Read Records from an offset."
+  /// @nexus.doc "Where a read starts, after an offset, or at the beginning or the end."
+  /// @nexus.proto "temporal.api.streamservice.v1.ReadRecordsRequest.position"
+  variant read-position {
+    from-offset(list<u8>),
+    start(stream-read-start),
+  }
+
+  /// @nexus.doc "Read Records from a position."
   /// @nexus.proto "temporal.api.streamservice.v1.ReadRecordsRequest"
   record read-records-request {
     ref: stream-ref,
-    /// @nexus.doc "Read after this offset. Empty uses start. An offset past the newest one fails."
-    from-offset: option<stream-offset>,
-    /// @nexus.doc "Where to start when from-offset is empty. Unspecified is the beginning."
-    start: option<stream-read-start>,
+    /// @nexus.doc
+    ///   "Where the read starts. Unset is the beginning. An offset past the newest one fails."
+    position: option<read-position>,
     /// @nexus.doc "About this many items per page, 1 to 1000."
     max-records: option<s32>,
     /// @nexus.doc "How long to wait for a new Record before an empty answer. At most 60 s."
     wait: option<duration>,
     /// @nexus.doc "How long to wait for an uncreated Stream. Empty fails at once. At most 60 s."
     create-wait: option<duration>,
-    // Replay needs a fixed range, so the Workflow API omits `last`.
-    /// @nexus.doc "Read the newest this many Records, oldest first. No from-offset. No wait."
-    /// @nexus.api-omit targets="workflow"
-    last: option<s32>,
     /// @nexus.doc "The maximum Record bytes in a page. A larger Record is still returned alone."
     max-bytes: option<s64>,
     /// @nexus.omit
@@ -314,8 +314,9 @@ interface stream-service {
   /// @nexus.proto "temporal.api.streamservice.v1.ReadRecordsResponse"
   record read-records-response {
     records: list<stream-record>,
-    /// @nexus.doc "The from-offset of the next read, the offset of the newest Record read."
-    next-offset: option<stream-offset>,
+    // An empty page gives the request's from-offset, which is empty when the request had none.
+    /// @nexus.doc "The last offset this read covered, of the newest Record of the page."
+    last-offset: option<stream-offset>,
     /// @nexus.doc "True when the Stream is closed and this read gave its last item."
     done: option<bool>,
     // Native only. The SDK Stores never set it.
@@ -358,8 +359,7 @@ interface stream-service {
     /// @nexus.doc "Read one page of Records. The poll iterator reads them all."
     /// @nexus.operation "read-records"
     read: func(
-      from-offset: option<stream-offset>,
-      start: option<stream-read-start>,
+      position: option<read-position>,
       max-records: option<s32>,
       wait: option<duration>,
       create-wait: option<duration>,
@@ -371,7 +371,7 @@ interface stream-service {
     describe: func() -> describe-stream-response;
   }
 
-  // With use-existing, created is false when the Stream existed, whatever its Retention.
+  // With use-existing, created is false when the Stream existed.
   /// @nexus.proto "temporal.api.streamservice.v1.CreateStreamResponse"
   type create-stream-result = own<%stream>;
 

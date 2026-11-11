@@ -32,7 +32,7 @@ class RedisStreamConfig(google.protobuf.message.Message):
     CLUSTER_FIELD_NUMBER: builtins.int
     KEY_PREFIX_FIELD_NUMBER: builtins.int
     RETENTION_FIELD_NUMBER: builtins.int
-    SAFETY_TTL_FIELD_NUMBER: builtins.int
+    LAST_WRITE_TTL_FIELD_NUMBER: builtins.int
     BLOCKING_READS_PER_NODE_FIELD_NUMBER: builtins.int
     RESPONSE_TIMEOUT_FIELD_NUMBER: builtins.int
     BACKEND_FIELD_NUMBER: builtins.int
@@ -50,8 +50,10 @@ class RedisStreamConfig(google.protobuf.message.Message):
     def retention(self) -> google.protobuf.duration_pb2.Duration:
         """The default Retention of a new Stream. Empty is 7 days."""
     @property
-    def safety_ttl(self) -> google.protobuf.duration_pb2.Duration:
-        """How long an open Workflow-owned Stream stays after its last write. Empty is 90 days."""
+    def last_write_ttl(self) -> google.protobuf.duration_pb2.Duration:
+        """How long an open Stream stays after its last write. Empty keeps an open Stream until its
+        close.
+        """
     blocking_reads_per_node: builtins.int
     """Zero is 256."""
     @property
@@ -73,7 +75,7 @@ class RedisStreamConfig(google.protobuf.message.Message):
         cluster: builtins.bool = ...,
         key_prefix: builtins.str = ...,
         retention: google.protobuf.duration_pb2.Duration | None = ...,
-        safety_ttl: google.protobuf.duration_pb2.Duration | None = ...,
+        last_write_ttl: google.protobuf.duration_pb2.Duration | None = ...,
         blocking_reads_per_node: builtins.int = ...,
         response_timeout: google.protobuf.duration_pb2.Duration | None = ...,
         backend: builtins.str = ...,
@@ -83,12 +85,12 @@ class RedisStreamConfig(google.protobuf.message.Message):
     def HasField(
         self,
         field_name: typing_extensions.Literal[
+            "last_write_ttl",
+            b"last_write_ttl",
             "response_timeout",
             b"response_timeout",
             "retention",
             b"retention",
-            "safety_ttl",
-            b"safety_ttl",
             "wait_timeout",
             b"wait_timeout",
         ],
@@ -104,12 +106,12 @@ class RedisStreamConfig(google.protobuf.message.Message):
             b"cluster",
             "key_prefix",
             b"key_prefix",
+            "last_write_ttl",
+            b"last_write_ttl",
             "response_timeout",
             b"response_timeout",
             "retention",
             b"retention",
-            "safety_ttl",
-            b"safety_ttl",
             "urls",
             b"urls",
             "wait_replicas",

@@ -118,8 +118,8 @@ def _group(producer: models.Producer) -> tuple[str, str, str] | None:
     # Only an Activity or Standalone Activity Producer supersedes. The group is its kind, id and
     # run, so a retry of the same Activity supersedes its earlier attempt.
     match producer.kind:
-        case models.ProducerKindActivity(value=activity):
-            return ("activity", producer.id, activity.run_id or "")
+        case models.ProducerKindWorkflowActivity(value=activity):
+            return ("workflow-activity", producer.id, activity.run_id or "")
         case models.ProducerKindStandaloneActivity(value=activity):
             return ("standalone-activity", producer.id, activity.run_id or "")
         case _:
@@ -131,7 +131,7 @@ def _epoch_key(producer: models.Producer) -> tuple[int, ...]:
     # again, so the time orders the attempts across it.
     match producer.kind:
         case (
-            models.ProducerKindActivity(value=activity)
+            models.ProducerKindWorkflowActivity(value=activity)
             | models.ProducerKindStandaloneActivity(value=activity)
         ):
             epoch = activity.epoch

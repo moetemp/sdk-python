@@ -37,7 +37,7 @@ def _activity(
     kind = (
         models.ProducerKindStandaloneActivity(producer)
         if standalone
-        else models.ProducerKindActivity(producer)
+        else models.ProducerKindWorkflowActivity(producer)
     )
     return models.Producer(id=id, kind=kind)
 
