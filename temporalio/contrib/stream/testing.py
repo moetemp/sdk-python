@@ -17,11 +17,11 @@ class MemoryStreamBackend(ExtensionStreamBackend):
     """Keeps Streams in this process, with the same rules as Redis, for tests.
 
     Register it on the client in a :py:class:`temporalio.streams.StreamConfig`, as with
-    ``RedisStreamBackend``. Every Worker and client that shares one backend shares its Streams.
-    The Streams are lost when the process ends. It registers its ``name``, ``memory`` by
-    default. It has Redis's rules, so tests can swap the Store without changing Workflow code.
-    As on Redis, a Workflow's close is a regular Activity on the Workflow's task queue, so a
-    Worker on that queue that polls Activities must have the backend.
+    ``RedisStreamBackend``. Every Worker and client that shares one backend shares its Streams,
+    in every namespace. The Streams are lost when the process ends. It registers its ``name``,
+    ``memory`` by default. It has Redis's rules, so tests can swap the Store without changing
+    Workflow code. As on Redis, a Workflow's close is a regular Activity on the Workflow's task
+    queue, so a Worker on that queue that polls Activities must have the backend.
 
     .. warning::
         This API is experimental.

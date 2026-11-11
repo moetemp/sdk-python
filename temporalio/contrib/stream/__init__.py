@@ -70,7 +70,9 @@ class RedisStreamBackend(ExtensionStreamBackend):
             url: A Redis URL, or the seed URLs of a cluster. Credentials and TLS come from the
                 URL.
             cluster: Whether the URLs are of a Redis cluster.
-            key_prefix: The prefix of every key. Defaults to ``temporal-streams``.
+            key_prefix: The prefix of every key. Defaults to ``temporal-streams``. A key has no
+                namespace, so a Stream id is unique in one Redis and key prefix. Give each
+                namespace its own prefix to keep their Streams apart.
             retention: The default Retention of a new Stream, which is how long the Stream
                 stays readable after its close. Defaults to 7 days.
             last_write_ttl: How long an open Stream is kept after its last write. Unset, the

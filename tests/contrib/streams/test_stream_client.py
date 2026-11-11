@@ -449,6 +449,26 @@ async def test_clients_of_one_runtime_share_the_backend_calls(stream_client: Cli
     ]
 
 
+async def test_two_namespaces_on_one_backend_share_a_stream_id(stream_client: Client):
+    # The Store keys a Stream by its id alone, so a namespace keeps its Streams apart only with a
+    # backend or a key prefix of its own.
+    config = stream_client.config()
+    config["namespace"] = f"other-{uuid.uuid4()}"
+    other = Client(**config)
+    stream_id = f"shared-{uuid.uuid4()}"
+    stream = await stream_client.create_stream(stream_id, payload_type=str)
+    await stream.append("from default")
+    seen = other.get_stream(stream_id, payload_type=str)
+    assert [
+        item.data
+        async for item in seen.read(wait_new_records=False)
+        if isinstance(item, streams.Record)
+    ] == ["from default"]
+    with pytest.raises(streams.StreamError) as exists:
+        await other.create_stream(stream_id, payload_type=str)
+    assert exists.value.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+
+
 async def test_one_backend_needs_no_selector(client: Client):
     one = _client(client, streams.StreamConfig(backends=[MemoryStreamBackend()]))
     created = await one.create_stream(f"one-{uuid.uuid4()}", payload_type=str)
