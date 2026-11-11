@@ -392,8 +392,10 @@ class _StreamServiceCalls(system_nexus._SystemNexusWorkflowOutboundInterceptorBa
         return await self._next.start_system_nexus_operation(input)
 
     async def start_create_stream(
-        self, request: models.CreateStreamRequest
-    ) -> temporalio.workflow.NexusOperationHandle[models.CreateStreamResult]:
+        self,
+        request: models.CreateStreamRequest[Any],
+        output_type: type[models.CreateStreamResult[Any]] | None = None,
+    ) -> temporalio.workflow.NexusOperationHandle[models.CreateStreamResult[Any]]:
         return streams_workflow.run_create_stream(request)
 
     async def start_append_records(

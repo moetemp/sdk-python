@@ -79,7 +79,9 @@ async def test_a_poll_carries_the_last_offset_until_the_close():
         ),
         models.ReadRecordsResponse(records=[], last_offset=_off(10), done=True),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = [
         item
         async for item in stream.iter_read_items(
@@ -103,7 +105,9 @@ async def test_a_read_with_no_wait_ends_at_an_empty_page_that_didnt_move():
         ),
         models.ReadRecordsResponse(records=[], last_offset=_off(5)),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = [item async for item in stream.iter_read_items(position=_BEGINNING)]
     assert [_offset(item) for item in items] == [_off(4)]
     first, second = nexus_client.requests
@@ -116,7 +120,9 @@ async def test_a_poll_resumes_after_the_last_item_it_gave():
     nexus_client = FakeNexusClient(
         models.ReadRecordsResponse(records=[_data(4), _data(7)], last_offset=_off(8)),
     )
-    stream = FakeService(nexus_client).get_stream[str](id="wf:run")
+    stream = FakeService(nexus_client).get_stream(
+        models.StreamRef(id="wf:run"), body_type=str
+    )
     items = stream.iter_read_items(
         position=models.ReadPositionStart(models.StreamReadStart.StreamReadStartEnd)
     )

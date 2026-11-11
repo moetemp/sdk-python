@@ -366,7 +366,9 @@ def _model_ref(ref: StreamRef[Any]) -> models.StreamRef:
 
 
 def _proto_ref(ref: StreamRef[Any]) -> stream_v1.StreamRef:
-    return models._StreamRefTransferTypeConverter().to_transfer_type(_model_ref(ref))
+    return models._StreamRefTransferTypeConverter[Any]().to_transfer_type(
+        _model_ref(ref)
+    )
 
 
 def _generated_ref(ref: StreamRef[Any]) -> models.StreamRef:
@@ -374,8 +376,7 @@ def _generated_ref(ref: StreamRef[Any]) -> models.StreamRef:
 
 
 def _generated(ref: StreamRef[Any]) -> generated_stream.Stream[Any]:
-    # The generated factory takes the ref's fields.
-    return generated_stream.get_stream(id=ref.id, backend=ref.backend or None)
+    return generated_stream.get_stream(_generated_ref(ref))
 
 
 def _check(
@@ -404,9 +405,7 @@ def _start_append(
     if not values:
         raise TypeError("append takes one or more values")
     _check(ref, "write to")
-    call = _support.start_now(
-        generated_stream.append_records(ref=_generated_ref(ref), records=list(values))
-    )
+    call = _support.start_now(_generated(ref).append(*values))
     return _call_future(call, lambda offset: offset)
 
 
@@ -426,7 +425,7 @@ def _append(
 
 def _start_close(ref: StreamRef[Any]) -> asyncio.Future[StreamOffset]:
     _closing(ref)
-    call = _support.start_now(generated_stream.close_stream(ref=_generated_ref(ref)))
+    call = _support.start_now(_generated(ref).close())
     return _call_future(call, lambda _: b"")
 
 
@@ -588,10 +587,11 @@ async def create_stream(
     See :py:data:`temporalio.workflow.create_stream`.
     """
     ref: StreamRef[T] = _creating(id)
-    await generated_create.create_stream[payload_type or object](
+    await generated_create.create_stream(
         id=id,
         backend=ref.backend,
         id_conflict_policy=_models_policy(id_conflict_policy),
+        body_type=payload_type or object,
     )
     return WorkflowStream(ref)
 
@@ -608,10 +608,11 @@ def create_stream_nowait(
     """
     ref: StreamRef[T] = _creating(id)
     call = _support.start_now(
-        generated_create.create_stream[payload_type or object](
+        generated_create.create_stream(
             id=id,
             backend=ref.backend,
             id_conflict_policy=_models_policy(id_conflict_policy),
+            body_type=payload_type or object,
         )
     )
     _write_nowait(_call_future(call, lambda _: b""))

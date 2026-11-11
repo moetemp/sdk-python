@@ -58,7 +58,7 @@ def _producer(streams: _activity.ActivityStreams) -> models.Producer:
 
 
 def _model_ref(ref: stream_v1.StreamRef) -> models.StreamRef:
-    return models._StreamRefTransferTypeConverter().from_transfer_type(
+    return models._StreamRefTransferTypeConverter[Any]().from_transfer_type(
         ref, models.StreamRef
     )
 

@@ -21,7 +21,7 @@ def _model(ref: StreamRef[Any]) -> models.StreamRef:
 
 def to_proto(ref: StreamRef[Any]) -> stream_v1.StreamRef:
     """The ``temporal.api.stream.v1.StreamRef`` message of a ref."""
-    return models._StreamRefTransferTypeConverter().to_transfer_type(_model(ref))
+    return models._StreamRefTransferTypeConverter[Any]().to_transfer_type(_model(ref))
 
 
 def _to_json(ref: StreamRef[Any]) -> dict[str, Any]:
@@ -41,7 +41,7 @@ def _from_json(value: Any, type_hint: Any) -> StreamRef[Any]:
     message = google.protobuf.json_format.ParseDict(
         value, stream_v1.StreamRef(), ignore_unknown_fields=True
     )
-    model = models._StreamRefTransferTypeConverter().from_transfer_type(
+    model = models._StreamRefTransferTypeConverter[Any]().from_transfer_type(
         message, models.StreamRef
     )
     return origin(id=model.id, backend=model.backend)

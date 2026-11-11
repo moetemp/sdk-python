@@ -176,9 +176,9 @@ class GeneratedCalls:
     @workflow.run
     async def run(self) -> list[str]:
         tokens = await workflow.create_stream(own_id(), payload_type=str)
-        generated = generated_stream[str](
-            id=tokens.ref.id,
-            backend=tokens.ref.backend or None,
+        generated = generated_stream(
+            models.StreamRef(id=tokens.ref.id, backend=tokens.ref.backend),
+            body_type=str,
         )
         offset = await generated.append("a", "b")
         refused = []

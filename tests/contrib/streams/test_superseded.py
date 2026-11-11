@@ -47,7 +47,8 @@ def _workflow(run: str) -> models.Producer:
         id=f"wf:{run}",
         kind=models.ProducerKindWorkflow(
             models.WorkflowProducer(
-                run_id=run, epoch=models.WorkflowTaskEpoch(attempt=1)
+                run_id=run,
+                epoch=models.WorkflowTaskEpoch(started_event_id=3, attempt=1),
             )
         ),
     )
@@ -60,7 +61,8 @@ def _local_activity(id: str, run: str, attempt: int) -> models.Producer:
             models.LocalActivityProducer(
                 run_id=run,
                 epoch=models.LocalActivityEpoch(
-                    task=models.WorkflowTaskEpoch(attempt=attempt), attempt=attempt
+                    task=models.WorkflowTaskEpoch(started_event_id=3, attempt=attempt),
+                    attempt=attempt,
                 ),
             )
         ),

@@ -293,10 +293,11 @@ async def create(
     backend_name, calls = select_backend(client, id)
     # Delegate to the generated client. It sends a new request id for each call. A closed,
     # expired or another owner's Stream fails the create.
-    await calls.service(client.namespace).create_stream[object](
+    await calls.service(client.namespace).create_stream(
         id=id,
         backend=backend_name,
         id_conflict_policy=models.StreamIdConflictPolicy(int(id_conflict_policy)),
+        body_type=object,
         rpc_metadata=rpc_metadata,
         rpc_timeout=rpc_timeout,
     )

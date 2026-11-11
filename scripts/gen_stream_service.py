@@ -1,9 +1,9 @@
 """Generates the Stream service bindings of the Streams API in temporalio.streams.
 
-The WIT in scripts/_wit is a copy of the API repo's, and the Stream service protos are in the API
-protos of the Core submodule. Run scripts/gen_protos.py first for the proto modules. No nexgen
-release has the directives of the WIT, so the script installs nexgen at NEX_GEN_REVISION from
-moetemp/nexgen. Set NEX_GEN_STREAMS_BIN to use a local build of that revision instead.
+The WIT in scripts/_wit is a byte-for-byte copy of the API repo's, and the Stream service protos
+are in the API protos of the Core submodule. Run scripts/gen_protos.py first for the proto
+modules. No nexgen release has the directives of the WIT, so the script installs nexgen at
+NEX_GEN_REVISION. Set NEX_GEN_STREAMS_BIN to use a local build of that revision instead.
 """
 
 import os
@@ -30,9 +30,9 @@ proto_path = (
 )
 output_dir = base_dir / "temporalio" / "streams" / "system"
 
-NEX_GEN_REPOSITORY = "https://github.com/moetemp/nexgen"
-# The head of moe/up/combined-regen-1110, which reads the directives of the WIT.
-NEX_GEN_REVISION = "ea0597bfb9a743f2410f4fddf0b9dca21a63c7fe"
+NEX_GEN_REPOSITORY = "https://github.com/temporalio/nexgen"
+# A revision that reads the directives of the WIT.
+NEX_GEN_REVISION = "bbf5c1595a703563ff373d507d6e8174144cdf7c"
 nex_gen_root = base_dir / ".nexgen-streams" / NEX_GEN_REVISION
 
 

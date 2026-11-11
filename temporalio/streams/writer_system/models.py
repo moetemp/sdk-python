@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import typing
 
 import typing_extensions
 
@@ -69,7 +70,9 @@ class _OpenWriterRequestTransferTypeConverter(
     ) -> OpenWriterRequest:
         if not value.HasField("ref"):
             raise ValueError("missing required field OpenWriterRequest.ref")
-        ref = _StreamRefTransferTypeConverter().from_transfer_type(value.ref, StreamRef)
+        ref = _StreamRefTransferTypeConverter[typing.Any]().from_transfer_type(
+            value.ref, StreamRef
+        )
         if not value.HasField("producer"):
             raise ValueError("missing required field OpenWriterRequest.producer")
         return OpenWriterRequest(
@@ -90,7 +93,7 @@ class _OpenWriterRequestTransferTypeConverter(
     ) -> temporalio.bridge.proto.streams.streams_pb2.OpenWriterRequest:
         message = temporalio.bridge.proto.streams.streams_pb2.OpenWriterRequest()
         message.ref.CopyFrom(
-            _StreamRefTransferTypeConverter().to_transfer_type(value.ref)
+            _StreamRefTransferTypeConverter[typing.Any]().to_transfer_type(value.ref)
         )
         message.producer.CopyFrom(
             _ProducerTransferTypeConverter().to_transfer_type(value.producer)
