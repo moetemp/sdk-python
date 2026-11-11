@@ -23,7 +23,7 @@ from temporalio.streams._access import Access, ReadSpec, reader
 from temporalio.streams._backend import BackendCalls
 from temporalio.streams._conflict import StreamIDConflictPolicy
 from temporalio.streams._offset import StreamOffset
-from temporalio.streams._plugin import client_backend
+from temporalio.streams._plugin import ref_backend, select_backend
 from temporalio.streams._reader import Item, Position, Reader
 from temporalio.streams._ref import StreamRef
 from temporalio.streams._writer import RecordWriter
@@ -279,7 +279,6 @@ async def create(
     payload_type: type[T] | None,
     *,
     id: str,
-    backend: str | None,
     id_conflict_policy: StreamIDConflictPolicy,
     rpc_metadata: Mapping[str, str | bytes],
     rpc_timeout: timedelta | None,
@@ -291,7 +290,7 @@ async def create(
     if not id:
         # An empty id would fail only at the Store, with an unclear error.
         raise ValueError("The Stream id is empty")
-    backend_name, calls = client_backend(client, backend)
+    backend_name, calls = select_backend(client, id)
     # Delegate to the generated client. It sends a new request id for each call. A closed,
     # expired or another owner's Stream fails the create.
     await calls.service(client.namespace).create_stream[object](
@@ -310,7 +309,6 @@ def get_stream(
     payload_type: type[T] | None,
     *,
     id: str,
-    backend: str | None,
 ) -> Stream[T]:
     """Get a Stream by its id.
 
@@ -319,7 +317,7 @@ def get_stream(
     if not id:
         # An empty id would fail only at the first call, with an unclear error.
         raise ValueError("The Stream id is empty")
-    backend_name, calls = client_backend(client, backend)
+    backend_name, calls = select_backend(client, id)
     ref: StreamRef[T] = StreamRef(id=id, backend=backend_name)
     return _stream(client, calls, ref, payload_type)
 
@@ -332,7 +330,7 @@ def from_ref(
 
     See :py:meth:`temporalio.client.Client.get_stream`.
     """
-    _, calls = client_backend(client, ref.backend, hint="the ref's backend field")
+    _, calls = ref_backend(client, ref.id, ref.backend)
     # A ref that code built as StreamRef[T] carries the payload type, so reads decode with it.
     arguments = typing.get_args(getattr(ref, "__orig_class__", None))
     payload_type = arguments[0] if arguments else None

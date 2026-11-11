@@ -40,7 +40,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.contrib.streams._support import stream_status
+from tests.contrib.streams._support import only_backend, stream_status
 from tests.helpers import new_worker
 
 
@@ -483,13 +483,13 @@ async def test_backend_replays_a_history_made_without_it(
     history = await handle.fetch_history()
     replayer = Replayer(
         workflows=[RandomAroundActivity],
-        stream_backends=stream_client.config()["stream_backends"],
+        stream_config=stream_client.config()["stream_config"],
     )
     await replayer.replay_workflow(history)
 
 
 async def test_backend_shutdown_after_client_writes(stream_client: Client):
-    [backend] = stream_client.config()["stream_backends"]
+    backend = only_backend(stream_client)
     assert isinstance(backend, ExtensionStreamBackend)
     stream = await stream_client.create_stream(
         f"shutdown-{uuid.uuid4()}", payload_type=str
@@ -634,22 +634,22 @@ async def test_reader_stops_on_its_own_timer_and_resumes(stream_client: Client):
 async def test_two_backends_on_one_client(client: Client, redis_url: str):
     # A client can have two Stream backends, such as during a migration to another backend. Each
     # ref stores its backend name, so a call goes to the backend that has the Stream.
+    redis = RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}")
+    memory = MemoryStreamBackend()
     config = client.config()
-    config["stream_backends"] = [
-        RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True),
-        MemoryStreamBackend(),
-    ]
-    stream_client = Client(**config)
-    stream_id = f"two-{uuid.uuid4()}"
-    on_redis = await stream_client.create_stream(stream_id, payload_type=str)
-    on_memory = await stream_client.create_stream(
-        stream_id, backend="memory", payload_type=str
+    config["stream_config"] = streams.StreamConfig(
+        backends=[redis, memory],
+        backend_selector=lambda ctx: memory if ctx.id.startswith("memory-") else redis,
     )
+    stream_client = Client(**config)
+    suffix = uuid.uuid4()
+    on_redis = await stream_client.create_stream(f"redis-{suffix}", payload_type=str)
+    on_memory = await stream_client.create_stream(f"memory-{suffix}", payload_type=str)
     assert (on_redis.ref.backend, on_memory.ref.backend) == ("redis", "memory")
     await on_redis.append("redis")
     await on_memory.append("memory")
-    for backend, expected in (("redis", "redis"), ("memory", "memory")):
-        again = stream_client.get_stream(stream_id, backend=backend, payload_type=str)
+    for ref, expected in ((on_redis.ref, "redis"), (on_memory.ref, "memory")):
+        again = stream_client.get_stream(ref)
         data = [
             item.data
             async for item in again.read(wait_new_records=False)

@@ -11,7 +11,7 @@ import pytest
 from temporalio.client import Client
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
-from temporalio.streams import StreamBackend
+from temporalio.streams import StreamBackend, StreamConfig
 
 
 def _free_port() -> int:
@@ -59,15 +59,13 @@ async def stream_client(
     client: Client, request: pytest.FixtureRequest
 ) -> AsyncIterator[Client]:
     # Every live test runs on the memory Store and on Redis, since both must have the same
-    # rules. The backend is the default, so a create with no backend name uses it.
+    # rules. The client has one backend, so every Stream goes to it.
     backend: StreamBackend
     if request.param == "memory":
-        backend = MemoryStreamBackend(default=True)
+        backend = MemoryStreamBackend()
     else:
         redis_url = request.getfixturevalue("redis_url")
-        backend = RedisStreamBackend(
-            redis_url, key_prefix=f"t-{uuid.uuid4()}", default=True
-        )
+        backend = RedisStreamBackend(redis_url, key_prefix=f"t-{uuid.uuid4()}")
     config = client.config()
-    config["stream_backends"] = [backend]
+    config["stream_config"] = StreamConfig(backends=[backend])
     yield Client(**config)

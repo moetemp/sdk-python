@@ -11,7 +11,7 @@ from temporalio.api.enums.v1 import StreamErrorReason, StreamIdConflictPolicy
 from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
 from temporalio.service import RPCStatusCode
-from temporalio.streams import StreamBackend
+from temporalio.streams import StreamBackend, StreamConfig
 from temporalio.streams._backend import _ExtensionCalls
 
 
@@ -180,7 +180,7 @@ class FakeExtension:
 
 class _FakeBackend(StreamBackend):
     def __init__(self, calls: _ExtensionCalls) -> None:
-        super().__init__("fake-streams", backend_name="fake", default=True)
+        super().__init__("fake-streams", backend_name="fake")
         self._calls = calls
 
     def _backend_for(
@@ -195,5 +195,5 @@ def fake_client(client: Client) -> tuple[Client, FakeExtension]:
     extension = FakeExtension()
     backend = _FakeBackend(_ExtensionCalls(extension))
     config = client.config()
-    config["stream_backends"] = [backend]
+    config["stream_config"] = StreamConfig(backends=[backend])
     return Client(**config), extension

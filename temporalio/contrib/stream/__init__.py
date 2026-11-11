@@ -1,14 +1,17 @@
 """The Redis Stream backend.
 
-Register it on the client. Workflow code and clients create Streams with
-:py:data:`temporalio.workflow.create_stream` and :py:attr:`temporalio.client.Client.create_stream`.
-``backend=`` picks a backend that isn't the default::
+Register it on the client in a :py:class:`temporalio.streams.StreamConfig`. Workflow code and
+clients create Streams with :py:data:`temporalio.workflow.create_stream` and
+:py:attr:`temporalio.client.Client.create_stream`::
 
+    from temporalio import streams
     from temporalio.contrib.stream import RedisStreamBackend
 
     client = await Client.connect(
         "localhost:7233",
-        stream_backends=[RedisStreamBackend("redis://localhost", default=True)],
+        stream_config=streams.StreamConfig(
+            backends=[RedisStreamBackend("redis://localhost")]
+        ),
     )
 
 A Workflow's close is a regular Activity on the Workflow's task queue. So a Worker on that queue
@@ -31,12 +34,12 @@ from temporalio.streams.proto import v1 as ext_pb
 class RedisStreamBackend(ExtensionStreamBackend):
     """Sends Stream calls to Redis, through the temporalio-streams runtime in the bridge.
 
-    Register it on the client with ``stream_backends=``. A Worker uses its client's backends,
-    so one backend serves Workflow code, Activities and the client. The clients of the backend
-    that share a :py:class:`temporalio.runtime.Runtime` share one runtime object and its
-    connections, and so do their Workers. It registers its ``name``, ``redis`` by default, and
-    each Stream ref that it creates keeps that name. A Worker serves only one backend. A client
-    can have more than one, and ``backend=`` picks one.
+    Register it on the client in a :py:class:`temporalio.streams.StreamConfig`. A Worker uses
+    its client's config, so one backend serves Workflow code, Activities and the client. The
+    clients of the backend that share a :py:class:`temporalio.runtime.Runtime` share one runtime
+    object and its connections, and so do their Workers. It registers its ``name``, ``redis`` by
+    default, and each Stream ref that it creates keeps that name. A Worker serves only one
+    backend. A client can have more than one, and the config's ``backend_selector`` picks one.
 
     A Workflow's close is a regular Activity on the Workflow's task queue, which runs after the
     Workflow Task commits. So a Worker on that queue that polls Activities must have this
@@ -57,7 +60,6 @@ class RedisStreamBackend(ExtensionStreamBackend):
         safety_ttl: timedelta | None = None,
         response_timeout: timedelta | None = None,
         name: str = "redis",
-        default: bool = False,
     ) -> None:
         """Create the backend.
 
@@ -75,10 +77,7 @@ class RedisStreamBackend(ExtensionStreamBackend):
                 keeps every Record. Defaults to 90 days.
             response_timeout: The longest time that one Redis call can take. Defaults to 5 s.
             name: The backend name that Stream refs store, so every process can route a
-                ref that it receives.
-            default: Make this the backend of a create with no backend name. With more than
-                one registered backend, exactly one must have it, or the client raises
-                ``StreamConfigError``.
+                ref that it receives. The names of a Stream config must be unique.
         """
         config = ext_pb.RedisStreamConfig(
             urls=[url] if isinstance(url, str) else list(url),
@@ -92,9 +91,7 @@ class RedisStreamBackend(ExtensionStreamBackend):
         ):
             if value is not None:
                 getattr(config, field).FromTimedelta(value)
-        super().__init__(
-            "temporalio.RedisStreamBackend", False, config, None, name, default
-        )
+        super().__init__("temporalio.RedisStreamBackend", False, config, None, name)
 
 
 __all__ = ["RedisStreamBackend"]

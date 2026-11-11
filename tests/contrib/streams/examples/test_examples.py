@@ -6,6 +6,7 @@ import pytest
 
 from temporalio import streams
 from temporalio.client import Client
+from temporalio.contrib.stream.testing import MemoryStreamBackend
 from tests.contrib.streams.examples import (
     activity_streams_tokens,
     agent_publishes_turns,
@@ -62,22 +63,36 @@ async def test_activity_streams_tokens(stream_client: Client):
 
 
 async def test_worker_setup_on_memory(client: Client):
-    target = client.service_client.config.target_host
-    test_client = await worker_setup.connect_for_tests(target)
-    assert await worker_setup.main(test_client, task_queue()) == [
-        "hello ada",
-        "bye ada",
-    ]
+    async with await worker_setup.start_test_environment() as env:
+        assert await worker_setup.main(env.client, task_queue()) == [
+            "hello ada",
+            "bye ada",
+        ]
+    # The migration's selector, with memory backends in place of the two Redis backends.
+    config = client.config()
+    config["stream_config"] = worker_setup.migration_config(
+        MemoryStreamBackend(name="redis-a"), MemoryStreamBackend(name="redis-b")
+    )
+    migrating = Client(**config)
+    assert await worker_setup.create_while_migrating(migrating) == (
+        "redis-b",
+        "redis-a",
+    )
+    with pytest.raises(streams.StreamConfigError, match="client with one backend"):
+        worker_setup.run_worker(migrating, task_queue())
 
 
 async def test_worker_setup_on_redis(client: Client, redis_url: str):
     target = client.service_client.config.target_host
-    redis_client = await worker_setup.connect_with_redis(target, redis_url)
+    redis_client = await worker_setup.connect(target, redis_url)
     assert await worker_setup.main(redis_client, task_queue()) == [
         "hello ada",
         "bye ada",
     ]
     migrating = await worker_setup.connect_while_migrating(target, redis_url, redis_url)
-    assert await worker_setup.create_on_second_backend(migrating) == "redis-b"
+    assert await worker_setup.create_while_migrating(migrating) == (
+        "redis-b",
+        "redis-a",
+    )
     with pytest.raises(streams.StreamConfigError, match="client with one backend"):
         worker_setup.run_worker(migrating, task_queue())

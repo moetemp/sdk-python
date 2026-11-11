@@ -1,20 +1,22 @@
 """Streams API proposal, "Worker setup".
 
-Register the Stream backends on the client with ``stream_backends=``. The Worker uses its
-client's backend, and serves only one. Each backend registers a name. A create with no backend
-name uses the backend with ``default=True``, and ``backend=`` picks another. Tests use
-``MemoryStreamBackend`` without changing Workflow code. Sync Workflow code, such as
+The client registers its Stream backends in a ``StreamConfig``, as ``ExternalStorage`` registers
+its drivers. The Worker takes its client's config, and serves only one backend. One backend needs
+no selector. With more than one, a selector picks the backend of each new Stream. Tests swap
+Redis for ``MemoryStreamBackend`` without changing Workflow code. Sync Workflow code, such as
 ``@workflow.init``, uses the ``_nowait`` calls.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 from temporalio import streams, workflow
 from temporalio.client import Client
 from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
+from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 
@@ -39,33 +41,45 @@ class Greeter:
         return name
 
 
-async def connect_with_redis(target_host: str, redis_url: str) -> Client:
-    # This SDK has no native backend, so its one Redis backend is the default.
+async def connect(target_host: str, redis_url: str) -> Client:
+    # Retention is an option of the backend, not of a create. One backend needs no selector.
+    backend = RedisStreamBackend(redis_url, retention=timedelta(days=7))
     return await Client.connect(
-        target_host, stream_backends=[RedisStreamBackend(redis_url, default=True)]
+        target_host, stream_config=streams.StreamConfig(backends=[backend])
     )
 
 
-async def connect_for_tests(target_host: str) -> Client:
-    return await Client.connect(
-        target_host, stream_backends=[MemoryStreamBackend(default=True)]
+def migration_config(
+    redis_a: streams.StreamBackend, redis_b: streams.StreamBackend
+) -> streams.StreamConfig:
+    # With more than one backend, a selector picks the backend of each new Stream, as
+    # ExternalStorage.driver_selector picks a driver. It returns one of the registered backends.
+    return streams.StreamConfig(
+        backends=[redis_a, redis_b],
+        # redis-b is the migration target.
+        backend_selector=lambda ctx: (
+            redis_a if ctx.id.startswith("legacy-") else redis_b
+        ),
     )
 
 
 async def connect_while_migrating(target_host: str, url_a: str, url_b: str) -> Client:
-    # Two backends during a migration. A create with no backend= uses the default one. A
-    # Worker serves only one backend, so a Worker gets a client with one backend.
+    redis_a = RedisStreamBackend(url_a, name="redis-a", retention=timedelta(days=1))
+    redis_b = RedisStreamBackend(url_b, name="redis-b", retention=timedelta(days=1))
     return await Client.connect(
-        target_host,
-        stream_backends=[
-            RedisStreamBackend(url_a, name="redis-a", default=True),
-            RedisStreamBackend(url_b, name="redis-b"),
-        ],
+        target_host, stream_config=migration_config(redis_a, redis_b)
+    )
+
+
+async def start_test_environment() -> WorkflowEnvironment:
+    # A test swaps Redis for memory with no code change, since the client registers the backends.
+    return await WorkflowEnvironment.start_time_skipping(
+        stream_config=streams.StreamConfig(backends=[MemoryStreamBackend()])
     )
 
 
 def run_worker(client: Client, task_queue: str) -> Worker:
-    # The Worker uses its client's one backend, so it needs no Stream setup of its own.
+    # The Worker takes its client's config, so it needs no Stream setup of its own.
     return Worker(client, task_queue=task_queue, workflows=[Greeter])
 
 
@@ -79,8 +93,8 @@ async def main(client: Client, task_queue: str) -> list[str]:
     return [r.data async for r in stream.read() if isinstance(r, streams.Record)]
 
 
-async def create_on_second_backend(client: Client) -> str | None:
-    stream = await client.create_stream(
-        f"chat-{uuid.uuid4()}", backend="redis-b", payload_type=str
-    )
-    return stream.ref.backend
+async def create_while_migrating(client: Client) -> tuple[str | None, str | None]:
+    suffix = uuid.uuid4()
+    new = await client.create_stream(f"chat-{suffix}", payload_type=str)
+    legacy = await client.create_stream(f"legacy-{suffix}", payload_type=str)
+    return new.ref.backend, legacy.ref.backend

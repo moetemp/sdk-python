@@ -28,9 +28,17 @@ and adds ``Superseded`` items from the Producer epochs. A read of a closed Strea
 A :py:class:`StreamBackend` makes the Stream calls and registers a backend name. Examples are
 :py:class:`temporalio.contrib.stream.RedisStreamBackend` (``redis``) and
 :py:class:`temporalio.contrib.stream.testing.MemoryStreamBackend` (``memory``). Register
-backends with ``Client.connect(..., stream_backends=[...])``. A ref keeps the name of its
-backend. With more than one registered backend, exactly one must have ``default=True``. A create
-with no ``backend=`` uses that backend. A Worker serves only one backend.
+backends in a :py:class:`StreamConfig`, as ``ExternalStorage`` registers its drivers::
+
+    client = await Client.connect(
+        "localhost:7233",
+        stream_config=StreamConfig(backends=[RedisStreamBackend("redis://localhost")]),
+    )
+
+With one backend, every Stream goes to it. With more than one, the config's
+``backend_selector`` picks the backend of each create and each get by id. A ref keeps the name
+of its backend, so a call through a ref finds its backend by name. A Worker serves only one
+backend.
 
 .. warning::
     The Streams API is experimental.
@@ -46,7 +54,11 @@ from temporalio.streams._errors import (
 )
 from temporalio.streams._items import END, Closed, End, ItemKind, Record
 from temporalio.streams._offset import StreamOffset
-from temporalio.streams._plugin import StreamBackend
+from temporalio.streams._plugin import (
+    StreamBackend,
+    StreamConfig,
+    StreamSelectContext,
+)
 from temporalio.streams._reader import Reader
 from temporalio.streams._ref import StreamRef
 from temporalio.streams._stream_client import producer
@@ -96,12 +108,14 @@ __all__ = [
     "StreamBackend",
     "StreamClose",
     "StreamCloseStatus",
+    "StreamConfig",
     "StreamConfigError",
     "StreamError",
     "StreamErrorReason",
     "StreamIDConflictPolicy",
     "StreamOffset",
     "StreamRef",
+    "StreamSelectContext",
     "StreamWriter",
     "Timestamp",
     "WorkflowProducer",

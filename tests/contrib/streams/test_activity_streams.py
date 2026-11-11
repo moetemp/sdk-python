@@ -250,9 +250,9 @@ async def test_retry_goes_on_with_a_closed_or_expired_stream(client: Client):
     # Stream expires one Retention after its close, so the Stream closed before the run has
     # expired, while the one that the run closes is still within Retention.
     config = client.config()
-    config["stream_backends"] = [
-        MemoryStreamBackend(retention=timedelta(seconds=2), default=True)
-    ]
+    config["stream_config"] = streams.StreamConfig(
+        backends=[MemoryStreamBackend(retention=timedelta(seconds=2))]
+    )
     memory_client = Client(**config)
     expired = await memory_client.create_stream(
         f"expired-{uuid.uuid4()}", payload_type=str

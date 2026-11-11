@@ -34,7 +34,7 @@ from ._workflow_instance import (
 from .workflow_sandbox import SandboxedWorkflowRunner
 
 if TYPE_CHECKING:
-    from temporalio.streams import StreamBackend
+    from temporalio.streams import StreamConfig
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +60,17 @@ class Replayer:
         runtime: temporalio.runtime.Runtime | None = None,
         disable_safe_workflow_eviction: bool = False,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
-        stream_backends: Sequence[StreamBackend] = (),
+        stream_config: StreamConfig | None = None,
     ) -> None:
         """Create a replayer to replay workflows from history.
 
         See :py:meth:`temporalio.worker.Worker.__init__` for a description of
         most of the arguments. Most of the same arguments need to be passed to
         the replayer that were passed to the worker when the workflow originally
-        ran. Pass ``stream_backends`` with the same backends as the Worker's
+        ran. Pass ``stream_config`` with the same backend as the Worker's
         client, such as :py:class:`temporalio.contrib.stream.RedisStreamBackend`.
-        A replay makes no Stream call, so the Store doesn't need to be reachable.
+        A Replayer serves only one backend, as a Worker does. A replay makes no
+        Stream call, so the Store doesn't need to be reachable.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that
@@ -93,7 +94,7 @@ class Replayer:
             runtime=runtime,
             disable_safe_workflow_eviction=disable_safe_workflow_eviction,
             header_codec_behavior=header_codec_behavior,
-            stream_backends=list(stream_backends),
+            stream_config=stream_config,
         )
         self._initial_config = self._config.copy()
         self._default_workflow_logic_flags = set(_DEFAULT_ENABLED_WORKFLOW_LOGIC_FLAGS)
@@ -102,7 +103,7 @@ class Replayer:
         self.plugins = plugins
         for plugin in plugins:
             self._config = plugin.configure_replayer(self._config)
-        if self._config.get("stream_backends"):
+        if self._config.get("stream_config") is not None:
             from temporalio.streams import _plugin as _stream_plugin
 
             self._config = _stream_plugin.configure_replayer(self._config)
@@ -445,7 +446,7 @@ class ReplayerConfig(TypedDict, total=False):
     runtime: temporalio.runtime.Runtime | None
     disable_safe_workflow_eviction: bool
     header_codec_behavior: HeaderCodecBehavior
-    stream_backends: Sequence[StreamBackend]
+    stream_config: StreamConfig | None
 
 
 @dataclass(frozen=True)

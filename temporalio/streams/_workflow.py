@@ -18,7 +18,7 @@ import asyncio
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, NamedTuple, TypeVar
+from typing import Any, TypeVar
 
 import google.protobuf.message
 
@@ -140,13 +140,6 @@ def _state() -> _RunState:
     return state
 
 
-class WorkerBackend(NamedTuple):
-    """The Stream backend of the Worker that runs the Workflow."""
-
-    name: str
-    default: bool
-
-
 def _transport() -> Any:
     # The run's outbound interceptor that the Worker's backend marks, or None.
     outbound = getattr(temporalio.workflow._Runtime.current(), "_outbound", None)
@@ -157,15 +150,12 @@ def _transport() -> Any:
     return None
 
 
-def worker_backend() -> WorkerBackend | None:
-    """The Worker's backend, which marks the run's outbound interceptor, or None."""
+def worker_backend() -> str | None:
+    """The name of the Worker's backend, which marks the run's outbound interceptor, or None."""
     outbound = _transport()
     if outbound is None:
         return None
-    return WorkerBackend(
-        getattr(outbound, "_temporal_stream_backend_name", ""),
-        getattr(outbound, "_temporal_stream_default", False),
-    )
+    return getattr(outbound, "_temporal_stream_backend_name", "")
 
 
 async def _close_in_workflow(request: stream_pb.CloseStreamRequest) -> str:
@@ -182,30 +172,23 @@ def no_worker_backend() -> _errors.StreamConfigError:
     """The error of Workflow code on a Worker with no Stream backend."""
     return _errors.StreamConfigError(
         "No Stream backend is on the Worker. Register one on its client with "
-        "stream_backends=."
+        "stream_config=."
     )
 
 
 def _check_backend(backend: str | None, action: str) -> str:
     # These errors come from the Worker's config, not from History. So they fail the Workflow
-    # Task, and a Worker with the right config retries it.
+    # Task, and a Worker with the right config retries it. A Worker serves only one backend,
+    # so Workflow code never calls a selector.
     worker = worker_backend()
     if worker is None:
         raise no_worker_backend()
-    if not backend:
-        if not worker.default:
-            raise _errors.no_default_backend(
-                "Worker",
-                [worker.name],
-                "workflow.create_stream[T](id, backend=...)",
-            )
-        return worker.name
-    if backend != worker.name:
+    if backend and backend != worker:
         raise _errors.StreamConfigError(
             f"Can't {action} a Stream of the backend {backend}. The Worker has only "
-            f"{worker.name}."
+            f"{worker}."
         )
-    return worker.name
+    return worker
 
 
 def _records(request: google.protobuf.message.Message) -> int:
@@ -598,14 +581,13 @@ async def create_stream(
     payload_type: type[T] | None,
     id: str,
     *,
-    backend: str | None,
     id_conflict_policy: StreamIDConflictPolicy,
 ) -> WorkflowStream[T]:
     """Create a standalone Stream.
 
     See :py:data:`temporalio.workflow.create_stream`.
     """
-    ref: StreamRef[T] = _creating(id, backend)
+    ref: StreamRef[T] = _creating(id)
     await generated_create.create_stream[payload_type or object](
         id=id,
         backend=ref.backend,
@@ -618,14 +600,13 @@ def create_stream_nowait(
     payload_type: type[T] | None,
     id: str,
     *,
-    backend: str | None,
     id_conflict_policy: StreamIDConflictPolicy,
 ) -> WorkflowStream[T]:
     """Create a standalone Stream without an await.
 
     See :py:data:`temporalio.workflow.create_stream_nowait`.
     """
-    ref: StreamRef[T] = _creating(id, backend)
+    ref: StreamRef[T] = _creating(id)
     call = _support.start_now(
         generated_create.create_stream[payload_type or object](
             id=id,
@@ -637,12 +618,12 @@ def create_stream_nowait(
     return WorkflowStream(ref)
 
 
-def _creating(id: str, backend: str | None) -> StreamRef[Any]:
+def _creating(id: str) -> StreamRef[Any]:
     # The checks raise before the generated call. A Workflow creates only standalone Streams, so
     # the ref has no owner.
     if not id:
         raise ValueError("The Stream id is empty")
-    ref: StreamRef[Any] = StreamRef(id=id, backend=_check_backend(backend, "create"))
+    ref: StreamRef[Any] = StreamRef(id=id, backend=_check_backend(None, "create"))
     _check(ref, "create", backend_checked=True)
     return ref
 

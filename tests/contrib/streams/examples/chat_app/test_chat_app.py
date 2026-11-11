@@ -73,7 +73,6 @@ async def answer(
     read = client.get_stream(
         refs.turns.id,
         payload_type=Turn,
-        backend=refs.turns.backend,
     ).read()
     records = await read_until_answer(read, 1)
     await read.aclose()
@@ -91,13 +90,11 @@ async def test_turn_and_its_tokens(stream_client: Client):
     turns = stream_client.get_stream(
         refs.turns.id,
         payload_type=Turn,
-        backend=refs.turns.backend,
     )
     records = [r async for r in turns.read() if isinstance(r, streams.Record)]
     tokens = stream_client.get_stream(
         refs.tokens.id,
         payload_type=Token,
-        backend=refs.tokens.backend,
     )
     deltas = [r.data async for r in tokens.read() if isinstance(r, streams.Record)]
     system, user, assistant, ended = records
@@ -170,7 +167,6 @@ async def test_message_during_a_run_joins_the_next_round(stream_client: Client):
         read = stream_client.get_stream(
             refs.turns.id,
             payload_type=Turn,
-            backend=refs.turns.backend,
         ).read()
         records = []
         async for item in read:
@@ -215,7 +211,6 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
     child = stream_client.get_stream(
         link.agent.turns.id,
         payload_type=Turn,
-        backend=link.agent.turns.backend,
     )
     child_turns = [r.data async for r in child.read() if isinstance(r, streams.Record)]
     assert [(t.role, t.tool) for t in child_turns] == [
@@ -229,7 +224,6 @@ async def test_sub_agent_writes_its_own_streams(stream_client: Client):
     tokens = stream_client.get_stream(
         link.agent.tokens.id,
         payload_type=Token,
-        backend=link.agent.tokens.backend,
     )
     assert [r async for r in tokens.read() if isinstance(r, streams.Record)]
     assert records[-1].data.text.startswith("The sub-agent reports back.")
@@ -250,7 +244,6 @@ async def failed_attempt(
     tokens = client.get_stream(
         refs.tokens.id,
         payload_type=Token,
-        backend=refs.tokens.backend,
     )
     return refs, [item async for item in with_superseded(tokens.read())]
 
@@ -277,7 +270,6 @@ async def test_resume_from_a_saved_offset(stream_client: Client):
         turns = stream_client.get_stream(
             refs.turns.id,
             payload_type=Turn,
-            backend=refs.turns.backend,
         )
         await handle.execute_update(ChatSession.send, UserMessage("message 1"))
         read = turns.read()
@@ -323,7 +315,6 @@ async def test_share_again_is_a_strict_create_of_an_existing_id(stream_client: C
             turns = stream_client.get_stream(
                 refs.turns.id,
                 payload_type=Turn,
-                backend=refs.turns.backend,
             )
             read = turns.read()
             await read_until_answer(read, 1)

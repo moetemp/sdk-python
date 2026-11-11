@@ -46,7 +46,7 @@ class TurnWorkflow:
 
 async def test_refs_in_models_round_trip_on_the_memory_store(client: Client):
     config = client.config()
-    config["stream_backends"] = [MemoryStreamBackend(default=True)]
+    config["stream_config"] = streams.StreamConfig(backends=[MemoryStreamBackend()])
     config["data_converter"] = pydantic_data_converter
     client = Client(**config)
     async with new_worker(client, TurnWorkflow, activities=[call_model]) as worker:

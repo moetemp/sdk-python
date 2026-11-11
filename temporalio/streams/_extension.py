@@ -65,12 +65,10 @@ class ExtensionStreamBackend(StreamBackend):
         config: ext_pb.RedisStreamConfig | runtime_pb.MemoryStreamConfig,
         runtime: temporalio.runtime.Runtime | None,
         backend_name: str,
-        default: bool,
     ) -> None:
         """Create the backend over the bridge's Stream runtime, on Redis or in memory.
 
-        ``backend_name`` is the name that Stream refs store for this backend. ``default``
-        makes it the backend of a create with no backend name.
+        ``backend_name`` is the name that Stream refs store for this backend.
         """
         config.backend = backend_name
         self._config = config.SerializeToString()
@@ -87,7 +85,6 @@ class ExtensionStreamBackend(StreamBackend):
         super().__init__(
             name,
             backend_name=backend_name,
-            default=default,
             activities=_writes.ACTIVITIES,
         )
 
@@ -125,7 +122,7 @@ class ExtensionStreamBackend(StreamBackend):
         if interceptor is None or interceptor.backend is None:
             raise StreamConfigError(
                 f"The client has no {type(self).__name__}. Register it with "
-                "stream_backends=."
+                "stream_config=."
             )
         return interceptor.backend
 
@@ -160,7 +157,7 @@ class ExtensionStreamBackend(StreamBackend):
         if mine is None:
             raise StreamConfigError(
                 f"The Worker's client has no {type(self).__name__}. Register it with "
-                "stream_backends=."
+                "stream_config=."
             )
         if config.get("no_remote_activities"):
             # Another Worker on the task queue can run the close Activity, so it isn't an error.
@@ -263,7 +260,6 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
             {
                 "_backend": self.plugin,
                 "_backend_name": self.plugin.backend_name,
-                "_default": self.plugin.default,
             },
         )
 
@@ -276,15 +272,10 @@ class _StreamInterceptor(temporalio.client.Interceptor, temporalio.worker.Interc
 class _WorkflowInbound(temporalio.worker.WorkflowInboundInterceptor):
     _backend: ExtensionStreamBackend | None = None
     _backend_name = ""
-    _default = False
 
     def init(self, outbound: temporalio.worker.WorkflowOutboundInterceptor) -> None:
         assert self._backend is not None
-        super().init(
-            _WorkflowOutbound(
-                outbound, self._backend, self._backend_name, self._default
-            )
-        )
+        super().init(_WorkflowOutbound(outbound, self._backend, self._backend_name))
 
     async def execute_workflow(
         self, input: temporalio.worker.ExecuteWorkflowInput
@@ -339,12 +330,10 @@ class _WorkflowOutbound(temporalio.worker.WorkflowOutboundInterceptor):
         next: temporalio.worker.WorkflowOutboundInterceptor,
         backend: ExtensionStreamBackend,
         backend_name: str,
-        default: bool,
     ) -> None:
         super().__init__(next)
         self._temporal_stream_backend = backend
         self._temporal_stream_backend_name = backend_name
-        self._temporal_stream_default = default
         # Counts the run's Activity calls, so a key is the same on replay and on a retry. It
         # doesn't call workflow.uuid4(), so the user's random values don't change.
         self._activity_calls = 0

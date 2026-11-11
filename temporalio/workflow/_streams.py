@@ -165,7 +165,6 @@ async def create_stream(
     id: str,
     *,
     payload_type: type[T],
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[T]: ...
 
@@ -175,7 +174,6 @@ async def create_stream(
     id: str,
     *,
     payload_type: None = None,
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[Any]: ...
 
@@ -184,7 +182,6 @@ async def create_stream(
     id: str,
     *,
     payload_type: type[T] | None = None,
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[Any]:
     """Create a Stream, and return it.
@@ -199,12 +196,12 @@ async def create_stream(
     gets that Stream. A run after continue-as-new uses the Stream through the ref that the earlier
     run forwards, with :py:func:`get_stream`. The create and each append are Local Activities.
 
+    The Stream goes to the Worker's backend. A Worker serves only one backend, so Workflow code
+    never calls the client's ``backend_selector``.
+
     Args:
         id: The Stream id, which the Workflow picks, such as a session id.
         payload_type: The type that reads decode each Record with.
-        backend: The name of the backend. Defaults to the Worker's backend. A replay must create
-            the Stream on the same backend, so keep the Worker's default, or gate a new one with
-            ``workflow.patched``.
         id_conflict_policy: ``FAIL`` raises a :py:class:`StreamError` with ``reason``
             ``STREAM_ERROR_REASON_ALREADY_EXISTS`` on an id that exists, which no earlier create
             of this run chain made. ``USE_EXISTING`` returns the existing Stream.
@@ -213,8 +210,8 @@ async def create_stream(
         StreamError: ``FAIL`` on an id that exists, with ``reason``
             ``STREAM_ERROR_REASON_ALREADY_EXISTS``.
         ReadOnlyContextError: The code must not change state, such as a query handler.
-        StreamConfigError: The Worker has no Stream backend or none with that name. It fails the
-            Workflow Task, not the run.
+        StreamConfigError: The Worker has no Stream backend. It fails the Workflow Task, not
+            the run.
 
     .. warning::
         This API is experimental.
@@ -224,7 +221,6 @@ async def create_stream(
     return await _workflow.create_stream(
         payload_type,
         id,
-        backend=backend,
         id_conflict_policy=id_conflict_policy
         if id_conflict_policy is not None
         else StreamIDConflictPolicy.FAIL,
@@ -236,7 +232,6 @@ def create_stream_nowait(
     id: str,
     *,
     payload_type: type[T],
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[T]: ...
 
@@ -246,7 +241,6 @@ def create_stream_nowait(
     id: str,
     *,
     payload_type: None = None,
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[Any]: ...
 
@@ -255,7 +249,6 @@ def create_stream_nowait(
     id: str,
     *,
     payload_type: type[T] | None = None,
-    backend: str | None = None,
     id_conflict_policy: StreamIDConflictPolicy | None = None,
 ) -> WorkflowStream[Any]:
     """Start the create, and return the Stream at once.
@@ -273,7 +266,6 @@ def create_stream_nowait(
     return _workflow.create_stream_nowait(
         payload_type,
         id,
-        backend=backend,
         id_conflict_policy=id_conflict_policy
         if id_conflict_policy is not None
         else StreamIDConflictPolicy.FAIL,
@@ -283,8 +275,8 @@ def create_stream_nowait(
 def get_stream(ref: StreamRef[T]) -> WorkflowStream[T]:
     """Get the Stream of a ref that came as data, such as an argument. It makes no call.
 
-    The Stream's calls check its backend. A Worker that doesn't have it fails the Workflow Task
-    at the first call.
+    The Stream's calls check the backend name of the ref. A Worker that doesn't have that
+    backend fails the Workflow Task at the first call.
 
     .. warning::
         This API is experimental.

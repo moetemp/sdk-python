@@ -83,12 +83,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis_url = os.environ.get("CHAT_APP_REDIS_URL")
     backend: streams.StreamBackend
     if redis_url:
-        backend = RedisStreamBackend(redis_url, default=True)
+        backend = RedisStreamBackend(redis_url)
     else:
-        backend = MemoryStreamBackend(default=True)
+        backend = MemoryStreamBackend()
     client = await Client.connect(
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
-        stream_backends=[backend],
+        stream_config=streams.StreamConfig(backends=[backend]),
     )
     # Each server start sends this create, so it gets the lobby that an earlier start made.
     lobby = await client.create_stream(
@@ -255,9 +255,7 @@ async def end(session: SessionDep) -> dict[str, Any]:
 
 @app.post("/api/sessions/{session_id}/share")
 async def share(session_id: str, refs: StreamsDep, chat: ChatDep) -> dict[str, Any]:
-    turns = chat.client.get_stream(
-        refs.turns.id, payload_type=Turn, backend=refs.turns.backend
-    )
+    turns = chat.client.get_stream(refs.turns.id, payload_type=Turn)
     # The snapshot holds the chat up to this offset, which names it.
     upto = await turns.get_offset()
     share_id = f"{session_id}-snapshot-{upto}"
@@ -359,15 +357,11 @@ async def session_events(
     # The tab sends the offsets that it saved, so a reload or a reconnect resumes there. The
     # init's create can still be in flight when a new chat's tab starts to read.
     wait = timedelta(seconds=30)
-    turns_stream = chat.client.get_stream(
-        refs.turns.id, payload_type=Turn, backend=refs.turns.backend
-    )
+    turns_stream = chat.client.get_stream(refs.turns.id, payload_type=Turn)
     turns_read = turns_stream.read(
         offset=streams.StreamOffset.parse(turns) if turns else None, create_wait=wait
     )
-    tokens_stream = chat.client.get_stream(
-        refs.tokens.id, payload_type=Token, backend=refs.tokens.backend
-    )
+    tokens_stream = chat.client.get_stream(refs.tokens.id, payload_type=Token)
     # A tab that joins reads only new tokens, since the turns Stream has the earlier replies.
     tokens_read = tokens_stream.read(
         offset=streams.StreamOffset.parse(tokens) if tokens else streams.END,
@@ -383,9 +377,7 @@ async def session_events(
 
 
 def lobby_read(chat: Chat) -> streams.Reader[SessionInfo]:
-    lobby = chat.client.get_stream(
-        chat.lobby.id, payload_type=SessionInfo, backend=chat.lobby.backend
-    )
+    lobby = chat.client.get_stream(chat.lobby.id, payload_type=SessionInfo)
     # The newest 20 chats, then each new one.
     return lobby.read(last=20)
 

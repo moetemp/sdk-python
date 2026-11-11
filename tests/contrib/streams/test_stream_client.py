@@ -11,9 +11,15 @@ from temporalio import streams, workflow
 from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.client import BufferedAppender, Client, Stream
 from temporalio.contrib.stream.testing import MemoryStreamBackend
-from temporalio.converter import DataConverter
+from temporalio.converter import (
+    DataConverter,
+    StorageDriverActivityInfo,
+    StorageDriverWorkflowInfo,
+)
 from temporalio.streams.system import models
+from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
+from tests.contrib.streams._support import only_backend
 from tests.contrib.streams.fake_extension import fake_client
 from tests.helpers import new_worker
 
@@ -27,13 +33,17 @@ class Turn:
 _BEGINNING = streams.StreamOffset(b"")
 
 
-async def test_unknown_backend_raises_before_any_call(client: Client):
+def _client(client: Client, stream_config: streams.StreamConfig) -> Client:
+    config = client.config()
+    config["stream_config"] = stream_config
+    return Client(**config)
+
+
+async def test_ref_with_an_unknown_backend_raises_before_any_call(client: Client):
     client, extension = fake_client(client)
-    with pytest.raises(streams.StreamConfigError, match="no Stream backend redis"):
-        await client.create_stream("chat-1", payload_type=Turn, backend="redis")
-    with pytest.raises(streams.StreamConfigError, match="It has fake"):
-        client.get_stream("chat-1", payload_type=Turn, backend="redis")
-    with pytest.raises(streams.StreamConfigError, match="It has fake"):
+    with pytest.raises(
+        streams.StreamConfigError, match="no Stream backend redis. It has fake"
+    ):
         client.get_stream(streams.StreamRef(id="chat-1", backend="redis"))
     assert not extension.streams and not extension.namespaces
     stream = await client.create_stream("chat-1", payload_type=Turn)
@@ -55,7 +65,7 @@ async def test_get_stream_gives_the_stream_of_a_ref(client: Client):
         converter.to_payload(stream.ref), streams.StreamRef[Turn]
     )
     assert ref == stream.ref
-    typed = client.get_stream(ref.id, payload_type=Turn, backend=ref.backend)
+    typed = client.get_stream(ref.id, payload_type=Turn)
     assert typed.ref == ref and await typed.get_offset() == _BEGINNING
     await typed.append(Turn("model", "hi"))
     [record] = [r async for r in typed.read(wait_new_records=False)]
@@ -217,7 +227,7 @@ async def test_create_fails_on_a_stream_that_exists(stream_client: Client):
 
 async def test_a_create_retry_with_the_same_request_id_succeeds(stream_client: Client):
     # A retry after a lost answer sends the same request id, so it isn't a conflict.
-    [backend] = stream_client.config(active_config=True)["stream_backends"]
+    backend = only_backend(stream_client)
     service = backend._backend_for(stream_client).service(stream_client.namespace)
     request = models.CreateStreamRequest(
         stream_ref=models.StreamRef(id=f"retry-{uuid.uuid4()}"), request_id="create-1"
@@ -374,11 +384,12 @@ async def test_record_over_the_store_limit_raises_too_large(stream_client: Clien
 async def test_create_of_an_expired_stream_raises(client: Client):
     # Retention is a backend setting now. safety_ttl keeps an open Stream, so only a closed
     # Stream expires, one Retention after its close.
-    config = client.config()
-    config["stream_backends"] = [
-        MemoryStreamBackend(retention=timedelta(milliseconds=200), default=True)
-    ]
-    one = Client(**config)
+    one = _client(
+        client,
+        streams.StreamConfig(
+            backends=[MemoryStreamBackend(retention=timedelta(milliseconds=200))]
+        ),
+    )
     stream_id = f"expired-{uuid.uuid4()}"
     stream = await one.create_stream(stream_id, payload_type=str)
     await stream.append("old")
@@ -418,7 +429,7 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
 async def test_clients_of_one_runtime_share_the_backend_calls(stream_client: Client):
     # A service that makes a client for each tenant keeps one set of Redis connections.
     other = Client(**stream_client.config())
-    [backend] = stream_client.config(active_config=True)["stream_backends"]
+    backend = only_backend(stream_client)
     assert backend._backend_for(other) is backend._backend_for(stream_client)
     stream = await other.create_stream(f"shared-{uuid.uuid4()}", payload_type=str)
     await stream.append("from the other client")
@@ -429,40 +440,103 @@ async def test_clients_of_one_runtime_share_the_backend_calls(stream_client: Cli
     ]
 
 
-async def test_default_is_native_with_no_default_backend(client: Client):
-    config = client.config()
-    config["stream_backends"] = [MemoryStreamBackend()]
-    one = Client(**config)
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
-        one.get_stream("d-2", payload_type=str)
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
-        await one.create_stream("d-2", payload_type=str)
-    with pytest.raises(streams.StreamConfigError, match="default is native"):
-        one.get_stream(streams.StreamRef(id="d-2"))
-    on_memory = one.get_stream("d-2", payload_type=str, backend="memory")
-    assert on_memory.ref.backend == "memory"
-    created = await one.create_stream("d-2", payload_type=str, backend="memory")
+async def test_one_backend_needs_no_selector(client: Client):
+    one = _client(client, streams.StreamConfig(backends=[MemoryStreamBackend()]))
+    created = await one.create_stream(f"one-{uuid.uuid4()}", payload_type=str)
     assert created.ref.backend == "memory"
+    await created.append("hi")
+    assert one.get_stream(created.ref.id, payload_type=str).ref == created.ref
+    # A ref with no backend name goes where a get by id goes.
+    assert await one.get_stream(streams.StreamRef(id=created.ref.id)).get_offset() > (
+        _BEGINNING
+    )
 
 
-async def test_stream_takes_the_named_backend_or_the_default(client: Client):
-    config = client.config()
-    config["stream_backends"] = [
-        MemoryStreamBackend(name="a", default=True),
-        MemoryStreamBackend(name="b"),
+async def test_selector_routes_by_id(client: Client):
+    a, b = MemoryStreamBackend(name="a"), MemoryStreamBackend(name="b")
+    contexts: list[streams.StreamSelectContext] = []
+
+    def select(ctx: streams.StreamSelectContext) -> streams.StreamBackend:
+        contexts.append(ctx)
+        return a if ctx.id.startswith("legacy-") else b
+
+    two = _client(
+        client, streams.StreamConfig(backends=[a, b], backend_selector=select)
+    )
+    legacy = await two.create_stream("legacy-1", payload_type=str)
+    new = await two.create_stream("chat-1", payload_type=str)
+    assert (legacy.ref.backend, new.ref.backend) == ("a", "b")
+    await new.append("on b")
+    by_id = two.get_stream("chat-1", payload_type=str)
+    assert by_id.ref == new.ref and await by_id.get_offset() > _BEGINNING
+    assert two.get_stream("legacy-1", payload_type=str).ref.backend == "a"
+    # A plain client call has no target.
+    assert [(c.id, c.target) for c in contexts] == [
+        ("legacy-1", None),
+        ("chat-1", None),
+        ("chat-1", None),
+        ("legacy-1", None),
     ]
-    two = Client(**config)
-    created = await two.create_stream("moving", payload_type=str, backend="b")
-    await created.append("on b")
-    on_b = two.get_stream("moving", payload_type=str, backend="b")
-    assert on_b.ref == created.ref and await on_b.get_offset() > _BEGINNING
-    assert two.get_stream("moving", payload_type=str).ref.backend == "a"
-    # A ref with no backend name uses the default backend, which doesn't have the Stream.
-    with pytest.raises(streams.StreamError) as missing:
-        await two.get_stream(streams.StreamRef(id="moving")).get_offset()
-    assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
     with pytest.raises(ValueError):
         two.get_stream("", payload_type=str)
+
+
+async def test_ref_finds_its_backend_by_name(client: Client):
+    a, b = MemoryStreamBackend(name="a"), MemoryStreamBackend(name="b")
+    calls: list[str] = []
+
+    def select(ctx: streams.StreamSelectContext) -> streams.StreamBackend:
+        calls.append(ctx.id)
+        return b
+
+    # The Stream is on a, where this selector never sends a Stream.
+    on_a = await _client(client, streams.StreamConfig(backends=[a])).create_stream(
+        f"on-a-{uuid.uuid4()}", payload_type=str
+    )
+    await on_a.append("on a")
+    two = _client(
+        client, streams.StreamConfig(backends=[a, b], backend_selector=select)
+    )
+    found = two.get_stream(on_a.ref)
+    assert found.ref.backend == "a" and await found.get_offset() > _BEGINNING
+    assert not calls
+
+
+async def test_selector_gets_the_target_that_external_storage_gets(client: Client):
+    # An Activity of a Workflow gets the Workflow, and a standalone Activity gets itself.
+    a, b = MemoryStreamBackend(name="a"), MemoryStreamBackend(name="b")
+    targets: list[object] = []
+
+    def select(ctx: streams.StreamSelectContext) -> streams.StreamBackend:
+        targets.append(ctx.target)
+        return a
+
+    two = _client(
+        client, streams.StreamConfig(backends=[a, b], backend_selector=select)
+    )
+
+    async def create() -> None:
+        await two.create_stream(f"in-activity-{uuid.uuid4()}", payload_type=str)
+
+    await ActivityEnvironment().run(create)
+    standalone = ActivityEnvironment()
+    standalone.info = dataclasses.replace(
+        standalone.info,
+        workflow_id=None,
+        workflow_namespace=None,
+        workflow_run_id=None,
+        workflow_type=None,
+        activity_run_id="activity-run",
+    )
+    await standalone.run(create)
+    assert targets == [
+        StorageDriverWorkflowInfo(
+            namespace="default", id="test", run_id="test-run", type="test"
+        ),
+        StorageDriverActivityInfo(
+            namespace="default", id="test", run_id="activity-run", type="unknown"
+        ),
+    ]
 
 
 @workflow.defn
@@ -554,17 +628,10 @@ async def test_empty_stream_id_raises_with_no_call(client: Client):
     assert not extension.namespaces
 
 
-async def test_registration_rules(client: Client):
-    config = client.config()
-    config["stream_backends"] = [
-        MemoryStreamBackend(),
-        MemoryStreamBackend(name="b", default=True),
-    ]
-    two = Client(**config)
-    assert (await two.create_stream("d-1", payload_type=str)).ref.backend == "b"
-    assert two.get_stream("d-1", payload_type=str).ref.backend == "b"
-    # A Worker serves only one backend, and so does a Replayer.
+async def test_worker_and_replayer_serve_one_backend(client: Client):
+    a, b = MemoryStreamBackend(name="a"), MemoryStreamBackend(name="b")
+    two = streams.StreamConfig(backends=[a, b], backend_selector=lambda ctx: b)
     with pytest.raises(streams.StreamConfigError, match="one backend"):
-        new_worker(Client(**config), Agent)
+        new_worker(_client(client, two), Agent)
     with pytest.raises(streams.StreamConfigError, match="one backend"):
-        Replayer(workflows=[Agent], stream_backends=config["stream_backends"])
+        Replayer(workflows=[Agent], stream_config=two)

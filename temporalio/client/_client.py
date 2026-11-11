@@ -113,7 +113,7 @@ from ._workflow import (
 
 if TYPE_CHECKING:
     from temporalio.streams import (
-        StreamBackend,
+        StreamConfig,
         StreamIDConflictPolicy,
         StreamRef,
     )
@@ -166,7 +166,7 @@ class Client:
         grpc_compression: GrpcCompression = GrpcCompression.GZIP,
         payload_limits: PayloadLimitsConfig = PayloadLimitsConfig(),
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
-        stream_backends: Sequence[StreamBackend] = (),
+        stream_config: StreamConfig | None = None,
     ) -> Self:
         """Connect to a Temporal server.
 
@@ -236,10 +236,10 @@ class Client:
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
-            stream_backends: The Stream backends of this client and its Workers, such as
-                :py:class:`temporalio.contrib.stream.RedisStreamBackend`. Names must be unique.
-                With more than one backend, exactly one must have ``default=True``. See
-                :py:class:`temporalio.streams.StreamBackend`.
+            stream_config: The Stream backends of this client and its Workers, such as
+                :py:class:`temporalio.contrib.stream.RedisStreamBackend`, and the selector
+                that picks one for each Stream. A Worker serves only one backend. See
+                :py:class:`temporalio.streams.StreamConfig`.
 
                 .. warning::
                     This API is experimental.
@@ -280,7 +280,7 @@ class Client:
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
             plugins=plugins,
-            stream_backends=stream_backends,
+            stream_config=stream_config,
         )
 
     def __init__(
@@ -294,7 +294,7 @@ class Client:
         default_workflow_query_reject_condition: None
         | (temporalio.common.QueryRejectCondition) = None,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
-        stream_backends: Sequence[StreamBackend] = (),
+        stream_config: StreamConfig | None = None,
     ):
         """Create a Temporal client from a service client.
 
@@ -309,13 +309,13 @@ class Client:
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
-            stream_backends=list(stream_backends),
+            stream_config=stream_config,
         )
         self._initial_config = config.copy()
 
         for plugin in plugins:
             config = plugin.configure_client(config)
-        if config.get("stream_backends"):
+        if config.get("stream_config") is not None:
             # Only a client with Stream backends loads the Streams package.
             from temporalio.streams import _plugin as _stream_plugin
 
@@ -927,7 +927,6 @@ class Client:
         /,
         *,
         payload_type: type[_StreamPayloadT],
-        backend: str | None = None,
         id_conflict_policy: StreamIDConflictPolicy | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
@@ -940,7 +939,6 @@ class Client:
         /,
         *,
         payload_type: None = None,
-        backend: str | None = None,
         id_conflict_policy: StreamIDConflictPolicy | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
@@ -952,7 +950,6 @@ class Client:
         /,
         *,
         payload_type: type[_StreamPayloadT] | None = None,
-        backend: str | None = None,
         id_conflict_policy: StreamIDConflictPolicy | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
@@ -969,12 +966,13 @@ class Client:
         setting fails early. Code closes the Stream with ``close()``, or at the end of
         ``async with``.
 
+        With one backend, the Stream goes to it. With more than one, the ``backend_selector`` of
+        the client's :py:class:`temporalio.streams.StreamConfig` picks the backend.
+
         Args:
             id: The Stream id, which the caller picks, as for a Workflow ID.
             payload_type: The type that reads decode each Record with. Defaults to no type, so
                 a read decodes each Record as a JSON value.
-            backend: The name of the backend. Defaults to the registered backend with
-                ``default=True``.
             id_conflict_policy: ``FAIL`` (the default) raises a :py:class:`StreamError` with
                 ``reason`` ``STREAM_ERROR_REASON_ALREADY_EXISTS`` on an id that exists.
                 ``USE_EXISTING`` returns the existing Stream.
@@ -984,8 +982,8 @@ class Client:
         Raises:
             StreamError: ``FAIL`` on an id that exists, with ``reason``
                 ``STREAM_ERROR_REASON_ALREADY_EXISTS``.
-            StreamConfigError: The client has no backend with that name, or no backend has
-                ``default=True`` and the call gives no backend. No call is made.
+            StreamConfigError: The client has no Stream backend, or the selector returned a
+                backend that isn't registered. No call is made.
 
         .. warning::
             This API is experimental.
@@ -996,7 +994,6 @@ class Client:
             self,
             payload_type,
             id=id,
-            backend=backend,
             id_conflict_policy=id_conflict_policy
             if id_conflict_policy is not None
             else StreamIDConflictPolicy.FAIL,
@@ -1016,7 +1013,6 @@ class Client:
         /,
         *,
         payload_type: type[_StreamPayloadT],
-        backend: str | None = None,
     ) -> Stream[_StreamPayloadT]: ...
 
     @overload
@@ -1026,7 +1022,6 @@ class Client:
         /,
         *,
         payload_type: None = None,
-        backend: str | None = None,
     ) -> Stream[Any]: ...
 
     def get_stream(
@@ -1035,7 +1030,6 @@ class Client:
         /,
         *,
         payload_type: type[Any] | None = None,
-        backend: str | None = None,
     ) -> Stream[Any]:
         """Get a Stream by its id, or by a ref that came as data. It makes no call.
 
@@ -1044,15 +1038,16 @@ class Client:
         as a JSON value with no type. Pass a :py:class:`StreamRef` that came as data, such as
         from a Workflow's query, to get its Stream.
 
+        An id goes to the backend that a create of that id picks. A ref carries its backend's
+        name, so the call finds the backend by that name and calls no selector.
+
         Args:
             id_or_ref: The Stream id, or a ref of the Stream.
             payload_type: The type that reads decode each Record with, for the id form.
-            backend: The name of the backend, for the id form. Defaults to the registered
-                backend with ``default=True``.
 
         Raises:
-            StreamConfigError: The client has no backend of the Stream, or none has
-                ``default=True`` for a Stream with no backend.
+            StreamConfigError: The client has no backend of the ref's name, or the selector
+                returned a backend that isn't registered.
             ValueError: The id is empty.
 
         .. warning::
@@ -1061,9 +1056,7 @@ class Client:
         from temporalio.streams import _stream_client
 
         if isinstance(id_or_ref, str):
-            return _stream_client.get_stream(
-                self, payload_type, id=id_or_ref, backend=backend
-            )
+            return _stream_client.get_stream(self, payload_type, id=id_or_ref)
         return _stream_client.from_ref(self, id_or_ref)
 
     def get_workflow_handle_for(
@@ -3201,7 +3194,7 @@ class ClientConnectConfig(TypedDict, total=False):
     grpc_compression: GrpcCompression
     payload_limits: PayloadLimitsConfig
     header_codec_behavior: HeaderCodecBehavior
-    stream_backends: Sequence[StreamBackend]
+    stream_config: StreamConfig | None
 
 
 class ClientConfig(TypedDict, total=False):
@@ -3216,4 +3209,4 @@ class ClientConfig(TypedDict, total=False):
         temporalio.common.QueryRejectCondition | None
     ]
     header_codec_behavior: Required[HeaderCodecBehavior]
-    stream_backends: Required[Sequence[StreamBackend]]
+    stream_config: Required[StreamConfig | None]

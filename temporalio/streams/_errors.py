@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import temporalio.api.stream.v1
 import temporalio.bridge.streams
 import temporalio.exceptions
@@ -21,7 +19,12 @@ _RETRYABLE_REASONS: frozenset[int] = frozenset(
 
 
 class StreamConfigError(RuntimeError):
-    """The Stream backend config is wrong, such as when no backend has a given name.
+    """The Stream config is wrong, such as when no backend has a given name.
+
+    The cases are a missing or duplicate backend, more than one backend with no selector, a
+    selector that returns a backend that isn't registered, a backend in ``plugins=``, a Worker
+    whose client has two backends, a ref whose backend the client doesn't have, and a bridge
+    built without the Stream runtime.
 
     It isn't a :py:class:`StreamError`, so ``except StreamError`` doesn't catch it. In Workflow
     code it fails the Workflow Task. An Activity that raises it retries.
@@ -29,17 +32,6 @@ class StreamConfigError(RuntimeError):
     .. warning::
         This API is experimental.
     """
-
-
-def no_default_backend(
-    owner: str, names: Sequence[str], hint: str
-) -> StreamConfigError:
-    """The error of a call with no backend name when no backend has ``default=True``."""
-    return StreamConfigError(
-        f"No Stream backend of the {owner} ({', '.join(names)}) has default=True, so the "
-        "default is native, which this SDK does not have. Mark a backend with "
-        f"default=True, or give its name in {hint}."
-    )
 
 
 class StreamError(temporalio.exceptions.ApplicationError):

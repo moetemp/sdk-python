@@ -63,10 +63,9 @@ async def read(
     handle: WorkflowHandle[Any, Any],
     name: str = "tokens",
     payload_type: type[Any] = str,
-    backend: str | None = None,
 ) -> list[object]:
     stream = handle._client.get_stream(
-        stream_id(handle, name), payload_type=payload_type, backend=backend
+        stream_id(handle, name), payload_type=payload_type
     )
     return [item async for item in stream.read(wait_new_records=False)]
 
@@ -508,7 +507,7 @@ async def test_block_end_closes_when_no_retry_run_follows(stream_client: Client)
         # A close at the run's end is a command after the run's code, even on replay.
         replayer = Replayer(
             workflows=[EndsItsBlock],
-            stream_backends=stream_client.config()["stream_backends"],
+            stream_config=stream_client.config()["stream_config"],
         )
         for mode in ("caught", "then_non_retryable"):
             await replayer.replay_workflow(await handles[mode].fetch_history())
@@ -647,24 +646,28 @@ async def test_failed_task_writes_no_close(stream_client: Client):
 
 
 @workflow.defn
-class CreatesOn:
+class UsesBackend:
     @workflow.run
     async def run(self, backend: str | None) -> None:
-        await workflow.create_stream(own_id(), payload_type=str, backend=backend)
+        if backend is None:
+            await workflow.create_stream(own_id(), payload_type=str)
+        else:
+            ref = streams.StreamRef[str](id=own_id(), backend=backend)
+            await workflow.get_stream(ref).append("token")
 
 
 async def test_worker_config_errors_fail_the_task(
     client: Client, stream_client: Client
 ):
-    # A Worker with no plugin, or with another backend, fails the Workflow Task, so a Worker
-    # with the right config can continue the run.
+    # A Worker with no backend, or a ref of another backend, fails the Workflow Task, so a
+    # Worker with the right config can continue the run.
     for task_client, backend, message in (
         (client, None, "No Stream backend"),
         (stream_client, "elsewhere", "backend elsewhere"),
     ):
-        async with new_worker(task_client, CreatesOn) as worker:
+        async with new_worker(task_client, UsesBackend) as worker:
             handle = await task_client.start_workflow(
-                CreatesOn.run,
+                UsesBackend.run,
                 backend,
                 id=f"wf-{uuid.uuid4()}",
                 task_queue=worker.task_queue,
@@ -776,7 +779,7 @@ async def test_nowait_error_raises_after_the_other_writes(stream_client: Client)
         # The error waits for the other write, so a replay gives the same commands.
         replayer = Replayer(
             workflows=[CreatesTwoInInit],
-            stream_backends=stream_client.config()["stream_backends"],
+            stream_config=stream_client.config()["stream_config"],
         )
         await replayer.replay_workflow(await handle.fetch_history())
     assert isinstance(failed.value.cause, ApplicationError)
@@ -930,7 +933,7 @@ async def test_concurrent_appends_keep_their_order(stream_client: Client):
     assert len(markers) == 3
     # Replay uses the markers and writes nothing.
     await Replayer(
-        workflows=[Gathers], stream_backends=stream_client.config()["stream_backends"]
+        workflows=[Gathers], stream_config=stream_client.config()["stream_config"]
     ).replay_workflow(history)
     assert data(await read(handle)) == ["0", "1", "2", "3", "4"]
 
@@ -1121,20 +1124,11 @@ async def test_batch_over_the_store_limit_raises_too_large(stream_client: Client
 
 
 @workflow.defn
-class CreatesOnTheDefault:
+class CreatesOnTheWorkerBackend:
     @workflow.run
-    async def run(self) -> None:
-        await workflow.create_stream(own_id(), payload_type=str)
-
-
-@workflow.defn
-class CreatesOnANamedBackend:
-    @workflow.run
-    async def run(self, backend: str) -> str:
-        stream = await workflow.create_stream(
-            own_id(), payload_type=str, backend=backend
-        )
-        await stream.append(f"on {backend}")
+    async def run(self) -> str:
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await stream.append("on the Worker's backend")
         await workflow.get_stream(stream.ref).close()
         return stream.ref.backend or ""
 
@@ -1152,9 +1146,9 @@ async def test_create_of_an_expired_workflow_stream_raises(client: Client):
     # Retention is a backend setting now. A Workflow's standalone Stream expires one Retention
     # after its close, since safety_ttl keeps it open. A later client create finds it expired.
     config = client.config()
-    config["stream_backends"] = [
-        MemoryStreamBackend(retention=timedelta(milliseconds=500), default=True)
-    ]
+    config["stream_config"] = streams.StreamConfig(
+        backends=[MemoryStreamBackend(retention=timedelta(milliseconds=500))]
+    )
     memory_client = Client(**config)
     async with new_worker(memory_client, CreatesThenCloses) as worker:
         handle = await memory_client.start_workflow(
@@ -1173,31 +1167,31 @@ async def test_create_of_an_expired_workflow_stream_raises(client: Client):
         assert expired.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
 
 
-async def test_default_is_native_with_no_default_backend(client: Client):
-    # With no backend marked default=True, the default is native, which this SDK lacks. A create
-    # that gives the registered backend still works.
+async def test_workflow_create_calls_no_selector(client: Client):
+    # A Worker serves only one backend, so a Workflow's create goes to it, even when the
+    # client's config has a selector.
+    backend = MemoryStreamBackend(name="mem")
+    selected: list[str] = []
+
+    def select(ctx: streams.StreamSelectContext) -> streams.StreamBackend:
+        selected.append(ctx.id)
+        return backend
+
     config = client.config()
-    config["stream_backends"] = [MemoryStreamBackend()]
+    config["stream_config"] = streams.StreamConfig(
+        backends=[backend], backend_selector=select
+    )
     memory_client = Client(**config)
-    async with new_worker(
-        memory_client, CreatesOnTheDefault, CreatesOnANamedBackend
-    ) as worker:
+    async with new_worker(memory_client, CreatesOnTheWorkerBackend) as worker:
         handle = await memory_client.start_workflow(
-            CreatesOnTheDefault.run,
+            CreatesOnTheWorkerBackend.run,
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-        await assert_task_fail_eventually(handle, message_contains="default is native")
-        await handle.terminate()
-        named = await memory_client.start_workflow(
-            CreatesOnANamedBackend.run,
-            "memory",
-            id=f"wf-{uuid.uuid4()}",
-            task_queue=worker.task_queue,
-        )
-        assert await named.result() == "memory"
-    assert data(await read(named, backend="memory")) == ["on memory"]
-    assert await stream_status(memory_client, stream_id(named), "memory") == CLOSED
+        assert await handle.result() == "mem"
+    assert not selected
+    assert data(await read(handle)) == ["on the Worker's backend"]
+    assert await stream_status(memory_client, stream_id(handle), "mem") == CLOSED
 
 
 async def _event_types(handle: WorkflowHandle[Any, Any]) -> list[int]:

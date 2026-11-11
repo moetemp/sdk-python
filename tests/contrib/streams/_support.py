@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from temporalio.client import Client
-from temporalio.streams._plugin import client_backend
+from temporalio.streams import StreamBackend
+from temporalio.streams._plugin import ref_backend
 from temporalio.streams.system import models
 
 _BRIDGE = Path(__file__).parents[3] / "temporalio" / "bridge"
@@ -45,11 +46,19 @@ def vectors(name: str) -> object:
     return json.loads(crate_file(f"testdata/{name}").read_text(encoding="utf-8"))
 
 
+def only_backend(client: Client) -> StreamBackend:
+    """The one Stream backend of a client."""
+    stream_config = client.config(active_config=True)["stream_config"]
+    assert stream_config is not None
+    [backend] = stream_config.backends
+    return backend
+
+
 async def stream_status(
     client: Client, stream_id: str, backend: str | None = None
 ) -> models.StreamStatus:
     """The status that a describe gives, such as whether the Stream is closed."""
-    _, calls = client_backend(client, backend)
+    _, calls = ref_backend(client, stream_id, backend)
     response = await calls.service(client.namespace).send_describe_stream(
         models.DescribeStreamRequest(ref=models.StreamRef(id=stream_id))
     )

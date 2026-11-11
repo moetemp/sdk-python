@@ -161,7 +161,7 @@ def run_blocking(call: Coroutine[Any, Any, _R]) -> _R:
         call.close()
         raise _errors.StreamConfigError(
             "No Stream backend runs this Activity. Register one on the Worker's client "
-            "with stream_backends=."
+            "with stream_config=."
         )
     loop = streams.loop
     try:

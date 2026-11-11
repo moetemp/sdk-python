@@ -1,31 +1,27 @@
-"""The base of the Stream backends, and the rules of their registration."""
+"""The base of the Stream backends, the Stream config, and the rules of their registration."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
+import temporalio.activity
 import temporalio.client
 import temporalio.service
 import temporalio.worker
+from temporalio.converter import StorageDriverActivityInfo, StorageDriverWorkflowInfo
 from temporalio.plugin import SimplePlugin
 from temporalio.streams import _errors
 from temporalio.streams._backend import BackendCalls
-
-# The default backend when no registered backend has default=True. This SDK has no native
-# backend, so a call that needs the default then raises StreamConfigError.
-NATIVE = "native"
 
 
 class StreamBackend(SimplePlugin):
     """Base class of the Stream backends. Each instance registers one backend under its name.
 
-    Register backends on the client with ``Client.connect(..., stream_backends=[...])``. A
-    Worker uses its client's backends. A ``Replayer`` takes ``stream_backends=`` too. Names
-    must be unique. With more than one registered backend, exactly one must have
-    ``default=True``. With no backend marked, the default is ``native``. This SDK has no
-    ``native`` backend, so a create with no backend raises ``StreamConfigError``. Mark a
-    backend with ``default=True``, or give one with ``backend=``.
+    Register backends on the client in a :py:class:`StreamConfig`, with
+    ``Client.connect(..., stream_config=StreamConfig(backends=[...]))``. A Worker uses its
+    client's config. A ``Replayer`` takes ``stream_config=`` too.
 
     A backend is not a plugin, so passing it in ``plugins=`` raises ``StreamConfigError``.
 
@@ -38,23 +34,16 @@ class StreamBackend(SimplePlugin):
         name: str,
         *,
         backend_name: str,
-        default: bool,
         **options: Any,
     ) -> None:
         """Create the backend. ``options`` go to :py:class:`temporalio.plugin.SimplePlugin`."""
         self._backend_name = backend_name
-        self._default = default
         super().__init__(name, **options)
 
     @property
     def backend_name(self) -> str:
         """The backend name that Stream refs store."""
         return self._backend_name
-
-    @property
-    def default(self) -> bool:
-        """Whether a create with no backend name uses this backend."""
-        return self._default
 
     def _backend_for(
         self,
@@ -113,65 +102,155 @@ class StreamBackend(SimplePlugin):
 
 def _not_a_plugin(backend: StreamBackend) -> _errors.StreamConfigError:
     return _errors.StreamConfigError(
-        f"{type(backend).__name__} is a Stream backend, not a plugin. Pass it in "
-        "stream_backends= of Client.connect, or of the Replayer."
+        f"{type(backend).__name__} is a Stream backend, not a plugin. Pass it in a "
+        "StreamConfig, as stream_config= of Client.connect or of the Replayer."
     )
 
 
-def check_backends(backends: Sequence[object], owner: str) -> list[StreamBackend]:
-    """Check the registered backends, and return them.
+@dataclass(frozen=True)
+class StreamSelectContext:
+    """The context of a :py:attr:`StreamConfig.backend_selector` call.
 
-    A replayed create uses the default backend, so the default must not depend on the order
-    of the list.
+    It follows :py:class:`temporalio.converter.StorageDriverSelectContext`.
 
-    Raises:
-        TypeError: An entry is not a ``StreamBackend``.
-        StreamConfigError: Two backends have the same name, or there is more than one backend
-            and not exactly one has ``default=True``.
+    .. warning::
+        This API is experimental.
     """
-    checked: list[StreamBackend] = []
-    for backend in backends:
-        if not isinstance(backend, StreamBackend):
-            raise TypeError(f"{backend!r} is not a StreamBackend")
-        if any(other.backend_name == backend.backend_name for other in checked):
+
+    id: str
+    """The Stream id."""
+
+    target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None = None
+    """The Workflow or Activity that makes the call, as in ``StorageDriverSelectContext``.
+
+    An Activity that a Workflow started gets the Workflow, and an Activity with no Workflow gets
+    the Activity. A client outside an Activity gets None. Workflow code never calls the
+    selector, since a Worker serves only one backend.
+    """
+
+
+@dataclass(frozen=True)
+class StreamConfig:
+    """The Stream backends of a client and its Workers.
+
+    It follows :py:class:`temporalio.converter.ExternalStorage`, which holds drivers and a
+    driver selector. Pass it with ``Client.connect(..., stream_config=...)``. With one backend,
+    every Stream goes to it. With more than one, :py:attr:`backend_selector` is required.
+
+    A Worker serves only one backend, so a Worker whose client has two raises
+    ``StreamConfigError``. During a migration, give each Worker a client with one backend.
+
+    .. warning::
+        This API is experimental.
+    """
+
+    backends: Sequence[StreamBackend]
+    """The backends, at least one. Each has a unique :py:attr:`StreamBackend.backend_name`."""
+
+    backend_selector: Callable[[StreamSelectContext], StreamBackend] | None = None
+    """Picks the backend of a create, and of a get by id. It returns one of :py:attr:`backends`.
+
+    Required with more than one backend. With one backend, every call uses it and no selector
+    runs. A ref carries its backend's name, so a call through a ref finds its backend by name
+    and doesn't call the selector. A get by id must reach the backend that the create of that
+    id picked, so a selector uses facts that don't change, such as the Stream id.
+    """
+
+    def __post_init__(self) -> None:
+        """Check the backends.
+
+        Raises:
+            TypeError: An entry is not a ``StreamBackend``.
+            StreamConfigError: There is no backend, two backends have the same name, or there
+                is more than one backend and no selector.
+        """
+        names: set[str] = set()
+        for backend in self.backends:
+            if not isinstance(backend, StreamBackend):
+                raise TypeError(f"{backend!r} is not a StreamBackend")
+            if backend.backend_name in names:
+                raise _errors.StreamConfigError(
+                    f"The Stream config has two backends with the name {backend.backend_name}"
+                )
+            names.add(backend.backend_name)
+        if not names:
+            raise _errors.StreamConfigError("The Stream config has no backend")
+        if len(names) > 1 and self.backend_selector is None:
             raise _errors.StreamConfigError(
-                f"The {owner} has two Stream backends with the name {backend.backend_name}"
+                "The Stream config has the backends "
+                f"{', '.join(b.backend_name for b in self.backends)}, and no "
+                "backend_selector. Set one to pick the backend of each Stream."
             )
-        checked.append(backend)
-    if len(checked) < 2:
-        return checked
-    defaults = [b.backend_name for b in checked if b.default]
-    if len(defaults) != 1:
-        names = ", ".join(b.backend_name for b in checked)
-        marked = f"{', '.join(defaults)} have" if defaults else "none has"
-        raise _errors.StreamConfigError(
-            f"The {owner} has the Stream backends {names}, and {marked} default=True. "
-            "Mark exactly one with default=True."
+
+    def _select(self, stream_id: str) -> StreamBackend:
+        if len(self.backends) == 1:
+            return self.backends[0]
+        assert self.backend_selector is not None
+        target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None = None
+        if temporalio.activity.in_activity():
+            # The same target that the Activity Worker gives external storage, so a selector
+            # and a driver_selector see one target for one Activity.
+            info = temporalio.activity.info()
+            if info.in_workflow:
+                target = StorageDriverWorkflowInfo(
+                    namespace=info.namespace,
+                    id=info.workflow_id,
+                    run_id=info.workflow_run_id,
+                    type=info.workflow_type,
+                )
+            else:
+                target = StorageDriverActivityInfo(
+                    namespace=info.namespace,
+                    id=info.activity_id or None,
+                    run_id=info.activity_run_id or None,
+                    type=info.activity_type or None,
+                )
+        selected = self.backend_selector(
+            StreamSelectContext(id=stream_id, target=target)
         )
-    return checked
+        if not any(selected is backend for backend in self.backends):
+            raise _errors.StreamConfigError(
+                f"The backend_selector returned {selected!r} for the Stream {stream_id}, "
+                "which is not one of the backends of the Stream config"
+            )
+        return selected
 
-
-def default_name(backends: Sequence[StreamBackend]) -> str:
-    """The name of the backend with ``default=True``, or ``native`` if none has it."""
-    return next((b.backend_name for b in backends if b.default), NATIVE)
+    def _named(self, name: str) -> StreamBackend:
+        for backend in self.backends:
+            if backend.backend_name == name:
+                return backend
+        raise _errors.StreamConfigError(
+            f"The client has no Stream backend {name}. It has "
+            f"{', '.join(b.backend_name for b in self.backends)}."
+        )
 
 
 def configure_client(
     config: temporalio.client.ClientConfig,
 ) -> temporalio.client.ClientConfig:
-    """Check the client's backends, and apply the plugin configuration of each one."""
-    backends = check_backends(config.get("stream_backends", ()), "client")
-    config["stream_backends"] = backends
-    for backend in backends:
+    """Apply the plugin configuration of each backend of the client's Stream config."""
+    stream_config = config.get("stream_config")
+    if not isinstance(stream_config, StreamConfig):
+        raise TypeError(f"{stream_config!r} is not a StreamConfig")
+    for backend in stream_config.backends:
         config = backend._configure_client(config)
     return config
 
 
 def configure_worker(
-    backends: Sequence[StreamBackend], config: temporalio.worker.WorkerConfig
+    stream_config: StreamConfig, config: temporalio.worker.WorkerConfig
 ) -> temporalio.worker.WorkerConfig:
-    """Apply the plugin configuration of the client's backends to a Worker."""
-    for backend in backends:
+    """Apply the plugin configuration of the client's one backend to a Worker.
+
+    Raises:
+        StreamConfigError: The client has more than one backend.
+    """
+    if len(stream_config.backends) > 1:
+        raise _errors.StreamConfigError(
+            "The Worker's client has more than one Stream backend. A Worker serves only one "
+            "backend, so give each Worker a client with one backend."
+        )
+    for backend in stream_config.backends:
         config = backend._configure_worker(config)
     return config
 
@@ -179,43 +258,58 @@ def configure_worker(
 def configure_replayer(
     config: temporalio.worker.ReplayerConfig,
 ) -> temporalio.worker.ReplayerConfig:
-    """Check the Replayer's backends, and apply the plugin configuration of each one."""
-    backends = check_backends(config.get("stream_backends", ()), "Replayer")
-    config["stream_backends"] = backends
-    for backend in backends:
+    """Apply the plugin configuration of the Replayer's one backend.
+
+    Raises:
+        StreamConfigError: The Stream config has more than one backend.
+    """
+    stream_config = config.get("stream_config")
+    if not isinstance(stream_config, StreamConfig):
+        raise TypeError(f"{stream_config!r} is not a StreamConfig")
+    if len(stream_config.backends) > 1:
+        raise _errors.StreamConfigError(
+            "The Replayer's Stream config has more than one backend. A Replayer serves only "
+            "one backend, as a Worker does."
+        )
+    for backend in stream_config.backends:
         config = backend._configure_replayer(config)
     return config
 
 
-def client_backends(client: temporalio.client.Client) -> list[StreamBackend]:
-    """The backends registered on a client."""
-    return list(client.config(active_config=True).get("stream_backends", ()))
-
-
-def client_backend(
-    client: temporalio.client.Client, name: str | None, *, hint: str = "backend="
-) -> tuple[str, BackendCalls]:
-    """The name and the calls of a client's backend. A ``name`` of None picks the default.
-
-    Raises:
-        StreamConfigError: The client has no backend of that name, or none has
-            ``default=True`` for a call with no name.
-    """
-    backends = client_backends(client)
-    wanted = name or default_name(backends)
-    for backend in backends:
-        if backend.backend_name == wanted:
-            return wanted, backend._backend_for(client)
-    if not backends:
+def _client_config(client: temporalio.client.Client) -> StreamConfig:
+    stream_config = client.config(active_config=True).get("stream_config")
+    if stream_config is None:
         raise _errors.StreamConfigError(
             "The client has no Stream backend. Register one with "
-            "Client.connect(..., stream_backends=[...])."
+            "Client.connect(..., stream_config=StreamConfig(backends=[...]))."
         )
+    return stream_config
+
+
+def select_backend(
+    client: temporalio.client.Client, stream_id: str
+) -> tuple[str, BackendCalls]:
+    """The name and the calls of the backend of a create or a get by id.
+
+    Raises:
+        StreamConfigError: The client has no backend, or the selector returned a backend that
+            is not registered.
+    """
+    backend = _client_config(client)._select(stream_id)
+    return backend.backend_name, backend._backend_for(client)
+
+
+def ref_backend(
+    client: temporalio.client.Client, stream_id: str, name: str | None
+) -> tuple[str, BackendCalls]:
+    """The name and the calls of the backend that a ref names.
+
+    A ref with no backend name goes through the selector, as a get by id does.
+
+    Raises:
+        StreamConfigError: The client has no backend of that name.
+    """
     if not name:
-        raise _errors.no_default_backend(
-            "client", [b.backend_name for b in backends], hint
-        )
-    raise _errors.StreamConfigError(
-        f"The client has no Stream backend {name}. It has "
-        f"{', '.join(b.backend_name for b in backends)}."
-    )
+        return select_backend(client, stream_id)
+    backend = _client_config(client)._named(name)
+    return backend.backend_name, backend._backend_for(client)

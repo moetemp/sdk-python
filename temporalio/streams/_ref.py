@@ -93,7 +93,11 @@ class StreamRef(Generic[T]):
 
     @property
     def backend(self) -> str | None:
-        """Name of the backend that stores the Stream. None means the default one."""
+        """The registered name of the backend that stores the Stream, not an address.
+
+        A call through the ref finds the backend by this name. None means the backend that a
+        get by id picks.
+        """
         return self._backend
 
     def __eq__(self, other: object) -> bool:
