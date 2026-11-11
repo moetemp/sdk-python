@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from ._extensions import StreamWriterClientExtension
+from ._extensions import StreamWriterClientExtension, WriterCalls
 from ._resources.writer import Writer
 
 __all__ = [
     "StreamWriterClientExtension",
     "Writer",
+    "WriterCalls",
 ]

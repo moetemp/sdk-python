@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import gc
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,6 +18,7 @@ from temporalio.converter import (
     StorageDriverActivityInfo,
     StorageDriverWorkflowInfo,
 )
+from temporalio.streams._extension import ExtensionStreamBackend
 from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 from temporalio.testing import ActivityEnvironment
@@ -259,6 +261,81 @@ async def test_a_writer_open_carries_the_namespace(client: Client):
     stream = await client.create_stream("namespaced", payload_type=str)
     await stream.append("a")
     assert extension.writer_namespaces == [client.namespace]
+
+
+def _writer_calls(client: Client) -> Any:
+    backend: Any = only_backend(client)._backend_for(client)
+    return backend
+
+
+def _named_producer(name: str) -> models.Producer:
+    return models.Producer(
+        id=f"client:{name}",
+        kind=models.ProducerKindClient(
+            models.ClientProducer(epoch=models.ClientEpoch(attempt=1))
+        ),
+    )
+
+
+async def _records_of(stream: Stream[str]) -> list[str]:
+    items = stream.read(wait_new_records=False)
+    return [item.data async for item in items if isinstance(item, streams.Record)]
+
+
+async def test_a_write_after_a_writer_close_raises_closed(stream_client: Client):
+    stream = await stream_client.create_stream(
+        f"writer-close-{uuid.uuid4()}", payload_type=str
+    )
+    writers = _writer_calls(stream_client).writers(
+        stream_client.namespace, stream_client.data_converter
+    )
+    writer = await writers.open_writer(
+        ref=models.StreamRef(id=stream.ref.id),
+        producer=_named_producer(str(uuid.uuid4())),
+    )
+    await writer.write_records([models.AppendRecord(body="a")])
+    await writer.close()
+    with pytest.raises(streams.StreamError) as closed:
+        await writer.write_records([models.AppendRecord(body="b")])
+    assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+    assert await _records_of(stream) == ["a"]
+
+
+async def test_a_writer_that_python_frees_is_released(stream_client: Client):
+    stream = await stream_client.create_stream(
+        f"writer-freed-{uuid.uuid4()}", payload_type=str
+    )
+    calls = _writer_calls(stream_client)
+    writers = calls.writers(stream_client.namespace, stream_client.data_converter)
+    producer = _named_producer(str(uuid.uuid4()))
+    ref = models.StreamRef(id=stream.ref.id)
+    first = await writers.open_writer(ref=ref, producer=producer)
+    await first.write_records([models.AppendRecord(body="a")])
+    opened = len(calls._writers)
+    # No close. Dropping the last reference releases the crate's writer.
+    del first
+    gc.collect()
+    assert len(calls._writers) == opened - 1
+    # A new open of the same epoch goes on in order after the released one.
+    second = await writers.open_writer(ref=ref, producer=producer)
+    await second.write_records([models.AppendRecord(body="b")])
+    await second.close()
+    assert await _records_of(stream) == ["a", "b"]
+
+
+async def test_backend_shutdown_closes_the_open_writers(stream_client: Client):
+    stream = await stream_client.create_stream(
+        f"shutdown-writers-{uuid.uuid4()}", payload_type=str
+    )
+    await stream.append("before")
+    backend = only_backend(stream_client)
+    assert isinstance(backend, ExtensionStreamBackend)
+    await backend.shutdown()
+    # The Stream's writer is closed, so its next write fails, and the Stream stays open.
+    with pytest.raises(streams.StreamError) as closed:
+        await stream.append("after")
+    assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+    assert await _records_of(stream) == ["before"]
 
 
 async def test_a_create_retry_with_the_same_request_id_succeeds(stream_client: Client):

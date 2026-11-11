@@ -181,11 +181,12 @@ async def test_streams_of_one_client_share_a_producer_and_free_it(client: Client
         if isinstance(item, streams.Record) and item.producer
     }
     assert len(producers) == 1
-    # A Stream that Python frees without a close frees its writer. So a server that makes a
-    # Stream per request doesn't keep a writer for each.
+    # A Stream that Python frees without a close drops its writer, which releases it. So a
+    # server that makes a Stream per request doesn't keep a writer for each.
+    assert len(extension.writers) == 2
     del other
     gc.collect()
-    assert len(extension.freed) == 1
+    assert len(extension.writers) == 1
 
 
 async def test_rpc_timeout_bounds_each_call_and_not_the_read(client: Client):

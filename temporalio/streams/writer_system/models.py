@@ -26,18 +26,12 @@ from temporalio.streams.system.models import (
 
 __all__ = [
     "AppendRecord",
-    "CloseWriterRequest",
     "CloseWriterResponse",
-    "CloseWritersRequest",
-    "CloseWritersResponse",
-    "FreeWriterRequest",
-    "FreeWriterResponse",
     "OpenWriterRequest",
     "Producer",
     "StreamRef",
     "WriteRecordsRequest",
     "WriteRecordsResponse",
-    "WriterResult",
     "_ProducerTransferTypeConverter",
 ]
 
@@ -113,49 +107,8 @@ temporalio.converter.transfer_type_convertible(_OpenWriterRequestTransferTypeCon
 
 
 @dataclasses.dataclass(slots=True)
-class WriterResult:
-    writer_id: int | None = None
-
-
-class _WriterResultTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        WriterResult, temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse,
-        type_hint: type[WriterResult],
-    ) -> WriterResult:
-        return WriterResult(
-            writer_id=value.writer_id if value.writer_id != 0 else None,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: WriterResult,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse:
-        message = temporalio.bridge.proto.streams.streams_pb2.OpenWriterResponse()
-        if value.writer_id is not None:
-            message.writer_id = value.writer_id
-        return message
-
-
-temporalio.converter.transfer_type_convertible(_WriterResultTransferTypeConverter)(
-    WriterResult
-)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
 class WriteRecordsRequest:
     records: list[AppendRecord] | None = dataclasses.field(default_factory=list)
-    writer_id: int | None = None
 
 
 class _WriteRecordsRequestTransferTypeConverter(
@@ -181,7 +134,6 @@ class _WriteRecordsRequestTransferTypeConverter(
                 )
                 for item in value.records
             ],
-            writer_id=value.writer_id if value.writer_id != 0 else None,
         )
 
     @typing_extensions.override
@@ -196,8 +148,6 @@ class _WriteRecordsRequestTransferTypeConverter(
                 item.CopyFrom(
                     _AppendRecordTransferTypeConverter().to_transfer_type(element)
                 )
-        if value.writer_id is not None:
-            message.writer_id = value.writer_id
         return message
 
 
@@ -252,47 +202,6 @@ temporalio.converter.transfer_type_convertible(
 
 
 @dataclasses.dataclass(slots=True)
-class CloseWriterRequest:
-    writer_id: int | None = None
-
-
-class _CloseWriterRequestTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        CloseWriterRequest,
-        temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest,
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest,
-        type_hint: type[CloseWriterRequest],
-    ) -> CloseWriterRequest:
-        return CloseWriterRequest(
-            writer_id=value.writer_id if value.writer_id != 0 else None,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: CloseWriterRequest,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest:
-        message = temporalio.bridge.proto.streams.streams_pb2.CloseWriterRequest()
-        if value.writer_id is not None:
-            message.writer_id = value.writer_id
-        return message
-
-
-temporalio.converter.transfer_type_convertible(
-    _CloseWriterRequestTransferTypeConverter
-)(CloseWriterRequest)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
 class CloseWriterResponse:
     last_offset: bytes | None = None
 
@@ -331,159 +240,3 @@ class _CloseWriterResponseTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _CloseWriterResponseTransferTypeConverter
 )(CloseWriterResponse)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class FreeWriterRequest:
-    writer_id: int | None = None
-
-
-class _FreeWriterRequestTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        FreeWriterRequest,
-        temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest,
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest,
-        type_hint: type[FreeWriterRequest],
-    ) -> FreeWriterRequest:
-        return FreeWriterRequest(
-            writer_id=value.writer_id if value.writer_id != 0 else None,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: FreeWriterRequest,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest:
-        message = temporalio.bridge.proto.streams.streams_pb2.FreeWriterRequest()
-        if value.writer_id is not None:
-            message.writer_id = value.writer_id
-        return message
-
-
-temporalio.converter.transfer_type_convertible(_FreeWriterRequestTransferTypeConverter)(
-    FreeWriterRequest
-)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class FreeWriterResponse:
-    pass
-
-
-class _FreeWriterResponseTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        FreeWriterResponse,
-        temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse,
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse,
-        type_hint: type[FreeWriterResponse],
-    ) -> FreeWriterResponse:
-        return FreeWriterResponse()
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: FreeWriterResponse,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse:
-        message = temporalio.bridge.proto.streams.streams_pb2.FreeWriterResponse()
-        return message
-
-
-temporalio.converter.transfer_type_convertible(
-    _FreeWriterResponseTransferTypeConverter
-)(FreeWriterResponse)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class CloseWritersRequest:
-    pass
-
-
-class _CloseWritersRequestTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        CloseWritersRequest,
-        temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest,
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest,
-        type_hint: type[CloseWritersRequest],
-    ) -> CloseWritersRequest:
-        return CloseWritersRequest()
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: CloseWritersRequest,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest:
-        message = temporalio.bridge.proto.streams.streams_pb2.CloseWritersRequest()
-        return message
-
-
-temporalio.converter.transfer_type_convertible(
-    _CloseWritersRequestTransferTypeConverter
-)(CloseWritersRequest)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class CloseWritersResponse:
-    failed: int | None = None
-
-
-class _CloseWritersResponseTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        CloseWritersResponse,
-        temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse,
-    ]
-):
-    transfer_type: (
-        type[temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse] | None
-    ) = temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse,
-        type_hint: type[CloseWritersResponse],
-    ) -> CloseWritersResponse:
-        return CloseWritersResponse(
-            failed=value.failed if value.failed != 0 else None,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: CloseWritersResponse,
-    ) -> temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse:
-        message = temporalio.bridge.proto.streams.streams_pb2.CloseWritersResponse()
-        if value.failed is not None:
-            message.failed = value.failed
-        return message
-
-
-temporalio.converter.transfer_type_convertible(
-    _CloseWritersResponseTransferTypeConverter
-)(CloseWritersResponse)  # pyright: ignore[reportUnusedCallResult]

@@ -43,7 +43,6 @@ class ActivityStreams:
                 writers=self.backend.writers(self.namespace, self.converter),
                 stream_id=stream_id,
                 producer=self.producer,
-                free=self.backend.free_writer,
             )
             self.writers[stream_id] = writer
         return writer

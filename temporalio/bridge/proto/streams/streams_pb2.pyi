@@ -22,9 +22,9 @@ else:
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
 class MemoryStreamConfig(google.protobuf.message.Message):
-    """The messages of the calls that `temporalio-streams` adds to the five Stream service operations.
-    Lang sends them through the bridge's call on the runtime object, by the method name in each
-    comment. One generic call keeps Stream logic out of every bridge.
+    """The writer messages that `temporalio-streams` adds to the five Stream service operations, and
+    the config of its memory runtime. A bridge passes them as bytes to the runtime's byte calls, so
+    it decodes no proto.
 
     The settings of the memory Stream runtime, for tests. Each field has the number of the same
     field in the config of the other Stores, such as Redis, so a backend can send that config here
@@ -76,13 +76,13 @@ class MemoryStreamConfig(google.protobuf.message.Message):
 global___MemoryStreamConfig = MemoryStreamConfig
 
 class OpenWriterRequest(google.protobuf.message.Message):
-    """Method `OpenWriter`, asynchronous. A writer for an Activity, a Local Activity or a client
-    Producer, which keeps its epoch and `sequence` order. A writer of a Local Activity, or of an
-    Activity attempt above 1, first sends an empty batch, so that the new epoch fences the earlier
-    one. The opens of one Producer epoch on one Stream share one writer. Each open adds a
-    reference, and each `CloseWriter` or `FreeWriter` releases one. The batches of every writer in
-    a process take their `sequence` from one counter, so a writer that opens again after its close
-    continues above its earlier batches.
+    """The open of a writer, through the runtime's `open_writer`. A writer is for an Activity, a Local
+    Activity or a client Producer, and it keeps its epoch and `sequence` order. A writer of a Local
+    Activity, or of an Activity attempt above 1, first sends an empty batch, so that the new epoch
+    fences the earlier one. The writers of one Producer epoch on one Stream share one order of
+    batches. The batches of every writer in a process take their `sequence` from one counter, so a
+    writer that opens again after a close continues above its earlier batches. The bridge holds the
+    writer as an object, and dropping the object releases the writer.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -144,37 +144,18 @@ class OpenWriterRequest(google.protobuf.message.Message):
 
 global___OpenWriterRequest = OpenWriterRequest
 
-class OpenWriterResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_ID_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
-    """The writer that the other writer calls name."""
-    def __init__(
-        self,
-        *,
-        writer_id: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["writer_id", b"writer_id"]
-    ) -> None: ...
-
-global___OpenWriterResponse = OpenWriterResponse
-
 class WriteRecordsRequest(google.protobuf.message.Message):
-    """Method `WriteRecords`, asynchronous. Appends Records at once for an open writer and responds when
-    the Store has them. It uses the writer's Producer epoch and `sequence` order. After a Store
-    failure it resends the same batch, so that the Store writes it once. Records past the Store's
-    batch limit go in more batches, in order. An awaited publish of an Activity or a client uses this
-    call. A Store failure after the retries fails only that write, and the next write takes a higher
-    `sequence`. Any other failure fails the writer.
+    """A write, through the writer's `write`. It appends the Records at once and answers when the
+    Store has them, in the writer's Producer epoch and `sequence` order. After a Store failure it
+    resends the same batch, so that the Store writes it once. Records past the Store's batch limit
+    go in more batches, in order. A Store failure after the retries fails only that write, and the
+    next write takes a higher `sequence`. Any other Store refusal fails the writer. A write on a
+    closed writer fails with CLOSED.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    WRITER_ID_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
     @property
     def records(
         self,
@@ -184,17 +165,13 @@ class WriteRecordsRequest(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        writer_id: builtins.int = ...,
         records: collections.abc.Iterable[
             temporalio.api.stream.v1.message_pb2.AppendRecord
         ]
         | None = ...,
     ) -> None: ...
     def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "records", b"records", "writer_id", b"writer_id"
-        ],
+        self, field_name: typing_extensions.Literal["records", b"records"]
     ) -> None: ...
 
 global___WriteRecordsRequest = WriteRecordsRequest
@@ -222,28 +199,11 @@ class WriteRecordsResponse(google.protobuf.message.Message):
 
 global___WriteRecordsResponse = WriteRecordsResponse
 
-class CloseWriterRequest(google.protobuf.message.Message):
-    """Method `CloseWriter`, asynchronous. Releases one reference of the writer. The last reference
-    waits for a write in flight, then drops the writer. It doesn't close the Stream. It fails with
-    the writer's error if the writer failed.
+class CloseWriterResponse(google.protobuf.message.Message):
+    """The answer of the writer's `close`. The close waits for a write in flight, and it doesn't close
+    the Stream. It fails with the writer's error if the writer failed.
     """
 
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_ID_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
-    def __init__(
-        self,
-        *,
-        writer_id: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["writer_id", b"writer_id"]
-    ) -> None: ...
-
-global___CloseWriterRequest = CloseWriterRequest
-
-class CloseWriterResponse(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     LAST_OFFSET_FIELD_NUMBER: builtins.int
@@ -259,63 +219,3 @@ class CloseWriterResponse(google.protobuf.message.Message):
     ) -> None: ...
 
 global___CloseWriterResponse = CloseWriterResponse
-
-class FreeWriterRequest(google.protobuf.message.Message):
-    """Method `FreeWriter`. Releases one reference of the writer with no wait, for a reference that
-    lang drops, such as from a finalizer. The bridge may also call it with no async runtime. A write
-    in flight still completes. The writer's error, if any, is lost.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    WRITER_ID_FIELD_NUMBER: builtins.int
-    writer_id: builtins.int
-    def __init__(
-        self,
-        *,
-        writer_id: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["writer_id", b"writer_id"]
-    ) -> None: ...
-
-global___FreeWriterRequest = FreeWriterRequest
-
-class FreeWriterResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___FreeWriterResponse = FreeWriterResponse
-
-class CloseWritersRequest(google.protobuf.message.Message):
-    """Method `CloseWriters`, asynchronous. Drops every open writer, for example when the backend's
-    client or Worker shuts down.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    def __init__(
-        self,
-    ) -> None: ...
-
-global___CloseWritersRequest = CloseWritersRequest
-
-class CloseWritersResponse(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    FAILED_FIELD_NUMBER: builtins.int
-    failed: builtins.int
-    """The writers that had failed."""
-    def __init__(
-        self,
-        *,
-        failed: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["failed", b"failed"]
-    ) -> None: ...
-
-global___CloseWritersResponse = CloseWritersResponse

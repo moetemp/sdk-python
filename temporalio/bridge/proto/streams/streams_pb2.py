@@ -21,21 +21,15 @@ from temporalio.api.stream.v1 import (
 )
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\'temporal/sdk/core/streams/streams.proto\x12\x0f\x63oresdk.streams\x1a\x1egoogle/protobuf/duration.proto\x1a$temporal/api/stream/v1/message.proto"\x86\x01\n\x12MemoryStreamConfig\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x31\n\x0elast_write_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t"\xd9\x01\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12.\n\x03ref\x18\x02 \x01(\x0b\x32!.temporal.api.stream.v1.StreamRef\x12\x32\n\x08producer\x18\x03 \x01(\x0b\x32 .temporal.api.stream.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x04 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration"\'\n\x12OpenWriterResponse\x12\x11\n\twriter_id\x18\x01 \x01(\x04"_\n\x13WriteRecordsRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04\x12\x35\n\x07records\x18\x02 \x03(\x0b\x32$.temporal.api.stream.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x0c\x12\x13\n\x0blast_offset\x18\x02 \x01(\x0c"\'\n\x12\x43loseWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x0c"&\n\x11\x46reeWriterRequest\x12\x11\n\twriter_id\x18\x01 \x01(\x04"\x14\n\x12\x46reeWriterResponse"\x15\n\x13\x43loseWritersRequest"&\n\x14\x43loseWritersResponse\x12\x0e\n\x06\x66\x61iled\x18\x01 \x01(\x05\x42-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
+    b'\n\'temporal/sdk/core/streams/streams.proto\x12\x0f\x63oresdk.streams\x1a\x1egoogle/protobuf/duration.proto\x1a$temporal/api/stream/v1/message.proto"\x86\x01\n\x12MemoryStreamConfig\x12,\n\tretention\x18\x04 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x31\n\x0elast_write_ttl\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration\x12\x0f\n\x07\x62\x61\x63kend\x18\n \x01(\t"\xd9\x01\n\x11OpenWriterRequest\x12\x11\n\tnamespace\x18\x01 \x01(\t\x12.\n\x03ref\x18\x02 \x01(\x0b\x32!.temporal.api.stream.v1.StreamRef\x12\x32\n\x08producer\x18\x03 \x01(\x0b\x32 .temporal.api.stream.v1.Producer\x12\x16\n\x0emax_batch_size\x18\x04 \x01(\x05\x12\x35\n\x12max_retry_duration\x18\x05 \x01(\x0b\x32\x19.google.protobuf.Duration"L\n\x13WriteRecordsRequest\x12\x35\n\x07records\x18\x01 \x03(\x0b\x32$.temporal.api.stream.v1.AppendRecord"A\n\x14WriteRecordsResponse\x12\x14\n\x0c\x66irst_offset\x18\x01 \x01(\x0c\x12\x13\n\x0blast_offset\x18\x02 \x01(\x0c"*\n\x13\x43loseWriterResponse\x12\x13\n\x0blast_offset\x18\x01 \x01(\x0c\x42-\xea\x02*Temporalio::Internal::Bridge::Api::Streamsb\x06proto3'
 )
 
 
 _MEMORYSTREAMCONFIG = DESCRIPTOR.message_types_by_name["MemoryStreamConfig"]
 _OPENWRITERREQUEST = DESCRIPTOR.message_types_by_name["OpenWriterRequest"]
-_OPENWRITERRESPONSE = DESCRIPTOR.message_types_by_name["OpenWriterResponse"]
 _WRITERECORDSREQUEST = DESCRIPTOR.message_types_by_name["WriteRecordsRequest"]
 _WRITERECORDSRESPONSE = DESCRIPTOR.message_types_by_name["WriteRecordsResponse"]
-_CLOSEWRITERREQUEST = DESCRIPTOR.message_types_by_name["CloseWriterRequest"]
 _CLOSEWRITERRESPONSE = DESCRIPTOR.message_types_by_name["CloseWriterResponse"]
-_FREEWRITERREQUEST = DESCRIPTOR.message_types_by_name["FreeWriterRequest"]
-_FREEWRITERRESPONSE = DESCRIPTOR.message_types_by_name["FreeWriterResponse"]
-_CLOSEWRITERSREQUEST = DESCRIPTOR.message_types_by_name["CloseWritersRequest"]
-_CLOSEWRITERSRESPONSE = DESCRIPTOR.message_types_by_name["CloseWritersResponse"]
 MemoryStreamConfig = _reflection.GeneratedProtocolMessageType(
     "MemoryStreamConfig",
     (_message.Message,),
@@ -57,17 +51,6 @@ OpenWriterRequest = _reflection.GeneratedProtocolMessageType(
     },
 )
 _sym_db.RegisterMessage(OpenWriterRequest)
-
-OpenWriterResponse = _reflection.GeneratedProtocolMessageType(
-    "OpenWriterResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _OPENWRITERRESPONSE,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.OpenWriterResponse)
-    },
-)
-_sym_db.RegisterMessage(OpenWriterResponse)
 
 WriteRecordsRequest = _reflection.GeneratedProtocolMessageType(
     "WriteRecordsRequest",
@@ -91,17 +74,6 @@ WriteRecordsResponse = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(WriteRecordsResponse)
 
-CloseWriterRequest = _reflection.GeneratedProtocolMessageType(
-    "CloseWriterRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _CLOSEWRITERREQUEST,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.CloseWriterRequest)
-    },
-)
-_sym_db.RegisterMessage(CloseWriterRequest)
-
 CloseWriterResponse = _reflection.GeneratedProtocolMessageType(
     "CloseWriterResponse",
     (_message.Message,),
@@ -113,50 +85,6 @@ CloseWriterResponse = _reflection.GeneratedProtocolMessageType(
 )
 _sym_db.RegisterMessage(CloseWriterResponse)
 
-FreeWriterRequest = _reflection.GeneratedProtocolMessageType(
-    "FreeWriterRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _FREEWRITERREQUEST,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.FreeWriterRequest)
-    },
-)
-_sym_db.RegisterMessage(FreeWriterRequest)
-
-FreeWriterResponse = _reflection.GeneratedProtocolMessageType(
-    "FreeWriterResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _FREEWRITERRESPONSE,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.FreeWriterResponse)
-    },
-)
-_sym_db.RegisterMessage(FreeWriterResponse)
-
-CloseWritersRequest = _reflection.GeneratedProtocolMessageType(
-    "CloseWritersRequest",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _CLOSEWRITERSREQUEST,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.CloseWritersRequest)
-    },
-)
-_sym_db.RegisterMessage(CloseWritersRequest)
-
-CloseWritersResponse = _reflection.GeneratedProtocolMessageType(
-    "CloseWritersResponse",
-    (_message.Message,),
-    {
-        "DESCRIPTOR": _CLOSEWRITERSRESPONSE,
-        "__module__": "temporal.sdk.core.streams.streams_pb2",
-        # @@protoc_insertion_point(class_scope:coresdk.streams.CloseWritersResponse)
-    },
-)
-_sym_db.RegisterMessage(CloseWritersResponse)
-
 if _descriptor._USE_C_DESCRIPTORS == False:
     DESCRIPTOR._options = None
     DESCRIPTOR._serialized_options = (
@@ -166,22 +94,10 @@ if _descriptor._USE_C_DESCRIPTORS == False:
     _MEMORYSTREAMCONFIG._serialized_end = 265
     _OPENWRITERREQUEST._serialized_start = 268
     _OPENWRITERREQUEST._serialized_end = 485
-    _OPENWRITERRESPONSE._serialized_start = 487
-    _OPENWRITERRESPONSE._serialized_end = 526
-    _WRITERECORDSREQUEST._serialized_start = 528
-    _WRITERECORDSREQUEST._serialized_end = 623
-    _WRITERECORDSRESPONSE._serialized_start = 625
-    _WRITERECORDSRESPONSE._serialized_end = 690
-    _CLOSEWRITERREQUEST._serialized_start = 692
-    _CLOSEWRITERREQUEST._serialized_end = 731
-    _CLOSEWRITERRESPONSE._serialized_start = 733
-    _CLOSEWRITERRESPONSE._serialized_end = 775
-    _FREEWRITERREQUEST._serialized_start = 777
-    _FREEWRITERREQUEST._serialized_end = 815
-    _FREEWRITERRESPONSE._serialized_start = 817
-    _FREEWRITERRESPONSE._serialized_end = 837
-    _CLOSEWRITERSREQUEST._serialized_start = 839
-    _CLOSEWRITERSREQUEST._serialized_end = 860
-    _CLOSEWRITERSRESPONSE._serialized_start = 862
-    _CLOSEWRITERSRESPONSE._serialized_end = 900
+    _WRITERECORDSREQUEST._serialized_start = 487
+    _WRITERECORDSREQUEST._serialized_end = 563
+    _WRITERECORDSRESPONSE._serialized_start = 565
+    _WRITERECORDSRESPONSE._serialized_end = 630
+    _CLOSEWRITERRESPONSE._serialized_start = 632
+    _CLOSEWRITERRESPONSE._serialized_end = 674
 # @@protoc_insertion_point(module_scope)

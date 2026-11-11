@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import weakref
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import temporalio.api.stream.v1 as stream_v1
@@ -58,7 +57,11 @@ def unretrieved_error(future: asyncio.Future[StreamOffset]) -> BaseException | N
 
 
 class RecordWriter:
-    """Writes the Records of one Producer to one Stream, through the writer client."""
+    """Writes the Records of one Producer to one Stream, through the writer client.
+
+    The crate's writer stays on the event loop that opened it. If Python frees this object with
+    no close, dropping the crate's writer releases it.
+    """
 
     def __init__(
         self,
@@ -66,18 +69,14 @@ class RecordWriter:
         writers: writer_client.StreamWriterClientExtension,
         stream_id: str,
         producer: stream_v1.Producer,
-        free: Callable[[int], None] | None = None,
     ) -> None:
         """Create a writer. It opens on the first write.
 
-        ``writers`` encodes the values with the user's converter and codec. ``free`` releases
-        the crate's writer if Python frees this one without a close.
+        ``writers`` encodes the values with the user's converter and codec.
         """
         self._writers = writers
         self._stream_id = stream_id
         self._producer = producer
-        self._free = free
-        self._release: weakref.finalize[Any, RecordWriter] | None = None
         self._writer: Writer | None = None
         self._open_lock = asyncio.Lock()
         # The last write that started. Each write waits for the one before it, so the order is
@@ -105,12 +104,6 @@ class RecordWriter:
                     ref=models.StreamRef(id=self._stream_id),
                     producer=producer,
                 )
-                if self._free is not None:
-                    # The crate keeps a writer for each open that nobody closed or freed. So
-                    # free it when Python frees this writer.
-                    self._release = weakref.finalize(
-                        self, self._free, self._writer.writer_id
-                    )
             return self._writer
 
     def write(self, values: Sequence[Any]) -> WriteFuture:
@@ -182,7 +175,6 @@ class RecordWriter:
         self._closed = True
         if self._last is not None:
             await asyncio.wait([self._last])
-        if self._release is not None:
-            self._release.detach()
-        if self._writer is not None:
-            await self._writer.close()
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            await writer.close()

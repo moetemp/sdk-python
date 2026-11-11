@@ -6,7 +6,8 @@ import asyncio
 import contextlib
 import contextvars
 import functools
-from collections.abc import Callable, Iterable, Iterator, Mapping
+import weakref
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 
 _M = TypeVar("_M", bound=google.protobuf.message.Message)
 _OutputT = TypeVar("_OutputT")
+_T = TypeVar("_T")
 
 _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
     "CreateStream": stream_pb.CreateStreamResponse,
@@ -42,10 +44,6 @@ _RESPONSES: dict[str, type[google.protobuf.message.Message]] = {
     "CloseStream": stream_pb.CloseStreamResponse,
     "ReadRecords": stream_pb.ReadRecordsResponse,
     "DescribeStream": stream_pb.DescribeStreamResponse,
-    "OpenWriter": runtime_pb.OpenWriterResponse,
-    "WriteRecords": runtime_pb.WriteRecordsResponse,
-    "CloseWriter": runtime_pb.CloseWriterResponse,
-    "FreeWriter": runtime_pb.FreeWriterResponse,
 }
 
 
@@ -114,8 +112,16 @@ class BackendCalls(Protocol):
         """The writers of Activity and client Producers for ``namespace``."""
         ...
 
-    def free_writer(self, writer_id: int) -> None:
-        """Release one reference of a writer without waiting, such as when Python frees it."""
+
+class StreamWriterObject(Protocol):
+    """One writer of the crate's runtime. Dropping the last reference releases it."""
+
+    async def write(self, input: bytes) -> bytes:
+        """Write an encoded ``WriteRecordsRequest``, and return the encoded response."""
+        ...
+
+    async def close(self) -> bytes:
+        """Close the writer, and return the encoded ``CloseWriterResponse``."""
         ...
 
 
@@ -126,21 +132,37 @@ class StreamRuntime(Protocol):
         """Call a method with encoded input, and return the encoded output."""
         ...
 
-    def free_writer(self, writer_id: int) -> None:
-        """Release one reference of a writer without waiting."""
+    async def open_writer(self, input: bytes) -> StreamWriterObject:
+        """Open a writer from an encoded ``OpenWriterRequest``."""
         ...
+
+
+async def _answer(call: Awaitable[_T]) -> _T:
+    # A failed call of the runtime or a writer carries its Stream error.
+    try:
+        return await call
+    except temporalio.bridge.streams.StreamCallError as err:
+        stream_error = _errors.from_failure(err)
+        if stream_error is None:
+            raise
+        raise stream_error from None
 
 
 class _ExtensionCalls:
     """Makes Stream calls to the crate's runtime object, which serves one client.
 
-    The generated clients start the Stream service and writer operations. Their Nexus client is
-    the runtime.
+    The generated client starts the Stream service operations, and its Nexus client is the
+    runtime. A writer is an object of the runtime.
     """
 
     def __init__(self, runtime: StreamRuntime) -> None:
         """Create a backend over a runtime object."""
         self._runtime = runtime
+        # The open writers, with the loop that opened each, so a shutdown can close them. A
+        # writer that Python frees leaves it, and the drop releases the crate's writer.
+        self._writers: weakref.WeakKeyDictionary[
+            StreamWriterObject, asyncio.AbstractEventLoop
+        ] = weakref.WeakKeyDictionary()
 
     def service(
         self,
@@ -157,39 +179,39 @@ class _ExtensionCalls:
     def writers(
         self, namespace: str, data_converter: temporalio.converter.DataConverter
     ) -> writer_client.StreamWriterClientExtension:
-        """The generated writer client over the runtime."""
+        """The writer client over the runtime."""
         return _writers_class()(_RuntimeNexusClient(self, namespace, data_converter))
-
-    def free_writer(self, writer_id: int) -> None:
-        """Release one reference of a writer without waiting."""
-        try:
-            self._runtime.free_writer(writer_id)
-        except temporalio.bridge.streams.StreamCallError:
-            # A writer that the runtime already dropped, such as at shutdown, has nothing to
-            # release.
-            pass
 
     async def call_async(
         self, method: str, request: google.protobuf.message.Message, response: type[_M]
     ) -> _M:
         """Call a method of the runtime."""
-        try:
-            data = await self._runtime.call(method, request.SerializeToString())
-        except temporalio.bridge.streams.StreamCallError as err:
-            stream_error = _errors.from_failure(err)
-            if stream_error is None:
-                raise
-            raise stream_error from None
+        data = await _answer(self._runtime.call(method, request.SerializeToString()))
         return response.FromString(data)
 
+    async def open_writer(
+        self, request: google.protobuf.message.Message
+    ) -> StreamWriterObject:
+        """Open a writer of the runtime. It stays on the running loop."""
+        writer = await _answer(self._runtime.open_writer(request.SerializeToString()))
+        self._writers[writer] = asyncio.get_running_loop()
+        return writer
+
     async def close_writers(self) -> int:
-        """Close every open writer of the runtime, and return how many failed."""
-        response = await self.call_async(
-            "CloseWriters",
-            runtime_pb.CloseWritersRequest(),
-            runtime_pb.CloseWritersResponse,
-        )
-        return response.failed
+        """Close the open writers of the running loop, and return how many failed.
+
+        A writer of another loop is released when Python frees it.
+        """
+        loop = asyncio.get_running_loop()
+        failed = 0
+        for writer, owner in list(self._writers.items()):
+            if owner is not loop:
+                continue
+            try:
+                await _answer(writer.close())
+            except Exception:
+                failed += 1
+        return failed
 
 
 class StreamServiceCalls(service_client.StreamServiceClientExtension):
@@ -262,19 +284,16 @@ def _writers_class() -> Callable[
             self._nexus_client = nexus_client
 
         @override
-        def create_nexus_client(
-            self, service: type[Any] | str, endpoint: str
-        ) -> temporalio.client.NexusClient[Any]:
-            del service, endpoint
-            runtime: Any = self._nexus_client
-            return runtime
+        def writer_calls(self) -> client.WriterCalls:
+            return self._nexus_client
 
     return _StreamWriters
 
 
 class _RuntimeNexusClient:
-    # The generated clients start each operation on a Nexus client. This one starts it on the
-    # runtime in place of an endpoint, and the runtime answers before the start returns.
+    # The generated client starts each operation on a Nexus client. This one starts it on the
+    # runtime in place of an endpoint, and the runtime answers before the start returns. The
+    # writer calls encode their models the same way.
     def __init__(
         self,
         backend: _ExtensionCalls,
@@ -313,37 +332,85 @@ class _RuntimeNexusClient:
         if isinstance(operation, nexusrpc.Operation):
             result_type = result_type or operation.output_type
             operation = operation.name
+        request = await self._encode(arg)
+        response = await self._deadline(
+            operation,
+            self._backend.call_async(operation, request, _RESPONSES[operation]),
+            rpc_timeout,
+        )
+        return _Answered(await self._decode(response, result_type))
+
+    async def open_writer(
+        self, request: Any, *, rpc_timeout: timedelta | None = None
+    ) -> StreamWriterObject:
+        """Open a writer of the runtime from a writer model."""
+        encoded = await self._encode(request)
+        return await self._deadline(
+            "OpenWriter", self._backend.open_writer(encoded), rpc_timeout
+        )
+
+    async def write_records(
+        self,
+        writer: StreamWriterObject,
+        request: Any,
+        result_type: type[_OutputT],
+        *,
+        rpc_timeout: timedelta | None = None,
+    ) -> _OutputT:
+        """Write a writer model's Records, and return the answer as ``result_type``."""
+        encoded = await self._encode(request)
+        data = await self._deadline(
+            "WriteRecords",
+            _answer(writer.write(encoded.SerializeToString())),
+            rpc_timeout,
+        )
+        return await self._decode(
+            runtime_pb.WriteRecordsResponse.FromString(data), result_type
+        )
+
+    async def close_writer(
+        self,
+        writer: StreamWriterObject,
+        result_type: type[_OutputT],
+        *,
+        rpc_timeout: timedelta | None = None,
+    ) -> _OutputT:
+        """Close a writer, and return the answer as ``result_type``."""
+        data = await self._deadline("CloseWriter", _answer(writer.close()), rpc_timeout)
+        return await self._decode(
+            runtime_pb.CloseWriterResponse.FromString(data), result_type
+        )
+
+    async def _encode(self, arg: Any) -> google.protobuf.message.Message:
         with self._converters():
             request = cast(
                 google.protobuf.message.Message,
                 _transfer_type_converter(type(arg)).to_transfer_type(arg),
             )
-        # The IDL leaves the namespace out, since the server knows it.
+        # The IDL leaves the namespace out, so the runtime's client sets it on each request.
         if "namespace" in request.DESCRIPTOR.fields_by_name:
             setattr(request, "namespace", self._namespace)
-        codec = self._data_converter.payload_codec
-        await _encode_payloads(request, codec)
-        response = await self._call(operation, request, rpc_timeout)
-        await _decode_payloads(response, codec)
-        result: Any = None
-        if result_type is not None:
-            with self._converters():
-                result = _transfer_type_converter(result_type).from_transfer_type(
-                    response, result_type
-                )
-        return _Answered(result)
+        await _encode_payloads(request, self._data_converter.payload_codec)
+        return request
 
-    async def _call(
-        self,
-        operation: str,
-        request: google.protobuf.message.Message,
-        rpc_timeout: timedelta | None,
-    ) -> google.protobuf.message.Message:
+    async def _decode(
+        self, response: google.protobuf.message.Message, result_type: type[Any] | None
+    ) -> Any:
+        await _decode_payloads(response, self._data_converter.payload_codec)
+        if result_type is None:
+            return None
+        with self._converters():
+            return _transfer_type_converter(result_type).from_transfer_type(
+                response, result_type
+            )
+
+    async def _deadline(
+        self, operation: str, call: Awaitable[_T], rpc_timeout: timedelta | None
+    ) -> _T:
         # The rpc_timeout is the call's deadline here too. The Streams give theirs through
         # call_options.
         options = call_options.get()
         timeout = rpc_timeout or (options.timeout if options is not None else None)
-        call = self._backend.call_async(operation, request, _RESPONSES[operation])
         if timeout is None:
             return await call
         try:

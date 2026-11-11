@@ -46,6 +46,34 @@ class StreamRuntime:
         """
         return await self._ref.call(method, input)
 
-    def free_writer(self, writer_id: int) -> None:
-        """Release one handle of a writer without waiting, such as from a finalizer."""
-        self._ref.free_writer(writer_id)
+    async def open_writer(self, input: bytes) -> StreamWriter:
+        """Open a writer from an encoded ``OpenWriterRequest``.
+
+        Raises:
+            StreamCallError: The open failed, with the gRPC code, message and details as args.
+        """
+        return StreamWriter(await self._ref.open_writer(input))
+
+
+class StreamWriter:
+    """One writer of the runtime. Dropping the last reference releases it."""
+
+    def __init__(self, ref: Any) -> None:
+        """Wrap the bridge's writer object. Use ``StreamRuntime.open_writer`` instead."""
+        self._ref = ref
+
+    async def write(self, input: bytes) -> bytes:
+        """Write an encoded ``WriteRecordsRequest``, and return the encoded response.
+
+        Raises:
+            StreamCallError: The write failed, with the gRPC code, message and details as args.
+        """
+        return await self._ref.write(input)
+
+    async def close(self) -> bytes:
+        """Close the writer, and return the encoded ``CloseWriterResponse``.
+
+        Raises:
+            StreamCallError: The writer failed, with the gRPC code, message and details as args.
+        """
+        return await self._ref.close()

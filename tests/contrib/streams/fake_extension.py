@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.api.streamservice.v1 as stream_pb
@@ -36,11 +37,51 @@ class _Stream:
         self.changed = asyncio.Event()
 
 
+class _FakeWriter:
+    def __init__(
+        self, extension: FakeExtension, stream_id: str, producer: stream_v1.Producer
+    ) -> None:
+        self._extension = extension
+        self._stream_id = stream_id
+        self._producer = producer
+        self._last_offset = b""
+        self.closed = False
+
+    async def write(self, input: bytes) -> bytes:
+        if self.closed:
+            raise _error(
+                RPCStatusCode.FAILED_PRECONDITION,
+                StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
+            )
+        write = runtime_pb.WriteRecordsRequest.FromString(input)
+        offsets = [
+            self._extension._append(
+                self._stream_id,
+                stream_v1.StreamRecord(
+                    data=stream_v1.StreamData(body=record.body, producer=self._producer)
+                ),
+            )
+            for record in write.records
+        ]
+        if offsets:
+            self._last_offset = offsets[-1]
+        return runtime_pb.WriteRecordsResponse(
+            first_offset=offsets[0] if offsets else b"",
+            last_offset=offsets[-1] if offsets else b"",
+        ).SerializeToString()
+
+    async def close(self) -> bytes:
+        self.closed = True
+        return runtime_pb.CloseWriterResponse(
+            last_offset=self._last_offset
+        ).SerializeToString()
+
+
 class FakeExtension:
     def __init__(self) -> None:
         self.streams: dict[str, _Stream] = {}
-        self.writers: dict[int, tuple[str, stream_v1.Producer]] = {}
-        self.freed: list[int] = []
+        # The writers that Python holds. A writer that Python frees leaves the set.
+        self.writers: weakref.WeakSet[_FakeWriter] = weakref.WeakSet()
         self.namespaces: set[str] = set()
         self.writer_namespaces: list[str] = []
         self.creates: list[stream_pb.CreateStreamRequest] = []
@@ -64,8 +105,12 @@ class FakeExtension:
         stream.wake()
         return record.data.offset
 
-    def free_writer(self, writer_id: int) -> None:
-        self.freed.append(writer_id)
+    async def open_writer(self, input: bytes) -> _FakeWriter:
+        open_writer = runtime_pb.OpenWriterRequest.FromString(input)
+        self.writer_namespaces.append(open_writer.namespace)
+        writer = _FakeWriter(self, open_writer.ref.id, open_writer.producer)
+        self.writers.add(writer)
+        return writer
 
     def _create(self, create: stream_pb.CreateStreamRequest) -> bytes:
         self.creates.append(create)
@@ -98,36 +143,6 @@ class FakeExtension:
     async def call(self, method: str, input: bytes) -> bytes:
         if method == "CreateStream":
             return self._create(stream_pb.CreateStreamRequest.FromString(input))
-        if method == "OpenWriter":
-            open_writer = runtime_pb.OpenWriterRequest.FromString(input)
-            writer_id = len(self.writers) + 1
-            self.writer_namespaces.append(open_writer.namespace)
-            self.writers[writer_id] = (open_writer.ref.id, open_writer.producer)
-            return runtime_pb.OpenWriterResponse(
-                writer_id=writer_id
-            ).SerializeToString()
-        if method == "WriteRecords":
-            write = runtime_pb.WriteRecordsRequest.FromString(input)
-            stream_id, producer = self.writers[write.writer_id]
-            offsets = [
-                self._append(
-                    stream_id,
-                    stream_v1.StreamRecord(
-                        data=stream_v1.StreamData(body=record.body, producer=producer)
-                    ),
-                )
-                for record in write.records
-            ]
-            return runtime_pb.WriteRecordsResponse(
-                first_offset=offsets[0] if offsets else b"",
-                last_offset=offsets[-1] if offsets else b"",
-            ).SerializeToString()
-        if method == "CloseWriter":
-            return runtime_pb.CloseWriterResponse(
-                last_offset=(self.next_offset - 1).to_bytes(8, "big")
-                if self.next_offset > 1
-                else b""
-            ).SerializeToString()
         if method == "CloseStream":
             # A close writes no Record. It wakes the waiting reads, which then end.
             close = stream_pb.CloseStreamRequest.FromString(input)

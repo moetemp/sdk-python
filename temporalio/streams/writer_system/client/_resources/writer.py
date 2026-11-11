@@ -4,40 +4,29 @@
 from __future__ import annotations
 
 import collections.abc
-import dataclasses
 import datetime
 import typing
-import uuid as _uuid
-
-import temporalio.client
 
 from ...models import (
     AppendRecord,
-    CloseWriterRequest,
     CloseWriterResponse,
-    FreeWriterRequest,
-    FreeWriterResponse,
     WriteRecordsRequest,
     WriteRecordsResponse,
 )
-from ...services import StreamWriter
+
+if typing.TYPE_CHECKING:
+    from .._extensions import WriterCalls
 
 
-@dataclasses.dataclass(init=False)
 class Writer:
-    """An open writer of one Producer. The crate keeps its epoch and sequence."""
+    """An open writer of one Producer. The runtime's writer object keeps its epoch and sequence.
 
-    writer_id: int
+    Dropping the last reference releases the runtime's writer.
+    """
 
-    def __init__(
-        self,
-        nexus_client: temporalio.client.NexusClient[typing.Any],
-        /,
-        *,
-        writer_id: int,
-    ) -> None:
-        self._nexus_client: temporalio.client.NexusClient[typing.Any] = nexus_client
-        self.writer_id = writer_id
+    def __init__(self, calls: WriterCalls, writer: typing.Any, /) -> None:
+        self._calls = calls
+        self._writer = writer
 
     async def write_records(
         self,
@@ -47,18 +36,13 @@ class Writer:
         rpc_timeout: datetime.timedelta | None = None,
     ) -> WriteRecordsResponse:
         """Write Records at once. The answer has the first and the last offset."""
-        request = WriteRecordsRequest(
-            writer_id=self.writer_id,
-            records=records or [],
-        )
-        handle = await self._nexus_client.start_operation(
-            operation=StreamWriter.write_records,
-            arg=request,
-            id=f"{_uuid.uuid4()}",
-            rpc_metadata=rpc_metadata or {},
+        del rpc_metadata
+        return await self._calls.write_records(
+            self._writer,
+            WriteRecordsRequest(records=records or []),
+            WriteRecordsResponse,
             rpc_timeout=rpc_timeout,
         )
-        return await handle.result()
 
     async def close(
         self,
@@ -66,37 +50,11 @@ class Writer:
         rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
         rpc_timeout: datetime.timedelta | None = None,
     ) -> CloseWriterResponse:
-        """Release the handle. The last one waits for a write, then drops the writer."""
-        request = CloseWriterRequest(
-            writer_id=self.writer_id,
+        """Close the writer. It waits for a write in flight, and a later write fails as closed."""
+        del rpc_metadata
+        return await self._calls.close_writer(
+            self._writer, CloseWriterResponse, rpc_timeout=rpc_timeout
         )
-        handle = await self._nexus_client.start_operation(
-            operation=StreamWriter.close_writer,
-            arg=request,
-            id=f"{_uuid.uuid4()}",
-            rpc_metadata=rpc_metadata or {},
-            rpc_timeout=rpc_timeout,
-        )
-        return await handle.result()
-
-    async def free(
-        self,
-        *,
-        rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
-        rpc_timeout: datetime.timedelta | None = None,
-    ) -> FreeWriterResponse:
-        """Release the handle with no wait, for a handle that Python frees."""
-        request = FreeWriterRequest(
-            writer_id=self.writer_id,
-        )
-        handle = await self._nexus_client.start_operation(
-            operation=StreamWriter.free_writer,
-            arg=request,
-            id=f"{_uuid.uuid4()}",
-            rpc_metadata=rpc_metadata or {},
-            rpc_timeout=rpc_timeout,
-        )
-        return await handle.result()
 
 
 __all__ = ["Writer"]

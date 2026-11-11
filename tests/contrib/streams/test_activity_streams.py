@@ -257,6 +257,52 @@ async def test_a_local_activity_retry_supersedes_its_failed_attempt(
     assert items.index(superseded) == items.index(written[1]) - 1
 
 
+@activity.defn
+async def two_streams_of_one_attempt(ref: streams.StreamRef[str]) -> None:
+    first = activity.client().get_stream(ref)
+    second = activity.client().get_stream(ref)
+    # The writes start in the order of the calls, from two Stream objects of one attempt.
+    writes = [
+        first.append("1"),
+        second.append("2"),
+        first.append("3"),
+        second.append("4"),
+    ]
+    await asyncio.gather(*writes)
+
+
+@workflow.defn
+class TwoStreamsOfOneAttempt:
+    @workflow.run
+    async def run(self) -> None:
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await workflow.execute_activity(
+            two_streams_of_one_attempt,
+            stream.ref,
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+        await stream.close()
+
+
+async def test_two_streams_of_one_attempt_write_in_order(stream_client: Client):
+    async with new_worker(
+        stream_client, TwoStreamsOfOneAttempt, activities=[two_streams_of_one_attempt]
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            TwoStreamsOfOneAttempt.run,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    items = await read(handle)
+    assert [i.data for i in items if isinstance(i, streams.Record)] == [
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
+
+
 @dataclass
 class FinishedStreams:
     key: str

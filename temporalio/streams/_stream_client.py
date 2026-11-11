@@ -187,7 +187,6 @@ class ClientCalls(StreamCalls):
                     writers=backend.writers(client.namespace, client.data_converter),
                     stream_id=stream_id,
                     producer=_client_producer(client, named),
-                    free=backend.free_writer,
                 )
                 self._writers[named] = found
             return found

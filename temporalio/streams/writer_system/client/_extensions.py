@@ -7,83 +7,65 @@ import abc
 import collections.abc
 import datetime
 import typing
-import uuid as _uuid
-
-import temporalio.client
 
 from .. import models
 from ..models import (
-    CloseWritersRequest,
-    CloseWritersResponse,
+    CloseWriterResponse,
     OpenWriterRequest,
     StreamRef,
+    WriteRecordsRequest,
+    WriteRecordsResponse,
 )
-from ..services import StreamWriter
 from ._resources.writer import Writer
 
-_NexusServiceT = typing.TypeVar("_NexusServiceT")
+
+class WriterCalls(typing.Protocol):
+    """The runtime's calls of a writer, which encode the models with the user's converters."""
+
+    async def open_writer(
+        self,
+        request: OpenWriterRequest,
+        *,
+        rpc_timeout: datetime.timedelta | None = None,
+    ) -> typing.Any:
+        """Open a writer, and return the runtime's writer object."""
+        ...
+
+    async def write_records(
+        self,
+        writer: typing.Any,
+        request: WriteRecordsRequest,
+        result_type: type[WriteRecordsResponse],
+        *,
+        rpc_timeout: datetime.timedelta | None = None,
+    ) -> WriteRecordsResponse:
+        """Write Records with a writer object."""
+        ...
+
+    async def close_writer(
+        self,
+        writer: typing.Any,
+        result_type: type[CloseWriterResponse],
+        *,
+        rpc_timeout: datetime.timedelta | None = None,
+    ) -> CloseWriterResponse:
+        """Close a writer object."""
+        ...
 
 
-# The runtime serves the writer in process, so its calls use an empty endpoint.
 class StreamWriterClientExtension(abc.ABC):
-    """Starts the operations of ``StreamWriter`` from code outside a Workflow.
+    """Opens the writers of the runtime from code outside a Workflow.
 
-    A client class inherits this class and provides the SDK's ``create_nexus_client``
-    method.
+    A client class inherits this class and provides the runtime's ``writer_calls``.
 
     .. warning::
         This API is experimental and subject to change.
     """
 
     @abc.abstractmethod
-    def create_nexus_client(
-        self,
-        service: type[_NexusServiceT] | str,
-        endpoint: str,
-    ) -> temporalio.client.NexusClient[_NexusServiceT]:
-        """Return the Nexus client that starts the operations of ``service``."""
+    def writer_calls(self) -> WriterCalls:
+        """Return the runtime's calls of a writer."""
         ...
-
-    def get_writer(
-        self,
-        *,
-        writer_id: int,
-    ) -> Writer:
-        """A handle on an existing ``Writer``, with no call."""
-        return Writer(
-            self.create_nexus_client(
-                service=StreamWriter,
-                endpoint="",
-            ),
-            writer_id=writer_id,
-        )
-
-    async def _stream_writer_open_writer(
-        self,
-        request: OpenWriterRequest,
-        *,
-        rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
-        rpc_timeout: datetime.timedelta | None = None,
-    ) -> Writer:
-        nexus_client = self.create_nexus_client(
-            service=StreamWriter,
-            endpoint="",
-        )
-        handle = await nexus_client.start_operation(
-            operation=StreamWriter.open_writer,
-            arg=request,
-            id=f"{_uuid.uuid4()}",
-            rpc_metadata=rpc_metadata or {},
-            rpc_timeout=rpc_timeout,
-        )
-        result = await handle.result()
-        if result.writer_id is None:
-            raise RuntimeError("OpenWriter answered without `writer_id`")
-        resource = Writer(
-            nexus_client,
-            writer_id=result.writer_id,
-        )
-        return resource
 
     async def open_writer(
         self,
@@ -102,44 +84,13 @@ class StreamWriterClientExtension(abc.ABC):
                 or a value above 1000, is 1000.
             max_retry_duration: How long a write retries a Store failure. Empty is 10 s.
         """
+        # The runtime makes no RPC, so it has no use for the metadata.
+        del rpc_metadata
+        calls = self.writer_calls()
         request = OpenWriterRequest(
             ref=ref,
             producer=producer,
             max_batch_size=max_batch_size,
             max_retry_duration=max_retry_duration,
         )
-        return await self._stream_writer_open_writer(
-            request, rpc_metadata=rpc_metadata, rpc_timeout=rpc_timeout
-        )
-
-    async def _stream_writer_close_writers(
-        self,
-        request: CloseWritersRequest,
-        *,
-        rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
-        rpc_timeout: datetime.timedelta | None = None,
-    ) -> CloseWritersResponse:
-        nexus_client = self.create_nexus_client(
-            service=StreamWriter,
-            endpoint="",
-        )
-        handle = await nexus_client.start_operation(
-            operation=StreamWriter.close_writers,
-            arg=request,
-            id=f"{_uuid.uuid4()}",
-            rpc_metadata=rpc_metadata or {},
-            rpc_timeout=rpc_timeout,
-        )
-        return await handle.result()
-
-    async def close_writers(
-        self,
-        *,
-        rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
-        rpc_timeout: datetime.timedelta | None = None,
-    ) -> CloseWritersResponse:
-        """Drop every open writer, for example at shutdown."""
-        request = CloseWritersRequest()
-        return await self._stream_writer_close_writers(
-            request, rpc_metadata=rpc_metadata, rpc_timeout=rpc_timeout
-        )
+        return Writer(calls, await calls.open_writer(request, rpc_timeout=rpc_timeout))

@@ -74,6 +74,7 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "streams")]
     {
         m.add_class::<streams::StreamRuntimeRef>()?;
+        m.add_class::<streams::StreamWriterRef>()?;
         m.add_function(wrap_pyfunction!(new_stream_runtime, m)?)?;
     }
 

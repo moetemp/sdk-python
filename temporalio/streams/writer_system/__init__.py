@@ -5,34 +5,20 @@ from __future__ import annotations
 
 from .models import (
     AppendRecord,
-    CloseWriterRequest,
     CloseWriterResponse,
-    CloseWritersRequest,
-    CloseWritersResponse,
-    FreeWriterRequest,
-    FreeWriterResponse,
     OpenWriterRequest,
     Producer,
     StreamRef,
     WriteRecordsRequest,
     WriteRecordsResponse,
-    WriterResult,
 )
-from .services import StreamWriter
 
 __all__ = [
     "AppendRecord",
-    "CloseWriterRequest",
     "CloseWriterResponse",
-    "CloseWritersRequest",
-    "CloseWritersResponse",
-    "FreeWriterRequest",
-    "FreeWriterResponse",
     "OpenWriterRequest",
     "Producer",
     "StreamRef",
-    "StreamWriter",
     "WriteRecordsRequest",
     "WriteRecordsResponse",
-    "WriterResult",
 ]

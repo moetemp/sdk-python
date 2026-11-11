@@ -213,9 +213,11 @@ class ExtensionStreamBackend(StreamBackend):
         )
 
     async def shutdown(self) -> None:
-        """Close every open writer, including the client's.
+        """Close the open writers of the running event loop, including the client's.
 
-        Call it when the process stops writing to Streams.
+        Call it when the process stops writing to Streams. A later write of a closed writer
+        raises a ``StreamError`` with ``reason`` ``STREAM_ERROR_REASON_CLOSED``. A writer of
+        another loop is released when Python frees it.
         """
         failed = 0
         for backend in list(self._backends.values()):
