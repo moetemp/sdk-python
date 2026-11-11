@@ -20,8 +20,13 @@ _BEGINNING = models.ReadPositionStart(models.StreamReadStart.StreamReadStartBegi
 
 def _data(offset: int) -> models.StreamRecord[str]:
     return models.StreamRecord(
-        item=models.StreamItemData(models.StreamData(body="token")), offset=_off(offset)
+        item=models.StreamItemData(models.StreamData(body="token", offset=_off(offset)))
     )
+
+
+def _offset(record: models.StreamRecord[str]) -> bytes:
+    assert record.item is not None
+    return record.item.value.offset
 
 
 class FakeNexusClient:
@@ -81,7 +86,7 @@ async def test_a_poll_carries_the_last_offset_until_the_close():
             position=models.ReadPositionFromOffset(_off(1)), wait=timedelta(seconds=5)
         )
     ]
-    assert [item.offset for item in items] == [_off(9)]
+    assert [_offset(item) for item in items] == [_off(9)]
     assert [request.position for request in nexus_client.requests] == [
         models.ReadPositionFromOffset(_off(1)),
         models.ReadPositionFromOffset(_off(8)),
@@ -100,7 +105,7 @@ async def test_a_read_with_no_wait_ends_at_an_empty_page_that_didnt_move():
     )
     stream = FakeService(nexus_client).get_stream[str](id="wf:run")
     items = [item async for item in stream.iter_read_items(position=_BEGINNING)]
-    assert [item.offset for item in items] == [_off(4)]
+    assert [_offset(item) for item in items] == [_off(4)]
     first, second = nexus_client.requests
     assert first.position == _BEGINNING
     # The second page starts after the first one's last offset, in place of the start.
@@ -116,7 +121,7 @@ async def test_a_poll_resumes_after_the_last_item_it_gave():
         position=models.ReadPositionStart(models.StreamReadStart.StreamReadStartEnd)
     )
     first = await anext(items)
-    assert first.offset == _off(4)
+    assert _offset(first) == _off(4)
     # A read that resumes here starts after the item, in place of the start.
     assert items.next_request is not None
     assert items.next_request.position == models.ReadPositionFromOffset(_off(4))

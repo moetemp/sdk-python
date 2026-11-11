@@ -1,7 +1,8 @@
 # Written by hand in the shape of nexgen's client output, since the writer has no WIT. The shared
-# types (StreamRef, StreamWriter, AppendRecord and the Producer models) come from the generated
-# system models, so the writer always matches the generated client. Only the writer-specific
-# request and response types live here.
+# types (StreamRef, AppendRecord and the Producer models) come from the generated system models,
+# so the writer always matches the generated client. Only the writer-specific request and
+# response types live here. The runtime's client sets the namespace of each request, as for the
+# generated requests, so no model carries it.
 
 from __future__ import annotations
 
@@ -17,11 +18,9 @@ from temporalio.streams.system.models import (
     AppendRecord,
     Producer,
     StreamRef,
-    StreamWriter,
     _AppendRecordTransferTypeConverter,
     _ProducerTransferTypeConverter,
     _StreamRefTransferTypeConverter,
-    _StreamWriterTransferTypeConverter,
 )
 
 __all__ = [
@@ -35,7 +34,6 @@ __all__ = [
     "OpenWriterRequest",
     "Producer",
     "StreamRef",
-    "StreamWriter",
     "WriteRecordsRequest",
     "WriteRecordsResponse",
     "WriterResult",
@@ -48,7 +46,7 @@ class OpenWriterRequest:
     """Open a writer for one Producer of one Stream."""
 
     ref: StreamRef
-    writer: StreamWriter | None = None
+    producer: Producer
     max_batch_size: int | None = None
     max_retry_duration: datetime.timedelta | None = None
 
@@ -72,13 +70,13 @@ class _OpenWriterRequestTransferTypeConverter(
         if not value.HasField("ref"):
             raise ValueError("missing required field OpenWriterRequest.ref")
         ref = _StreamRefTransferTypeConverter().from_transfer_type(value.ref, StreamRef)
+        if not value.HasField("producer"):
+            raise ValueError("missing required field OpenWriterRequest.producer")
         return OpenWriterRequest(
             ref=ref,
-            writer=_StreamWriterTransferTypeConverter().from_transfer_type(
-                value.writer, StreamWriter
-            )
-            if value.HasField("writer")
-            else None,
+            producer=_ProducerTransferTypeConverter().from_transfer_type(
+                value.producer, Producer
+            ),
             max_batch_size=value.max_batch_size if value.max_batch_size != 0 else None,
             max_retry_duration=_support.duration_from_proto(value.max_retry_duration)
             if value.HasField("max_retry_duration")
@@ -94,10 +92,9 @@ class _OpenWriterRequestTransferTypeConverter(
         message.ref.CopyFrom(
             _StreamRefTransferTypeConverter().to_transfer_type(value.ref)
         )
-        if value.writer is not None:
-            message.writer.CopyFrom(
-                _StreamWriterTransferTypeConverter().to_transfer_type(value.writer)
-            )
+        message.producer.CopyFrom(
+            _ProducerTransferTypeConverter().to_transfer_type(value.producer)
+        )
         if value.max_batch_size is not None:
             message.max_batch_size = value.max_batch_size
         if value.max_retry_duration is not None:

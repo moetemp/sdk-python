@@ -40,9 +40,12 @@ class CreateStreamRequest(google.protobuf.message.Message):
     ID_CONFLICT_POLICY_FIELD_NUMBER: builtins.int
     REQUEST_ID_FIELD_NUMBER: builtins.int
     namespace: builtins.str
+    """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
+    read it.
+    """
     @property
     def stream_ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
-        """The ref of the Stream to create. Its id is the Stream id, and is never empty."""
+        """Required. The ref of the Stream to create. Its id is the Stream id, and is never empty."""
     id_conflict_policy: (
         temporalio.api.enums.v1.stream_pb2.StreamIdConflictPolicy.ValueType
     )
@@ -120,16 +123,22 @@ class AppendRecordsRequest(google.protobuf.message.Message):
 
     NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
-    WRITER_FIELD_NUMBER: builtins.int
+    PRODUCER_FIELD_NUMBER: builtins.int
     SEQUENCE_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
     TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
+    """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
+    read it.
+    """
     @property
-    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
+    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
+        """Required."""
     @property
-    def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """Required outside a Workflow. In a Workflow the transport sets it."""
+    def producer(self) -> temporalio.api.stream.v1.message_pb2.Producer:
+        """Required. The Producer of the batch. An append and a close of one Producer carry the same
+        Producer, so the Store orders each write the same way.
+        """
     sequence: builtins.int
     """The batch number in this epoch. With the Producer and epoch it is the dedupe key. Zero takes
     the next number of the epoch. Such a batch has no dedupe, so a retry writes it again.
@@ -150,7 +159,7 @@ class AppendRecordsRequest(google.protobuf.message.Message):
         *,
         namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
-        writer: temporalio.api.stream.v1.message_pb2.StreamWriter | None = ...,
+        producer: temporalio.api.stream.v1.message_pb2.Producer | None = ...,
         sequence: builtins.int = ...,
         records: collections.abc.Iterable[
             temporalio.api.stream.v1.message_pb2.AppendRecord
@@ -159,13 +168,16 @@ class AppendRecordsRequest(google.protobuf.message.Message):
         task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["ref", b"ref", "writer", b"writer"]
+        self,
+        field_name: typing_extensions.Literal["producer", b"producer", "ref", b"ref"],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
             "namespace",
             b"namespace",
+            "producer",
+            b"producer",
             "records",
             b"records",
             "ref",
@@ -174,8 +186,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
             b"sequence",
             "task_token",
             b"task_token",
-            "writer",
-            b"writer",
         ],
     ) -> None: ...
 
@@ -217,14 +227,18 @@ class CloseStreamRequest(google.protobuf.message.Message):
 
     NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
-    WRITER_FIELD_NUMBER: builtins.int
+    PRODUCER_FIELD_NUMBER: builtins.int
     TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
+    """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
+    read it.
+    """
     @property
-    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
+    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
+        """Required."""
     @property
-    def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """The writer that closes the Stream. A Store reads only its Producer."""
+    def producer(self) -> temporalio.api.stream.v1.message_pb2.Producer:
+        """Required. The Producer that closes the Stream."""
     task_token: builtins.bytes
     """Only read by the server. It checks the token as on the append."""
     def __init__(
@@ -232,23 +246,24 @@ class CloseStreamRequest(google.protobuf.message.Message):
         *,
         namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
-        writer: temporalio.api.stream.v1.message_pb2.StreamWriter | None = ...,
+        producer: temporalio.api.stream.v1.message_pb2.Producer | None = ...,
         task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
-        self, field_name: typing_extensions.Literal["ref", b"ref", "writer", b"writer"]
+        self,
+        field_name: typing_extensions.Literal["producer", b"producer", "ref", b"ref"],
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
             "namespace",
             b"namespace",
+            "producer",
+            b"producer",
             "ref",
             b"ref",
             "task_token",
             b"task_token",
-            "writer",
-            b"writer",
         ],
     ) -> None: ...
 
@@ -281,14 +296,17 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     START_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     WAIT_FIELD_NUMBER: builtins.int
-    CREATE_WAIT_FIELD_NUMBER: builtins.int
     TO_OFFSET_FIELD_NUMBER: builtins.int
     WAKE_ONLY_FIELD_NUMBER: builtins.int
     MAX_BYTES_FIELD_NUMBER: builtins.int
     FLOOR_FROM_FIELD_NUMBER: builtins.int
     namespace: builtins.str
+    """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
+    read it.
+    """
     @property
-    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
+    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
+        """Required."""
     from_offset: builtins.bytes
     """Read after this offset. It fails with OFFSET_TOO_HIGH if it is past the newest offset.
     (-- api-linter: core::0140::prepositions=disabled
@@ -302,11 +320,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     def wait(self) -> google.protobuf.duration_pb2.Duration:
         """How long the read waits for a new Record before it answers with an empty page. Empty answers
         at once, and a wait longer than 60 s waits 60 s.
-        """
-    @property
-    def create_wait(self) -> google.protobuf.duration_pb2.Duration:
-        """How long to wait for a Stream that nobody created yet. Empty fails at once with NOT_FOUND.
-        At most 60 s.
         """
     to_offset: builtins.bytes
     """The exclusive end of the read. The read scans no entry at or after it, so a replay reads the
@@ -342,7 +355,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType = ...,
         max_records: builtins.int = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
-        create_wait: google.protobuf.duration_pb2.Duration | None = ...,
         to_offset: builtins.bytes = ...,
         wake_only: builtins.bool = ...,
         max_bytes: builtins.int = ...,
@@ -351,8 +363,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     def HasField(
         self,
         field_name: typing_extensions.Literal[
-            "create_wait",
-            b"create_wait",
             "from_offset",
             b"from_offset",
             "position",
@@ -368,8 +378,6 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "create_wait",
-            b"create_wait",
             "floor_from",
             b"floor_from",
             "from_offset",
@@ -473,8 +481,12 @@ class DescribeStreamRequest(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
     namespace: builtins.str
+    """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
+    read it.
+    """
     @property
-    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
+    def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
+        """Required."""
     def __init__(
         self,
         *,

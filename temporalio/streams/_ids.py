@@ -25,14 +25,11 @@ def workflow_producer(run_id: str) -> models.Producer:
     """The Workflow Producer of a run.
 
     The run writes through Local Activities, which send their own Producers, so its Workflow
-    Producer only closes. Its epoch is the Workflow case with no task, which fences nothing,
-    since that Producer writes no Record.
+    Producer only closes. A close sends no epoch.
     """
     return models.Producer(
         id=workflow_producer_id(run_id),
-        kind=models.ProducerKindWorkflow(
-            models.WorkflowProducer(run_id=run_id, epoch=models.WorkflowTaskEpoch())
-        ),
+        kind=models.ProducerKindWorkflow(models.WorkflowProducer(run_id=run_id)),
     )
 
 

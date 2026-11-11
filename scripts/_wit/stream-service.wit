@@ -44,6 +44,7 @@ interface stream-service {
   /// @nexus.proto "temporal.api.stream.v1.WorkflowTaskEpoch"
   record workflow-task-epoch {
     started-event-id: option<s64>,
+    /// @nexus.doc "1 or more."
     attempt: option<s32>,
     /// @nexus.doc "When the Workflow Task attempt started. It tells a reused started id apart."
     started-time: option<timestamp>,
@@ -53,8 +54,8 @@ interface stream-service {
   /// @nexus.proto "temporal.api.stream.v1.LocalActivityEpoch"
   record local-activity-epoch {
     /// @nexus.doc "The Workflow Task attempt that dispatched the Local Activity."
-    task: option<workflow-task-epoch>,
-    /// @nexus.doc "The Local Activity's own attempt in that Workflow Task."
+    task: workflow-task-epoch,
+    /// @nexus.doc "The Local Activity's own attempt in that Workflow Task, 1 or more."
     attempt: option<s32>,
   }
 
@@ -62,13 +63,15 @@ interface stream-service {
   /// @nexus.proto "temporal.api.stream.v1.ActivityEpoch"
   record activity-epoch {
     /// @nexus.doc "When the server scheduled this attempt. A reset makes it later."
-    attempt-scheduled-time: option<timestamp>,
+    attempt-scheduled-time: timestamp,
+    /// @nexus.doc "1 or more."
     attempt: option<s32>,
   }
 
   /// @nexus.doc "A client attempt, which the client picks."
   /// @nexus.proto "temporal.api.stream.v1.ClientEpoch"
   record client-epoch {
+    /// @nexus.doc "1 or more."
     attempt: option<s32>,
   }
 
@@ -76,7 +79,8 @@ interface stream-service {
   /// @nexus.proto "temporal.api.stream.v1.WorkflowProducer"
   record workflow-producer {
     /// @nexus.doc "The run id of the Workflow run, not of its chain."
-    run-id: option<string>,
+    run-id: string,
+    // A Workflow Producer only closes a Stream, and its close sends no epoch.
     epoch: option<workflow-task-epoch>,
   }
 
@@ -84,21 +88,22 @@ interface stream-service {
   ///   "A Local Activity Producer, one for each call of a run. A higher epoch fences lower ones."
   /// @nexus.proto "temporal.api.stream.v1.LocalActivityProducer"
   record local-activity-producer {
-    run-id: option<string>,
-    epoch: option<local-activity-epoch>,
+    run-id: string,
+    epoch: local-activity-epoch,
   }
 
   /// @nexus.doc "An Activity Producer. A higher epoch fences the lower ones."
   /// @nexus.proto "temporal.api.stream.v1.ActivityProducer"
   record activity-producer {
+    /// @nexus.doc "The run of the Workflow that scheduled the Activity. Empty when standalone."
     run-id: option<string>,
-    epoch: option<activity-epoch>,
+    epoch: activity-epoch,
   }
 
   /// @nexus.doc "A client Producer. A higher epoch only fences the lower ones."
   /// @nexus.proto "temporal.api.stream.v1.ClientProducer"
   record client-producer {
-    epoch: option<client-epoch>,
+    epoch: client-epoch,
   }
 
   // The case is the kind of the Producer, so a kind sets only its own fields.
@@ -130,19 +135,14 @@ interface stream-service {
     body: body-t,
   }
 
-  /// @nexus.doc "The Producer of a write. An append and a close carry the same writer."
-  /// @nexus.proto "temporal.api.stream.v1.StreamWriter"
-  record stream-writer {
-    /// @nexus.doc "Required on a write."
-    producer: option<producer>,
-  }
-
   /// @nexus.doc "One Record that a Producer appended."
   /// @nexus.proto "temporal.api.stream.v1.StreamData"
   record stream-data {
     /// @nexus.doc "The value."
     body: body-t,
     producer: option<producer>,
+    /// @nexus.doc "The place of this Record in the Stream. Ordered and unique, with gaps."
+    offset: list<u8>,
   }
 
   /// How a Stream closed. A Producer's close gives CLOSED. Native Streams add their own later.
@@ -160,6 +160,8 @@ interface stream-service {
     producer: option<producer>,
     /// @nexus.doc "Why the Stream closed."
     status: option<stream-close-status>,
+    /// @nexus.doc "Where the Stream ended."
+    offset: list<u8>,
   }
 
   /// @nexus.doc "A read item: a Record or the close."
@@ -171,13 +173,11 @@ interface stream-service {
 
   // An offset is ordered and unique in one Stream, and sparse. Offsets have gaps, so they don't
   // count Records. A read gives its Stream, so the read checks the offset against that Stream.
-  /// @nexus.doc "One item that a read gives."
+  /// @nexus.doc "One item that a read gives. Each item carries its own offset."
   /// @nexus.proto "temporal.api.stream.v1.StreamRecord"
   record stream-record {
     // A newer server can send an item kind that this SDK doesn't know. Then the item is empty.
     item: option<stream-item>,
-    /// @nexus.doc "The place of this item in the Stream. Ordered and unique, with gaps."
-    offset: option<stream-offset>,
   }
 
   // A create takes no Retention. The backend config holds it.
@@ -224,14 +224,14 @@ interface stream-service {
   record append-records-request {
     ref: stream-ref,
     records: list<append-record>,
-    // The writer carries the Producer, which only the context helper sets right, so it is never a
-    // parameter. The helper of each context fills the Producer that applies where it runs.
-    /// @nexus.doc "Required outside a Workflow. In a Workflow the transport sets it."
-    /// @nexus.source targets="workflow" python="workflow_writer()"
-    ///   typescript="workflowWriter()" dotnet="StreamWorkflowContext.Writer()"
-    /// @nexus.source targets="client" python="client_writer()" typescript="clientWriter()"
-    ///   dotnet="StreamActivityContext.Writer()"
-    writer: option<stream-writer>,
+    // Only the context helper sets the Producer right, so it is never a parameter. The helper of
+    // each context fills the Producer that applies where it runs.
+    /// @nexus.doc "The Producer of the batch. The helper of each context sets it."
+    /// @nexus.source targets="workflow" python="workflow_producer()"
+    ///   typescript="workflowProducer()" dotnet="StreamWorkflowContext.Producer()"
+    /// @nexus.source targets="client" python="client_producer()" typescript="clientProducer()"
+    ///   dotnet="StreamActivityContext.Producer()"
+    producer: producer,
     // A call with no writer state, such as append, sends no sequence. The Store then numbers the
     // batch, so nothing dedupes it.
     /// @nexus.doc
@@ -254,12 +254,12 @@ interface stream-service {
   /// @nexus.proto "temporal.api.streamservice.v1.CloseStreamRequest"
   record close-stream-request {
     ref: stream-ref,
-    // The SDK Stores read only the Producer.
-    /// @nexus.source targets="workflow" python="workflow_writer()"
-    ///   typescript="workflowWriter()" dotnet="StreamWorkflowContext.Writer()"
-    /// @nexus.source targets="client" python="client_writer()" typescript="clientWriter()"
-    ///   dotnet="StreamActivityContext.Writer()"
-    writer: option<stream-writer>,
+    /// @nexus.doc "The Producer that closes the Stream. The helper of each context sets it."
+    /// @nexus.source targets="workflow" python="workflow_producer()"
+    ///   typescript="workflowProducer()" dotnet="StreamWorkflowContext.Producer()"
+    /// @nexus.source targets="client" python="client_producer()" typescript="clientProducer()"
+    ///   dotnet="StreamActivityContext.Producer()"
+    producer: producer,
     /// @nexus.omit
     namespace: placeholder,
     // Native only. The SDK Stores don't read it.
@@ -300,9 +300,6 @@ interface stream-service {
     max-bytes: option<s64>,
     /// @nexus.omit
     namespace: placeholder,
-    // A read of an uncreated Stream fails at once with NOT_FOUND, so the SDK never sets it.
-    /// @nexus.omit
-    create-wait: placeholder,
     // Native only. The SDK Stores refuse to-offset and wake-only.
     /// @nexus.omit
     to-offset: placeholder,

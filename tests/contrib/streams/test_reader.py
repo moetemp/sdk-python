@@ -14,6 +14,12 @@ def _off(n: int) -> bytes:
     return n.to_bytes(8, "big")
 
 
+def _record(offset: int) -> models.StreamRecord[Any]:
+    return models.StreamRecord(
+        item=models.StreamItemData(models.StreamData(body=None, offset=_off(offset)))
+    )
+
+
 class _Pages(_backend.StreamServiceCalls):
     """Answers each read with the next page, and keeps the requests."""
 
@@ -32,9 +38,7 @@ class _Pages(_backend.StreamServiceCalls):
 
 
 async def test_a_waiting_read_carries_the_offset_until_records_come():
-    record = models.StreamRecord(
-        item=models.StreamItemData(models.StreamData(body=None)), offset=_off(9)
-    )
+    record = _record(9)
     service = _Pages(
         models.ReadRecordsResponse(records=[], last_offset=_off(8)),
         models.ReadRecordsResponse(records=[record], last_offset=_off(10)),
@@ -47,7 +51,7 @@ async def test_a_waiting_read_carries_the_offset_until_records_come():
         ),
         timedelta(seconds=5),
     )
-    assert page.records and page.records[0].offset == _off(9)
+    assert page.records and _reader._offset_of(page.records[0]) == _off(9)
     first, second = service.requests
     assert (first.position, second.position) == (
         models.ReadPositionFromOffset(_off(1)),
@@ -74,20 +78,16 @@ class _RecordLandsBetweenPolls(_backend.StreamServiceCalls):
             case models.ReadPositionStart(
                 value=models.StreamReadStart.StreamReadStartEnd
             ):
-                after = (self.records[-1].offset or b"") if self.records else b""
+                after = _reader._offset_of(self.records[-1]) if self.records else b""
             case _:
                 after = b""
-        found = [record for record in self.records if (record.offset or b"") > after]
+        found = [r for r in self.records if _reader._offset_of(r) > after]
         if not self.records:
-            self.records.append(
-                models.StreamRecord(
-                    item=models.StreamItemData(models.StreamData(body=None)),
-                    offset=_off(1),
-                )
-            )
+            self.records.append(_record(1))
         # An empty page gives the request's from-offset, which is empty with no offset.
         return models.ReadRecordsResponse(
-            records=found, last_offset=found[-1].offset if found else after or None
+            records=found,
+            last_offset=_reader._offset_of(found[-1]) if found else after or None,
         )
 
 
@@ -102,7 +102,7 @@ async def test_a_waiting_read_from_the_end_of_an_empty_stream_misses_no_record()
         ),
         timedelta(seconds=1),
     )
-    assert [record.offset for record in page.records] == [_off(1)]
+    assert [_reader._offset_of(record) for record in page.records] == [_off(1)]
 
 
 class _Missing(_backend.StreamServiceCalls):

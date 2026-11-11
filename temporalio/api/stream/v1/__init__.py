@@ -12,7 +12,6 @@ from .message_pb2 import (
     StreamErrorDetails,
     StreamRecord,
     StreamRef,
-    StreamWriter,
     WorkflowProducer,
     WorkflowTaskEpoch,
 )
@@ -31,7 +30,6 @@ __all__ = [
     "StreamErrorDetails",
     "StreamRecord",
     "StreamRef",
-    "StreamWriter",
     "WorkflowProducer",
     "WorkflowTaskEpoch",
 ]

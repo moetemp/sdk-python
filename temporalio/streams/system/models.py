@@ -236,7 +236,7 @@ class AppendRecordsRequest(typing.Generic[BodyT]):
 
     ref: StreamRef
     records: list[AppendRecord[BodyT]]
-    writer: StreamWriter | None = None
+    producer: Producer
     sequence: int | None = None
 
 
@@ -270,14 +270,15 @@ class _AppendRecordsRequestTransferTypeConverter(
             )
             for item in value.records
         ]
+        if not value.HasField("producer"):
+            raise ValueError("missing required field AppendRecordsRequest.producer")
+        producer = _ProducerTransferTypeConverter().from_transfer_type(
+            value.producer, Producer
+        )
         return AppendRecordsRequest(
             ref=ref,
             records=records,
-            writer=_StreamWriterTransferTypeConverter().from_transfer_type(
-                value.writer, StreamWriter
-            )
-            if value.HasField("writer")
-            else None,
+            producer=producer,
             sequence=value.sequence if value.sequence != 0 else None,
         )
 
@@ -297,10 +298,9 @@ class _AppendRecordsRequestTransferTypeConverter(
             item.CopyFrom(
                 _AppendRecordTransferTypeConverter().to_transfer_type(element)
             )
-        if value.writer is not None:
-            message.writer.CopyFrom(
-                _StreamWriterTransferTypeConverter().to_transfer_type(value.writer)
-            )
+        message.producer.CopyFrom(
+            _ProducerTransferTypeConverter().to_transfer_type(value.producer)
+        )
         if value.sequence is not None:
             message.sequence = value.sequence
         return message
@@ -354,54 +354,6 @@ class _AppendRecordTransferTypeConverter(
 temporalio.converter.transfer_type_convertible(
     _AppendRecordTransferTypeConverter[typing.Any]
 )(AppendRecord)  # pyright: ignore[reportUnusedCallResult]
-
-
-@dataclasses.dataclass(slots=True)
-class StreamWriter:
-    """The Producer of a write. An append and a close carry the same writer."""
-
-    producer: Producer | None = None
-
-
-class _StreamWriterTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter[
-        StreamWriter, temporalio.api.stream.v1.message_pb2.StreamWriter
-    ]
-):
-    transfer_type: type[temporalio.api.stream.v1.message_pb2.StreamWriter] | None = (
-        temporalio.api.stream.v1.message_pb2.StreamWriter
-    )
-
-    @typing_extensions.override
-    def from_transfer_type(
-        self,
-        value: temporalio.api.stream.v1.message_pb2.StreamWriter,
-        type_hint: type[StreamWriter],
-    ) -> StreamWriter:
-        return StreamWriter(
-            producer=_ProducerTransferTypeConverter().from_transfer_type(
-                value.producer, Producer
-            )
-            if value.HasField("producer")
-            else None,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(
-        self,
-        value: StreamWriter,
-    ) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        message = temporalio.api.stream.v1.message_pb2.StreamWriter()
-        if value.producer is not None:
-            message.producer.CopyFrom(
-                _ProducerTransferTypeConverter().to_transfer_type(value.producer)
-            )
-        return message
-
-
-temporalio.converter.transfer_type_convertible(_StreamWriterTransferTypeConverter)(
-    StreamWriter
-)  # pyright: ignore[reportUnusedCallResult]
 
 
 @dataclasses.dataclass(slots=True)
@@ -525,7 +477,7 @@ temporalio.converter.transfer_type_convertible(_ProducerTransferTypeConverter)(P
 class WorkflowProducer:
     """A Workflow run Producer. A higher epoch fences the lower ones."""
 
-    run_id: str | None = None
+    run_id: str
     epoch: WorkflowTaskEpoch | None = None
 
 
@@ -544,8 +496,11 @@ class _WorkflowProducerTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.WorkflowProducer,
         type_hint: type[WorkflowProducer],
     ) -> WorkflowProducer:
+        if not value.run_id:
+            raise ValueError("missing required field WorkflowProducer.run_id")
+        run_id = value.run_id
         return WorkflowProducer(
-            run_id=value.run_id if bool(value.run_id) else None,
+            run_id=run_id,
             epoch=_WorkflowTaskEpochTransferTypeConverter().from_transfer_type(
                 value.epoch, WorkflowTaskEpoch
             )
@@ -559,8 +514,7 @@ class _WorkflowProducerTransferTypeConverter(
         value: WorkflowProducer,
     ) -> temporalio.api.stream.v1.message_pb2.WorkflowProducer:
         message = temporalio.api.stream.v1.message_pb2.WorkflowProducer()
-        if value.run_id is not None:
-            message.run_id = value.run_id
+        message.run_id = value.run_id
         if value.epoch is not None:
             message.epoch.CopyFrom(
                 _WorkflowTaskEpochTransferTypeConverter().to_transfer_type(value.epoch)
@@ -681,8 +635,8 @@ class LocalActivityProducer:
     ones.
     """
 
-    run_id: str | None = None
-    epoch: LocalActivityEpoch | None = None
+    run_id: str
+    epoch: LocalActivityEpoch
 
 
 class _LocalActivityProducerTransferTypeConverter(
@@ -701,13 +655,17 @@ class _LocalActivityProducerTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.LocalActivityProducer,
         type_hint: type[LocalActivityProducer],
     ) -> LocalActivityProducer:
+        if not value.run_id:
+            raise ValueError("missing required field LocalActivityProducer.run_id")
+        run_id = value.run_id
+        if not value.HasField("epoch"):
+            raise ValueError("missing required field LocalActivityProducer.epoch")
+        epoch = _LocalActivityEpochTransferTypeConverter().from_transfer_type(
+            value.epoch, LocalActivityEpoch
+        )
         return LocalActivityProducer(
-            run_id=value.run_id if bool(value.run_id) else None,
-            epoch=_LocalActivityEpochTransferTypeConverter().from_transfer_type(
-                value.epoch, LocalActivityEpoch
-            )
-            if value.HasField("epoch")
-            else None,
+            run_id=run_id,
+            epoch=epoch,
         )
 
     @typing_extensions.override
@@ -716,12 +674,10 @@ class _LocalActivityProducerTransferTypeConverter(
         value: LocalActivityProducer,
     ) -> temporalio.api.stream.v1.message_pb2.LocalActivityProducer:
         message = temporalio.api.stream.v1.message_pb2.LocalActivityProducer()
-        if value.run_id is not None:
-            message.run_id = value.run_id
-        if value.epoch is not None:
-            message.epoch.CopyFrom(
-                _LocalActivityEpochTransferTypeConverter().to_transfer_type(value.epoch)
-            )
+        message.run_id = value.run_id
+        message.epoch.CopyFrom(
+            _LocalActivityEpochTransferTypeConverter().to_transfer_type(value.epoch)
+        )
         return message
 
 
@@ -734,7 +690,7 @@ temporalio.converter.transfer_type_convertible(
 class LocalActivityEpoch:
     """A Local Activity attempt. Its Workflow Task orders it first."""
 
-    task: WorkflowTaskEpoch | None = None
+    task: WorkflowTaskEpoch
     attempt: int | None = None
 
 
@@ -753,12 +709,13 @@ class _LocalActivityEpochTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.LocalActivityEpoch,
         type_hint: type[LocalActivityEpoch],
     ) -> LocalActivityEpoch:
+        if not value.HasField("task"):
+            raise ValueError("missing required field LocalActivityEpoch.task")
+        task = _WorkflowTaskEpochTransferTypeConverter().from_transfer_type(
+            value.task, WorkflowTaskEpoch
+        )
         return LocalActivityEpoch(
-            task=_WorkflowTaskEpochTransferTypeConverter().from_transfer_type(
-                value.task, WorkflowTaskEpoch
-            )
-            if value.HasField("task")
-            else None,
+            task=task,
             attempt=value.attempt if value.attempt != 0 else None,
         )
 
@@ -768,10 +725,9 @@ class _LocalActivityEpochTransferTypeConverter(
         value: LocalActivityEpoch,
     ) -> temporalio.api.stream.v1.message_pb2.LocalActivityEpoch:
         message = temporalio.api.stream.v1.message_pb2.LocalActivityEpoch()
-        if value.task is not None:
-            message.task.CopyFrom(
-                _WorkflowTaskEpochTransferTypeConverter().to_transfer_type(value.task)
-            )
+        message.task.CopyFrom(
+            _WorkflowTaskEpochTransferTypeConverter().to_transfer_type(value.task)
+        )
         if value.attempt is not None:
             message.attempt = value.attempt
         return message
@@ -782,12 +738,12 @@ temporalio.converter.transfer_type_convertible(
 )(LocalActivityEpoch)  # pyright: ignore[reportUnusedCallResult]
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(slots=True, kw_only=True)
 class ActivityProducer:
     """An Activity Producer. A higher epoch fences the lower ones."""
 
     run_id: str | None = None
-    epoch: ActivityEpoch | None = None
+    epoch: ActivityEpoch
 
 
 class _ActivityProducerTransferTypeConverter(
@@ -805,13 +761,14 @@ class _ActivityProducerTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.ActivityProducer,
         type_hint: type[ActivityProducer],
     ) -> ActivityProducer:
+        if not value.HasField("epoch"):
+            raise ValueError("missing required field ActivityProducer.epoch")
+        epoch = _ActivityEpochTransferTypeConverter().from_transfer_type(
+            value.epoch, ActivityEpoch
+        )
         return ActivityProducer(
             run_id=value.run_id if bool(value.run_id) else None,
-            epoch=_ActivityEpochTransferTypeConverter().from_transfer_type(
-                value.epoch, ActivityEpoch
-            )
-            if value.HasField("epoch")
-            else None,
+            epoch=epoch,
         )
 
     @typing_extensions.override
@@ -822,10 +779,9 @@ class _ActivityProducerTransferTypeConverter(
         message = temporalio.api.stream.v1.message_pb2.ActivityProducer()
         if value.run_id is not None:
             message.run_id = value.run_id
-        if value.epoch is not None:
-            message.epoch.CopyFrom(
-                _ActivityEpochTransferTypeConverter().to_transfer_type(value.epoch)
-            )
+        message.epoch.CopyFrom(
+            _ActivityEpochTransferTypeConverter().to_transfer_type(value.epoch)
+        )
         return message
 
 
@@ -838,7 +794,7 @@ temporalio.converter.transfer_type_convertible(_ActivityProducerTransferTypeConv
 class ActivityEpoch:
     """An Activity or Standalone Activity attempt."""
 
-    attempt_scheduled_time: Timestamp | None = None
+    attempt_scheduled_time: Timestamp
     attempt: int | None = None
 
 
@@ -857,12 +813,15 @@ class _ActivityEpochTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.ActivityEpoch,
         type_hint: type[ActivityEpoch],
     ) -> ActivityEpoch:
-        return ActivityEpoch(
-            attempt_scheduled_time=_TimestampTransferTypeConverter().from_transfer_type(
-                value.attempt_scheduled_time, Timestamp
+        if not value.HasField("attempt_scheduled_time"):
+            raise ValueError(
+                "missing required field ActivityEpoch.attempt_scheduled_time"
             )
-            if value.HasField("attempt_scheduled_time")
-            else None,
+        attempt_scheduled_time = _TimestampTransferTypeConverter().from_transfer_type(
+            value.attempt_scheduled_time, Timestamp
+        )
+        return ActivityEpoch(
+            attempt_scheduled_time=attempt_scheduled_time,
             attempt=value.attempt if value.attempt != 0 else None,
         )
 
@@ -872,12 +831,11 @@ class _ActivityEpochTransferTypeConverter(
         value: ActivityEpoch,
     ) -> temporalio.api.stream.v1.message_pb2.ActivityEpoch:
         message = temporalio.api.stream.v1.message_pb2.ActivityEpoch()
-        if value.attempt_scheduled_time is not None:
-            message.attempt_scheduled_time.CopyFrom(
-                _TimestampTransferTypeConverter().to_transfer_type(
-                    value.attempt_scheduled_time
-                )
+        message.attempt_scheduled_time.CopyFrom(
+            _TimestampTransferTypeConverter().to_transfer_type(
+                value.attempt_scheduled_time
             )
+        )
         if value.attempt is not None:
             message.attempt = value.attempt
         return message
@@ -892,7 +850,7 @@ temporalio.converter.transfer_type_convertible(_ActivityEpochTransferTypeConvert
 class ClientProducer:
     """A client Producer. A higher epoch only fences the lower ones."""
 
-    epoch: ClientEpoch | None = None
+    epoch: ClientEpoch
 
 
 class _ClientProducerTransferTypeConverter(
@@ -910,12 +868,13 @@ class _ClientProducerTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.ClientProducer,
         type_hint: type[ClientProducer],
     ) -> ClientProducer:
+        if not value.HasField("epoch"):
+            raise ValueError("missing required field ClientProducer.epoch")
+        epoch = _ClientEpochTransferTypeConverter().from_transfer_type(
+            value.epoch, ClientEpoch
+        )
         return ClientProducer(
-            epoch=_ClientEpochTransferTypeConverter().from_transfer_type(
-                value.epoch, ClientEpoch
-            )
-            if value.HasField("epoch")
-            else None,
+            epoch=epoch,
         )
 
     @typing_extensions.override
@@ -924,10 +883,9 @@ class _ClientProducerTransferTypeConverter(
         value: ClientProducer,
     ) -> temporalio.api.stream.v1.message_pb2.ClientProducer:
         message = temporalio.api.stream.v1.message_pb2.ClientProducer()
-        if value.epoch is not None:
-            message.epoch.CopyFrom(
-                _ClientEpochTransferTypeConverter().to_transfer_type(value.epoch)
-            )
+        message.epoch.CopyFrom(
+            _ClientEpochTransferTypeConverter().to_transfer_type(value.epoch)
+        )
         return message
 
 
@@ -1031,7 +989,7 @@ class CloseStreamRequest:
     """Close a Stream. Readers drain what is left, then end. Later appends are refused."""
 
     ref: StreamRef
-    writer: StreamWriter | None = None
+    producer: Producer
 
 
 class _CloseStreamRequestTransferTypeConverter(
@@ -1054,13 +1012,14 @@ class _CloseStreamRequestTransferTypeConverter(
         if not value.HasField("ref"):
             raise ValueError("missing required field CloseStreamRequest.ref")
         ref = _StreamRefTransferTypeConverter().from_transfer_type(value.ref, StreamRef)
+        if not value.HasField("producer"):
+            raise ValueError("missing required field CloseStreamRequest.producer")
+        producer = _ProducerTransferTypeConverter().from_transfer_type(
+            value.producer, Producer
+        )
         return CloseStreamRequest(
             ref=ref,
-            writer=_StreamWriterTransferTypeConverter().from_transfer_type(
-                value.writer, StreamWriter
-            )
-            if value.HasField("writer")
-            else None,
+            producer=producer,
         )
 
     @typing_extensions.override
@@ -1074,10 +1033,9 @@ class _CloseStreamRequestTransferTypeConverter(
         message.ref.CopyFrom(
             _StreamRefTransferTypeConverter().to_transfer_type(value.ref)
         )
-        if value.writer is not None:
-            message.writer.CopyFrom(
-                _StreamWriterTransferTypeConverter().to_transfer_type(value.writer)
-            )
+        message.producer.CopyFrom(
+            _ProducerTransferTypeConverter().to_transfer_type(value.producer)
+        )
         return message
 
 
@@ -1277,10 +1235,9 @@ temporalio.converter.transfer_type_convertible(
 
 @dataclasses.dataclass(slots=True)
 class StreamRecord(typing.Generic[BodyT]):
-    """One item that a read gives."""
+    """One item that a read gives. Each item carries its own offset."""
 
     item: StreamItem[BodyT] | None = None
-    offset: bytes | None = None
 
 
 class _StreamRecordTransferTypeConverter(
@@ -1320,7 +1277,6 @@ class _StreamRecordTransferTypeConverter(
                 _oneof_item = None
         return StreamRecord(
             item=_oneof_item,
-            offset=value.offset if bool(value.offset) else None,
         )
 
     @typing_extensions.override
@@ -1343,8 +1299,6 @@ class _StreamRecordTransferTypeConverter(
                             value.item.value
                         )
                     )
-        if value.offset is not None:
-            message.offset = value.offset
         return message
 
 
@@ -1353,12 +1307,13 @@ temporalio.converter.transfer_type_convertible(
 )(StreamRecord)  # pyright: ignore[reportUnusedCallResult]
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(slots=True, kw_only=True)
 class StreamData(typing.Generic[BodyT]):
     """One Record that a Producer appended."""
 
     body: BodyT
     producer: Producer | None = None
+    offset: bytes
 
 
 class _StreamDataTransferTypeConverter(
@@ -1380,6 +1335,9 @@ class _StreamDataTransferTypeConverter(
         if not value.HasField("body"):
             raise ValueError("missing required field StreamData.body")
         body = typing.cast(BodyT, _support.payload_from_proto(value.body, body_type))
+        if not value.offset:
+            raise ValueError("missing required field StreamData.offset")
+        offset = value.offset
         return StreamData(
             body=body,
             producer=_ProducerTransferTypeConverter().from_transfer_type(
@@ -1387,6 +1345,7 @@ class _StreamDataTransferTypeConverter(
             )
             if value.HasField("producer")
             else None,
+            offset=offset,
         )
 
     @typing_extensions.override
@@ -1400,6 +1359,7 @@ class _StreamDataTransferTypeConverter(
             message.producer.CopyFrom(
                 _ProducerTransferTypeConverter().to_transfer_type(value.producer)
             )
+        message.offset = value.offset
         return message
 
 
@@ -1408,12 +1368,13 @@ temporalio.converter.transfer_type_convertible(
 )(StreamData)  # pyright: ignore[reportUnusedCallResult]
 
 
-@dataclasses.dataclass(slots=True)
+@dataclasses.dataclass(slots=True, kw_only=True)
 class StreamClose:
     """The close of a Stream. A read gives it last."""
 
     producer: Producer | None = None
     status: StreamCloseStatus | None = None
+    offset: bytes
 
 
 class _StreamCloseTransferTypeConverter(
@@ -1431,6 +1392,9 @@ class _StreamCloseTransferTypeConverter(
         value: temporalio.api.stream.v1.message_pb2.StreamClose,
         type_hint: type[StreamClose],
     ) -> StreamClose:
+        if not value.offset:
+            raise ValueError("missing required field StreamClose.offset")
+        offset = value.offset
         return StreamClose(
             producer=_ProducerTransferTypeConverter().from_transfer_type(
                 value.producer, Producer
@@ -1440,6 +1404,7 @@ class _StreamCloseTransferTypeConverter(
             status=_stream_close_status_from_proto(value.status)
             if value.status != 0
             else None,
+            offset=offset,
         )
 
     @typing_extensions.override
@@ -1458,6 +1423,7 @@ class _StreamCloseTransferTypeConverter(
                     value.status
                 )
             )
+        message.offset = value.offset
         return message
 
 

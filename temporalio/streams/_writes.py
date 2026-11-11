@@ -38,9 +38,10 @@ def _producer(streams: _activity.ActivityStreams) -> models.Producer:
     local = streams.producer.local_activity
     task_pb = local.epoch.task
     started = task_pb.started_time if task_pb.HasField("started_time") else None
+    # The Store refuses an epoch with a missing field, so the zero values go as they are.
     task = models.WorkflowTaskEpoch(
-        started_event_id=task_pb.started_event_id or None,
-        attempt=task_pb.attempt or None,
+        started_event_id=task_pb.started_event_id,
+        attempt=task_pb.attempt,
         started_time=models.Timestamp(seconds=started.seconds, nanos=started.nanos)
         if started is not None
         else None,
@@ -49,7 +50,7 @@ def _producer(streams: _activity.ActivityStreams) -> models.Producer:
         id=streams.producer.id,
         kind=models.ProducerKindLocalActivity(
             models.LocalActivityProducer(
-                run_id=local.run_id or None,
+                run_id=local.run_id,
                 epoch=models.LocalActivityEpoch(task=task, attempt=1),
             )
         ),
@@ -192,7 +193,7 @@ async def append_records(
                 response = await service.send_append_records(
                     models.AppendRecordsRequest(
                         ref=_model_ref(request.ref),
-                        writer=models.StreamWriter(producer=producer),
+                        producer=producer,
                         sequence=index + 1,
                         records=[
                             models.AppendRecord(
@@ -227,11 +228,7 @@ async def close_stream(request: stream_pb.CloseStreamRequest) -> str:
     await service.send_close_stream(
         models.CloseStreamRequest(
             ref=_model_ref(request.ref),
-            writer=models.StreamWriter(
-                producer=_ids.workflow_producer(
-                    streams.producer.workflow_activity.run_id
-                )
-            ),
+            producer=_ids.workflow_producer(streams.producer.workflow_activity.run_id),
         )
     )
     return ""

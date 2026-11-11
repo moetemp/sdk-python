@@ -103,7 +103,7 @@ class RecordWriter:
                 )
                 self._writer = await self._writers.open_writer(
                     ref=models.StreamRef(id=self._stream_id),
-                    writer=models.StreamWriter(producer=producer),
+                    producer=producer,
                 )
                 if self._free is not None:
                     # The crate keeps a writer for each open that nobody closed or freed. So

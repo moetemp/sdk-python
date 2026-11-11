@@ -61,10 +61,14 @@ class WorkflowTaskEpoch(google.protobuf.message.Message):
     ATTEMPT_FIELD_NUMBER: builtins.int
     STARTED_TIME_FIELD_NUMBER: builtins.int
     started_event_id: builtins.int
+    """Required."""
     attempt: builtins.int
+    """Required. 1 or more."""
     @property
     def started_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
-        """Tells a reused started event id apart, for example after a dropped speculative task."""
+        """Tells a reused started event id apart, for example after a dropped speculative task. Core
+        leaves it empty when the server gave the task no started time.
+        """
     def __init__(
         self,
         *,
@@ -102,9 +106,9 @@ class LocalActivityEpoch(google.protobuf.message.Message):
     ATTEMPT_FIELD_NUMBER: builtins.int
     @property
     def task(self) -> global___WorkflowTaskEpoch:
-        """The Workflow Task attempt that dispatched the Local Activity."""
+        """Required. The Workflow Task attempt that dispatched the Local Activity."""
     attempt: builtins.int
-    """The Local Activity's own attempt in that Workflow Task."""
+    """Required. The Local Activity's own attempt in that Workflow Task, 1 or more."""
     def __init__(
         self,
         *,
@@ -132,10 +136,11 @@ class ActivityEpoch(google.protobuf.message.Message):
     ATTEMPT_FIELD_NUMBER: builtins.int
     @property
     def attempt_scheduled_time(self) -> google.protobuf.timestamp_pb2.Timestamp:
-        """When the server scheduled this attempt. An Activity reset starts the attempt count again,
-        so only this time orders the attempts across a reset.
+        """Required. When the server scheduled this attempt. An Activity reset starts the attempt count
+        again, so only this time orders the attempts across a reset.
         """
     attempt: builtins.int
+    """Required. 1 or more."""
     def __init__(
         self,
         *,
@@ -168,6 +173,7 @@ class ClientEpoch(google.protobuf.message.Message):
 
     ATTEMPT_FIELD_NUMBER: builtins.int
     attempt: builtins.int
+    """Required. 1 or more."""
     def __init__(
         self,
         *,
@@ -189,9 +195,10 @@ class WorkflowProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
-    """The run id of the Workflow run, not of its chain. Each run is its own Producer."""
+    """Required. The run id of the Workflow run, not of its chain. Each run is its own Producer."""
     @property
-    def epoch(self) -> global___WorkflowTaskEpoch: ...
+    def epoch(self) -> global___WorkflowTaskEpoch:
+        """A Workflow Producer only closes a Stream, and its close sends no epoch."""
     def __init__(
         self,
         *,
@@ -218,9 +225,10 @@ class LocalActivityProducer(google.protobuf.message.Message):
     RUN_ID_FIELD_NUMBER: builtins.int
     EPOCH_FIELD_NUMBER: builtins.int
     run_id: builtins.str
-    """The run id of the Workflow run."""
+    """Required. The run id of the Workflow run."""
     @property
-    def epoch(self) -> global___LocalActivityEpoch: ...
+    def epoch(self) -> global___LocalActivityEpoch:
+        """Required."""
     def __init__(
         self,
         *,
@@ -252,7 +260,8 @@ class ActivityProducer(google.protobuf.message.Message):
     Activity, whose own run id is in the Producer id.
     """
     @property
-    def epoch(self) -> global___ActivityEpoch: ...
+    def epoch(self) -> global___ActivityEpoch:
+        """Required."""
     def __init__(
         self,
         *,
@@ -279,7 +288,8 @@ class ClientProducer(google.protobuf.message.Message):
 
     EPOCH_FIELD_NUMBER: builtins.int
     @property
-    def epoch(self) -> global___ClientEpoch: ...
+    def epoch(self) -> global___ClientEpoch:
+        """Required."""
     def __init__(
         self,
         *,
@@ -311,8 +321,8 @@ class Producer(google.protobuf.message.Message):
     STANDALONE_ACTIVITY_FIELD_NUMBER: builtins.int
     CLIENT_FIELD_NUMBER: builtins.int
     id: builtins.str
-    """Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run. It is
-    unique in one Stream, and a Stream is in one namespace, so it carries no namespace.
+    """Required. Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run.
+    It is unique in one Stream, so it carries no namespace.
     """
     @property
     def workflow(self) -> global___WorkflowProducer: ...
@@ -389,32 +399,6 @@ class Producer(google.protobuf.message.Message):
 
 global___Producer = Producer
 
-class StreamWriter(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    The Producer of a write. An append and a close carry the same writer, so the Store orders each
-    write the same way.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    PRODUCER_FIELD_NUMBER: builtins.int
-    @property
-    def producer(self) -> global___Producer:
-        """Required on a write."""
-    def __init__(
-        self,
-        *,
-        producer: global___Producer | None = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["producer", b"producer"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["producer", b"producer"]
-    ) -> None: ...
-
-global___StreamWriter = StreamWriter
-
 class AppendRecord(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     One Record of a batch to append. The Store adds the batch's Producer and an offset.
@@ -448,15 +432,22 @@ class StreamData(google.protobuf.message.Message):
 
     PRODUCER_FIELD_NUMBER: builtins.int
     BODY_FIELD_NUMBER: builtins.int
+    OFFSET_FIELD_NUMBER: builtins.int
     @property
     def producer(self) -> global___Producer: ...
     @property
     def body(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    offset: builtins.bytes
+    """Required. The Record's offset. An offset is ordered and unique in one Stream, and it is
+    sparse. Offsets have gaps, so they don't count Records. An offset is never empty. A read
+    gives its Stream, so the read checks the offset against that Stream.
+    """
     def __init__(
         self,
         *,
         producer: global___Producer | None = ...,
         body: temporalio.api.common.v1.message_pb2.Payload | None = ...,
+        offset: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -464,7 +455,9 @@ class StreamData(google.protobuf.message.Message):
     ) -> builtins.bool: ...
     def ClearField(
         self,
-        field_name: typing_extensions.Literal["body", b"body", "producer", b"producer"],
+        field_name: typing_extensions.Literal[
+            "body", b"body", "offset", b"offset", "producer", b"producer"
+        ],
     ) -> None: ...
 
 global___StreamData = StreamData
@@ -480,16 +473,20 @@ class StreamClose(google.protobuf.message.Message):
 
     PRODUCER_FIELD_NUMBER: builtins.int
     STATUS_FIELD_NUMBER: builtins.int
+    OFFSET_FIELD_NUMBER: builtins.int
     @property
     def producer(self) -> global___Producer:
         """The Producer that closed the Stream."""
     status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType
     """Why the Stream closed."""
+    offset: builtins.bytes
+    """Required. Where the Stream ended."""
     def __init__(
         self,
         *,
         producer: global___Producer | None = ...,
         status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType = ...,
+        offset: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self, field_name: typing_extensions.Literal["producer", b"producer"]
@@ -497,7 +494,7 @@ class StreamClose(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "producer", b"producer", "status", b"status"
+            "offset", b"offset", "producer", b"producer", "status", b"status"
         ],
     ) -> None: ...
 
@@ -505,17 +502,13 @@ global___StreamClose = StreamClose
 
 class StreamRecord(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    An offset is ordered and unique in one Stream, and it is sparse. Offsets have gaps, so they
-    don't count Records. An offset is never empty. A read gives its Stream, so the read checks the
-    offset against that Stream.
+    One item that a read gives. Each item carries its own offset.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    OFFSET_FIELD_NUMBER: builtins.int
     DATA_FIELD_NUMBER: builtins.int
     CLOSE_FIELD_NUMBER: builtins.int
-    offset: builtins.bytes
     @property
     def data(self) -> global___StreamData: ...
     @property
@@ -523,7 +516,6 @@ class StreamRecord(google.protobuf.message.Message):
     def __init__(
         self,
         *,
-        offset: builtins.bytes = ...,
         data: global___StreamData | None = ...,
         close: global___StreamClose | None = ...,
     ) -> None: ...
@@ -536,7 +528,7 @@ class StreamRecord(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "close", b"close", "data", b"data", "item", b"item", "offset", b"offset"
+            "close", b"close", "data", b"data", "item", b"item"
         ],
     ) -> None: ...
     def WhichOneof(

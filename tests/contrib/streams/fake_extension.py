@@ -42,6 +42,7 @@ class FakeExtension:
         self.writers: dict[int, tuple[str, stream_v1.Producer]] = {}
         self.freed: list[int] = []
         self.namespaces: set[str] = set()
+        self.writer_namespaces: list[str] = []
         self.creates: list[stream_pb.CreateStreamRequest] = []
         self.next_offset = 1
 
@@ -57,11 +58,11 @@ class FakeExtension:
                 StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
             )
         # A fixed-width big-endian offset compares as raw bytes in the Store's order.
-        record.offset = self.next_offset.to_bytes(8, "big")
+        record.data.offset = self.next_offset.to_bytes(8, "big")
         self.next_offset += 1
         stream.records.append(record)
         stream.wake()
-        return record.offset
+        return record.data.offset
 
     def free_writer(self, writer_id: int) -> None:
         self.freed.append(writer_id)
@@ -100,7 +101,8 @@ class FakeExtension:
         if method == "OpenWriter":
             open_writer = runtime_pb.OpenWriterRequest.FromString(input)
             writer_id = len(self.writers) + 1
-            self.writers[writer_id] = (open_writer.ref.id, open_writer.writer.producer)
+            self.writer_namespaces.append(open_writer.namespace)
+            self.writers[writer_id] = (open_writer.ref.id, open_writer.producer)
             return runtime_pb.OpenWriterResponse(
                 writer_id=writer_id
             ).SerializeToString()
@@ -137,7 +139,7 @@ class FakeExtension:
             describe = stream_pb.DescribeStreamRequest.FromString(input)
             records = self.streams[describe.ref.id].records
             return stream_pb.DescribeStreamResponse(
-                last_offset=records[-1].offset if records else b""
+                last_offset=records[-1].data.offset if records else b""
             ).SerializeToString()
         if method == "ReadRecords":
             return (
@@ -163,15 +165,15 @@ class FakeExtension:
         if request.WhichOneof("position") == "from_offset":
             offset = request.from_offset
         elif request.start == StreamReadStart.STREAM_READ_START_END and stream.records:
-            offset = stream.records[-1].offset
+            offset = stream.records[-1].data.offset
         wait = request.wait.ToTimedelta().total_seconds()
         until = loop.time() + wait
         while True:
-            found = [record for record in stream.records if record.offset > offset]
+            found = [r for r in stream.records if r.data.offset > offset]
             if found or stream.closed:
                 return stream_pb.ReadRecordsResponse(
                     records=found,
-                    last_offset=found[-1].offset if found else offset,
+                    last_offset=found[-1].data.offset if found else offset,
                     done=stream.closed,
                 )
             left = until - loop.time()

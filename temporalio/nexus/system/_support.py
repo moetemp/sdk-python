@@ -347,15 +347,18 @@ def next_read_request(
 
 class _ReadItem(typing.Protocol):
     @property
-    def item(self) -> object: ...
-
-    @property
-    def offset(self) -> bytes | None: ...
+    def item(self) -> typing.Any: ...
 
 
 def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
-    """The request that resumes a Stream read after ``item``."""
-    return _read_after(request, item.offset or b"")
+    """The request that resumes a Stream read after ``item``.
+
+    Each item carries its own offset. An item of a kind that this SDK doesn't know has none, so
+    the read starts at its page again.
+    """
+    if item.item is None:
+        return request
+    return _read_after(request, item.item.value.offset)
 
 
 def _read_after(request: _ReadRequestT, offset: bytes) -> _ReadRequestT:
@@ -474,27 +477,24 @@ def request_id() -> str:
 # the API only when they run.
 
 
-def workflow_writer() -> typing.Any:
-    """The writer of the Workflow run's writes, with the previous run in a retry run."""
+def workflow_producer() -> typing.Any:
+    """The Producer of the Workflow run's writes."""
     from temporalio.streams import _ids
-    from temporalio.streams.system import models
     from temporalio.workflow import info
 
-    return models.StreamWriter(producer=_ids.workflow_producer(info().run_id))
+    return _ids.workflow_producer(info().run_id)
 
 
-def client_writer() -> typing.Any:
-    """The writer of a write outside a Workflow, which is the Activity attempt's writer."""
-    import temporalio.api.stream.v1 as stream_v1
+def client_producer() -> typing.Any:
+    """The Producer of a write outside a Workflow, which is the Activity attempt's Producer."""
     from temporalio.streams import _activity
     from temporalio.streams.system import models
 
     streams = _activity.current.get()
     if streams is None:
         # Each client has its own Producer, and a generated call doesn't say which client makes
-        # it. So the SDK's Streams send their writer, and a call without one fails.
+        # it. So the SDK's Streams send their Producer, and a call without one fails.
         raise RuntimeError("A Stream write outside a Workflow needs its Producer")
-    writer = stream_v1.StreamWriter(producer=streams.producer)
-    return models._StreamWriterTransferTypeConverter().from_transfer_type(
-        writer, models.StreamWriter
+    return models._ProducerTransferTypeConverter().from_transfer_type(
+        streams.producer, models.Producer
     )

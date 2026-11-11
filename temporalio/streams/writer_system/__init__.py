@@ -18,8 +18,6 @@ from .models import (
     WriteRecordsResponse,
     WriterResult,
 )
-
-# The package's StreamWriter is the service. The writer record of the same name stays in models.
 from .services import StreamWriter
 
 __all__ = [

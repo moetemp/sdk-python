@@ -87,15 +87,20 @@ class OpenWriterRequest(google.protobuf.message.Message):
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
+    NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
-    WRITER_FIELD_NUMBER: builtins.int
+    PRODUCER_FIELD_NUMBER: builtins.int
     MAX_BATCH_SIZE_FIELD_NUMBER: builtins.int
     MAX_RETRY_DURATION_FIELD_NUMBER: builtins.int
+    namespace: builtins.str
+    """The caller's namespace. The SDK sets it, and the writer copies it into each append. The SDK
+    Stores don't read it, but native Streams will.
+    """
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef: ...
     @property
-    def writer(self) -> temporalio.api.stream.v1.message_pb2.StreamWriter:
-        """Each batch sends it as AppendRecords does."""
+    def producer(self) -> temporalio.api.stream.v1.message_pb2.Producer:
+        """Required. The Producer of each batch, which sends it as AppendRecords does."""
     max_batch_size: builtins.int
     """A write sends at most this many Records in one batch. Zero, or a value above 1000, is 1000."""
     @property
@@ -104,8 +109,9 @@ class OpenWriterRequest(google.protobuf.message.Message):
     def __init__(
         self,
         *,
+        namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
-        writer: temporalio.api.stream.v1.message_pb2.StreamWriter | None = ...,
+        producer: temporalio.api.stream.v1.message_pb2.Producer | None = ...,
         max_batch_size: builtins.int = ...,
         max_retry_duration: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
@@ -114,10 +120,10 @@ class OpenWriterRequest(google.protobuf.message.Message):
         field_name: typing_extensions.Literal[
             "max_retry_duration",
             b"max_retry_duration",
+            "producer",
+            b"producer",
             "ref",
             b"ref",
-            "writer",
-            b"writer",
         ],
     ) -> builtins.bool: ...
     def ClearField(
@@ -127,10 +133,12 @@ class OpenWriterRequest(google.protobuf.message.Message):
             b"max_batch_size",
             "max_retry_duration",
             b"max_retry_duration",
+            "namespace",
+            b"namespace",
+            "producer",
+            b"producer",
             "ref",
             b"ref",
-            "writer",
-            b"writer",
         ],
     ) -> None: ...
 

@@ -89,7 +89,7 @@ class StreamWriterClientExtension(abc.ABC):
         self,
         *,
         ref: StreamRef,
-        writer: models.StreamWriter | None = None,
+        producer: models.Producer,
         max_batch_size: int | None = None,
         max_retry_duration: datetime.timedelta | None = None,
         rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
@@ -97,17 +97,14 @@ class StreamWriterClientExtension(abc.ABC):
     ) -> Writer:
         """
         Args:
-            writer: Each batch sends it as AppendRecords does. For a Local Activity it has
-                the run's task facts, so the writes withdraw the run's orphaned Local
-                Activity Records. Its withdraw_run must be empty, since only a retry run's
-                first append withdraws a run, and a writer sends many.
+            producer: The Producer of each batch, which sends it as AppendRecords does.
             max_batch_size: A write sends at most this many Records in one batch. Zero,
                 or a value above 1000, is 1000.
             max_retry_duration: How long a write retries a Store failure. Empty is 10 s.
         """
         request = OpenWriterRequest(
             ref=ref,
-            writer=writer,
+            producer=producer,
             max_batch_size=max_batch_size,
             max_retry_duration=max_retry_duration,
         )

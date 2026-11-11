@@ -226,6 +226,40 @@ async def test_create_fails_on_a_stream_that_exists(stream_client: Client):
         assert closed.value.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
 
 
+async def test_a_write_with_an_incomplete_producer_is_refused(stream_client: Client):
+    # The SDK always sends a complete epoch. A Producer that a caller builds by hand can lack one.
+    stream = await stream_client.create_stream(
+        f"incomplete-{uuid.uuid4()}", payload_type=str
+    )
+    service = (
+        only_backend(stream_client)
+        ._backend_for(stream_client)
+        .service(stream_client.namespace)
+    )
+    producer = models.Producer(
+        id="client:incomplete",
+        kind=models.ProducerKindClient(
+            models.ClientProducer(epoch=models.ClientEpoch(attempt=0))
+        ),
+    )
+    with pytest.raises(streams.StreamError) as refused:
+        await service.send_append_records(
+            models.AppendRecordsRequest(
+                ref=models.StreamRef(id=stream.ref.id),
+                producer=producer,
+                records=[models.AppendRecord(body="a")],
+            )
+        )
+    assert refused.value.reason == StreamErrorReason.STREAM_ERROR_REASON_INVALID
+
+
+async def test_a_writer_open_carries_the_namespace(client: Client):
+    client, extension = fake_client(client)
+    stream = await client.create_stream("namespaced", payload_type=str)
+    await stream.append("a")
+    assert extension.writer_namespaces == [client.namespace]
+
+
 async def test_a_create_retry_with_the_same_request_id_succeeds(stream_client: Client):
     # A retry after a lost answer sends the same request id, so it isn't a conflict.
     backend = only_backend(stream_client)

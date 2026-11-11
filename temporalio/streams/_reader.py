@@ -136,7 +136,7 @@ async def read(
                 except Exception as err:
                     # Move last_offset to the Record, so a resume doesn't fail on it again.
                     # The error gives the offset, for a read of that Record.
-                    offset = record.offset or b""
+                    offset = _offset_of(record)
                     position.last_offset = max(position.last_offset or b"", offset)
                     raise _errors.StreamError(
                         f"Can't decode the Record at the offset {offset.hex()}: {err}"
@@ -238,12 +238,17 @@ async def _read_until_records(
             pause = _FIRST_PAUSE
 
 
+def _offset_of(record: models.StreamRecord[Any]) -> bytes:
+    # Each item carries its own offset. An item of a kind that this SDK doesn't know has none.
+    return record.item.value.offset if record.item is not None else b""
+
+
 async def _item(
     converter: temporalio.converter.DataConverter,
     record: models.StreamRecord[temporalio.common.RawValue],
     payload_type: Any,
 ) -> Item | None:
-    offset = record.offset or b""
+    offset = _offset_of(record)
     match record.item:
         case None:
             # A newer backend's item kind that this SDK doesn't know is empty, so the read skips
