@@ -210,6 +210,53 @@ class Retrying:
         )
 
 
+@activity.defn
+async def local_flaky(input: CallModelInput) -> None:
+    attempts[input.prompt] = attempts.get(input.prompt, 0) + 1
+    attempt = attempts[input.prompt]
+    await activity.client().get_stream(input.stream).append(f"attempt-{attempt}")
+    if attempt == 1:
+        raise RuntimeError("first attempt fails")
+
+
+@workflow.defn
+class LocalRetrying:
+    @workflow.run
+    async def run(self, key: str) -> None:
+        stream = await workflow.create_stream(own_id(), payload_type=str)
+        await workflow.execute_local_activity(
+            local_flaky,
+            CallModelInput(key, stream.ref),
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(initial_interval=timedelta(milliseconds=10)),
+        )
+        await stream.close()
+
+
+async def test_a_local_activity_retry_supersedes_its_failed_attempt(
+    stream_client: Client,
+):
+    key = str(uuid.uuid4())
+    async with new_worker(
+        stream_client, LocalRetrying, activities=[local_flaky]
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            LocalRetrying.run,
+            key,
+            id=f"wf-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    items = await read_superseded(handle)
+    written = [item for item in items if isinstance(item, streams.Record)]
+    assert [record.data for record in written] == ["attempt-1", "attempt-2"]
+    # The retry is the same call at a higher attempt, so its first Record withdraws the failed
+    # attempt's Records.
+    [superseded] = [item for item in items if isinstance(item, Superseded)]
+    assert superseded.withdrawn_offsets == (written[0].offset,)
+    assert items.index(superseded) == items.index(written[1]) - 1
+
+
 @dataclass
 class FinishedStreams:
     key: str

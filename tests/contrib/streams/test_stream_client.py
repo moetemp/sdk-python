@@ -17,6 +17,7 @@ from temporalio.converter import (
     StorageDriverActivityInfo,
     StorageDriverWorkflowInfo,
 )
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
@@ -461,9 +462,16 @@ async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
         with pytest.raises(streams.StreamError) as fenced:
             await stream.append("zombie")
         assert fenced.value.reason == StreamErrorReason.STREAM_ERROR_REASON_FENCED
-    # The earlier epoch's Records are real messages, so nothing withdraws them.
+    # A plain read keeps both Records. A wrapped read withdraws the lower epoch's Record, as for
+    # every Producer.
     items = [item async for item in stream.read(wait_new_records=False)]
     assert [item.kind for item in items] == [streams.ItemKind.RECORD] * 2
+    wrapped = [
+        item async for item in with_superseded(stream.read(wait_new_records=False))
+    ]
+    [superseded] = [item for item in wrapped if isinstance(item, Superseded)]
+    assert superseded.withdrawn_offsets == (items[0].offset,)
+    assert wrapped.index(superseded) == 1
     with pytest.raises(ValueError):
         with streams.producer("ingest", epoch=0):
             pass

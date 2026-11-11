@@ -42,26 +42,18 @@ def _activity(
     return models.Producer(id=id, kind=kind)
 
 
-def _workflow(run: str) -> models.Producer:
-    return models.Producer(
-        id=f"wf:{run}",
-        kind=models.ProducerKindWorkflow(
-            models.WorkflowProducer(
-                run_id=run,
-                epoch=models.WorkflowTaskEpoch(started_event_id=3, attempt=1),
-            )
-        ),
-    )
-
-
-def _local_activity(id: str, run: str, attempt: int) -> models.Producer:
+def _local_activity(
+    id: str, run: str, *, task: int = 3, task_attempt: int = 1, attempt: int = 1
+) -> models.Producer:
     return models.Producer(
         id=id,
         kind=models.ProducerKindLocalActivity(
             models.LocalActivityProducer(
                 run_id=run,
                 epoch=models.LocalActivityEpoch(
-                    task=models.WorkflowTaskEpoch(started_event_id=3, attempt=attempt),
+                    task=models.WorkflowTaskEpoch(
+                        started_event_id=task, attempt=task_attempt
+                    ),
                     attempt=attempt,
                 ),
             )
@@ -69,9 +61,9 @@ def _local_activity(id: str, run: str, attempt: int) -> models.Producer:
     )
 
 
-def _client(attempt: int) -> models.Producer:
+def _client(attempt: int, id: str = "client:me") -> models.Producer:
     return models.Producer(
-        id="client:me",
+        id=id,
         kind=models.ProducerKindClient(
             models.ClientProducer(epoch=models.ClientEpoch(attempt=attempt))
         ),
@@ -115,31 +107,62 @@ async def test_a_standalone_activity_retry_supersedes_the_failed_attempt():
     assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10),)
 
 
-async def test_a_client_producer_never_supersedes():
-    # A newer client epoch only fences, so a client's Records are never withdrawn.
-    items = await _wrapped(_record(10, _client(1)), _record(20, _client(2)))
-    assert not any(isinstance(i, Superseded) for i in items)
-    # withdraws() also never matches a client's Records.
-    synthetic = Superseded(
-        offset=StreamOffset._from_wire(_off(20)),
-        producer=_activity("act:x", "r", attempt=2, seconds=101),
-    )
-    assert not synthetic.withdraws(_record(10, _client(1)))
+async def test_known_limit_a_resumed_retry_still_withdraws_the_failed_attempt():
+    # The helper takes a higher epoch as a new attempt at the same work. An Activity that resumes
+    # from its heartbeat details writes only the rest, and its first Record still withdraws the
+    # failed attempt's Records, though nothing writes them again.
+    first = _activity("act:wf:a:k", "r", attempt=1, seconds=100)
+    resumed = _activity("act:wf:a:k", "r", attempt=2, seconds=101)
+    items = await _wrapped(_record(10, first), _record(11, first), _record(20, resumed))
+    [superseded] = [i for i in items if isinstance(i, Superseded)]
+    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10), _hex(11))
 
 
-async def test_a_workflow_producer_never_supersedes():
-    # A run's Producer id is stable across its Workflow Tasks, so a failed task's Records stay
-    # visible.
-    run = _workflow("run-1")
-    items = await _wrapped(_record(10, run), _record(20, run))
-    assert not any(isinstance(i, Superseded) for i in items)
-
-
-async def test_a_local_activity_producer_never_supersedes():
+async def test_a_local_activity_retry_supersedes_the_failed_attempt():
     first = _local_activity("la:run-1:k", "run-1", attempt=1)
     retry = _local_activity("la:run-1:k", "run-1", attempt=2)
     items = await _wrapped(_record(10, first), _record(20, retry))
+    [superseded] = [i for i in items if isinstance(i, Superseded)]
+    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10),)
+
+
+async def test_a_local_activity_key_orders_the_task_before_the_attempt():
+    # A later Workflow Task beats a higher attempt in an earlier task, as in the crate's order.
+    earlier_task = _local_activity("la:run-1:k", "run-1", task=5, attempt=3)
+    task_retry = _local_activity("la:run-1:k", "run-1", task=5, task_attempt=2)
+    later_task = _local_activity("la:run-1:k", "run-1", task=9, attempt=1)
+    items = await _wrapped(
+        _record(10, earlier_task), _record(20, task_retry), _record(30, later_task)
+    )
+    first, second = [i for i in items if isinstance(i, Superseded)]
+    assert tuple(str(o) for o in first.withdrawn_offsets) == (_hex(10),)
+    assert tuple(str(o) for o in second.withdrawn_offsets) == (_hex(20),)
+
+
+async def test_a_named_client_at_a_higher_epoch_supersedes_its_lower_epochs():
+    items = await _wrapped(
+        _record(10, _client(1)), _record(11, _client(1)), _record(20, _client(2))
+    )
+    [superseded] = [i for i in items if isinstance(i, Superseded)]
+    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10), _hex(11))
+
+
+async def test_a_client_with_no_name_is_never_superseded():
+    # Each process has its own id at epoch 1, so no Record has a higher epoch of its Producer.
+    one, other = _client(1, "client:host:a"), _client(1, "client:host:b")
+    items = await _wrapped(_record(10, one), _record(20, other), _record(30, one))
     assert not any(isinstance(i, Superseded) for i in items)
+
+
+async def test_two_runs_never_supersede_each_other():
+    first = _local_activity("la:run-1:k", "run-1", task=3)
+    second = _local_activity("la:run-2:k", "run-2", task=9)
+    items = await _wrapped(_record(10, first), _record(20, second))
+    assert not any(isinstance(i, Superseded) for i in items)
+    # withdraws() also never matches a Producer of another run or kind.
+    synthetic = Superseded(offset=StreamOffset._from_wire(_off(20)), producer=second)
+    assert not synthetic.withdraws(_record(10, first))
+    assert not synthetic.withdraws(_record(10, _client(1)))
 
 
 async def test_withdraws_checks_a_record_kept_from_an_earlier_read():

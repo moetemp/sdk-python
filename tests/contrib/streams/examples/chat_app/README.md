@@ -160,7 +160,9 @@ another in one chat, so a new viewer sees each case.
 - **Opaque offsets.** A `StreamOffset` is an opaque position. The server passes each one to the
   browser as its string form, and parses a resume offset back with `StreamOffset.parse`.
 - **`Superseded` withdrawal.** The page uses `withdrawn_offsets` for tokens that the read gave,
-  and the server uses `withdraws()` for tokens that the tab kept from an earlier read.
+  and the server uses `withdraws()` for tokens that the tab kept from an earlier read. The rule is
+  the same for every Producer, so a share also leaves out a Turn that a failed Workflow Task
+  wrote before its retry wrote it again.
 - **Close with `async with`.** The share snapshot's block in the server, and the sub-agent's
   Streams in `Researcher`.
 - **`close()`.** `ChatSession.run` closes both Streams when the chat ends, since a run's end

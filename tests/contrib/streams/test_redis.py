@@ -27,6 +27,7 @@ from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import DataConverter, PayloadCodec
 from temporalio.exceptions import ApplicationError
 from temporalio.streams._extension import ExtensionStreamBackend, _WorkflowInbound
+from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 from temporalio.worker import (
     ExecuteWorkflowInput,
@@ -88,14 +89,21 @@ async def test_failed_workflow_task_republishes_its_records(stream_client: Clien
         )
         await handle.result()
         stream_id = f"{handle.id}-tokens"
-        items = await read_all(stream_client.get_stream(stream_id, payload_type=str))
+        stream = stream_client.get_stream(stream_id, payload_type=str)
+        items = await read_all(stream)
+        wrapped = [item async for item in with_superseded(stream.read())]
         assert (
             await stream_status(stream_client, stream_id)
             == models.StreamStatus.StreamStatusClosed
         )
-    # The retried task writes "after" again, and both copies stay visible.
+    # The retried task writes "after" again, and a plain read keeps both copies.
     written = records(items)
     assert [record.data for record in written] == ["before", "after", "after"]
+    # The retry's Local Activity is the same call at a higher Workflow Task epoch, so a wrapped
+    # read withdraws the first copy before the second.
+    [superseded] = [item for item in wrapped if isinstance(item, Superseded)]
+    assert superseded.withdrawn_offsets == (written[1].offset,)
+    assert wrapped.index(superseded) == wrapped.index(written[2]) - 1
 
 
 @dataclass

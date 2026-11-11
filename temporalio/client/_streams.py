@@ -118,7 +118,7 @@ class Stream(Generic[T]):
         The read ends when the Stream is closed and the read gave its last item, or at the
         newest Record when ``wait_new_records`` is False. To stop after a quiet period, use your
         own timer, and resume later with ``offset=`` set to the read's ``last_offset``. To cross
-        out the Records of a failed Activity attempt, wrap the read in
+        out the Records of a Producer's lower epochs, such as a failed attempt, wrap the read in
         :py:func:`temporalio.streams.superseded.with_superseded`.
 
         The Stream must exist. Its creator hands out its id or ref after the create, so a read

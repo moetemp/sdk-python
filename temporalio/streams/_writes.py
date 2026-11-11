@@ -34,7 +34,8 @@ def _context() -> tuple[_activity.ActivityStreams, _backend.StreamServiceCalls]:
 
 def _producer(streams: _activity.ActivityStreams) -> models.Producer:
     # All attempts of one Workflow Task write with one epoch and sequence, so the Store dedupes a
-    # retry. A later task's higher epoch supersedes a failed task's Records for the same call key.
+    # retry. A later task's higher epoch for the same call key fences the failed task's writes,
+    # and with_superseded() withdraws its Records.
     local = streams.producer.local_activity
     task_pb = local.epoch.task
     started = task_pb.started_time if task_pb.HasField("started_time") else None

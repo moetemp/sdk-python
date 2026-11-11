@@ -67,9 +67,10 @@ def producer(name: str, epoch: int) -> Iterator[None]:
     Use it for a writer that must fence its earlier instances, such as a server that restarts.
     Keep ``epoch`` in durable storage, and raise it at each start. After a write at a higher
     epoch, a write at a lower one raises a :py:class:`temporalio.streams.StreamError` with
-    ``reason`` ``STREAM_ERROR_REASON_FENCED``. The Records of the earlier epochs aren't withdrawn,
-    since they're real messages. Run only one live writer for each name. Writes in an Activity
-    ignore it and write as the attempt.
+    ``reason`` ``STREAM_ERROR_REASON_FENCED``. As for every Producer, a reader that wraps its read
+    in :py:func:`temporalio.streams.superseded.with_superseded` sees the Records of the earlier
+    epochs withdrawn once the higher epoch writes. Run only one live writer for each name. Writes
+    in an Activity ignore it and write as the attempt.
 
     Args:
         name: The Producer name, the same across restarts.
