@@ -58,7 +58,7 @@ async def test_a_waiting_read_carries_the_offset_until_records_come():
 
 
 class _Missing(_backend.StreamServiceCalls):
-    """Answers each read at once with NOT_FOUND, as a Store that ignores create_wait."""
+    """Answers each read with NOT_FOUND, as for a Stream that nobody created."""
 
     def __init__(self) -> None:
         super().__init__(cast(Any, None))
@@ -74,7 +74,7 @@ class _Missing(_backend.StreamServiceCalls):
         )
 
 
-async def test_a_wait_for_the_create_pauses_between_reads():
+async def test_a_read_of_a_missing_stream_raises_not_found_at_once():
     service = _Missing()
     items = _reader.read(
         service,
@@ -83,11 +83,9 @@ async def test_a_wait_for_the_create_pauses_between_reads():
         position=_reader.Position(None),
         payload_type=None,
         from_offset=None,
-        wait_new_records=False,
-        create_wait=timedelta(milliseconds=500),
+        wait_new_records=True,
     )
     with pytest.raises(StreamError) as missing:
         await anext(items)
     assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
-    # The pauses double from 50 ms, so the half second has a few reads, not a hot loop.
-    assert 2 <= service.calls <= 8
+    assert service.calls == 1

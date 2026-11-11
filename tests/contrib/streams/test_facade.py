@@ -125,25 +125,6 @@ async def test_a_stream_gives_its_ref_and_its_wire_message(client: Client):
     )
 
 
-async def test_read_waits_for_create(client: Client):
-    client, _ = fake_client(client)
-    stream = client.get_stream("tokens-7", payload_type=str)
-    with pytest.raises(streams.StreamError) as missing:
-        async for _ in stream.read():
-            pass
-    assert missing.value.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
-
-    async def create_later() -> None:
-        created = await client.create_stream(stream.ref.id, payload_type=str)
-        await created.append("five")
-        await created.close()
-
-    task = asyncio.create_task(create_later())
-    items = [item async for item in stream.read(create_wait=timedelta(seconds=5))]
-    await task
-    assert [item.data for item in items if isinstance(item, streams.Record)] == ["five"]
-
-
 async def test_a_waiting_read_ends_at_a_close(client: Client):
     client, _ = fake_client(client)
     stream = await client.create_stream("closes-later", payload_type=str)

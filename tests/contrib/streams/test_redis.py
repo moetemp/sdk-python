@@ -40,12 +40,12 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-from tests.contrib.streams._support import only_backend, stream_status
+from tests.contrib.streams._support import created, only_backend, stream_status
 from tests.helpers import new_worker
 
 
 async def read_all(stream: Stream[Any]) -> list[Any]:
-    return [item async for item in stream.read(create_wait=timedelta(seconds=20))]
+    return [item async for item in (await created(stream)).read()]
 
 
 def records(items: list[Any]) -> list[streams.Record[Any]]:
@@ -330,7 +330,7 @@ async def test_cancelled_block_closes_the_stream(stream_client: Client):
             CancelledBlock.run, id=f"wf-{uuid.uuid4()}", task_queue=worker.task_queue
         )
         turn = stream_of(stream_client, handle, "scoped")
-        reader = turn.read(create_wait=timedelta(seconds=20))
+        reader = (await created(turn)).read()
         assert isinstance(await anext(reader), streams.Record)
         await reader.aclose()
         await handle.cancel()
@@ -454,7 +454,7 @@ async def test_new_worker_replays_and_writes_each_record_once(stream_client: Cli
             WaitsForSignal.run, id=f"wf-{uuid.uuid4()}", task_queue=task_queue
         )
         first = stream_of(stream_client, handle)
-        reader = first.read(create_wait=timedelta(seconds=20))
+        reader = (await created(first)).read()
         assert isinstance(await anext(reader), streams.Record)
         await reader.aclose()
     # The new Worker has no cache, so it replays the run. A replay sends no create, which would
@@ -553,9 +553,7 @@ async def test_eviction_prints_nothing(
         handle = await stream_client.start_workflow(
             WaitsForever.run, id=f"wf-{uuid.uuid4()}", task_queue=w.task_queue
         )
-        reader = stream_of(stream_client, handle).read(
-            create_wait=timedelta(seconds=20)
-        )
+        reader = (await created(stream_of(stream_client, handle))).read()
         assert isinstance(await anext(reader), streams.Record)
         await reader.aclose()
     await handle.terminate()

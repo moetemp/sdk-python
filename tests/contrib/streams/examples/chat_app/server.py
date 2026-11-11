@@ -13,7 +13,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -52,6 +52,8 @@ from .shared import (
     Token,
     Turn,
     UserMessage,
+    tokens_id,
+    turns_id,
 )
 from .tools import ToolActivities
 from .workflow import ChatSession, Researcher
@@ -181,6 +183,19 @@ async def open_session(body: OpenRequest, chat: ChatDep) -> dict[str, Any]:
             id=session.id,
             task_queue=chat.task_queue,
             id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+        # A read of a Stream that nobody created fails, so the server creates the chat's
+        # Streams before it hands out their ids. The Workflow's init creates them too, so both
+        # use USE_EXISTING.
+        await chat.client.create_stream(
+            turns_id(session.id),
+            payload_type=Turn,
+            id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
+        )
+        await chat.client.create_stream(
+            tokens_id(session.id),
+            payload_type=Token,
+            id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
         )
         started = datetime.now(timezone.utc).isoformat(timespec="seconds")
         await chat.client.get_stream(chat.lobby).append(
@@ -354,18 +369,15 @@ async def session_events(
     tokens: str | None = None,
     kept: str | None = None,
 ) -> AsyncIterable[ServerSentEvent]:
-    # The tab sends the offsets that it saved, so a reload or a reconnect resumes there. The
-    # init's create can still be in flight when a new chat's tab starts to read.
-    wait = timedelta(seconds=30)
+    # The tab sends the offsets that it saved, so a reload or a reconnect resumes there.
     turns_stream = chat.client.get_stream(refs.turns.id, payload_type=Turn)
     turns_read = turns_stream.read(
-        offset=streams.StreamOffset.parse(turns) if turns else None, create_wait=wait
+        offset=streams.StreamOffset.parse(turns) if turns else None
     )
     tokens_stream = chat.client.get_stream(refs.tokens.id, payload_type=Token)
     # A tab that joins reads only new tokens, since the turns Stream has the earlier replies.
     tokens_read = tokens_stream.read(
-        offset=streams.StreamOffset.parse(tokens) if tokens else streams.END,
-        create_wait=wait,
+        offset=streams.StreamOffset.parse(tokens) if tokens else streams.END
     )
     merged = merge(
         events("lobby", lobby_read(chat)),

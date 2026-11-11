@@ -36,7 +36,7 @@ from temporalio.streams.system.workflow._resources.stream import (
     get_stream as generated_stream,
 )
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner
-from tests.contrib.streams._support import stream_status
+from tests.contrib.streams._support import created, stream_status
 from tests.helpers import assert_eventually, assert_task_fail_eventually, new_worker
 
 OPEN = models.StreamStatus.StreamStatusOpen
@@ -585,9 +585,9 @@ async def test_block_end_leaves_a_cron_stream_open(stream_client: Client):
             task_queue=worker.task_queue,
             cron_schedule="@every 1s",
         )
-        reader = stream_client.get_stream(stream_id(handle), payload_type=str).read(
-            create_wait=timedelta(seconds=20)
-        )
+        reader = (
+            await created(stream_client.get_stream(stream_id(handle), payload_type=str))
+        ).read()
         first = await asyncio.wait_for(anext(reader), 20)
         second = await asyncio.wait_for(anext(reader), 20)
         await reader.aclose()

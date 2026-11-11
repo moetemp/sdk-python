@@ -31,7 +31,7 @@ from temporalio.exceptions import ActivityError, ApplicationError, CancelledErro
 from temporalio.streams import _activity, _activity_stream
 from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
-from tests.contrib.streams._support import stream_status
+from tests.contrib.streams._support import created, stream_status
 from tests.helpers import new_worker
 
 
@@ -322,9 +322,11 @@ async def test_reader_withdraws_a_shown_record_after_a_reconnect(
             id=f"wf-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-        stream = stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
-        live = with_superseded(stream.read(create_wait=timedelta(seconds=20)))
-        reconnects = stream.read(create_wait=timedelta(seconds=20))
+        stream = await created(
+            stream_client.get_stream(f"{handle.id}-tokens", payload_type=str)
+        )
+        live = with_superseded(stream.read())
+        reconnects = stream.read()
         first = await anext(live)
         before = await anext(reconnects)
         # The reader closes its connection and keeps only the Records that it showed and its

@@ -2,8 +2,8 @@
 
 A chat server creates the Stream and passes its ref to the agent Workflow, which publishes each
 turn. The UI backend gets the Stream by its id, with no call, and renders each item as it
-arrives. It may read before the creator has created the Stream, so the read waits for the
-create. The read ends when the chat server closes the Stream.
+arrives. The chat server hands out the id only after its create, since a read of a Stream that
+nobody created fails. The read ends when the chat server closes the Stream.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from temporalio import activity, streams, workflow
-from temporalio.client import Client
+from temporalio.client import Client, Stream
 from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.worker import Worker
 
@@ -43,13 +43,18 @@ class Agent:
         return reply
 
 
-async def chat_server(client: Client, chat_id: str, task_queue: str) -> None:
+async def open_chat(client: Client, chat_id: str) -> Stream[Turn]:
+    # The chat server creates the Stream before it hands out the chat id.
+    return await client.create_stream(chat_id, payload_type=Turn)
+
+
+async def chat_server(client: Client, turns: Stream[Turn], task_queue: str) -> None:
     # The block end closes the Stream after the agent's done Turn.
-    async with await client.create_stream(chat_id, payload_type=Turn) as turns:
+    async with turns:
         await client.execute_workflow(
             Agent.run,
             args=[turns.ref, "hello there"],
-            id=chat_id,
+            id=turns.ref.id,
             task_queue=task_queue,
         )
 
@@ -80,17 +85,15 @@ async def main(client: Client, task_queue: str) -> Screen:
     async with Worker(
         client, task_queue=task_queue, workflows=[Agent], activities=[call_model]
     ):
-        chat_id = f"chat-{uuid.uuid4()}"
-        server = asyncio.create_task(chat_server(client, chat_id, task_queue))
+        turns = await open_chat(client, f"chat-{uuid.uuid4()}")
+        server = asyncio.create_task(chat_server(client, turns, task_queue))
+        chat_id = turns.ref.id  # the id that the UI backend gets after the create
         screen = Screen()
         stream = client.get_stream(chat_id, payload_type=Turn)  # by id, with no call
         # The UI opts into supersession, so a retried attempt's Records drop from the view.
         async for item in with_superseded(
             stream.read(
                 offset=saved_offset(),  # wherever the app keeps it, or streams.END
-                create_wait=timedelta(
-                    seconds=10
-                ),  # the creator may not have created it
             )
         ):
             if isinstance(item, Superseded):

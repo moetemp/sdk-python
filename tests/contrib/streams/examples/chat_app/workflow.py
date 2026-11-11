@@ -184,8 +184,9 @@ class ChatSession:
         self._number = input.number
         self._ended = False
         if input.streams is None:
-            # A chat id can come back, such as in a restarted session, so the run gets the
-            # chat's Streams if they exist.
+            # The server creates the chat's Streams before it hands out their ids, and a chat id
+            # can come back, such as in a restarted session. So the run gets the Streams if
+            # they exist.
             turns = workflow.create_stream_nowait(
                 turns_id(input.session_id),
                 payload_type=Turn,

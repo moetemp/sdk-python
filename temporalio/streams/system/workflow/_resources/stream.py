@@ -97,7 +97,6 @@ class Stream(typing.Generic[BodyT]):
         position: ReadPosition | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
-        create_wait: datetime.timedelta | None = None,
         max_bytes: int | None = None,
     ) -> ReadRecordsResponse[BodyT]:
         """Read one page of Records. The poll iterator reads them all."""
@@ -106,7 +105,6 @@ class Stream(typing.Generic[BodyT]):
             position=position,
             max_records=max_records,
             wait=wait,
-            create_wait=create_wait,
             max_bytes=max_bytes,
         )
         handle = await _read_records(request, self.body_type)
@@ -253,7 +251,6 @@ class _ReadRecords(typing.Generic[BodyT]):
         position: ReadPosition | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
-        create_wait: datetime.timedelta | None = None,
         max_bytes: int | None = None,
     ) -> temporalio.workflow.NexusOperationHandle[ReadRecordsResponse[BodyT],]:
         """A long poll. NOT_FOUND for an uncreated Stream. Workflow code reads from a Local
@@ -265,8 +262,6 @@ class _ReadRecords(typing.Generic[BodyT]):
             max_records: About this many items per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
-            create_wait: How long to wait for an uncreated Stream. Empty fails at once.
-                At most 60 s.
             max_bytes: The maximum Record bytes in a page. A larger Record is still
                 returned alone.
         """
@@ -275,7 +270,6 @@ class _ReadRecords(typing.Generic[BodyT]):
             position=position,
             max_records=max_records,
             wait=wait,
-            create_wait=create_wait,
             max_bytes=max_bytes,
         )
         return await _read_records(request, self.body_type)

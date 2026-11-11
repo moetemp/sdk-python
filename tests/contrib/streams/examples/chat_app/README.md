@@ -115,10 +115,11 @@ another in one chat, so a new viewer sees each case.
 
 - **`create_stream` with `USE_EXISTING` in a Workflow.** [`ChatSession.__init__`](workflow.py)
   gets the turns and the tokens Stream with `workflow.create_stream_nowait(...,
-  id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING)`. A chat id can come back, such as in a
-  restarted session, and the run then gets the chat's Streams.
+  id_conflict_policy=StreamIDConflictPolicy.USE_EXISTING)`. The server creates them too, and a chat
+  id can come back, such as in a restarted session. The run then gets the chat's Streams.
 - **`create_stream` with `USE_EXISTING` in a client.** The server's [`lifespan`](server.py) gets
-  the lobby Stream, which lists the chats. Each server start runs it.
+  the lobby Stream, which lists the chats. Each server start runs it. [`open_session`](server.py)
+  creates a new chat's turns and tokens Streams the same way, before it returns their ids.
 - **Strict create.** [`share`](server.py) creates each snapshot with
   `client.create_stream(payload_type=SharedTurn)`, since a share id names one snapshot. A second
   share of the same point raises a `StreamError` with reason `STREAM_ERROR_REASON_CLOSED`, since
@@ -150,7 +151,10 @@ another in one chat, so a new viewer sees each case.
 - **`streams.END`.** A tab that joins reads only new tokens, since the turns Stream has the
   earlier replies.
 - **A read from the start.** The lobby sidebar reads every chat, then each new one.
-- **`create_wait`.** A new chat's tab can start to read before the init's creates.
+- **Create before the id goes out.** A read of a Stream that nobody created fails with
+  `STREAM_ERROR_REASON_NOT_FOUND`, and it doesn't wait for a create. So the server creates a new
+  chat's Streams before it returns their ids to the tab. The Workflow's init creates them too,
+  so both sides use `id_conflict_policy=USE_EXISTING`.
 - **Resume from `last_offset`.** Each item that the server sends carries its read's
   `last_offset`. The tab saves it, and a reload or a reconnect sends it back.
 - **Opaque offsets.** A `StreamOffset` is an opaque position. The server passes each one to the

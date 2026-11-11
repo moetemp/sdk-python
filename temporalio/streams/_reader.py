@@ -10,7 +10,6 @@ from typing import Any, Generic, TypeVar
 
 import temporalio.common
 import temporalio.converter
-from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.streams import _backend, _convert, _errors
 from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._items import Closed, End, Record
@@ -108,75 +107,47 @@ async def read(
     payload_type: Any,
     from_offset: bytes | End | None,
     wait_new_records: bool,
-    create_wait: timedelta | None,
 ) -> AsyncGenerator[Item, None]:
     """Yield the items of a Stream in order, until the Stream is closed and drained.
 
-    With ``wait_new_records`` False, stop at the newest Record.
+    With ``wait_new_records`` False, stop at the newest Record. A read of a Stream that nobody
+    created fails at once with ``STREAM_ERROR_REASON_NOT_FOUND``.
     """
-    loop = asyncio.get_running_loop()
-    create_until = loop.time() + create_wait.total_seconds() if create_wait else None
-    pause = _FIRST_PAUSE
-
-    def request() -> models.ReadRecordsRequest:
-        create_left = (
-            timedelta(seconds=max(create_until - loop.time(), 0))
-            if create_until is not None
-            else None
-        )
-        return models.ReadRecordsRequest(
-            ref=models.StreamRef(id=stream_id),
-            # END applies only to the first page. Later pages start after the last page's offset.
-            position=_after(from_offset)
-            if isinstance(from_offset, bytes)
-            else models.ReadPositionStart(
-                models.StreamReadStart.StreamReadStartEnd
-                if from_offset is End.END
-                else models.StreamReadStart.StreamReadStartBeginning
-            ),
-            create_wait=min(create_left, _backend.longest_wait(_MAX_WAIT))
-            if create_left
-            else None,
-        )
-
-    while True:
-        pages = _pages(service, request(), wait_new_records)
-        try:
-            async for page in pages:
-                for record in page.records or []:
-                    try:
-                        item = await _item(converter, record, payload_type)
-                        if item is None:
-                            continue
-                    except Exception as err:
-                        # Move last_offset to the Record, so a resume doesn't fail on it again.
-                        # The error gives the offset, for a read of that Record.
-                        offset = record.offset or b""
-                        position.last_offset = max(position.last_offset or b"", offset)
-                        raise _errors.StreamError(
-                            f"Can't decode the Record at the offset {offset.hex()}: {err}"
-                        ) from err
-                    yield item
-                if page.last_offset is not None:
-                    # A resume starts after the page's last offset.
-                    position.last_offset = max(
-                        position.last_offset or b"", page.last_offset
-                    )
-            return
-        except _errors.StreamError as err:
-            if not _errors.has_reason(
-                err, StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
-            ):
-                raise
-            left = create_until - loop.time() if create_until is not None else 0
-            if left <= 0:
-                raise
-            # A Store that answers at once, with no wait for the create, isn't asked again at
-            # once.
-            await asyncio.sleep(min(pause, left))
-            pause = min(pause * 2, _LAST_PAUSE)
-        finally:
-            await pages.aclose()
+    request = models.ReadRecordsRequest(
+        ref=models.StreamRef(id=stream_id),
+        # END applies only to the first page. Later pages start after the last page's offset.
+        position=_after(from_offset)
+        if isinstance(from_offset, bytes)
+        else models.ReadPositionStart(
+            models.StreamReadStart.StreamReadStartEnd
+            if from_offset is End.END
+            else models.StreamReadStart.StreamReadStartBeginning
+        ),
+    )
+    pages = _pages(service, request, wait_new_records)
+    try:
+        async for page in pages:
+            for record in page.records or []:
+                try:
+                    item = await _item(converter, record, payload_type)
+                    if item is None:
+                        continue
+                except Exception as err:
+                    # Move last_offset to the Record, so a resume doesn't fail on it again.
+                    # The error gives the offset, for a read of that Record.
+                    offset = record.offset or b""
+                    position.last_offset = max(position.last_offset or b"", offset)
+                    raise _errors.StreamError(
+                        f"Can't decode the Record at the offset {offset.hex()}: {err}"
+                    ) from err
+                yield item
+            if page.last_offset is not None:
+                # A resume starts after the page's last offset.
+                position.last_offset = max(
+                    position.last_offset or b"", page.last_offset
+                )
+    finally:
+        await pages.aclose()
 
 
 async def _pages(

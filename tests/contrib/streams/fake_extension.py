@@ -152,15 +152,11 @@ class FakeExtension:
         self, request: stream_pb.ReadRecordsRequest
     ) -> stream_pb.ReadRecordsResponse:
         loop = asyncio.get_running_loop()
-        create_until = loop.time() + request.create_wait.ToTimedelta().total_seconds()
-        while request.ref.id not in self.streams:
-            if loop.time() >= create_until:
-                raise _error(
-                    RPCStatusCode.NOT_FOUND,
-                    StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND,
-                )
-            await asyncio.sleep(0.01)
-        stream = self.streams[request.ref.id]
+        stream = self.streams.get(request.ref.id)
+        if stream is None:
+            raise _error(
+                RPCStatusCode.NOT_FOUND, StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+            )
         # A resume reads after the offset, so from_offset is exclusive. A read from the end
         # starts after the newest Record. Empty reads from the start.
         offset = b""

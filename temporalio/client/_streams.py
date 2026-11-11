@@ -110,7 +110,6 @@ class Stream(Generic[T]):
         *,
         offset: StreamOffset | End | None = None,
         wait_new_records: bool = True,
-        create_wait: timedelta | None = None,
         rpc_metadata: Mapping[str, str | bytes] = {},
         rpc_timeout: timedelta | None = None,
     ) -> Reader[T]:
@@ -122,19 +121,22 @@ class Stream(Generic[T]):
         out the Records of a failed Activity attempt, wrap the read in
         :py:func:`temporalio.streams.superseded.with_superseded`.
 
+        The Stream must exist. Its creator hands out its id or ref after the create, so a read
+        doesn't wait for one.
+
         Args:
             offset: Resume after this offset, such as one from a Record or ``get_offset``, or
                 read from ``streams.END`` for new Records only. Defaults to the first Record.
             wait_new_records: Wait for new Records at the end of the Stream.
-            create_wait: How long to wait for a Stream that doesn't exist yet, such as one
-                that a Workflow creates after it starts. Defaults to no wait.
             rpc_metadata: Headers of each call of the read. The Redis and memory backends
                 ignore it.
             rpc_timeout: The deadline of each call of the read, on every backend, and not of the
                 whole read. A call that waits for new Records returns before the deadline.
 
         Raises:
-            StreamError: The code is a sync Activity, which uses :py:class:`SyncStream`.
+            StreamError: The code is a sync Activity, which uses :py:class:`SyncStream`. A
+                read of a Stream that nobody created raises one with ``reason``
+                ``STREAM_ERROR_REASON_NOT_FOUND`` at its first item.
         """
         from temporalio.streams._access import read_spec
         from temporalio.streams._items import End
@@ -148,7 +150,6 @@ class Stream(Generic[T]):
             self._payload_type,
             offset=wire_offset,
             wait_new_records=wait_new_records,
-            create_wait=create_wait,
         )
         return self._calls.read(read, rpc_metadata, rpc_timeout)
 
@@ -290,7 +291,6 @@ class SyncStream(Generic[T]):
         *,
         offset: StreamOffset | End | None = None,
         wait_new_records: bool = True,
-        create_wait: timedelta | None = None,
     ) -> SyncReader[T]:
         """Read the Stream's items in order. See :py:meth:`Stream.read`."""
         from temporalio.streams import _activity_stream
@@ -299,7 +299,6 @@ class SyncStream(Generic[T]):
             return self._stream.read(
                 offset=offset,
                 wait_new_records=wait_new_records,
-                create_wait=create_wait,
             )
 
         return SyncReader(_activity_stream.run_blocking(read()))

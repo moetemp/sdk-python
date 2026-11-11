@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 import temporalio.converter
@@ -49,7 +48,6 @@ class Access:
             payload_type=read.payload_type,
             from_offset=read.offset,
             wait_new_records=read.wait_new_records,
-            create_wait=read.create_wait,
         )
         try:
             async for item in items:
@@ -93,7 +91,6 @@ class ReadSpec:
     payload_type: Any
     offset: bytes | End | None
     wait_new_records: bool
-    create_wait: timedelta | None
 
 
 def read_spec(
@@ -101,14 +98,12 @@ def read_spec(
     *,
     offset: bytes | End | None,
     wait_new_records: bool,
-    create_wait: timedelta | None,
 ) -> ReadSpec:
     """The options of a read, and the type that it decodes each value with."""
     return ReadSpec(
         payload_type=payload_type,
         offset=offset,
         wait_new_records=wait_new_records,
-        create_wait=create_wait,
     )
 
 

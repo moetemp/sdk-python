@@ -50,8 +50,9 @@ DOCS = [
     ),
     (
         "Reading",
-        "A read starts at an offset, at END for new Records only, or with the last N Records. "
-        "A read can wait for a Stream that doesn't exist yet with create_wait.",
+        "A read starts after an offset, or at END for new Records only. A read of a Stream that "
+        "nobody created fails with NOT_FOUND, so the code that hands out a Stream's id creates "
+        "it first.",
     ),
 ]
 
