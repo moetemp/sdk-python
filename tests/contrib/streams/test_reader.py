@@ -57,6 +57,54 @@ async def test_a_waiting_read_carries_the_offset_until_records_come():
     assert timedelta() < second.wait <= timedelta(seconds=60)
 
 
+class _RecordLandsBetweenPolls(_backend.StreamServiceCalls):
+    """A Stream with no Record, which gets one right after the first poll answers."""
+
+    def __init__(self) -> None:
+        super().__init__(cast(Any, None))
+        self.records: list[models.StreamRecord[Any]] = []
+
+    @override
+    async def send_read_records(
+        self, request: models.ReadRecordsRequest, body_type: type[Any]
+    ) -> models.ReadRecordsResponse[Any]:
+        match request.position:
+            case models.ReadPositionFromOffset(value=offset):
+                after = offset
+            case models.ReadPositionStart(
+                value=models.StreamReadStart.StreamReadStartEnd
+            ):
+                after = (self.records[-1].offset or b"") if self.records else b""
+            case _:
+                after = b""
+        found = [record for record in self.records if (record.offset or b"") > after]
+        if not self.records:
+            self.records.append(
+                models.StreamRecord(
+                    item=models.StreamItemData(models.StreamData(body=None)),
+                    offset=_off(1),
+                )
+            )
+        # An empty page gives the request's from-offset, which is empty with no offset.
+        return models.ReadRecordsResponse(
+            records=found, last_offset=found[-1].offset if found else after or None
+        )
+
+
+async def test_a_waiting_read_from_the_end_of_an_empty_stream_misses_no_record():
+    page = await _reader._read_until_records(
+        _RecordLandsBetweenPolls(),
+        models.ReadRecordsRequest(
+            ref=models.StreamRef(id="wf:run"),
+            position=models.ReadPositionStart(
+                models.StreamReadStart.StreamReadStartEnd
+            ),
+        ),
+        timedelta(seconds=1),
+    )
+    assert [record.offset for record in page.records] == [_off(1)]
+
+
 class _Missing(_backend.StreamServiceCalls):
     """Answers each read with NOT_FOUND, as for a Stream that nobody created."""
 

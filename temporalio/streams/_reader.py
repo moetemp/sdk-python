@@ -23,6 +23,9 @@ Item = Record[Any] | Closed
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
 
+_BEGINNING = models.ReadPositionStart(models.StreamReadStart.StreamReadStartBeginning)
+_END = models.ReadPositionStart(models.StreamReadStart.StreamReadStartEnd)
+
 # An empty page that comes back in less than half of its wait is followed by a pause, so a
 # Store that ignores the wait isn't asked again at once. The pause doubles up to the last one.
 _FIRST_PAUSE = 0.05
@@ -118,11 +121,9 @@ async def read(
         # END applies only to the first page. Later pages start after the last page's offset.
         position=_after(from_offset)
         if isinstance(from_offset, bytes)
-        else models.ReadPositionStart(
-            models.StreamReadStart.StreamReadStartEnd
-            if from_offset is End.END
-            else models.StreamReadStart.StreamReadStartBeginning
-        ),
+        else _END
+        if from_offset is End.END
+        else _BEGINNING,
     )
     pages = _pages(service, request, wait_new_records)
     try:
@@ -173,8 +174,19 @@ async def _pages(
             or (not page.records and page.last_offset <= _from_offset(request))
         ):
             return
-        if page.last_offset is not None:
-            request = dataclasses.replace(request, position=_after(page.last_offset))
+        request = _next_request(request, page)
+
+
+def _next_request(
+    request: models.ReadRecordsRequest, page: models.ReadRecordsResponse[Any]
+) -> models.ReadRecordsRequest:
+    if page.last_offset is not None:
+        return dataclasses.replace(request, position=_after(page.last_offset))
+    if request.position == _END:
+        # An empty page from the end with no offset means the Stream had no Record. A poll from
+        # the end again would skip a Record that lands before it, so it starts at the beginning.
+        return dataclasses.replace(request, position=_BEGINNING)
+    return request
 
 
 def _after(offset: bytes) -> models.ReadPosition:
@@ -215,8 +227,7 @@ async def _read_until_records(
         page = await _read_page(service, request)
         if page.records or page.done:
             return page
-        if page.last_offset is not None:
-            request = dataclasses.replace(request, position=_after(page.last_offset))
+        request = _next_request(request, page)
         left = end - loop.time()
         if left <= 0:
             return page
