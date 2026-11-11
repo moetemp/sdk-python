@@ -72,8 +72,8 @@ class _CreateStream(typing.Generic[BodyT]):
             id: The Stream id, 1 to 4096 bytes.
             backend: Registered backend name, empty for the default. The Store never
                 reads it.
-            retention: The age after which a Record is dropped. Empty is the Store
-                default.
+            retention: How long the Stream stays readable after its close. Empty is the
+                Store default.
             id_conflict_policy: What the create does when the Stream exists. Unspecified
                 is fail.
         """

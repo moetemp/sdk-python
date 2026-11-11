@@ -485,7 +485,7 @@ global___StreamClose = StreamClose
 class StreamRecord(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     An offset is ordered and unique in one Stream, and it is sparse. Offsets have gaps, so they
-    don't count Records. Zero is never an offset. A read gives its Stream, so the read checks the
+    don't count Records. An offset is never empty. A read gives its Stream, so the read checks the
     offset against that Stream.
     """
 

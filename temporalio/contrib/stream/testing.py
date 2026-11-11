@@ -39,10 +39,10 @@ class MemoryStreamBackend(ExtensionStreamBackend):
         """Create the backend.
 
         Args:
-            retention: The default Retention of a new Stream. Defaults to 7 days.
-            safety_ttl: How long an open Stream bound to a Workflow is kept after its last
-                write. Defaults to 90 days. A standalone Stream, the only kind that this SDK
-                creates, expires one Retention after its last write instead.
+            retention: The default Retention of a new Stream, which is how long the Stream
+                stays readable after its close. Defaults to 7 days.
+            safety_ttl: How long an open Stream is kept after its last write. Until then, it
+                keeps every Record. Defaults to 90 days.
             runtime: The runtime of the backend's memory Store. Defaults to the default
                 runtime.
             name: The backend name that Stream refs store.

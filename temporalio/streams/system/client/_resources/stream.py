@@ -165,8 +165,8 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            from_offset: Start offset. Empty uses start. An offset past the newest one +
-                1 fails.
+            from_offset: Read after this offset. Empty uses start. An offset past the
+                newest one fails.
             start: Where to start when from-offset is empty. Unspecified is the
                 beginning.
             max_records: About this many items per page, 1 to 1000.
@@ -223,8 +223,8 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            from_offset: Start offset. Empty uses start. An offset past the newest one +
-                1 fails.
+            from_offset: Read after this offset. Empty uses start. An offset past the
+                newest one fails.
             start: Where to start when from-offset is empty. Unspecified is the
                 beginning.
             max_records: About this many items per page, 1 to 1000.

@@ -350,7 +350,7 @@ def _stream(
         # The Activity module imports this one.
         from temporalio.streams._activity_stream import ActivityCalls
 
-        # A Stream of the Worker's client writes as the attempt, so a retry withdraws the
-        # Records of the failed attempt.
+        # A Stream of the Worker's client writes as the attempt, so a reader can tell a retry's
+        # Records from those of the failed attempt.
         return Stream(ref, payload_type, ActivityCalls(streams, ref))
     return Stream(ref, payload_type, ClientCalls(client, backend, ref))

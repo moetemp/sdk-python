@@ -720,9 +720,8 @@ def _from_model(ref: models.StreamRef, backend: str | None) -> StreamRef[Any]:
 
 
 # The Worker's interceptor runs the Stream calls of the generated Workflow API with these. They
-# build the same Local Activity requests as the Streams, so History doesn't change. A retry run's
-# withdrawal comes from _write, once for each Stream, and the write Activity sends its own
-# writer.
+# build the same Local Activity requests as the Streams, so History doesn't change. The write
+# Activity sends its own writer.
 
 
 def run_create_stream(

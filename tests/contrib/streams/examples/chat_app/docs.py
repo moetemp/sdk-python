@@ -26,8 +26,8 @@ DOCS = [
     ),
     (
         "Retention",
-        "A Record stays readable for the backend's Retention, also while the Stream is open. A "
-        "closed Stream is kept for one Retention after its close. Token deltas matter only to "
+        "An open Stream keeps every Record until one safety TTL after its last write. A closed "
+        "Stream stays readable for one Retention after its close. Token deltas matter only to "
         "live readers, so a backend that stores a chat's tokens can keep a short Retention.",
     ),
     (

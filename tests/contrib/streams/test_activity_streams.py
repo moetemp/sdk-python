@@ -246,9 +246,9 @@ class ReadsFinishedStreams:
 
 
 async def test_retry_goes_on_with_a_closed_or_expired_stream(client: Client):
-    # On a Stream that accepts no write, the second attempt's open withdraws nothing, and the
-    # attempt only reads. Retention is a backend setting, so the aged Stream expires while the
-    # closed one, created fresh in the run, is still within Retention.
+    # A retry whose input has Streams that accept no write still runs, and only reads. A closed
+    # Stream expires one Retention after its close, so the Stream closed before the run has
+    # expired, while the one that the run closes is still within Retention.
     config = client.config()
     config["stream_backends"] = [
         MemoryStreamBackend(retention=timedelta(seconds=2), default=True)
@@ -258,7 +258,14 @@ async def test_retry_goes_on_with_a_closed_or_expired_stream(client: Client):
         f"expired-{uuid.uuid4()}", payload_type=str
     )
     await expired.append("old")
+    await expired.close()
     await asyncio.sleep(3)
+    with pytest.raises(streams.StreamError) as gone:
+        async for _ in memory_client.get_stream(expired.ref).read(
+            wait_new_records=False
+        ):
+            pass
+    assert gone.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
     key = str(uuid.uuid4())
     async with new_worker(
         memory_client, ReadsFinishedStreams, activities=[reads_after_a_failed_attempt]

@@ -43,10 +43,10 @@ class Stream(Generic[T]):
     in a block. A write error that no caller got raises at the next call of the Stream.
 
     In an Activity, including a Local Activity, a Stream from the Worker's client, such as from
-    ``activity.client()``, writes as the Producer of the attempt. So a retry withdraws the
-    Records of the failed attempt. It can't close the Stream. The end of the attempt waits
-    for the attempt's writes, and a write error that no caller got fails the attempt. A sync
-    Activity wraps the Stream in :py:class:`SyncStream`.
+    ``activity.client()``, writes as the Producer of the attempt. So a reader can tell a
+    retry's Records from those of the failed attempt. It can't close the Stream. The end of the
+    attempt waits for the attempt's writes, and a write error that no caller got fails the
+    attempt. A sync Activity wraps the Stream in :py:class:`SyncStream`.
 
     .. warning::
         This API is experimental.
@@ -119,15 +119,15 @@ class Stream(Generic[T]):
 
         The read ends when the Stream is closed and the read gave its last item, or at the
         newest Record when ``wait_new_records`` is False. To stop after a quiet period, use your
-        own timer, and resume later with ``offset=`` set to the read's ``next_offset``. A
-        ``Superseded`` item withdraws earlier Records of a failed attempt.
+        own timer, and resume later with ``offset=`` set to the read's ``next_offset``. To cross
+        out the Records of a failed Activity attempt, wrap the read in
+        :py:func:`temporalio.streams.superseded.with_superseded`.
 
         Args:
             offset: Resume after this offset, such as one from a Record or ``get_offset``, or
                 read from ``streams.END`` for new Records only. Defaults to the first Record.
             last: Start with the newest ``last`` Records, oldest first, such as for the first
-                view of a chat. Can't be used with ``offset``. A Record that a later
-                ``Superseded`` item withdraws doesn't count. At most 1000.
+                view of a chat. Can't be used with ``offset``. At most 1000.
             wait_new_records: Wait for new Records at the end of the Stream.
             create_wait: How long to wait for a Stream that doesn't exist yet, such as one
                 that a Workflow creates after it starts. Defaults to no wait.
