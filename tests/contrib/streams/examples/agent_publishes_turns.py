@@ -3,8 +3,8 @@
 The Workflow creates its two Streams, turns and token deltas, under ids of its choice, and hands
 out the turns Stream's ref through a ``stream`` query. It appends each turn with an awaited
 ``append``, and passes the tokens ref to the model Activity in its one input object. A run
-after continue-as-new gets the earlier run's refs and creates nothing. It closes both Streams
-before it returns, since a run's end doesn't close a Stream.
+after continue-as-new gets the earlier run's refs and creates nothing. It closes both Streams in
+a ``finally`` block, unless the run continues as new, since a run's end doesn't close a Stream.
 """
 
 from __future__ import annotations
@@ -90,28 +90,35 @@ class Agent:
             tokens = await workflow.create_stream(
                 f"{input.session_id}-tokens", payload_type=str
             )
-        while True:
-            if workflow.info().is_continue_as_new_suggested():
-                workflow.continue_as_new(  # forward the refs, so the next run keeps the Streams
-                    AgentInput(input.session_id, messages, turns.ref, tokens.ref)
-                )
-            await turns.append(Turn("model"))  # one Local Activity
-            reply = await workflow.execute_activity(
-                call_model,
-                CallModelInput(messages, tokens.ref),
-                start_to_close_timeout=MINUTE,
-            )
-            if not reply.tool_calls:
-                await turns.append(Turn("done", reply.text))
-                await turns.close()  # the done Turn carries the reply
-                await tokens.close()
-                return reply.text
-            for call in reply.tool_calls:
-                messages.append(
-                    await workflow.execute_activity(
-                        run_tool, call, start_to_close_timeout=MINUTE
+        continues = False
+        try:
+            while True:
+                if workflow.info().is_continue_as_new_suggested():
+                    continues = True  # the next run writes to the same Streams
+                    workflow.continue_as_new(  # forward the refs, so the next run keeps the Streams
+                        AgentInput(input.session_id, messages, turns.ref, tokens.ref)
                     )
+                await turns.append(Turn("model"))  # one Local Activity
+                reply = await workflow.execute_activity(
+                    call_model,
+                    CallModelInput(messages, tokens.ref),
+                    start_to_close_timeout=MINUTE,
                 )
+                if not reply.tool_calls:
+                    # The done Turn carries the reply.
+                    await turns.append(Turn("done", reply.text))
+                    return reply.text
+                for call in reply.tool_calls:
+                    messages.append(
+                        await workflow.execute_activity(
+                            run_tool, call, start_to_close_timeout=MINUTE
+                        )
+                    )
+        finally:
+            if not continues:
+                # Also when the run fails or is cancelled, so no reader waits on a dead session.
+                await turns.close()
+                await tokens.close()
 
 
 async def main(client: Client, task_queue: str) -> list[streams.Record[Turn]]:
