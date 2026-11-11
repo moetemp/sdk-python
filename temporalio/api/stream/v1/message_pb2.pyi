@@ -51,8 +51,9 @@ global___StreamRef = StreamRef
 class WorkflowTaskEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     One Workflow Task attempt of a run. It orders by started_event_id, then attempt, then
-    started_time. An epoch orders the writes of one Producer only, and a Producer is one run. A
-    reset run and the next run of a chain are other Producers, so their epochs start again.
+    started_time. An epoch orders the attempts of one Producer only, and a Producer belongs to one
+    run. So a reset run and the next run of a chain have other Producers, and their epochs start
+    again.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -164,9 +165,9 @@ global___ActivityEpoch = ActivityEpoch
 
 class ClientEpoch(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The attempt of a client Producer, which the client picks. A client that keeps one Producer
-    name across restarts stores this number and raises it at each start, so the new process
-    fences the old one. A client with no name of its own is a new Producer in each process.
+    The attempt of a client Producer, which the client picks. A client that runs the same work
+    again under one Producer name stores this number and raises it at each start. A client with no
+    name of its own is a new Producer in each process, so nothing fences or supersedes it.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -187,7 +188,7 @@ global___ClientEpoch = ClientEpoch
 
 class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Workflow run Producer. It writes in its Workflow Task. A higher epoch fences the lower ones.
+    A Workflow run Producer. It writes in its Workflow Task.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -217,7 +218,7 @@ global___WorkflowProducer = WorkflowProducer
 
 class LocalActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A Local Activity Producer, one for each call of a run. A higher epoch fences the lower ones.
+    A Local Activity Producer, one for each call of a run.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -247,8 +248,7 @@ global___LocalActivityProducer = LocalActivityProducer
 
 class ActivityProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    An Activity Producer, for an Activity of a Workflow or a Standalone Activity. A higher epoch
-    fences the lower ones. Their Records are those of a failed attempt, which a reader may hide.
+    An Activity Producer, for an Activity of a Workflow or a Standalone Activity.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -280,8 +280,7 @@ global___ActivityProducer = ActivityProducer
 
 class ClientProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A client Producer. A higher epoch only fences the lower ones, since a restarted client's earlier
-    Records are real messages, not the Records of a failed attempt. A client has no run.
+    A client Producer. A client has no run.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -306,10 +305,11 @@ global___ClientProducer = ClientProducer
 
 class Producer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The code that wrote a batch. Its id stays the same across attempts, and the kind's case orders
-    its epochs. After a write of a higher epoch, a write of a lower epoch of the same Producer
-    fails with FENCED. The epochs of two Producers never compare. A run-based kind carries its run,
-    so a client can't.
+    The code that wrote a batch, which is one unit of work. Its id stays the same across attempts,
+    and an epoch is one attempt. The kind's case orders its epochs. After a write of a higher epoch,
+    a write of a lower epoch of the same Producer fails with FENCED, and a reader may hide the
+    Records of the lower epoch. The rule is the same for every kind. The epochs of two Producers
+    never compare. A run-based kind carries its run, so a client can't.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -408,7 +408,8 @@ class AppendRecord(google.protobuf.message.Message):
 
     BODY_FIELD_NUMBER: builtins.int
     @property
-    def body(self) -> temporalio.api.common.v1.message_pb2.Payload: ...
+    def body(self) -> temporalio.api.common.v1.message_pb2.Payload:
+        """Required."""
     def __init__(
         self,
         *,
