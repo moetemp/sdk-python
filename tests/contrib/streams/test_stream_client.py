@@ -10,6 +10,7 @@ import pytest
 from temporalio import streams, workflow
 from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.client import BufferedAppender, Client, Stream
+from temporalio.contrib.stream import RedisStreamBackend
 from temporalio.contrib.stream.testing import MemoryStreamBackend
 from temporalio.converter import (
     DataConverter,
@@ -359,8 +360,8 @@ async def test_record_over_the_store_limit_raises_too_large(stream_client: Clien
 
 
 async def test_create_of_an_expired_stream_raises(client: Client):
-    # Retention is a backend setting now. safety_ttl keeps an open Stream, so only a closed
-    # Stream expires, one Retention after its close.
+    # Retention is a backend setting. With no last_write_ttl an open Stream doesn't expire, so
+    # only a closed Stream expires, one Retention after its close.
     one = _client(
         client,
         streams.StreamConfig(
@@ -379,6 +380,37 @@ async def test_create_of_an_expired_stream_raises(client: Client):
             id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
         )
     assert expired.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
+
+
+@pytest.mark.parametrize("store", ["memory", "redis"])
+async def test_last_write_ttl_expires_only_an_open_stream_that_sets_it(
+    client: Client, store: str, request: pytest.FixtureRequest
+):
+    def backend(ttl: timedelta | None) -> streams.StreamBackend:
+        if store == "memory":
+            return MemoryStreamBackend(last_write_ttl=ttl)
+        redis_url = request.getfixturevalue("redis_url")
+        return RedisStreamBackend(
+            redis_url, key_prefix=f"t-{uuid.uuid4()}", last_write_ttl=ttl
+        )
+
+    ttl = timedelta(milliseconds=300)
+    with_ttl = _client(client, streams.StreamConfig(backends=[backend(ttl)]))
+    without = _client(client, streams.StreamConfig(backends=[backend(None)]))
+    stream_id = f"ttl-{uuid.uuid4()}"
+    expiring = await with_ttl.create_stream(stream_id, payload_type=str)
+    kept = await without.create_stream(stream_id, payload_type=str)
+    await expiring.append("a")
+    await kept.append("a")
+    await asyncio.sleep(1)
+    with pytest.raises(streams.StreamError) as expired:
+        await with_ttl.create_stream(
+            stream_id,
+            payload_type=str,
+            id_conflict_policy=streams.StreamIDConflictPolicy.USE_EXISTING,
+        )
+    assert expired.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
+    await kept.append("b")
 
 
 async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):

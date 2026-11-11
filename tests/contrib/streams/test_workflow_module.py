@@ -1143,8 +1143,9 @@ class CreatesThenCloses:
 
 
 async def test_create_of_an_expired_workflow_stream_raises(client: Client):
-    # Retention is a backend setting now. A Workflow's standalone Stream expires one Retention
-    # after its close, since safety_ttl keeps it open. A later client create finds it expired.
+    # Retention is a backend setting. A Workflow's standalone Stream expires one Retention after
+    # its close, since an open Stream has no last_write_ttl by default. A later client create
+    # finds it expired.
     config = client.config()
     config["stream_config"] = streams.StreamConfig(
         backends=[MemoryStreamBackend(retention=timedelta(milliseconds=500))]

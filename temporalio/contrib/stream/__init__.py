@@ -57,7 +57,7 @@ class RedisStreamBackend(ExtensionStreamBackend):
         cluster: bool = False,
         key_prefix: str | None = None,
         retention: timedelta | None = None,
-        safety_ttl: timedelta | None = None,
+        last_write_ttl: timedelta | None = None,
         response_timeout: timedelta | None = None,
         name: str = "redis",
     ) -> None:
@@ -73,8 +73,8 @@ class RedisStreamBackend(ExtensionStreamBackend):
             key_prefix: The prefix of every key. Defaults to ``temporal-streams``.
             retention: The default Retention of a new Stream, which is how long the Stream
                 stays readable after its close. Defaults to 7 days.
-            safety_ttl: How long an open Stream is kept after its last write. Until then, it
-                keeps every Record. Defaults to 90 days.
+            last_write_ttl: How long an open Stream is kept after its last write. Unset, the
+                default, keeps an open Stream and every Record until its close.
             response_timeout: The longest time that one Redis call can take. Defaults to 5 s.
             name: The backend name that Stream refs store, so every process can route a
                 ref that it receives. The names of a Stream config must be unique.
@@ -86,7 +86,7 @@ class RedisStreamBackend(ExtensionStreamBackend):
         )
         for field, value in (
             ("retention", retention),
-            ("last_write_ttl", safety_ttl),
+            ("last_write_ttl", last_write_ttl),
             ("response_timeout", response_timeout),
         ):
             if value is not None:

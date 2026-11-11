@@ -31,7 +31,7 @@ class MemoryStreamBackend(ExtensionStreamBackend):
         self,
         *,
         retention: timedelta | None = None,
-        safety_ttl: timedelta | None = None,
+        last_write_ttl: timedelta | None = None,
         runtime: temporalio.runtime.Runtime | None = None,
         name: str = "memory",
     ) -> None:
@@ -40,8 +40,8 @@ class MemoryStreamBackend(ExtensionStreamBackend):
         Args:
             retention: The default Retention of a new Stream, which is how long the Stream
                 stays readable after its close. Defaults to 7 days.
-            safety_ttl: How long an open Stream is kept after its last write. Until then, it
-                keeps every Record. Defaults to 90 days.
+            last_write_ttl: How long an open Stream is kept after its last write. Unset, the
+                default, keeps an open Stream and every Record until its close.
             runtime: The runtime of the backend's memory Store. Defaults to the default
                 runtime.
             name: The backend name that Stream refs store.
@@ -49,6 +49,6 @@ class MemoryStreamBackend(ExtensionStreamBackend):
         config = runtime_pb.MemoryStreamConfig()
         if retention is not None:
             config.retention.FromTimedelta(retention)
-        if safety_ttl is not None:
-            config.last_write_ttl.FromTimedelta(safety_ttl)
+        if last_write_ttl is not None:
+            config.last_write_ttl.FromTimedelta(last_write_ttl)
         super().__init__("temporalio.MemoryStreamBackend", True, config, runtime, name)
