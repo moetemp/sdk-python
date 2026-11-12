@@ -507,8 +507,8 @@ def epoch_of(producer: streams.Producer) -> tuple[str, int | None]:
             | streams.ProducerKindStandaloneActivity(value=act)
         ):
             return "activity", act.epoch.attempt if act.epoch else None
-        case streams.ProducerKindClient(value=client):
-            return "client", client.epoch.attempt if client.epoch else None
+        case streams.ProducerKindClient():
+            return "client", None
         case _:
             return "unknown", None
 

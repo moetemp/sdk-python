@@ -19,7 +19,6 @@ from temporalio.converter import (
     StorageDriverWorkflowInfo,
 )
 from temporalio.streams._extension import ExtensionStreamBackend
-from temporalio.streams.superseded import Superseded, with_superseded
 from temporalio.streams.system import models
 from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Replayer
@@ -240,9 +239,14 @@ async def test_a_write_with_an_incomplete_producer_is_refused(stream_client: Cli
         .service(stream_client.namespace)
     )
     producer = models.Producer(
-        id="client:incomplete",
-        kind=models.ProducerKindClient(
-            models.ClientProducer(epoch=models.ClientEpoch(attempt=0))
+        id="sa:incomplete:run",
+        kind=models.ProducerKindStandaloneActivity(
+            models.ActivityProducer(
+                epoch=models.ActivityEpoch(
+                    attempt_scheduled_time=models.Timestamp(seconds=1, nanos=0),
+                    attempt=0,
+                )
+            )
         ),
     )
     with pytest.raises(streams.StreamError) as refused:
@@ -268,12 +272,10 @@ def _writer_calls(client: Client) -> Any:
     return backend
 
 
-def _named_producer(name: str) -> models.Producer:
+def _client_producer() -> models.Producer:
     return models.Producer(
-        id=f"client:{name}",
-        kind=models.ProducerKindClient(
-            models.ClientProducer(epoch=models.ClientEpoch(attempt=1))
-        ),
+        id=f"client:test:{uuid.uuid4()}",
+        kind=models.ProducerKindClient(models.ClientProducer()),
     )
 
 
@@ -291,7 +293,7 @@ async def test_a_write_after_a_writer_close_raises_closed(stream_client: Client)
     )
     writer = await writers.open_writer(
         ref=models.StreamRef(id=stream.ref.id),
-        producer=_named_producer(str(uuid.uuid4())),
+        producer=_client_producer(),
     )
     await writer.write_records([models.AppendRecord(body="a")])
     await writer.close()
@@ -307,7 +309,7 @@ async def test_a_writer_that_python_frees_is_released(stream_client: Client):
     )
     calls = _writer_calls(stream_client)
     writers = calls.writers(stream_client.namespace, stream_client.data_converter)
-    producer = _named_producer(str(uuid.uuid4()))
+    producer = _client_producer()
     ref = models.StreamRef(id=stream.ref.id)
     first = await writers.open_writer(ref=ref, producer=producer)
     await first.write_records([models.AppendRecord(body="a")])
@@ -316,7 +318,7 @@ async def test_a_writer_that_python_frees_is_released(stream_client: Client):
     del first
     gc.collect()
     assert len(calls._writers) == opened - 1
-    # A new open of the same epoch goes on in order after the released one.
+    # A new open of the same Producer goes on in order after the released one.
     second = await writers.open_writer(ref=ref, producer=producer)
     await second.write_records([models.AppendRecord(body="b")])
     await second.close()
@@ -397,11 +399,13 @@ async def test_a_waiting_read_ends_when_the_stream_closes(stream_client: Client)
     assert not reader.done()
     await stream.close()
     assert await asyncio.wait_for(reader, 10) == ["a"]
-    # A read from the end of a closed Stream has no item left, so it answers at once.
+    # A read from the end of a closed Stream has no Record left, so it answers at once with the
+    # Closed item.
     tail = stream_client.get_stream(stream.ref.id, payload_type=str).read(
         offset=streams.END
     )
-    assert await asyncio.wait_for(_items(tail), 5) == []
+    items = await asyncio.wait_for(_items(tail), 5)
+    assert [item.kind for item in items] == [streams.ItemKind.CLOSED]
 
 
 async def _items(read: streams.Reader[Any]) -> list[Any]:
@@ -523,35 +527,6 @@ async def test_last_write_ttl_expires_only_an_open_stream_that_sets_it(
         )
     assert expired.value.reason == StreamErrorReason.STREAM_ERROR_REASON_EXPIRED
     await kept.append("b")
-
-
-async def test_named_producer_fences_its_earlier_epoch(stream_client: Client):
-    stream = await stream_client.create_stream(
-        f"named-{uuid.uuid4()}", payload_type=str
-    )
-    # A server that restarts writes as the same name with a higher epoch, so the zombie that it
-    # replaces can't write after it.
-    with streams.producer("ingest", epoch=1):
-        await stream.append("before restart")
-    with streams.producer("ingest", epoch=2):
-        await stream.append("after restart")
-    with streams.producer("ingest", epoch=1):
-        with pytest.raises(streams.StreamError) as fenced:
-            await stream.append("zombie")
-        assert fenced.value.reason == StreamErrorReason.STREAM_ERROR_REASON_FENCED
-    # A plain read keeps both Records. A wrapped read withdraws the lower epoch's Record, as for
-    # every Producer.
-    items = [item async for item in stream.read(wait_new_records=False)]
-    assert [item.kind for item in items] == [streams.ItemKind.RECORD] * 2
-    wrapped = [
-        item async for item in with_superseded(stream.read(wait_new_records=False))
-    ]
-    [superseded] = [item for item in wrapped if isinstance(item, Superseded)]
-    assert superseded.withdrawn_offsets == (items[0].offset,)
-    assert wrapped.index(superseded) == 1
-    with pytest.raises(ValueError):
-        with streams.producer("ingest", epoch=0):
-            pass
 
 
 async def test_clients_of_one_runtime_share_the_backend_calls(stream_client: Client):

@@ -46,7 +46,6 @@ backend.
 
 # The reason of a StreamError is the proto enum, as in the StreamErrorDetails of a failed call.
 from temporalio.api.enums.v1 import StreamErrorReason
-from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._conflict import StreamIDConflictPolicy
 from temporalio.streams._errors import (
     StreamConfigError,
@@ -61,13 +60,11 @@ from temporalio.streams._plugin import (
 )
 from temporalio.streams._reader import Reader
 from temporalio.streams._ref import StreamRef
-from temporalio.streams._stream_client import producer
 
-# nexgen generates these wire models. Refs, Records and close items carry them.
+# nexgen generates these wire models. Refs and Records carry them.
 from temporalio.streams.system.models import (
     ActivityEpoch,
     ActivityProducer,
-    ClientEpoch,
     ClientProducer,
     LocalActivityEpoch,
     LocalActivityProducer,
@@ -78,7 +75,6 @@ from temporalio.streams.system.models import (
     ProducerKindStandaloneActivity,
     ProducerKindWorkflow,
     ProducerKindWorkflowActivity,
-    StreamClose,
     Timestamp,
     WorkflowProducer,
     WorkflowTaskEpoch,
@@ -88,7 +84,6 @@ __all__ = [
     "END",
     "ActivityEpoch",
     "ActivityProducer",
-    "ClientEpoch",
     "ClientProducer",
     "Closed",
     "End",
@@ -105,8 +100,6 @@ __all__ = [
     "Reader",
     "Record",
     "StreamBackend",
-    "StreamClose",
-    "StreamCloseStatus",
     "StreamConfig",
     "StreamConfigError",
     "StreamError",
@@ -118,5 +111,4 @@ __all__ = [
     "Timestamp",
     "WorkflowProducer",
     "WorkflowTaskEpoch",
-    "producer",
 ]

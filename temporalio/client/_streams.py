@@ -38,9 +38,8 @@ class Stream(Generic[T]):
     :py:meth:`temporalio.client.Client.get_stream`. Its :py:attr:`ref` is the data to pass on,
     such as to a Workflow.
 
-    All Streams of one client and Stream id write as one Producer, and
-    :py:func:`temporalio.streams.producer` sets a Producer with a name of its own for the writes
-    in a block. A write error that no caller got raises at the next call of the Stream.
+    All Streams of one client and Stream id write as one Producer. A write error that no caller
+    got raises at the next call of the Stream.
 
     In an Activity, including a Local Activity, a Stream from the Worker's client, such as from
     ``activity.client()``, writes as the Producer of the attempt. So a reader can tell a

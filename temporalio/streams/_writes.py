@@ -142,9 +142,7 @@ async def _encode(
         bodies = await codec.encode(bodies)
     records = [stream_v1.AppendRecord(body=body) for body in bodies]
     sizes = [
-        stream_v1.StreamRecord(
-            data=stream_v1.StreamData(producer=producer, body=record.body)
-        ).ByteSize()
+        stream_v1.StreamRecord(producer=producer, body=record.body).ByteSize()
         for record in records
     ]
     # Opaque offsets have no arithmetic, so a merged append's per-publish offsets can't be read

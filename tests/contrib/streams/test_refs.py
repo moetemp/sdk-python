@@ -100,21 +100,18 @@ def test_read_items_have_a_kind_that_narrows_their_type():
         offset=streams.StreamOffset((3).to_bytes(8, "big")),
         producer=None,
     )
-    closed = streams.Closed(
-        offset=streams.StreamOffset((4).to_bytes(8, "big")),
-        status=streams.StreamCloseStatus.CLOSED,
-    )
+    closed = streams.Closed(offset=streams.StreamOffset((4).to_bytes(8, "big")))
     items: list[streams.Record[Turn] | streams.Closed] = [record, closed]
     shown: list[Turn] = []
-    ended: list[streams.StreamCloseStatus] = []
+    ended: list[streams.StreamOffset | None] = []
     for item in items:
         match item.kind:  # the kind narrows the item's type
             case streams.ItemKind.CLOSED:
-                ended.append(item.status)
+                ended.append(item.offset)
             case _:
                 shown.append(item.data)
     assert shown == [Turn("model")]
-    assert ended == [streams.StreamCloseStatus.CLOSED]
+    assert ended == [streams.StreamOffset((4).to_bytes(8, "big"))]
     assert record.kind is streams.ItemKind.RECORD
     assert closed.kind is streams.ItemKind.CLOSED
 

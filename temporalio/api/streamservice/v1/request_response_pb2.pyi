@@ -92,8 +92,9 @@ class CreateStreamResponse(google.protobuf.message.Message):
     CREATED_FIELD_NUMBER: builtins.int
     @property
     def ref(self) -> temporalio.api.stream.v1.message_pb2.StreamRef:
-        """The ref of the Stream, with the name of the backend that holds it, also when the request
-        left the name empty. The caller passes this ref on as data.
+        """The ref of the Stream, which the caller passes on as data. The SDK sets the name of the
+        backend that it picked, also when the request left the name empty. The server gives the ref
+        back as the request had it, since it doesn't know that name.
         """
     created: builtins.bool
     """False when USE_EXISTING got a Stream that existed."""
@@ -126,7 +127,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     PRODUCER_FIELD_NUMBER: builtins.int
     SEQUENCE_FIELD_NUMBER: builtins.int
     RECORDS_FIELD_NUMBER: builtins.int
-    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
     read it.
@@ -149,11 +149,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
     ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
         temporalio.api.stream.v1.message_pb2.AppendRecord
     ]: ...
-    task_token: builtins.bytes
-    """Only read by the server, and opaque to every SDK and Store, which never parse it. It lets
-    the server check that the caller is the task that the Producer names. It is an identity
-    check, not a guard against a stale attempt, which the epoch fences.
-    """
     def __init__(
         self,
         *,
@@ -165,7 +160,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
             temporalio.api.stream.v1.message_pb2.AppendRecord
         ]
         | None = ...,
-        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -184,8 +178,6 @@ class AppendRecordsRequest(google.protobuf.message.Message):
             b"ref",
             "sequence",
             b"sequence",
-            "task_token",
-            b"task_token",
         ],
     ) -> None: ...
 
@@ -228,7 +220,6 @@ class CloseStreamRequest(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
     PRODUCER_FIELD_NUMBER: builtins.int
-    TASK_TOKEN_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
     read it.
@@ -239,15 +230,12 @@ class CloseStreamRequest(google.protobuf.message.Message):
     @property
     def producer(self) -> temporalio.api.stream.v1.message_pb2.Producer:
         """Required. The Producer that closes the Stream."""
-    task_token: builtins.bytes
-    """Only read by the server. It checks the token as on the append."""
     def __init__(
         self,
         *,
         namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
         producer: temporalio.api.stream.v1.message_pb2.Producer | None = ...,
-        task_token: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
         self,
@@ -256,14 +244,7 @@ class CloseStreamRequest(google.protobuf.message.Message):
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "namespace",
-            b"namespace",
-            "producer",
-            b"producer",
-            "ref",
-            b"ref",
-            "task_token",
-            b"task_token",
+            "namespace", b"namespace", "producer", b"producer", "ref", b"ref"
         ],
     ) -> None: ...
 
@@ -284,7 +265,7 @@ global___CloseStreamResponse = CloseStreamResponse
 
 class ReadRecordsRequest(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    Reads one page of items from an offset. At the end of the Stream, the read waits for a new
+    Reads one page of Records after an offset. At the end of the Stream, the read waits for a new
     Record, so readers long poll.
     """
 
@@ -293,13 +274,9 @@ class ReadRecordsRequest(google.protobuf.message.Message):
     NAMESPACE_FIELD_NUMBER: builtins.int
     REF_FIELD_NUMBER: builtins.int
     FROM_OFFSET_FIELD_NUMBER: builtins.int
-    START_FIELD_NUMBER: builtins.int
     MAX_RECORDS_FIELD_NUMBER: builtins.int
     WAIT_FIELD_NUMBER: builtins.int
-    TO_OFFSET_FIELD_NUMBER: builtins.int
-    WAKE_ONLY_FIELD_NUMBER: builtins.int
     MAX_BYTES_FIELD_NUMBER: builtins.int
-    FLOOR_FROM_FIELD_NUMBER: builtins.int
     namespace: builtins.str
     """The caller's namespace. Only read by the server. The SDK sets it, and the SDK Stores don't
     read it.
@@ -309,11 +286,11 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         """Required."""
     from_offset: builtins.bytes
     """Read after this offset. It fails with OFFSET_TOO_HIGH if it is past the newest offset.
+    Leave empty to read from the beginning. To read only new Records, a caller gets last_offset
+    from a describe and reads after it.
     (-- api-linter: core::0140::prepositions=disabled
-        aip.dev/not-precedent: "from" and "to" mark the ends of a range of offsets. --)
+        aip.dev/not-precedent: "from" marks the start of a range of offsets. --)
     """
-    start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType
-    """Start at the beginning or at the end of the Stream. Unspecified is the beginning."""
     max_records: builtins.int
     """The most Records in one page. Zero is 1000."""
     @property
@@ -321,30 +298,9 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         """How long the read waits for a new Record before it answers with an empty page. Empty answers
         at once, and a wait longer than 60 s waits 60 s.
         """
-    to_offset: builtins.bytes
-    """The exclusive end of the read. The read scans no entry at or after it, so a replay reads the
-    same range. Empty means no end. Only the server serves it, and a Store refuses it.
-    (-- api-linter: core::0140::prepositions=disabled
-        aip.dev/not-precedent: "from" and "to" mark the ends of a range of offsets. --)
-    """
-    wake_only: builtins.bool
-    """Asks only for a wake-up, for a reader that must not get Records in this answer, such as a
-    Workflow whose Records stay out of History. The read waits as a normal read does. It then
-    answers with no Records and last_offset = from_offset, when a Record after from_offset
-    exists, when the Stream closes (done), or when wait ends. The reader then gets the Records
-    with a normal read. The wait may be days, since a parked read adds nothing to History.
-    Only the server serves it, and a Store refuses it.
-    """
     max_bytes: builtins.int
     """The most Record bytes in one page, so a page fits the caller's limit, such as a History
     marker. A larger Record still comes alone, so the read always moves on. Zero is no cap.
-    """
-    floor_from: builtins.bytes
-    """The lowest offset this run read on replay. A reset run copies the earlier run's reads into
-    its History, so its floor must cover them too, not only its first live page. Only read by
-    the server.
-    (-- api-linter: core::0140::prepositions=disabled
-        aip.dev/not-precedent: The floor is the lowest from_offset of the run's reads. --)
     """
     def __init__(
         self,
@@ -352,34 +308,16 @@ class ReadRecordsRequest(google.protobuf.message.Message):
         namespace: builtins.str = ...,
         ref: temporalio.api.stream.v1.message_pb2.StreamRef | None = ...,
         from_offset: builtins.bytes = ...,
-        start: temporalio.api.enums.v1.stream_pb2.StreamReadStart.ValueType = ...,
         max_records: builtins.int = ...,
         wait: google.protobuf.duration_pb2.Duration | None = ...,
-        to_offset: builtins.bytes = ...,
-        wake_only: builtins.bool = ...,
         max_bytes: builtins.int = ...,
-        floor_from: builtins.bytes = ...,
     ) -> None: ...
     def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "from_offset",
-            b"from_offset",
-            "position",
-            b"position",
-            "ref",
-            b"ref",
-            "start",
-            b"start",
-            "wait",
-            b"wait",
-        ],
+        self, field_name: typing_extensions.Literal["ref", b"ref", "wait", b"wait"]
     ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "floor_from",
-            b"floor_from",
             "from_offset",
             b"from_offset",
             "max_bytes",
@@ -388,23 +326,12 @@ class ReadRecordsRequest(google.protobuf.message.Message):
             b"max_records",
             "namespace",
             b"namespace",
-            "position",
-            b"position",
             "ref",
             b"ref",
-            "start",
-            b"start",
-            "to_offset",
-            b"to_offset",
             "wait",
             b"wait",
-            "wake_only",
-            b"wake_only",
         ],
     ) -> None: ...
-    def WhichOneof(
-        self, oneof_group: typing_extensions.Literal["position", b"position"]
-    ) -> typing_extensions.Literal["from_offset", "start"] | None: ...
 
 global___ReadRecordsRequest = ReadRecordsRequest
 
@@ -418,7 +345,6 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     RECORDS_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
     DONE_FIELD_NUMBER: builtins.int
-    CONTINUE_AS_NEW_SUGGESTED_FIELD_NUMBER: builtins.int
     @property
     def records(
         self,
@@ -432,17 +358,9 @@ class ReadRecordsResponse(google.protobuf.message.Message):
     known, and an empty value means that the next read starts as this one did.
     """
     done: builtins.bool
-    """True when the Stream is closed and this read gave its last item. The close item says the
-    same on a page that has it. An answer with no item needs this flag, which is a wake_only
-    read and a read after the close item. A read of a closed Stream with no item left answers
-    at once.
-    """
-    continue_as_new_suggested: builtins.bool
-    """Tells a Workflow reader to continue as new. The server keeps every Record from the lowest
-    offset that a run read, since a replay of the run reads them again. That floor moves only
-    when the run ends. This flag is true when the Records that this reader's floor keeps are
-    more than half of the Stream's byte cap. The writer fails when the cap fills, and only the
-    reader's continue-as-new frees it. Only set by the server.
+    """True when the Stream is closed and this read gave its last Record. It is the only sign of a
+    close in a read, since a close stores no Record. A read of a closed Stream with no Record
+    left answers at once with done.
     """
     def __init__(
         self,
@@ -453,19 +371,11 @@ class ReadRecordsResponse(google.protobuf.message.Message):
         | None = ...,
         last_offset: builtins.bytes = ...,
         done: builtins.bool = ...,
-        continue_as_new_suggested: builtins.bool = ...,
     ) -> None: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "continue_as_new_suggested",
-            b"continue_as_new_suggested",
-            "done",
-            b"done",
-            "last_offset",
-            b"last_offset",
-            "records",
-            b"records",
+            "done", b"done", "last_offset", b"last_offset", "records", b"records"
         ],
     ) -> None: ...
 
@@ -473,7 +383,7 @@ global___ReadRecordsResponse = ReadRecordsResponse
 
 class DescribeStreamRequest(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    Gets the status, the newest offset and the Retention of a Stream.
+    Gets the status and the newest offset of a Stream.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -505,38 +415,27 @@ global___DescribeStreamRequest = DescribeStreamRequest
 
 class DescribeStreamResponse(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    The state of a Stream.
+    The state of a Stream. It has no Retention, since the Retention is a setting of the backend and
+    not of one Stream.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
     STATUS_FIELD_NUMBER: builtins.int
     LAST_OFFSET_FIELD_NUMBER: builtins.int
-    RETENTION_FIELD_NUMBER: builtins.int
     status: temporalio.api.enums.v1.stream_pb2.StreamStatus.ValueType
     last_offset: builtins.bytes
     """The newest offset, of a Record. Empty when the Stream has none."""
-    @property
-    def retention(self) -> google.protobuf.duration_pb2.Duration: ...
     def __init__(
         self,
         *,
         status: temporalio.api.enums.v1.stream_pb2.StreamStatus.ValueType = ...,
         last_offset: builtins.bytes = ...,
-        retention: google.protobuf.duration_pb2.Duration | None = ...,
     ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["retention", b"retention"]
-    ) -> builtins.bool: ...
     def ClearField(
         self,
         field_name: typing_extensions.Literal[
-            "last_offset",
-            b"last_offset",
-            "retention",
-            b"retention",
-            "status",
-            b"status",
+            "last_offset", b"last_offset", "status", b"status"
         ],
     ) -> None: ...
 

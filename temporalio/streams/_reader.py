@@ -11,7 +11,6 @@ from typing import Any, Generic, TypeVar
 import temporalio.common
 import temporalio.converter
 from temporalio.streams import _backend, _convert, _errors
-from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._items import Closed, End, Record
 from temporalio.streams._offset import StreamOffset
 from temporalio.streams.system import models
@@ -22,9 +21,6 @@ Item = Record[Any] | Closed
 
 # The service waits at most 60 s per read, so a longer wait is a loop of reads.
 _MAX_WAIT = timedelta(seconds=60)
-
-_BEGINNING = models.ReadPositionStart(models.StreamReadStart.StreamReadStartBeginning)
-_END = models.ReadPositionStart(models.StreamReadStart.StreamReadStartEnd)
 
 # An empty page that comes back in less than half of its wait is followed by a pause, so a
 # Store that ignores the wait isn't asked again at once. The pause doubles up to the last one.
@@ -87,8 +83,10 @@ class Reader(Generic[T]):
         with _backend.using(self._options):
             item = await self._items.__anext__()
         # A resume reads after the offset, so the next read starts at this item's offset.
-        offset = item.offset._wire
-        self._position.last_offset = max(self._position.last_offset or b"", offset)
+        if item.offset is not None:
+            self._position.last_offset = max(
+                self._position.last_offset or b"", item.offset._wire
+            )
         return item
 
     async def aclose(self) -> None:
@@ -116,14 +114,16 @@ async def read(
     With ``wait_new_records`` False, stop at the newest Record. A read of a Stream that nobody
     created fails at once with ``STREAM_ERROR_REASON_NOT_FOUND``.
     """
+    if from_offset is End.END:
+        # A from_offset is exclusive, so the read starts after the newest Record. With no Record
+        # it is empty and the read starts at the beginning, which misses no Record that lands
+        # before the first read.
+        described = await service.send_describe_stream(
+            models.DescribeStreamRequest(ref=models.StreamRef(id=stream_id))
+        )
+        from_offset = described.last_offset
     request = models.ReadRecordsRequest(
-        ref=models.StreamRef(id=stream_id),
-        # END applies only to the first page. Later pages start after the last page's offset.
-        position=_after(from_offset)
-        if isinstance(from_offset, bytes)
-        else _END
-        if from_offset is End.END
-        else _BEGINNING,
+        ref=models.StreamRef(id=stream_id), from_offset=from_offset
     )
     pages = _pages(service, request, wait_new_records)
     try:
@@ -131,12 +131,10 @@ async def read(
             for record in page.records or []:
                 try:
                     item = await _item(converter, record, payload_type)
-                    if item is None:
-                        continue
                 except Exception as err:
                     # Move last_offset to the Record, so a resume doesn't fail on it again.
                     # The error gives the offset, for a read of that Record.
-                    offset = _offset_of(record)
+                    offset = record.offset
                     position.last_offset = max(position.last_offset or b"", offset)
                     raise _errors.StreamError(
                         f"Can't decode the Record at the offset {offset.hex()}: {err}"
@@ -146,6 +144,12 @@ async def read(
                 # A resume starts after the page's last offset.
                 position.last_offset = max(
                     position.last_offset or b"", page.last_offset
+                )
+            if page.done:
+                yield Closed(
+                    offset=StreamOffset._from_wire(page.last_offset)
+                    if page.last_offset is not None
+                    else None
                 )
     finally:
         await pages.aclose()
@@ -171,7 +175,7 @@ async def _pages(
         if not wait_new_records and (
             page.last_offset is None
             # An empty page that didn't advance is at the newest Record.
-            or (not page.records and page.last_offset <= _from_offset(request))
+            or (not page.records and page.last_offset <= (request.from_offset or b""))
         ):
             return
         request = _next_request(request, page)
@@ -181,24 +185,9 @@ def _next_request(
     request: models.ReadRecordsRequest, page: models.ReadRecordsResponse[Any]
 ) -> models.ReadRecordsRequest:
     if page.last_offset is not None:
-        return dataclasses.replace(request, position=_after(page.last_offset))
-    if request.position == _END:
-        # An empty page from the end with no offset means the Stream had no Record. A poll from
-        # the end again would skip a Record that lands before it, so it starts at the beginning.
-        return dataclasses.replace(request, position=_BEGINNING)
+        # A from_offset is exclusive, so the read starts after the Record at that offset.
+        return dataclasses.replace(request, from_offset=page.last_offset)
     return request
-
-
-def _after(offset: bytes) -> models.ReadPosition:
-    # A from-offset is exclusive, so the read starts after the Record at that offset.
-    return models.ReadPositionFromOffset(offset)
-
-
-def _from_offset(request: models.ReadRecordsRequest) -> bytes:
-    position = request.position
-    if isinstance(position, models.ReadPositionFromOffset):
-        return position.value
-    return b""
 
 
 async def _read_page(
@@ -238,33 +227,14 @@ async def _read_until_records(
             pause = _FIRST_PAUSE
 
 
-def _offset_of(record: models.StreamRecord[Any]) -> bytes:
-    # Each item carries its own offset. An item of a kind that this SDK doesn't know has none.
-    return record.item.value.offset if record.item is not None else b""
-
-
 async def _item(
     converter: temporalio.converter.DataConverter,
     record: models.StreamRecord[temporalio.common.RawValue],
     payload_type: Any,
-) -> Item | None:
-    offset = _offset_of(record)
-    match record.item:
-        case None:
-            # A newer backend's item kind that this SDK doesn't know is empty, so the read skips
-            # it.
-            return None
-        case models.StreamItemData(value=data):
-            value = _convert.decode(converter, data.body, payload_type)
-            return Record(
-                data=value,
-                offset=StreamOffset._from_wire(offset),
-                producer=data.producer,
-            )
-        case models.StreamItemClose(value=close):
-            return Closed(
-                offset=StreamOffset._from_wire(offset),
-                status=StreamCloseStatus(int(close.status))
-                if close.status is not None
-                else StreamCloseStatus.UNSPECIFIED,
-            )
+) -> Record[Any]:
+    value = _convert.decode(converter, record.body, payload_type)
+    return Record(
+        data=value,
+        offset=StreamOffset._from_wire(record.offset),
+        producer=record.producer,
+    )

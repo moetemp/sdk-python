@@ -8,11 +8,7 @@ import weakref
 import temporalio.api.stream.v1 as stream_v1
 import temporalio.api.streamservice.v1 as stream_pb
 import temporalio.bridge.proto.streams as runtime_pb
-from temporalio.api.enums.v1 import (
-    StreamErrorReason,
-    StreamIdConflictPolicy,
-    StreamReadStart,
-)
+from temporalio.api.enums.v1 import StreamErrorReason, StreamIdConflictPolicy
 from temporalio.bridge.streams import StreamCallError
 from temporalio.client import Client
 from temporalio.service import RPCStatusCode
@@ -57,9 +53,7 @@ class _FakeWriter:
         offsets = [
             self._extension._append(
                 self._stream_id,
-                stream_v1.StreamRecord(
-                    data=stream_v1.StreamData(body=record.body, producer=self._producer)
-                ),
+                stream_v1.StreamRecord(body=record.body, producer=self._producer),
             )
             for record in write.records
         ]
@@ -99,11 +93,11 @@ class FakeExtension:
                 StreamErrorReason.STREAM_ERROR_REASON_CLOSED,
             )
         # A fixed-width big-endian offset compares as raw bytes in the Store's order.
-        record.data.offset = self.next_offset.to_bytes(8, "big")
+        record.offset = self.next_offset.to_bytes(8, "big")
         self.next_offset += 1
         stream.records.append(record)
         stream.wake()
-        return record.data.offset
+        return record.offset
 
     async def open_writer(self, input: bytes) -> _FakeWriter:
         open_writer = runtime_pb.OpenWriterRequest.FromString(input)
@@ -154,7 +148,7 @@ class FakeExtension:
             describe = stream_pb.DescribeStreamRequest.FromString(input)
             records = self.streams[describe.ref.id].records
             return stream_pb.DescribeStreamResponse(
-                last_offset=records[-1].data.offset if records else b""
+                last_offset=records[-1].offset if records else b""
             ).SerializeToString()
         if method == "ReadRecords":
             return (
@@ -174,21 +168,16 @@ class FakeExtension:
             raise _error(
                 RPCStatusCode.NOT_FOUND, StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
             )
-        # A resume reads after the offset, so from_offset is exclusive. A read from the end
-        # starts after the newest Record. Empty reads from the start.
-        offset = b""
-        if request.WhichOneof("position") == "from_offset":
-            offset = request.from_offset
-        elif request.start == StreamReadStart.STREAM_READ_START_END and stream.records:
-            offset = stream.records[-1].data.offset
+        # A resume reads after the offset, so from_offset is exclusive. Empty reads from the start.
+        offset = request.from_offset
         wait = request.wait.ToTimedelta().total_seconds()
         until = loop.time() + wait
         while True:
-            found = [r for r in stream.records if r.data.offset > offset]
+            found = [r for r in stream.records if r.offset > offset]
             if found or stream.closed:
                 return stream_pb.ReadRecordsResponse(
                     records=found,
-                    last_offset=found[-1].data.offset if found else offset,
+                    last_offset=found[-1].offset if found else offset,
                     done=stream.closed,
                 )
             left = until - loop.time()

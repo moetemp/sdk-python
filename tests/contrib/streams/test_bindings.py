@@ -15,18 +15,8 @@ def _off(n: int) -> bytes:
     return n.to_bytes(8, "big")
 
 
-_BEGINNING = models.ReadPositionStart(models.StreamReadStart.StreamReadStartBeginning)
-
-
 def _data(offset: int) -> models.StreamRecord[str]:
-    return models.StreamRecord(
-        item=models.StreamItemData(models.StreamData(body="token", offset=_off(offset)))
-    )
-
-
-def _offset(record: models.StreamRecord[str]) -> bytes:
-    assert record.item is not None
-    return record.item.value.offset
+    return models.StreamRecord(body="token", offset=_off(offset))
 
 
 class FakeNexusClient:
@@ -72,10 +62,11 @@ class FakeService(client.StreamServiceClientExtension):
 
 async def test_a_poll_carries_the_last_offset_until_the_close():
     nexus_client = FakeNexusClient(
-        models.ReadRecordsResponse(records=[], last_offset=_off(8)),
+        models.ReadRecordsResponse(records=[], last_offset=_off(8), done=False),
         models.ReadRecordsResponse(
             records=[_data(9)],
             last_offset=_off(10),
+            done=False,
         ),
         models.ReadRecordsResponse(records=[], last_offset=_off(10), done=True),
     )
@@ -85,14 +76,14 @@ async def test_a_poll_carries_the_last_offset_until_the_close():
     items = [
         item
         async for item in stream.iter_read_items(
-            position=models.ReadPositionFromOffset(_off(1)), wait=timedelta(seconds=5)
+            from_offset=_off(1), wait=timedelta(seconds=5)
         )
     ]
-    assert [_offset(item) for item in items] == [_off(9)]
-    assert [request.position for request in nexus_client.requests] == [
-        models.ReadPositionFromOffset(_off(1)),
-        models.ReadPositionFromOffset(_off(8)),
-        models.ReadPositionFromOffset(_off(10)),
+    assert [item.offset for item in items] == [_off(9)]
+    assert [request.from_offset for request in nexus_client.requests] == [
+        _off(1),
+        _off(8),
+        _off(10),
     ]
     assert all(request.wait for request in nexus_client.requests)
 
@@ -102,35 +93,36 @@ async def test_a_read_with_no_wait_ends_at_an_empty_page_that_didnt_move():
         models.ReadRecordsResponse(
             records=[_data(4)],
             last_offset=_off(5),
+            done=False,
         ),
-        models.ReadRecordsResponse(records=[], last_offset=_off(5)),
+        models.ReadRecordsResponse(records=[], last_offset=_off(5), done=False),
     )
     stream = FakeService(nexus_client).get_stream(
         models.StreamRef(id="wf:run"), body_type=str
     )
-    items = [item async for item in stream.iter_read_items(position=_BEGINNING)]
-    assert [_offset(item) for item in items] == [_off(4)]
+    items = [item async for item in stream.iter_read_items()]
+    assert [item.offset for item in items] == [_off(4)]
     first, second = nexus_client.requests
-    assert first.position == _BEGINNING
+    assert first.from_offset is None
     # The second page starts after the first one's last offset, in place of the start.
-    assert second.position == models.ReadPositionFromOffset(_off(5))
+    assert second.from_offset == _off(5)
 
 
 async def test_a_poll_resumes_after_the_last_item_it_gave():
     nexus_client = FakeNexusClient(
-        models.ReadRecordsResponse(records=[_data(4), _data(7)], last_offset=_off(8)),
+        models.ReadRecordsResponse(
+            records=[_data(4), _data(7)], last_offset=_off(8), done=False
+        ),
     )
     stream = FakeService(nexus_client).get_stream(
         models.StreamRef(id="wf:run"), body_type=str
     )
-    items = stream.iter_read_items(
-        position=models.ReadPositionStart(models.StreamReadStart.StreamReadStartEnd)
-    )
+    items = stream.iter_read_items()
     first = await anext(items)
-    assert _offset(first) == _off(4)
+    assert first.offset == _off(4)
     # A read that resumes here starts after the item, in place of the start.
     assert items.next_request is not None
-    assert items.next_request.position == models.ReadPositionFromOffset(_off(4))
+    assert items.next_request.from_offset == _off(4)
 
 
 async def test_start_now_runs_a_call_to_its_first_wait_at_once():

@@ -1,7 +1,6 @@
 import asyncio
 import collections.abc
 import dataclasses
-import sys
 import typing
 import uuid
 from datetime import timedelta
@@ -308,7 +307,7 @@ class _ReadRequest(typing.Protocol):
     __dataclass_fields__: typing.ClassVar[dict[str, typing.Any]]
 
     @property
-    def position(self) -> object: ...
+    def from_offset(self) -> bytes | None: ...
 
     @property
     def wait(self) -> timedelta | None: ...
@@ -333,13 +332,13 @@ def next_read_request(
 ) -> _ReadRequestT | None:
     """The request after one page of a Stream read, or None to stop.
 
-    A read ends when the Stream is closed and the read gave its last item. A read with no wait
+    A read ends when the Stream is closed and the read gave its last Record. A read with no wait
     also ends at an empty page that didn't move, since the Store had nothing past the newest
     Record.
     """
     if response.done or response.last_offset is None:
         return None
-    moved = response.last_offset > _from_offset(request)
+    moved = response.last_offset > (request.from_offset or b"")
     if not response.records and not moved and request.wait is None:
         return None
     return _read_after(request, response.last_offset)
@@ -347,38 +346,18 @@ def next_read_request(
 
 class _ReadItem(typing.Protocol):
     @property
-    def item(self) -> typing.Any: ...
+    def offset(self) -> bytes: ...
 
 
 def resume_read_request(request: _ReadRequestT, item: _ReadItem) -> _ReadRequestT:
-    """The request that resumes a Stream read after ``item``.
-
-    Each item carries its own offset. An item of a kind that this SDK doesn't know has none, so
-    the read starts at its page again.
-    """
-    if item.item is None:
-        return request
-    return _read_after(request, item.item.value.offset)
+    """The request that resumes a Stream read after ``item``."""
+    return _read_after(request, item.offset)
 
 
 def _read_after(request: _ReadRequestT, offset: bytes) -> _ReadRequestT:
     # A from-offset is exclusive, so the read starts after the Record at that offset. It
     # replaces the first page's start.
-    return dataclasses.replace(
-        request, position=_read_models(request).ReadPositionFromOffset(offset)
-    )
-
-
-def _from_offset(request: _ReadRequest) -> bytes:
-    position: typing.Any = request.position
-    if isinstance(position, _read_models(request).ReadPositionFromOffset):
-        return position.value
-    return b""
-
-
-def _read_models(request: _ReadRequest) -> typing.Any:
-    # Each generated package has its own position classes, and its converter matches only those.
-    return sys.modules[type(request).__module__]
+    return dataclasses.replace(request, from_offset=offset)
 
 
 class _AppendResponse(typing.Protocol):

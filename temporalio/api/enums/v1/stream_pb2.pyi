@@ -46,59 +46,6 @@ STREAM_STATUS_CLOSED: StreamStatus.ValueType  # 2
 STREAM_STATUS_EXPIRED: StreamStatus.ValueType  # 3
 global___StreamStatus = StreamStatus
 
-class _StreamCloseStatus:
-    ValueType = typing.NewType("ValueType", builtins.int)
-    V: typing_extensions.TypeAlias = ValueType
-
-class _StreamCloseStatusEnumTypeWrapper(
-    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
-        _StreamCloseStatus.ValueType
-    ],
-    builtins.type,
-):  # noqa: F821
-    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
-    STREAM_CLOSE_STATUS_UNSPECIFIED: _StreamCloseStatus.ValueType  # 0
-    STREAM_CLOSE_STATUS_CLOSED: _StreamCloseStatus.ValueType  # 1
-
-class StreamCloseStatus(
-    _StreamCloseStatus, metaclass=_StreamCloseStatusEnumTypeWrapper
-):
-    """Experimental. Might change in the future.
-    How a Stream closed. CLOSED comes from a Producer that called close(). Native Streams add their
-    own close statuses later.
-    (-- api-linter: core::0216::synonyms=disabled
-        aip.dev/not-precedent: Named consistently with WorkflowExecutionStatus. --)
-    """
-
-STREAM_CLOSE_STATUS_UNSPECIFIED: StreamCloseStatus.ValueType  # 0
-STREAM_CLOSE_STATUS_CLOSED: StreamCloseStatus.ValueType  # 1
-global___StreamCloseStatus = StreamCloseStatus
-
-class _StreamReadStart:
-    ValueType = typing.NewType("ValueType", builtins.int)
-    V: typing_extensions.TypeAlias = ValueType
-
-class _StreamReadStartEnumTypeWrapper(
-    google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[
-        _StreamReadStart.ValueType
-    ],
-    builtins.type,
-):  # noqa: F821
-    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
-    STREAM_READ_START_UNSPECIFIED: _StreamReadStart.ValueType  # 0
-    STREAM_READ_START_BEGINNING: _StreamReadStart.ValueType  # 1
-    STREAM_READ_START_END: _StreamReadStart.ValueType  # 2
-
-class StreamReadStart(_StreamReadStart, metaclass=_StreamReadStartEnumTypeWrapper):
-    """Experimental. Might change in the future.
-    Where a read starts when it has no from_offset.
-    """
-
-STREAM_READ_START_UNSPECIFIED: StreamReadStart.ValueType  # 0
-STREAM_READ_START_BEGINNING: StreamReadStart.ValueType  # 1
-STREAM_READ_START_END: StreamReadStart.ValueType  # 2
-global___StreamReadStart = StreamReadStart
-
 class _StreamIdConflictPolicy:
     ValueType = typing.NewType("ValueType", builtins.int)
     V: typing_extensions.TypeAlias = ValueType

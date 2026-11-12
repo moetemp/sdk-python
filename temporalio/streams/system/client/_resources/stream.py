@@ -19,7 +19,6 @@ from ...models import (
     CloseStreamRequest,
     DescribeStreamRequest,
     DescribeStreamResponse,
-    ReadPosition,
     ReadRecordsRequest,
     ReadRecordsResponse,
     StreamRecord,
@@ -111,7 +110,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def read(
         self,
-        position: ReadPosition | None = None,
+        from_offset: bytes | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         max_bytes: int | None = None,
@@ -122,7 +121,7 @@ class Stream(typing.Generic[BodyT]):
         """Read one page of Records. The poll iterator reads them all."""
         request = ReadRecordsRequest(
             ref=self.ref,
-            position=position,
+            from_offset=from_offset,
             max_records=max_records,
             wait=wait,
             max_bytes=max_bytes,
@@ -139,7 +138,7 @@ class Stream(typing.Generic[BodyT]):
 
     async def iter_read(
         self,
-        position: ReadPosition | None = None,
+        from_offset: bytes | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         max_bytes: int | None = None,
@@ -152,9 +151,9 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            position: Where the read starts. Unset is the beginning. A too high offset
-                fails.
-            max_records: About this many items per page, 1 to 1000.
+            from_offset: Read after this offset. Empty is the beginning. A too high
+                offset fails.
+            max_records: About this many Records per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
             max_bytes: The maximum Record bytes in a page. A larger Record is still
@@ -162,7 +161,7 @@ class Stream(typing.Generic[BodyT]):
         """
         request = ReadRecordsRequest(
             ref=self.ref,
-            position=position,
+            from_offset=from_offset,
             max_records=max_records,
             wait=wait,
             max_bytes=max_bytes,
@@ -186,7 +185,7 @@ class Stream(typing.Generic[BodyT]):
 
     def iter_read_items(
         self,
-        position: ReadPosition | None = None,
+        from_offset: bytes | None = None,
         max_records: int | None = None,
         wait: datetime.timedelta | None = None,
         max_bytes: int | None = None,
@@ -202,9 +201,9 @@ class Stream(typing.Generic[BodyT]):
         Read one page of Records. The poll iterator reads them all.
 
         Args:
-            position: Where the read starts. Unset is the beginning. A too high offset
-                fails.
-            max_records: About this many items per page, 1 to 1000.
+            from_offset: Read after this offset. Empty is the beginning. A too high
+                offset fails.
+            max_records: About this many Records per page, 1 to 1000.
             wait: How long to wait for a new Record before an empty answer. At most 60
                 s.
             max_bytes: The maximum Record bytes in a page. A larger Record is still
@@ -212,7 +211,7 @@ class Stream(typing.Generic[BodyT]):
         """
         request = ReadRecordsRequest(
             ref=self.ref,
-            position=position,
+            from_offset=from_offset,
             max_records=max_records,
             wait=wait,
             max_bytes=max_bytes,
@@ -220,7 +219,7 @@ class Stream(typing.Generic[BodyT]):
         return PollIterator(
             request,
             self.iter_read(
-                position=position,
+                from_offset=from_offset,
                 max_records=max_records,
                 wait=wait,
                 max_bytes=max_bytes,
@@ -238,7 +237,7 @@ class Stream(typing.Generic[BodyT]):
         rpc_metadata: collections.abc.Mapping[str, str | bytes] | None = None,
         rpc_timeout: datetime.timedelta | None = None,
     ) -> DescribeStreamResponse:
-        """Describe the Stream's status, newest offset and Retention."""
+        """Describe the Stream's status and newest offset."""
         request = DescribeStreamRequest(
             ref=self.ref,
         )

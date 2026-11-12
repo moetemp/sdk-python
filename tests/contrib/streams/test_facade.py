@@ -78,18 +78,23 @@ async def test_client_writes_reads_and_closes(client: Client):
     assert first < second
     assert await stream.get_offset() == second
     await stream.close()
-    # A close writes no item. The read ends once it gave the last Record.
+    # A close writes no Record. The read ends with the Closed item, once it gave the last Record.
     items = [item async for item in stream.read()]
-    assert [item.kind for item in items] == [streams.ItemKind.RECORD] * 2
-    turn, token = items
+    assert [item.kind for item in items] == [
+        streams.ItemKind.RECORD,
+        streams.ItemKind.RECORD,
+        streams.ItemKind.CLOSED,
+    ]
+    turn, token, closed = items
     assert isinstance(turn, streams.Record) and turn.data == Turn("model")
     assert isinstance(token, streams.Record) and token.data == Turn("user", "hello")
+    assert closed == streams.Closed(offset=second)
     assert turn.producer is not None
     assert isinstance(turn.producer.kind, streams.ProducerKindClient)
     assert extension.namespaces == {client.namespace}
 
     resumed = [item async for item in stream.read(offset=turn.offset)]
-    assert [item.offset for item in resumed] == [token.offset]
+    assert [item.offset for item in resumed] == [token.offset, second]
 
 
 async def test_create_fails_on_an_id_that_exists(client: Client):
@@ -248,9 +253,9 @@ async def test_codec_runs_once_for_each_write_and_page(client: Client):
 
 async def test_forked_process_gets_its_own_client_producers(client: Client):
     # A forked child has the parent's key and count, so the fork hook replaces them.
-    before = _stream_client._client_producer(client, None).id
+    before = _stream_client._client_producer(client).id
     _stream_client._new_process_key()
-    after = _stream_client._client_producer(client, None).id
+    after = _stream_client._client_producer(client).id
     assert before != after
 
 

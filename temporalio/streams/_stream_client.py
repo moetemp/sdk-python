@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import contextlib
-import contextvars
 import itertools
 import os
 import typing
 import uuid
 import weakref
-from collections.abc import AsyncGenerator, Iterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from datetime import timedelta
 from typing import Any, TypeVar
 
@@ -39,11 +37,6 @@ _CLIENT_KEYS: weakref.WeakKeyDictionary[temporalio.client.Client, str] = (
     weakref.WeakKeyDictionary()
 )
 
-# The named Producer that client writes use, set by the producer() context manager.
-_producer_override: contextvars.ContextVar[tuple[str, int] | None] = (
-    contextvars.ContextVar("__temporal_stream_producer", default=None)
-)
-
 
 def _new_process_key() -> None:
     # A forked child has the parent's key and count, so two children would give their clients
@@ -60,53 +53,14 @@ if _register_at_fork is not None:
     _register_at_fork(after_in_child=_new_process_key)
 
 
-@contextlib.contextmanager
-def producer(name: str, epoch: int) -> Iterator[None]:
-    """Make the client writes in the block write as the Producer ``name`` at ``epoch``.
-
-    Use it for a writer that must fence its earlier instances, such as a server that restarts.
-    Keep ``epoch`` in durable storage, and raise it at each start. After a write at a higher
-    epoch, a write at a lower one raises a :py:class:`temporalio.streams.StreamError` with
-    ``reason`` ``STREAM_ERROR_REASON_FENCED``. As for every Producer, a reader that wraps its read
-    in :py:func:`temporalio.streams.superseded.with_superseded` sees the Records of the earlier
-    epochs withdrawn once the higher epoch writes. Run only one live writer for each name. Writes
-    in an Activity ignore it and write as the attempt.
-
-    Args:
-        name: The Producer name, the same across restarts.
-        epoch: The writer's epoch, 1 or more.
-
-    Raises:
-        ValueError: The epoch is below 1.
-
-    .. warning::
-        This API is experimental.
-    """
-    if epoch < 1:
-        raise ValueError("A Producer's epoch is 1 or more")
-    token = _producer_override.set((name, epoch))
-    try:
-        yield
-    finally:
-        _producer_override.reset(token)
-
-
-def _client_producer(
-    client: temporalio.client.Client, named: tuple[str, int] | None
-) -> stream_v1.Producer:
-    if named is not None:
-        name, epoch = named
-        return stream_v1.Producer(
-            id=_ids.named_client_producer_id(name),
-            client=stream_v1.ClientProducer(epoch=stream_v1.ClientEpoch(attempt=epoch)),
-        )
+def _client_producer(client: temporalio.client.Client) -> stream_v1.Producer:
     key = _CLIENT_KEYS.get(client)
     if key is None:
         key = f"{_process_key}-{next(_clients)}"
         _CLIENT_KEYS[client] = key
     return stream_v1.Producer(
         id=_ids.client_producer_id(client.identity, key),
-        client=stream_v1.ClientProducer(epoch=stream_v1.ClientEpoch(attempt=1)),
+        client=stream_v1.ClientProducer(),
     )
 
 
@@ -156,7 +110,7 @@ class ClientCalls(StreamCalls):
     """The calls of one Stream in client code.
 
     Each append starts its write at the call. All Streams of one client and Stream id write as
-    one Producer, unless :py:func:`producer` sets a Producer with a name of its own.
+    one Producer.
     """
 
     def __init__(
@@ -169,8 +123,7 @@ class ClientCalls(StreamCalls):
         self._client = client
         self._backend = backend
         self._ref = ref
-        # One writer for each Producer this Stream wrote as, keyed by the producer() override.
-        self._writers: dict[tuple[str, int] | None, RecordWriter] = {}
+        self._writer: RecordWriter | None = None
         self._closed = False
 
     def _access(self) -> Access:
@@ -179,17 +132,13 @@ class ClientCalls(StreamCalls):
         stream_id = self._ref.id
 
         def writer() -> RecordWriter:
-            # Read the Producer at write time, so a write in a producer() block uses it.
-            named = _producer_override.get()
-            found = self._writers.get(named)
-            if found is None:
-                found = RecordWriter(
+            if self._writer is None:
+                self._writer = RecordWriter(
                     writers=backend.writers(client.namespace, client.data_converter),
                     stream_id=stream_id,
-                    producer=_client_producer(client, named),
+                    producer=_client_producer(client),
                 )
-                self._writers[named] = found
-            return found
+            return self._writer
 
         return Access(
             backend=backend,
@@ -202,13 +151,11 @@ class ClientCalls(StreamCalls):
     def _raise_lost_write(self) -> None:
         # Client code has no end, such as a run's, to raise a write error that no caller got. So
         # the Stream's next call raises it.
-        first: BaseException | None = None
-        for writer in list(self._writers.values()):
-            error = writer.unretrieved_error()
-            if error is not None and first is None:
-                first = error
-        if first is not None:
-            raise first
+        if self._writer is None:
+            return
+        error = self._writer.unretrieved_error()
+        if error is not None:
+            raise error
 
     def append(
         self,

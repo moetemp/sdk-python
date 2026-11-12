@@ -183,13 +183,12 @@ another in one chat, so a new viewer sees each case.
   Activities, each model or tool attempt is an Activity Producer, a sub-agent writes through its
   own Local Activities, and the server writes as a client.
 
-The app doesn't use `streams.producer()`, `SyncStream`, `close_nowait` or the `FENCED` reason.
+The app doesn't use `SyncStream`, `close_nowait` or the `FENCED` reason.
 
 ## Coming
 
 These are approved but not built yet, so the app doesn't use them.
 
-- A `closed` item with a close status. The log would show why a Stream closed.
 - `max_record_age` on a read.
 
 The Python facade has no public `describe` yet, so the app uses only `get_offset`.

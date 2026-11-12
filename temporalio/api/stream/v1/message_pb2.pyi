@@ -22,7 +22,8 @@ DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
 class StreamRef(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    Identifies one Stream. The id is opaque to callers.
+    Identifies one Stream. The id is opaque to callers. A Stream has no incarnations. A create of a
+    closed or expired Stream fails, and it doesn't make a second Stream with the same id.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -33,8 +34,9 @@ class StreamRef(google.protobuf.message.Message):
     backend: builtins.str
     """The name of the backend that holds the Stream, as the Worker and client config register
     it, so every process routes a ref it receives. With no name, the SDK picks the backend from
-    its config. Only an SDK reads it. A request carries the whole ref, and the server and a
-    Store ignore this field.
+    its config. Only an SDK sets and reads it, since only the SDK knows the name that its config
+    gives a backend. A request carries the whole ref, and the server and a Store ignore this
+    field.
     """
     def __init__(
         self,
@@ -163,29 +165,6 @@ class ActivityEpoch(google.protobuf.message.Message):
 
 global___ActivityEpoch = ActivityEpoch
 
-class ClientEpoch(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    The attempt of a client Producer, which the client picks. A client that runs the same work
-    again under one Producer name stores this number and raises it at each start. A client with no
-    name of its own is a new Producer in each process, so nothing fences or supersedes it.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    ATTEMPT_FIELD_NUMBER: builtins.int
-    attempt: builtins.int
-    """Required. 1 or more."""
-    def __init__(
-        self,
-        *,
-        attempt: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["attempt", b"attempt"]
-    ) -> None: ...
-
-global___ClientEpoch = ClientEpoch
-
 class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     A Workflow run Producer. On the server's Streams, a Workflow writes as this Producer in its
@@ -284,25 +263,14 @@ global___ActivityProducer = ActivityProducer
 
 class ClientProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    A client Producer. A client has no run.
+    A client Producer. A client has no run and no epoch. So nothing fences a client's writes, and a
+    reader never hides them.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
-    EPOCH_FIELD_NUMBER: builtins.int
-    @property
-    def epoch(self) -> global___ClientEpoch:
-        """Required."""
     def __init__(
         self,
-        *,
-        epoch: global___ClientEpoch | None = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self, field_name: typing_extensions.Literal["epoch", b"epoch"]
     ) -> None: ...
 
 global___ClientProducer = ClientProducer
@@ -312,8 +280,9 @@ class Producer(google.protobuf.message.Message):
     The code that wrote a batch, which is one unit of work. Its id stays the same across attempts,
     and an epoch is one attempt. The kind's case orders its epochs. After a write of a higher epoch,
     a write of a lower epoch of the same Producer fails with FENCED, and a reader may hide the
-    Records of the lower epoch. The rule is the same for every kind. The epochs of two Producers
-    never compare. A run-based kind carries its run, so a client can't.
+    Records of the lower epoch. The rule is the same for every kind that has an epoch. A client has
+    none. The epochs of two Producers never compare. A new run has new Producers, so no write
+    fences or supersedes the Records of an earlier run, such as the base run of a reset.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -326,7 +295,8 @@ class Producer(google.protobuf.message.Message):
     CLIENT_FIELD_NUMBER: builtins.int
     id: builtins.str
     """Required. Stable across attempts, such as `wf:<run id>` for the Workflow Producer of a run.
-    It is unique in one Stream, so it carries no namespace.
+    It is unique in one Stream. The id of a run-based kind has its run id, so it stays unique
+    when Producers of more than one namespace write to one Stream.
     """
     @property
     def workflow(self) -> global___WorkflowProducer: ...
@@ -428,9 +398,10 @@ class AppendRecord(google.protobuf.message.Message):
 
 global___AppendRecord = AppendRecord
 
-class StreamData(google.protobuf.message.Message):
+class StreamRecord(google.protobuf.message.Message):
     """Experimental. Might change in the future.
-    One Record that a Producer appended.
+    One Record that a Producer appended, as a read gives it. A read gives only Records. A close
+    stores no Record, so a read tells of it with the done flag of its response.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -464,81 +435,6 @@ class StreamData(google.protobuf.message.Message):
             "body", b"body", "offset", b"offset", "producer", b"producer"
         ],
     ) -> None: ...
-
-global___StreamData = StreamData
-
-class StreamClose(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    The close of a Stream, as a read item. A close is its own call and stores no Record. A read
-    builds this item from the close state of the Stream and returns it last, so a reader learns in
-    order that the Stream ended, who closed it and why.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    PRODUCER_FIELD_NUMBER: builtins.int
-    STATUS_FIELD_NUMBER: builtins.int
-    OFFSET_FIELD_NUMBER: builtins.int
-    @property
-    def producer(self) -> global___Producer:
-        """The Producer that closed the Stream."""
-    status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType
-    """Why the Stream closed."""
-    offset: builtins.bytes
-    """Required. Where the Stream ended."""
-    def __init__(
-        self,
-        *,
-        producer: global___Producer | None = ...,
-        status: temporalio.api.enums.v1.stream_pb2.StreamCloseStatus.ValueType = ...,
-        offset: builtins.bytes = ...,
-    ) -> None: ...
-    def HasField(
-        self, field_name: typing_extensions.Literal["producer", b"producer"]
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "offset", b"offset", "producer", b"producer", "status", b"status"
-        ],
-    ) -> None: ...
-
-global___StreamClose = StreamClose
-
-class StreamRecord(google.protobuf.message.Message):
-    """Experimental. Might change in the future.
-    One item that a read gives. Each item carries its own offset.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    DATA_FIELD_NUMBER: builtins.int
-    CLOSE_FIELD_NUMBER: builtins.int
-    @property
-    def data(self) -> global___StreamData: ...
-    @property
-    def close(self) -> global___StreamClose: ...
-    def __init__(
-        self,
-        *,
-        data: global___StreamData | None = ...,
-        close: global___StreamClose | None = ...,
-    ) -> None: ...
-    def HasField(
-        self,
-        field_name: typing_extensions.Literal[
-            "close", b"close", "data", b"data", "item", b"item"
-        ],
-    ) -> builtins.bool: ...
-    def ClearField(
-        self,
-        field_name: typing_extensions.Literal[
-            "close", b"close", "data", b"data", "item", b"item"
-        ],
-    ) -> None: ...
-    def WhichOneof(
-        self, oneof_group: typing_extensions.Literal["item", b"item"]
-    ) -> typing_extensions.Literal["data", "close"] | None: ...
 
 global___StreamRecord = StreamRecord
 

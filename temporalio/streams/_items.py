@@ -6,7 +6,6 @@ import enum
 from dataclasses import dataclass, field
 from typing import Generic, Literal, TypeVar
 
-from temporalio.streams._close import StreamCloseStatus
 from temporalio.streams._offset import StreamOffset
 from temporalio.streams.system import models
 
@@ -61,8 +60,7 @@ class Record(Generic[T]):
 class Closed:
     """The close of a Stream, the last item of a read.
 
-    A read of a closed Stream ends after this item. On the memory and Redis backends the status is
-    :py:attr:`StreamCloseStatus.CLOSED`. Native Streams add their own statuses later.
+    A read of a closed Stream ends after this item.
 
     .. warning::
         This API is experimental.
@@ -71,8 +69,8 @@ class Closed:
     kind: Literal[ItemKind.CLOSED] = field(default=ItemKind.CLOSED, init=False)
     """Always :py:attr:`ItemKind.CLOSED`."""
 
-    offset: StreamOffset
-    """The offset at which the Stream ended."""
+    offset: StreamOffset | None
+    """The last offset that the read covered, which is the offset of the newest Record.
 
-    status: StreamCloseStatus
-    """Why the Stream closed."""
+    It is None when the Stream has no Record.
+    """

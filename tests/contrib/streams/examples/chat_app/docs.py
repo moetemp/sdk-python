@@ -22,7 +22,7 @@ DOCS = [
         "Superseded and withdrawal",
         "A Superseded item withdraws a Producer's Records at a lower epoch when the same "
         "Producer writes at a higher one, such as an Activity's retry, a Local Activity's "
-        "retry, a Workflow Task's retry or a named client's restart. A live reader crosses them "
+        "retry or a Workflow Task's retry. A live reader crosses them "
         "out with withdrawn_offsets. A reader that kept Records from an earlier read checks "
         "them with withdraws().",
     ),

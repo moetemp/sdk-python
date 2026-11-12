@@ -61,12 +61,9 @@ def _local_activity(
     )
 
 
-def _client(attempt: int, id: str = "client:me") -> models.Producer:
+def _client(id: str = "client:me") -> models.Producer:
     return models.Producer(
-        id=id,
-        kind=models.ProducerKindClient(
-            models.ClientProducer(epoch=models.ClientEpoch(attempt=attempt))
-        ),
+        id=id, kind=models.ProducerKindClient(models.ClientProducer())
     )
 
 
@@ -139,19 +136,18 @@ async def test_a_local_activity_key_orders_the_task_before_the_attempt():
     assert tuple(str(o) for o in second.withdrawn_offsets) == (_hex(20),)
 
 
-async def test_a_named_client_at_a_higher_epoch_supersedes_its_lower_epochs():
-    items = await _wrapped(
-        _record(10, _client(1)), _record(11, _client(1)), _record(20, _client(2))
-    )
-    [superseded] = [i for i in items if isinstance(i, Superseded)]
-    assert tuple(str(o) for o in superseded.withdrawn_offsets) == (_hex(10), _hex(11))
-
-
-async def test_a_client_with_no_name_is_never_superseded():
-    # Each process has its own id at epoch 1, so no Record has a higher epoch of its Producer.
-    one, other = _client(1, "client:host:a"), _client(1, "client:host:b")
+async def test_a_client_is_never_superseded():
+    # A client has no epoch, so no Record has a higher epoch of its Producer.
+    one, other = _client("client:host:a"), _client("client:host:b")
     items = await _wrapped(_record(10, one), _record(20, other), _record(30, one))
     assert not any(isinstance(i, Superseded) for i in items)
+    assert [str(i.offset) for i in items if isinstance(i, Record)] == [
+        _hex(10),
+        _hex(20),
+        _hex(30),
+    ]
+    synthetic = Superseded(offset=StreamOffset._from_wire(_off(30)), producer=one)
+    assert not synthetic.withdraws(_record(10, one))
 
 
 async def test_two_runs_never_supersede_each_other():
@@ -162,7 +158,7 @@ async def test_two_runs_never_supersede_each_other():
     # withdraws() also never matches a Producer of another run or kind.
     synthetic = Superseded(offset=StreamOffset._from_wire(_off(20)), producer=second)
     assert not synthetic.withdraws(_record(10, first))
-    assert not synthetic.withdraws(_record(10, _client(1)))
+    assert not synthetic.withdraws(_record(10, _client()))
 
 
 async def test_withdraws_checks_a_record_kept_from_an_earlier_read():

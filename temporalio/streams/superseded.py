@@ -16,9 +16,7 @@ epoch can't write after a higher one.
 - An Activity, a Standalone Activity or a Local Activity runs again only when its earlier attempt
   failed or its result was never recorded. A Local Activity's Producer is one call of a run, so a
   Workflow append whose Workflow Task failed and then retried withdraws the first copy.
-- A named client from :py:func:`temporalio.streams.producer` that writes at a higher epoch
-  withdraws what its lower epochs wrote, such as before a restart. A client with no name has an
-  id of its own and epoch 1, so nothing withdraws its Records.
+- A client has no epoch, so nothing withdraws its Records.
 - A Workflow Producer only closes, so it has no Record to withdraw.
 
 The limits: the first copy is visible until the retry writes, a retry that never writes as that
@@ -135,7 +133,8 @@ async def with_superseded(
 
 def _group(producer: models.Producer) -> tuple[str, str, str] | None:
     # The Store fences by kind and Producer id, so the group is the same, with the run where the
-    # kind has one. A kind of a newer server that this SDK doesn't know is skipped.
+    # kind has one. A client has no epoch, so it has no group. A kind of a newer server that this
+    # SDK doesn't know is skipped.
     match producer.kind:
         case models.ProducerKindWorkflow(value=workflow):
             return ("workflow", producer.id, workflow.run_id)
@@ -145,8 +144,6 @@ def _group(producer: models.Producer) -> tuple[str, str, str] | None:
             return ("workflow-activity", producer.id, activity.run_id or "")
         case models.ProducerKindStandaloneActivity(value=activity):
             return ("standalone-activity", producer.id, activity.run_id or "")
-        case models.ProducerKindClient():
-            return ("client", producer.id, "")
         case _:
             return None
 
@@ -170,8 +167,6 @@ def _epoch_key(producer: models.Producer) -> tuple[int, ...]:
                 activity.epoch.attempt_scheduled_time,
                 activity.epoch.attempt,
             )
-        case models.ProducerKindClient(value=client):
-            attempt = client.epoch.attempt
         case _:
             pass
     started = task.started_time if task is not None else None
