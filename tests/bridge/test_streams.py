@@ -20,8 +20,8 @@ async def test_memory_runtime_takes_calls_by_method_name():
         await runtime.call("NoSuchMethod", b"")
     code, _, details = err.value.args
     assert code == RPCStatusCode.UNIMPLEMENTED
-    # StreamErrorDetails with the reason STREAM_ERROR_REASON_UNSUPPORTED (14).
-    assert details == b"\x08\x0e"
+    # StreamErrorDetails with the reason STREAM_ERROR_REASON_UNSUPPORTED (13).
+    assert details == b"\x08\x0d"
 
 
 def test_runtime_refuses_a_config_that_does_not_decode():
