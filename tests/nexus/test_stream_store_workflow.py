@@ -570,7 +570,7 @@ async def test_worker_keeps_its_stream_stores(client: Client):
         worker.client = stream_client
 
 
-async def test_activity_interceptors_skip_stream_store_activity(client: Client):
+async def test_activity_interceptors_see_stream_store_activity(client: Client):
     interceptor = RecordingInterceptor()
     stream_client = _with_store(client, MemoryStreamStore())
     async with new_worker(
@@ -585,7 +585,11 @@ async def test_activity_interceptors_skip_stream_store_activity(client: Client):
             id=f"workflow-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-    assert interceptor.activity_types == ["user_activity"]
+    # The create runs as the SDK's Local Activity, before the Workflow's own Activity.
+    assert interceptor.activity_types == [
+        "__temporal_stream_store_call",
+        "user_activity",
+    ]
 
 
 async def test_workflow_task_retry_appends_with_higher_epoch(client: Client):

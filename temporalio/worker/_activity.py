@@ -46,7 +46,6 @@ from ._interceptor import (
     ExecuteActivityInput,
     Interceptor,
 )
-from ._stream_store import _STREAM_STORE_ACTIVITY
 
 logger = logging.getLogger(__name__)
 
@@ -742,13 +741,8 @@ class _ActivityWorker:
         # now even though the info() can't be intercepted and heartbeat() will
         # fail. The interceptors may want to use the info() during init.
         impl: ActivityInboundInterceptor = _ActivityInboundImpl(self, running_activity)
-        # A Workflow's Stream call already goes through the user's Workflow interceptors, as one
-        # system Nexus operation. This Activity is how the Worker runs that call. The user's
-        # Activity interceptors would see an Activity that no user code scheduled, so they don't
-        # run for it.
-        if info.activity_type != _STREAM_STORE_ACTIVITY:
-            for interceptor in reversed(list(self._interceptors)):
-                impl = interceptor.intercept_activity(impl)
+        for interceptor in reversed(list(self._interceptors)):
+            impl = interceptor.intercept_activity(impl)
 
         impl.init(_ActivityOutboundImpl(self, running_activity.info))
         return await impl.execute_activity(input)
