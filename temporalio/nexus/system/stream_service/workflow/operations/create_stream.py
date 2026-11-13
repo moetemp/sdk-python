@@ -8,7 +8,6 @@ import temporalio.nexus.system
 import temporalio.nexus.system._support as _support
 import temporalio.workflow
 
-from ..._resource_context_manager import resource_context_manager
 from ...models import (
     CreateStreamRequest,
     CreateStreamResult,
@@ -43,7 +42,6 @@ async def _create_stream(
 
 
 @typing.overload
-@resource_context_manager
 async def create_stream(
     *,
     id: str,
@@ -54,7 +52,6 @@ async def create_stream(
 
 
 @typing.overload
-@resource_context_manager
 async def create_stream(
     *,
     id: str,
@@ -64,7 +61,6 @@ async def create_stream(
 ) -> Stream[object]: ...
 
 
-@resource_context_manager
 async def create_stream(
     *,
     id: str,
