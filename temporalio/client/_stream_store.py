@@ -10,7 +10,6 @@ import google.protobuf.message
 import nexusrpc
 
 import temporalio.activity
-import temporalio.api.stream.v1
 import temporalio.bridge._visitor
 import temporalio.bridge.runtime
 import temporalio.common
@@ -253,25 +252,25 @@ class StreamConfig:
 
     def _store_for(
         self,
-        operation: str,
-        request: bytes,
+        ref: temporalio.nexus.system.stream_service.StreamRef[Any],
         target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None,
     ) -> StreamStore:
-        ref = _request_ref(operation, request)
         if ref.store:
             return self._get_store_by_name(ref.store)
         return self._select_store(StreamSelectContext(id=ref.id, target=target))
 
 
-def _request_ref(operation: str, request: bytes) -> temporalio.api.stream.v1.StreamRef:
-    definition = _STREAM_SERVICE.operation_definitions[operation]
-    message = _proto_type(definition.input_type).FromString(request)
+def _request_ref(  # pyright: ignore[reportUnusedFunction]
+    request: Any,
+) -> temporalio.nexus.system.stream_service.StreamRef[Any]:
     # A create calls its ref `stream_ref` and every other request calls it `ref`, so
     # the field is found by its type.
-    for field in message.DESCRIPTOR.fields:
-        if field.message_type is temporalio.api.stream.v1.StreamRef.DESCRIPTOR:
-            return getattr(message, field.name)
-    raise TypeError(f"The {operation} request has no StreamRef")
+    if dataclasses.is_dataclass(request) and not isinstance(request, type):
+        for field in dataclasses.fields(request):
+            value = getattr(request, field.name)
+            if isinstance(value, temporalio.nexus.system.stream_service.StreamRef):
+                return value
+    raise TypeError(f"The request {type(request).__name__} has no StreamRef")
 
 
 def _activity_target() -> StorageDriverActivityInfo | None:  # pyright: ignore[reportUnusedFunction]

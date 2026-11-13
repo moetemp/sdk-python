@@ -20,6 +20,7 @@ from temporalio.client._stream_store import (
     _stream_response,
 )
 from temporalio.converter import StorageDriverWorkflowInfo
+from temporalio.nexus.system.stream_service import StreamRef
 
 from ._interceptor import StartLocalActivityInput, StartNexusOperationInput
 
@@ -46,10 +47,15 @@ _STREAM_STORE_REFUSALS = {
 
 def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
     config: StreamConfig, data_converter: temporalio.converter.DataConverter
-) -> Callable[[str, bytes], Awaitable[bytes]]:
+) -> Callable[[str, bytes, str, str], Awaitable[bytes]]:
     @temporalio.activity.defn(name=_STREAM_STORE_ACTIVITY)
-    async def call(operation: str, request: bytes) -> bytes:
-        store = config._store_for(operation, request, _workflow_target())
+    async def call(
+        operation: str, request: bytes, stream_id: str, store_name: str
+    ) -> bytes:
+        # The Workflow passes the ref beside the encoded request, so that the request
+        # isn't decoded again to route it. An empty `store_name` means no Store.
+        ref = StreamRef[Any](id=stream_id, store=store_name or None)
+        store = config._store_for(ref, _workflow_target())
         return await _call_stream_store(store, data_converter, operation, request)
 
     return call
@@ -96,14 +102,14 @@ class _WorkflowStreamStore:
         [request] = payload_converter.to_payloads([input.input])
         # A ref of a Store that the config doesn't have fails here, with no I/O. Its
         # `StreamConfigError` fails the Workflow Task.
-        ref_store = _request_ref(input.operation_name, request.data).store
-        if ref_store:
-            self.config._get_store_by_name(ref_store)
+        ref = _request_ref(input.input)
+        if ref.store:
+            self.config._get_store_by_name(ref.store)
         options = self.config.workflow_call_options
         activity = instance._outbound_schedule_activity(
             StartLocalActivityInput(
                 activity=_STREAM_STORE_ACTIVITY,
-                args=(input.operation_name, request.data),
+                args=(input.operation_name, request.data, ref.id, ref.store or ""),
                 activity_id=None,
                 schedule_to_close_timeout=options.schedule_to_close_timeout,
                 schedule_to_start_timeout=None,
@@ -114,7 +120,7 @@ class _WorkflowStreamStore:
                 headers={},
                 summary=input.summary,
                 event_groups=input.event_groups,
-                arg_types=[str, bytes],
+                arg_types=[str, bytes, str, str],
                 ret_type=bytes,
             )
         )

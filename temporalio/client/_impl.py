@@ -131,6 +131,7 @@ from ._stream_store import (
     StreamConfig,
     _activity_target,
     _call_stream_store,
+    _request_ref,
     _stream_response,
 )
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
@@ -1676,9 +1677,7 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             data_converter.payload_converter, data_converter.failure_converter
         )
         [request] = payload_converter.to_payloads([input.arg])
-        store = stream_config._store_for(
-            input.operation, request.data, _activity_target()
-        )
+        store = stream_config._store_for(_request_ref(input.arg), _activity_target())
         response = await _call_stream_store(
             store, data_converter, input.operation, request.data
         )

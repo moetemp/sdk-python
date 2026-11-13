@@ -27,6 +27,7 @@ from temporalio.client import (
     StreamSelectContext,
     StreamStore,
 )
+from temporalio.client._stream_store import _request_ref
 from temporalio.converter import DataConverter, StorageDriverActivityInfo
 from temporalio.exceptions import ApplicationError, StreamConfigError, StreamError
 from temporalio.nexus.system.stream_service import (
@@ -476,6 +477,12 @@ async def test_ref_of_a_store_that_the_client_lacks_fails(client: Client):
     )
     with pytest.raises(StreamConfigError, match="'other'"):
         await stream.describe()
+
+
+def test_request_without_a_stream_ref_fails():
+    request = Producer(id="mine", kind=ProducerKindClient(ClientProducer()))
+    with pytest.raises(TypeError, match="Producer has no StreamRef"):
+        _request_ref(request)
 
 
 async def test_start_local_gives_its_client_the_stream_config():
