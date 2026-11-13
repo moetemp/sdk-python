@@ -22,15 +22,25 @@ from temporalio.client import (
 from temporalio.common import RetryPolicy
 from temporalio.converter import DataConverter, StorageDriverWorkflowInfo
 from temporalio.exceptions import ApplicationError, StreamError
+from temporalio.nexus.system import TEMPORAL_SYSTEM_ENDPOINT
 from temporalio.nexus.system.stream_service import (
+    AppendRecord,
+    AppendRecordsRequest,
+    ClientProducer,
+    CloseStreamRequest,
     Producer,
     ProducerKindClient,
     ProducerKindLocalActivity,
+    ReadRecordsRequest,
     StreamIdConflictPolicy,
     StreamRecord,
     StreamRef,
+    StreamService,
 )
 from temporalio.nexus.system.stream_service.workflow import create_stream, get_stream
+from temporalio.nexus.system.stream_service.workflow._resources.stream import (
+    Stream as WorkflowStream,
+)
 from temporalio.testing import MemoryStreamStore
 from temporalio.worker import (
     ActivityInboundInterceptor,
@@ -67,23 +77,29 @@ class AppendWorkflow:
 
 
 @workflow.defn
-class UnsupportedCallsWorkflow:
+class RefusedOperationWorkflow:
     @workflow.run
-    async def run(self, stream_id: str) -> list[str]:
-        stream = await create_stream(id=stream_id, body_type=str)
-        errors: list[str] = []
-        for call in (lambda: stream.append("a"), stream.close, stream.read):
-            try:
-                await call()
-            except ApplicationError as err:
-                assert err.non_retryable
-                errors.append(err.message)
+    async def run(self, operation: str) -> str:
+        # The Workflow `Stream` has no method for these operations, so the test starts
+        # them through a Nexus client, as Workflow code still can.
+        ref = StreamRef[str](id="stream")
+        producer = Producer(id="workflow", kind=ProducerKindClient(ClientProducer()))
+        requests: dict[str, Any] = {
+            "AppendRecords": AppendRecordsRequest(
+                ref=ref, records=[AppendRecord(body="a")], producer=producer
+            ),
+            "CloseStream": CloseStreamRequest(ref=ref, producer=producer),
+            "ReadRecords": ReadRecordsRequest(ref=ref),
+        }
+        nexus_client = workflow.create_nexus_client(
+            service=StreamService, endpoint=TEMPORAL_SYSTEM_ENDPOINT
+        )
         try:
-            async with get_stream(stream.ref):
-                pass
+            await nexus_client.start_operation(operation, requests[operation])
         except ApplicationError as err:
-            errors.append(err.message)
-        return errors
+            assert err.non_retryable
+            return err.message
+        return "started"
 
 
 @workflow.defn
@@ -422,28 +438,44 @@ async def test_workflow_stream_without_store_starts_nexus_operation(client: Clie
         await handle.terminate()
 
 
-async def test_workflow_stream_append_close_and_read_fail_with_store(client: Client):
+@pytest.mark.parametrize(
+    "operation, message",
+    [
+        (
+            "AppendRecords",
+            "Workflow code can't append to a Stream on a Store in this release. "
+            "Call a Local Activity that appends through its client.",
+        ),
+        (
+            "CloseStream",
+            "Workflow code can't close a Stream on a Store in this release. "
+            "Call an Activity that closes it through its client.",
+        ),
+        (
+            "ReadRecords",
+            "Workflow code can't read a Stream on a Store in this release. "
+            "Call an Activity that reads it through its client.",
+        ),
+    ],
+)
+async def test_workflow_stream_operation_fails_with_store(
+    client: Client, operation: str, message: str
+):
     stream_client = _with_store(client, MemoryStreamStore())
-    async with new_worker(stream_client, UnsupportedCallsWorkflow) as worker:
-        errors = await stream_client.execute_workflow(
-            UnsupportedCallsWorkflow.run,
-            f"stream-{uuid.uuid4()}",
+    async with new_worker(stream_client, RefusedOperationWorkflow) as worker:
+        result = await stream_client.execute_workflow(
+            RefusedOperationWorkflow.run,
+            operation,
             id=f"workflow-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-    append_error = (
-        "Workflow code can't append to a Stream on a Store in this release. "
-        "Call a Local Activity that appends through its client."
-    )
-    close_error = (
-        "Workflow code can't close a Stream on a Store in this release. "
-        "Call an Activity that closes it through its client."
-    )
-    read_error = (
-        "Workflow code can't read a Stream on a Store in this release. "
-        "Call an Activity that reads it through its client."
-    )
-    assert errors == [append_error, close_error, read_error, close_error]
+    assert result == message
+
+
+def test_workflow_stream_has_no_append_close_or_read():
+    for name in ("append", "close", "read"):
+        assert not hasattr(WorkflowStream, name)
+    assert hasattr(WorkflowStream, "describe")
 
 
 async def test_workflow_stream_store_error_reaches_workflow_code(client: Client):

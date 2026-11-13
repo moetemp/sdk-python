@@ -28,8 +28,8 @@ notification_output_dir = base_dir / "temporalio" / "nexus" / "notifications"
 workflow_init_path = base_dir / "temporalio" / "workflow" / "__init__.py"
 NEX_GEN_VERSION = "0.2.8"
 # The Stream package needs a newer nexgen, which rejects the other WITs. One pin is enough
-# again once the api WITs and a nexgen release agree. No release has nexgen commit bf3c49c9
-# yet, so NEX_GEN_STREAM_BIN points at a build of it.
+# again once the api WITs and a nexgen release agree. No release has nexgen commit 9653a0f5,
+# the `main` of nexgen, yet, so NEX_GEN_STREAM_BIN points at a build of it.
 NEX_GEN_STREAM_VERSION = "0.2.12"
 proto_files = [
     gen_protos.api_proto_dir
@@ -87,7 +87,7 @@ def nex_gen_stream_command() -> list[str]:
     bin_path = os.environ.get("NEX_GEN_STREAM_BIN")
     if not bin_path:
         raise RuntimeError(
-            "NEX_GEN_STREAM_BIN must point at a nexgen build of commit bf3c49c9"
+            "NEX_GEN_STREAM_BIN must point at a nexgen build of commit 9653a0f5"
         )
     version = subprocess.check_output([bin_path, "--version"], text=True).strip()
     if version != f"nexgen {NEX_GEN_STREAM_VERSION}":

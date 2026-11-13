@@ -91,9 +91,10 @@ class _WorkflowStreamStore:
         input: StartNexusOperationInput[Any, OutputT],
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
         """Answer a Stream call of Workflow code with a Local Activity that calls a Store."""
-        # The generator can't leave these methods out of the Workflow `Stream` yet. In
-        # this release, Workflow code writes and reads a Stream on a Store through its
-        # own Activities.
+        # The Workflow `Stream` has no `append`, `close` or `read`, but the generated
+        # Workflow service still has their operations, so Workflow code can start one
+        # through a Nexus client. In this release, Workflow code writes and reads a Stream
+        # on a Store through its own Activities.
         refusal = _STREAM_STORE_REFUSALS.get(input.operation_name)
         if refusal is not None:
             raise temporalio.exceptions.ApplicationError(refusal, non_retryable=True)
