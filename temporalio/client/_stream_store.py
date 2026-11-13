@@ -63,8 +63,7 @@ class StreamStore(ABC):
     """A Store that answers the Stream operations of a client.
 
     A client with a Store sends each Stream operation to it. This release has no
-    Streams on the server, so a client needs a Store for any Stream operation. A
-    Store is configuration. Use
+    Streams on the server, so a client needs a Store for any Stream operation. Use
     :py:class:`temporalio.contrib.redis.streams.RedisStreamStore`, or
     :py:class:`temporalio.testing.MemoryStreamStore` in tests.
 
