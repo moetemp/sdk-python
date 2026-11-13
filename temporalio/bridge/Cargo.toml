@@ -38,7 +38,7 @@ tls-aws-lc = [
     "temporalio-streams-redis?/tls-aws-lc",
     "tokio-rustls/aws_lc_rs",
 ]
-fips = ["tls-aws-lc", "dep:aws-lc-rs", "temporalio-streams-redis?/fips"]
+fips = ["tls-aws-lc", "dep:aws-lc-rs", "streams", "temporalio-streams-redis?/fips"]
 # Off by default, so a source build doesn't compile the Stream runtime and its Redis client.
 # The official builds turn it on. Cargo fetches the git dependency below for every build, with
 # this feature off too.
