@@ -378,7 +378,7 @@ def test_each_stream_module_can_be_the_first_import():
     assert failures == {}
 
 
-async def test_client_without_stream_store_starts_nexus_operation(client: Client):
+async def test_client_without_stream_store_raises_and_sends_nothing(client: Client):
     requests: list[
         temporalio.api.workflowservice.v1.StartNexusOperationExecutionRequest
     ] = []
@@ -400,16 +400,20 @@ async def test_client_without_stream_store_starts_nexus_operation(client: Client
         "start_nexus_operation_execution",
         start_nexus_operation_execution,
     ):
-        handle = await nexus_client.start_operation(
-            StreamService.describe_stream,
-            DescribeStreamRequest(ref=StreamRef(id="stream")),
-            id="operation",
-        )
-    assert handle.run_id == "run"
-    [request] = requests
-    assert request.endpoint == temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT
-    assert request.service == "temporal.api.streamservice.v1.StreamService"
-    assert request.operation == "DescribeStream"
+        with pytest.raises(StreamConfigError) as err:
+            await nexus_client.start_operation(
+                StreamService.describe_stream,
+                DescribeStreamRequest(ref=StreamRef(id="stream")),
+                id="operation",
+            )
+        # The generated client method goes the same way.
+        with pytest.raises(StreamConfigError):
+            await client.create_stream(id="stream", body_type=str)
+    assert str(err.value) == (
+        "This client has no Stream Store. Give one in "
+        "stream_config=StreamConfig(stores=[...])."
+    )
+    assert requests == []
 
 
 def test_stream_config_refuses_a_bad_set_of_stores():

@@ -421,19 +421,21 @@ async def test_workflow_stream_replay_does_not_call_store(client: Client):
     ).replay_workflow(await handle.fetch_history())
 
 
-async def test_workflow_stream_without_store_starts_nexus_operation(client: Client):
-    async with new_worker(client, AppendWorkflow) as worker:
+async def test_workflow_create_without_store_fails_the_task(client: Client):
+    async with new_worker(client, CreateAndDescribeWorkflow) as worker:
         handle = await client.start_workflow(
-            AppendWorkflow.run,
+            CreateAndDescribeWorkflow.run,
             f"stream-{uuid.uuid4()}",
             id=f"workflow-{uuid.uuid4()}",
             task_queue=worker.task_queue,
             execution_timeout=timedelta(seconds=30),
         )
-        # The dev server doesn't serve the Stream service, so it rejects the Nexus
-        # command that only the system Nexus path makes.
         await assert_task_fail_eventually(
-            handle, message_contains="temporal.api.streamservice.v1.StreamService"
+            handle,
+            message_contains=(
+                "The client of this Worker has no Stream Store. Give one in "
+                "stream_config=StreamConfig(stores=[...])."
+            ),
         )
         await handle.terminate()
 

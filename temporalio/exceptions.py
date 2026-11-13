@@ -289,6 +289,10 @@ class StreamConfigError(RuntimeError):
     It is not a :py:class:`StreamError`. A Store didn't fail. The setup of the Stores
     is wrong, and a retry won't help. These are its cases.
 
+    * A Stream call is made on a client with no Stream config. This release has no
+      Streams on the server, so every Stream call needs a Store.
+    * A Workflow's Stream call is made on a Worker whose client has no Stream config.
+      This fails the Workflow Task.
     * A :py:class:`temporalio.client.StreamConfig` has no Store, has two Stores with
       one name, or has more than one Store and no selector.
     * A ref names a Store that the config of the client doesn't have.

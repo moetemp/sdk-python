@@ -234,7 +234,9 @@ class Client(
                 picks one for a new Stream, as
                 :py:class:`temporalio.converter.ExternalStorage` holds drivers and a
                 selector. A client with it sends each Stream operation to one of its
-                Stores instead of the server. ``None`` sends them to the server.
+                Stores. This release has no Streams on the server, so with ``None`` a
+                Stream operation raises
+                :py:class:`temporalio.exceptions.StreamConfigError`.
 
                 .. warning::
                     This API is experimental and subject to change.

@@ -61,7 +61,8 @@ class StreamStoreCallOptions:
 class StreamStore(ABC):
     """A Store that answers the Stream operations of a client.
 
-    A client with a Store sends each Stream operation to it instead of the server. A
+    A client with a Store sends each Stream operation to it. This release has no
+    Streams on the server, so a client needs a Store for any Stream operation. A
     Store is configuration. Use
     :py:class:`temporalio.contrib.redis.streams.RedisStreamStore`, or
     :py:class:`temporalio.testing.MemoryStreamStore` in tests.
@@ -157,8 +158,10 @@ class StreamSelectContext:
 class StreamConfig:
     """The Stream Stores of a client, and the rule that picks one for a new Stream.
 
-    A client with this config sends each Stream operation to one of its Stores
-    instead of the server. It holds Stores and a selector, as
+    A client with this config sends each Stream operation to one of its Stores.
+    This release has no Streams on the server, so a client without this config
+    raises :py:class:`temporalio.exceptions.StreamConfigError` for a Stream
+    operation. It holds Stores and a selector, as
     :py:class:`temporalio.converter.ExternalStorage` holds drivers and a selector.
 
     A ref carries the name of its Store, so a call on a known Stream goes to the

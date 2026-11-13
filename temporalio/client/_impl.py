@@ -1574,12 +1574,17 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
-        stream_config = self._client._config.get("stream_config")
         if (
-            stream_config is not None
-            and temporalio.nexus.system.is_system_endpoint(input.endpoint)
+            temporalio.nexus.system.is_system_endpoint(input.endpoint)
             and input.service == _STREAM_SERVICE.name
         ):
+            # This release has no Streams on the server, so a Stream call needs a Store.
+            stream_config = self._client._config.get("stream_config")
+            if stream_config is None:
+                raise temporalio.exceptions.StreamConfigError(
+                    "This client has no Stream Store. Give one in "
+                    "stream_config=StreamConfig(stores=[...])."
+                )
             return await self._start_stream_store_operation(stream_config, input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
