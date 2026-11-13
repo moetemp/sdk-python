@@ -24,6 +24,7 @@ import temporalio.client
 import temporalio.common
 import temporalio.runtime
 import temporalio.service
+from temporalio.client._stream_store import _stream_store_activity
 from temporalio.common import (
     HeaderCodecBehavior,
     VersioningBehavior,
@@ -498,7 +499,14 @@ class Worker:
             or bridge_client.config.runtime
             or temporalio.runtime.Runtime.default()
         )
-        activities = config.get("activities")
+        activities = list(config.get("activities") or [])
+        stream_stores = client_config["stream_stores"]
+        if stream_stores and config.get("workflows"):
+            activities.append(
+                _stream_store_activity(
+                    stream_stores[0], client_config["data_converter"]
+                )
+            )
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
             self._activity_worker = _ActivityWorker(
@@ -578,6 +586,9 @@ class Worker:
                 encode_headers=client_config["header_codec_behavior"]
                 != HeaderCodecBehavior.NO_CODEC,
                 max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
+                stream_store_call_options=stream_stores[0].call_options
+                if stream_stores
+                else None,
             )
 
         tuner = config.get("tuner")
@@ -667,7 +678,9 @@ class Worker:
                     enable_workflows=self._workflow_worker is not None,
                     enable_local_activities=self._activity_worker is not None
                     and self._workflow_worker is not None,
-                    enable_remote_activities=self._activity_worker is not None
+                    # The Stream Store Local Activity alone doesn't make this worker
+                    # poll for Activity Tasks.
+                    enable_remote_activities=bool(config.get("activities"))
                     and not config.get("no_remote_activities"),
                     enable_nexus=self._nexus_worker is not None,
                 ),
@@ -751,12 +764,20 @@ class Worker:
         Changing the client will make sure the worker starts using it for the
         next calls it makes. However, outstanding client calls will still
         complete with the existing client. The new client cannot be "lazy" and
-        must be using the same runtime as the current client.
+        must be using the same runtime and Stream Stores as the current client.
         """
         bridge_client = _extract_bridge_client_for_worker(value)
         if self._runtime is not bridge_client._runtime:
             raise ValueError(
                 "New client is not on the same runtime as the existing client"
+            )
+        # Running Workflows route their Stream calls by the Store that the worker
+        # started with, so a new client can't change it.
+        if list(value.config(active_config=True)["stream_stores"]) != list(
+            self.client.config(active_config=True)["stream_stores"]
+        ):
+            raise ValueError(
+                "New client doesn't have the Stream Stores of the existing client"
             )
         assert bridge_client._bridge_client
         self._bridge_worker.replace_client(bridge_client._bridge_client)
