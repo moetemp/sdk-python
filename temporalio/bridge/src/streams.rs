@@ -1,5 +1,6 @@
-//! Bindings to the Stream runtime of the `temporalio-streams` crate. Python calls the five Stream
-//! service operations by name, with the encoded request, and gets the encoded response.
+//! Bindings to the Stream runtime of the `temporalio-streams` crate, on the memory Store or on the
+//! Redis Store of `temporalio-streams-redis`. Python calls the five Stream service operations by
+//! name, with the encoded request, and gets the encoded response.
 
 use pyo3::exceptions::PyException;
 #[cfg(feature = "streams")]
@@ -65,4 +66,65 @@ pub fn new_memory_stream_runtime(
         meter,
     );
     Ok(StreamRuntimeRef { streams, runtime })
+}
+
+/// The options of the Redis Store, as Python passes them. A `None` takes the crate's default.
+#[cfg(feature = "streams")]
+pub struct RedisStreamOptions {
+    pub urls: Vec<String>,
+    pub cluster: bool,
+    pub key_prefix: Option<String>,
+    pub retention: Option<std::time::Duration>,
+    pub last_write_ttl: Option<std::time::Duration>,
+    pub response_timeout: Option<std::time::Duration>,
+    pub store_name: String,
+    pub wait_replicas: i32,
+    pub wait_timeout: Option<std::time::Duration>,
+}
+
+/// Builds the runtime on Redis. It connects at its first call, so a server that is down fails that
+/// call and not this one. A bad option raises `ValueError` with the crate's message.
+#[cfg(feature = "streams")]
+pub fn new_redis_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    options: RedisStreamOptions,
+) -> PyResult<StreamRuntimeRef> {
+    use pyo3::exceptions::PyValueError;
+    use temporalio_streams_redis::{proto::RedisStreamConfig, RedisStreamRuntime, RuntimeOptions};
+
+    let runtime = runtime_ref.runtime.clone();
+    runtime.assert_same_process("create a Stream runtime")?;
+    // The crate reads an empty or zero field as its default, so `None` maps to that.
+    let config = RedisStreamConfig {
+        urls: options.urls,
+        cluster: options.cluster,
+        key_prefix: options.key_prefix.unwrap_or_default(),
+        retention: proto_duration("retention", options.retention)?,
+        last_write_ttl: proto_duration("last_write_ttl", options.last_write_ttl)?,
+        response_timeout: proto_duration("response_timeout", options.response_timeout)?,
+        store_name: options.store_name,
+        wait_replicas: options.wait_replicas,
+        wait_timeout: proto_duration("wait_timeout", options.wait_timeout)?,
+        ..Default::default()
+    };
+    let options =
+        RuntimeOptions::try_from(config).map_err(|err| PyValueError::new_err(err.to_string()))?;
+    // The runtime can spawn Tokio tasks, which need an entered Tokio runtime.
+    let _guard = runtime.core.tokio_handle().enter();
+    let meter = runtime.core.telemetry().get_temporal_metric_meter();
+    let streams = RedisStreamRuntime::create(options, meter);
+    Ok(StreamRuntimeRef { streams, runtime })
+}
+
+// The config's durations are the `prost-wkt-types` type that the Redis crate's protos use. The
+// bridge doesn't depend on that crate, so the field's type picks the conversion.
+#[cfg(feature = "streams")]
+fn proto_duration<T>(field: &str, value: Option<std::time::Duration>) -> PyResult<Option<T>>
+where
+    T: TryFrom<std::time::Duration>,
+    T::Error: std::fmt::Display,
+{
+    value.map(T::try_from).transpose().map_err(|err| {
+        pyo3::exceptions::PyValueError::new_err(format!("The {field} is too long: {err}"))
+    })
 }
