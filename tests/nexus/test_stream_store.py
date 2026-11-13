@@ -175,8 +175,32 @@ async def test_standalone_activity_append_has_activity_producer(client: Client):
     )
 
 
-async def test_local_activity_append_fails(client: Client):
-    with pytest.raises(RuntimeError, match="Local Activity"):
+async def test_local_activity_append_has_local_activity_producer(client: Client):
+    task_started = datetime(2026, 11, 12, 10, 0, 0, 123456, tzinfo=timezone.utc)
+    producer = await _append_in_activity(
+        client,
+        dataclasses.replace(
+            ActivityEnvironment.default_info(),
+            activity_id="3",
+            attempt=2,
+            is_local=True,
+            workflow_run_id="run:1",
+            workflow_task=temporalio.activity.WorkflowTaskAttempt(
+                started_event_id=7, attempt=1, started_time=task_started
+            ),
+        ),
+    )
+    assert producer.id == "la:run%3A1:3"
+    assert producer.WhichOneof("kind") == "local_activity"
+    assert producer.local_activity.run_id == "run:1"
+    assert producer.local_activity.epoch.task.started_event_id == 7
+    assert producer.local_activity.epoch.task.attempt == 1
+    assert producer.local_activity.epoch.task.started_time == _timestamp(task_started)
+    assert producer.local_activity.epoch.attempt == 2
+
+
+async def test_local_activity_append_without_workflow_task_fails(client: Client):
+    with pytest.raises(RuntimeError, match="Workflow Task"):
         await _append_in_activity(
             client,
             dataclasses.replace(ActivityEnvironment.default_info(), is_local=True),

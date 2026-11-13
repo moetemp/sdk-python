@@ -66,11 +66,15 @@ def default_producer() -> "Producer":
         ActivityEpoch,
         ActivityProducer,
         ClientProducer,
+        LocalActivityEpoch,
+        LocalActivityProducer,
         Producer,
         ProducerKindClient,
+        ProducerKindLocalActivity,
         ProducerKindStandaloneActivity,
         ProducerKindWorkflowActivity,
         Timestamp,
+        WorkflowTaskEpoch,
     )
 
     if not temporalio.activity.in_activity():
@@ -79,9 +83,33 @@ def default_producer() -> "Producer":
         )
     info = temporalio.activity.info()
     if info.is_local:
-        raise RuntimeError(
-            "A Stream write from a Local Activity needs the Workflow Task of the "
-            "Activity, which the SDK doesn't give yet"
+        task = info.workflow_task
+        if task is None or info.workflow_run_id is None:
+            raise RuntimeError(
+                "A Stream write from a Local Activity needs its Workflow Task, and the "
+                "Worker's Core gave none"
+            )
+        started_time = None
+        if task.started_time is not None:
+            proto_time = _timestamp(task.started_time)
+            started_time = Timestamp(seconds=proto_time.seconds, nanos=proto_time.nanos)
+        # The activity id of a Local Activity is its sequence number in the run, so a
+        # retried Workflow Task writes as the same Producer with a higher epoch.
+        return Producer(
+            id=_producer_id("la", info.workflow_run_id, info.activity_id),
+            kind=ProducerKindLocalActivity(
+                LocalActivityProducer(
+                    run_id=info.workflow_run_id,
+                    epoch=LocalActivityEpoch(
+                        task=WorkflowTaskEpoch(
+                            started_event_id=task.started_event_id,
+                            attempt=task.attempt,
+                            started_time=started_time,
+                        ),
+                        attempt=info.attempt,
+                    ),
+                )
+            ),
         )
     attempt_time = _timestamp(info.current_attempt_scheduled_time)
     epoch = ActivityEpoch(

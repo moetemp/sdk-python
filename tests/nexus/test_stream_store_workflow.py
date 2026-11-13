@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import temporalio.api.stream.v1
 import temporalio.exceptions
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import EventType
@@ -20,10 +21,12 @@ from temporalio.common import RetryPolicy
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError
 from temporalio.nexus.system.stream_service import (
+    ClientProducer,
     Producer,
-    ProducerKindWorkflow,
+    ProducerKindClient,
+    ProducerKindLocalActivity,
+    StreamIdConflictPolicy,
     StreamRef,
-    WorkflowProducer,
 )
 from temporalio.nexus.system.stream_service.workflow import create_stream, get_stream
 from temporalio.worker import (
@@ -97,6 +100,52 @@ class AppendAndActivityWorkflow:
         await stream.append("a")
         await workflow.execute_local_activity(
             user_activity, start_to_close_timeout=timedelta(seconds=10)
+        )
+
+
+_fail_next_task = True
+
+
+@workflow.defn(sandboxed=False)
+class AppendThenFailTaskOnceWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> None:
+        stream = await create_stream(
+            id=stream_id,
+            body_type=str,
+            id_conflict_policy=StreamIdConflictPolicy.StreamIdConflictPolicyUseExisting,
+        )
+        await stream.append("a")
+        global _fail_next_task
+        if _fail_next_task:
+            _fail_next_task = False
+            raise RuntimeError("Failed the Workflow Task once")
+
+
+@activity.defn
+async def append_from_local_activity(stream_id: str) -> None:
+    stream = activity.client().get_stream(StreamRef(id=stream_id), body_type=str)
+    await stream.append("a")
+
+
+@workflow.defn
+class UserLocalActivityAppendWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> None:
+        await workflow.execute_local_activity(
+            append_from_local_activity,
+            stream_id,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+
+
+@workflow.defn
+class ExplicitProducerWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> None:
+        stream = await create_stream(id=stream_id, body_type=str)
+        await stream.append(
+            "a", producer=Producer(id="mine", kind=ProducerKindClient(ClientProducer()))
         )
 
 
@@ -197,11 +246,15 @@ async def test_workflow_stream_uses_store(client: Client):
     assert [record.body for record in records] == _BODIES
     run_id = handle.result_run_id
     assert run_id
-    producer = Producer(
-        id=f"wf:{run_id}",
-        kind=ProducerKindWorkflow(WorkflowProducer(run_id=run_id)),
-    )
-    assert [record.producer for record in records] == [producer, producer]
+    first, second = (record.producer for record in records)
+    assert first is not None
+    assert first == second
+    # The create is the run's first Local Activity, so the append is its second.
+    assert first.id == f"la:{run_id}:2"
+    assert isinstance(first.kind, ProducerKindLocalActivity)
+    assert first.kind.value.run_id == run_id
+    assert first.kind.value.epoch.task.started_event_id > 0
+    assert first.kind.value.epoch.attempt == 1
 
 
 async def test_workflow_stream_store_uses_payload_codec(client: Client):
@@ -322,3 +375,68 @@ async def test_activity_interceptors_skip_stream_store_activity(client: Client):
             task_queue=worker.task_queue,
         )
     assert interceptor.activity_types == ["user_activity"]
+
+
+async def test_workflow_task_retry_appends_with_higher_epoch(client: Client):
+    global _fail_next_task
+    _fail_next_task = True
+    store = MemoryStreamStore()
+    stream_client = _with_store(client, store)
+    stream_id = f"stream-{uuid.uuid4()}"
+    async with new_worker(stream_client, AppendThenFailTaskOnceWorkflow) as worker:
+        await stream_client.execute_workflow(
+            AppendThenFailTaskOnceWorkflow.run,
+            stream_id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    first, second = (record.producer for record in store.streams[stream_id].records)
+    assert first.id == second.id
+
+    def epoch(producer: temporalio.api.stream.v1.Producer) -> tuple[int, int, int]:
+        local = producer.local_activity.epoch
+        return (local.task.started_event_id, local.task.attempt, local.attempt)
+
+    assert epoch(second) > epoch(first)
+
+
+async def test_user_local_activity_append_has_local_activity_producer(client: Client):
+    store = MemoryStreamStore()
+    stream_client = _with_store(client, store)
+    stream = await stream_client.create_stream(
+        id=f"stream-{uuid.uuid4()}", body_type=str
+    )
+    async with new_worker(
+        stream_client,
+        UserLocalActivityAppendWorkflow,
+        activities=[append_from_local_activity],
+    ) as worker:
+        handle = await stream_client.start_workflow(
+            UserLocalActivityAppendWorkflow.run,
+            stream.ref.id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        await handle.result()
+    [record] = store.streams[stream.ref.id].records
+    run_id = handle.result_run_id
+    assert record.producer.id == f"la:{run_id}:1"
+    assert record.producer.local_activity.run_id == run_id
+    assert record.producer.local_activity.epoch.task.started_event_id > 0
+    assert record.producer.local_activity.epoch.attempt == 1
+
+
+async def test_workflow_explicit_producer_reaches_store(client: Client):
+    store = MemoryStreamStore()
+    stream_client = _with_store(client, store)
+    stream_id = f"stream-{uuid.uuid4()}"
+    async with new_worker(stream_client, ExplicitProducerWorkflow) as worker:
+        await stream_client.execute_workflow(
+            ExplicitProducerWorkflow.run,
+            stream_id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    [record] = store.streams[stream_id].records
+    assert record.producer.id == "mine"
+    assert record.producer.WhichOneof("kind") == "client"
