@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import temporalio.api.streamservice.v1
 import temporalio.common
 import temporalio.exceptions
 from temporalio import activity, workflow
@@ -21,6 +22,7 @@ from temporalio.common import RetryPolicy
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import (
+    AppendRecordsResponse,
     ClientProducer,
     Producer,
     ProducerKindClient,
@@ -52,6 +54,14 @@ class AppendWorkflow:
         stream = await create_stream(id=stream_id, body_type=str)
         await stream.append(*_BODIES)
         return stream.ref
+
+
+@workflow.defn
+class AppendOffsetsWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> AppendRecordsResponse:
+        stream = await create_stream(id=stream_id, body_type=str)
+        return await stream.append(*_BODIES)
 
 
 @workflow.defn
@@ -210,6 +220,50 @@ class FlakyAppendStore(MemoryStreamStore):
             if self.appends <= self._failures:
                 raise RuntimeError("append failed")
         return await super().call(operation, request)
+
+
+class LostAnswerStore(StreamStore):
+    """Writes each call to a memory Store, then can lose the answer of the first append."""
+
+    def __init__(
+        self, options: StreamStoreCallOptions, *, lose_first_answer: bool = True
+    ) -> None:
+        self._store = MemoryStreamStore()
+        self._options = options
+        self._lose_first_answer = lose_first_answer
+        self.appends: list[temporalio.api.streamservice.v1.AppendRecordsRequest] = []
+        self.first_response: (
+            temporalio.api.streamservice.v1.AppendRecordsResponse | None
+        ) = None
+
+    @property
+    def name(self) -> str:
+        return self._store.name
+
+    @property
+    def call_options(self) -> StreamStoreCallOptions:
+        return self._options
+
+    async def call(self, operation: str, request: bytes) -> bytes:
+        response = await self._store.call(operation, request)
+        if operation != "AppendRecords":
+            return response
+        self.appends.append(
+            temporalio.api.streamservice.v1.AppendRecordsRequest.FromString(request)
+        )
+        if self.first_response is None:
+            self.first_response = (
+                temporalio.api.streamservice.v1.AppendRecordsResponse.FromString(
+                    response
+                )
+            )
+            if not self._lose_first_answer:
+                return response
+            raise StreamError(
+                "Lost the answer of a write",
+                reason=StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE,
+            )
+        return response
 
 
 class RecordingInterceptor(Interceptor):
@@ -448,6 +502,37 @@ async def test_workflow_stream_store_call_options_retry(client: Client):
     assert store.appends == 2
 
 
+async def test_workflow_append_retry_in_one_task_writes_once(client: Client):
+    store = LostAnswerStore(
+        StreamStoreCallOptions(
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(milliseconds=10), maximum_attempts=2
+            )
+        )
+    )
+    stream_client = _with_store(client, store)
+    stream_id = f"stream-{uuid.uuid4()}"
+    async with new_worker(stream_client, AppendOffsetsWorkflow) as worker:
+        appended = await stream_client.execute_workflow(
+            AppendOffsetsWorkflow.run,
+            stream_id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    first, second = store.appends
+    assert first.producer == second.producer
+    assert first.producer.local_activity.epoch.attempt == 1
+    assert first.sequence == second.sequence == 1
+    records = await _read_all(stream_client, stream_id)
+    assert [record.body for record in records] == _BODIES
+    assert store.first_response is not None
+    assert appended.first_offset == store.first_response.first_offset
+    assert appended.last_offset == store.first_response.last_offset
+    assert [appended.first_offset, appended.last_offset] == [
+        record.offset for record in records
+    ]
+
+
 async def test_workflow_stream_store_call_options_timeout(client: Client):
     options = StreamStoreCallOptions(start_to_close_timeout=timedelta(milliseconds=200))
     store = FlakyAppendStore(options, delay=timedelta(seconds=5))
@@ -530,7 +615,8 @@ async def test_user_local_activity_append_has_local_activity_producer(client: Cl
 
 
 async def test_workflow_explicit_producer_reaches_store(client: Client):
-    stream_client = _with_store(client, MemoryStreamStore())
+    store = LostAnswerStore(StreamStoreCallOptions(), lose_first_answer=False)
+    stream_client = _with_store(client, store)
     stream_id = f"stream-{uuid.uuid4()}"
     async with new_worker(stream_client, ExplicitProducerWorkflow) as worker:
         await stream_client.execute_workflow(
@@ -542,3 +628,7 @@ async def test_workflow_explicit_producer_reaches_store(client: Client):
     [producer] = _producers(await _read_all(stream_client, stream_id))
     assert producer.id == "mine"
     assert isinstance(producer.kind, ProducerKindClient)
+    [request] = store.appends
+    assert request.producer.id == "mine"
+    assert request.producer.WhichOneof("kind") == "client"
+    assert request.sequence == 0

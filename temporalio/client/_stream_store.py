@@ -44,8 +44,9 @@ class StreamStoreCallOptions:
     retry_policy: temporalio.common.RetryPolicy = dataclasses.field(
         default_factory=lambda: temporalio.common.RetryPolicy(maximum_attempts=1)
     )
-    """Retries of a failed call. The default is one attempt, since an append that runs
-    again writes its Records again."""
+    """Retries of a failed call. The default is one attempt. In one Workflow Task, each
+    attempt of a Workflow's append without an explicit ``producer`` sends the same
+    Producer, epoch and sequence, so the Store writes the batch once."""
 
     def __post_init__(self) -> None:
         """Check that a timeout is set."""
@@ -236,4 +237,9 @@ def _with_local_activity_producer(request: bytes) -> bytes:
     message.producer.CopyFrom(
         converter.to_transfer_type(temporalio.nexus.system._support.default_producer())
     )
+    # Each retry of this Local Activity in one Workflow Task sends the same Producer, epoch
+    # and sequence, so the Store writes the batch once and gives back its first offsets.
+    message.producer.local_activity.epoch.attempt = 1
+    if not message.sequence:
+        message.sequence = 1
     return message.SerializeToString()
