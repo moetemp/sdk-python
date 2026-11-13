@@ -182,9 +182,14 @@ def _get_serialization_context(  # pyright: ignore[reportUnusedFunction]
     request: Any,
 ) -> temporalio.converter.SerializationContext | None:
     """Return the serialization context for a system Nexus operation."""
+    from .stream_service.workflow import (
+        __nexus_operation_registry__ as stream_operation_registry,
+    )
     from .workflow_service import __nexus_operation_registry__
 
-    operation_info = __nexus_operation_registry__.get((service, operation))
+    operation_info = __nexus_operation_registry__.get(
+        (service, operation)
+    ) or stream_operation_registry.get((service, operation))
     if operation_info is None or operation_info.serialization_context is None:
         return None
     return operation_info.serialization_context(request)
