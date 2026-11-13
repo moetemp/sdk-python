@@ -185,6 +185,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_store import StreamStore, StreamStoreCallOptions
 from ._worker_versioning import (
     BuildIdOp,
     BuildIdOpAddNewCompatible,
@@ -350,6 +351,8 @@ __all__ = [
     "TaskReachabilityType",
     "CloudOperationsClient",
     "Plugin",
+    "StreamStore",
+    "StreamStoreCallOptions",
     "Callback",
     "_ClientImpl",
     "_apply_headers",

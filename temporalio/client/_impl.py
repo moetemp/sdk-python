@@ -33,6 +33,7 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus
 import temporalio.nexus._operation_context
+import temporalio.nexus.system
 from temporalio.activity import ActivityCancellationDetails
 from temporalio.converter import (
     ActivitySerializationContext,
@@ -124,6 +125,12 @@ from ._schedule import (
     ScheduleHandle,
     ScheduleUpdate,
     ScheduleUpdateInput,
+)
+from ._stream_store import (
+    _STREAM_SERVICE,
+    StreamStore,
+    _call_stream_store,
+    _stream_response,
 )
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
 from ._workflow import (
@@ -1565,6 +1572,13 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
+        stream_stores = self._client._config["stream_stores"]
+        if (
+            stream_stores
+            and temporalio.nexus.system.is_system_endpoint(input.endpoint)
+            and input.service == _STREAM_SERVICE.name
+        ):
+            return await self._start_stream_store_operation(stream_stores[0], input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
             service=input.service,
@@ -1647,6 +1661,35 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             service=input.service,
             operation=input.operation,
         )
+
+    async def _start_stream_store_operation(
+        self, store: StreamStore, input: StartNexusOperationInput
+    ) -> NexusOperationHandle[Any]:
+        data_converter = self._client.data_converter
+        serialization_context = temporalio.nexus.system._get_serialization_context(
+            input.service, input.operation, input.arg
+        )
+        if serialization_context is not None:
+            data_converter = data_converter.with_context(serialization_context)
+        payload_converter = temporalio.nexus.system._get_payload_converter(
+            data_converter.payload_converter, data_converter.failure_converter
+        )
+        [request] = payload_converter.to_payloads([input.arg])
+        response = await _call_stream_store(
+            store, data_converter, input.operation, request.data
+        )
+        handle: NexusOperationHandle[Any] = NexusOperationHandle(
+            self._client,
+            input.id,
+            result_type=input.result_type,
+            endpoint=input.endpoint,
+            service=input.service,
+            operation=input.operation,
+        )
+        handle._known_outcome = _stream_response(
+            payload_converter, input.operation, input.result_type, response
+        )
+        return handle
 
     async def describe_nexus_operation(
         self, input: DescribeNexusOperationInput
