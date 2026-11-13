@@ -128,6 +128,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         encode_headers: bool,
         max_workflow_task_external_storage_concurrency: int,
         default_workflow_logic_flags: frozenset[_WorkflowLogicFlag] | None = None,
+        has_stream_backend: bool = False,
     ) -> None:
         # Debug mode is enabled if specified or if the TEMPORAL_DEBUG env var is truthy
         debug_mode = debug_mode or bool(os.environ.get("TEMPORAL_DEBUG"))
@@ -197,6 +198,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         self._max_workflow_task_external_storage_concurrency = (
             max_workflow_task_external_storage_concurrency
         )
+        self._has_stream_backend = has_stream_backend
         self._throw_after_activation: Exception | None = None
 
         # If debug mode is enabled, disable deadlock detection
@@ -819,6 +821,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             nexus_serialization_context=temporalio.converter._serialization_context._propagated_nexus_serialization_context(
                 init
             ),
+            has_stream_backend=self._has_stream_backend,
         )
         if defn.sandboxed:
             return self._workflow_runner.create_instance(det)

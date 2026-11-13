@@ -36,6 +36,11 @@ class SignalWithStartWorkflowModelRequest(typing.Protocol):
 
 
 def request_id() -> str:
+    import temporalio.workflow
+
+    # Workflow code must get the same id on replay.
+    if temporalio.workflow.in_workflow():
+        return str(temporalio.workflow.uuid4())
     return str(uuid.uuid4())
 
 
@@ -102,6 +107,21 @@ def default_producer() -> "Producer":
     return Producer(
         id=_producer_id("sa", info.activity_id, info.activity_run_id),
         kind=ProducerKindStandaloneActivity(ActivityProducer(epoch=epoch)),
+    )
+
+
+def workflow_producer() -> "Producer":
+    import temporalio.workflow
+    from temporalio.nexus.system.stream_service.models import (
+        Producer,
+        ProducerKindWorkflow,
+        WorkflowProducer,
+    )
+
+    run_id = temporalio.workflow.info().run_id
+    return Producer(
+        id=_producer_id("wf", run_id),
+        kind=ProducerKindWorkflow(WorkflowProducer(run_id=run_id)),
     )
 
 

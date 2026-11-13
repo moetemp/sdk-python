@@ -59,7 +59,18 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.workflow
+from temporalio.client._stream_backend import (
+    _STREAM_BACKEND_ACTIVITY,
+    _STREAM_SERVICE,
+    _stream_response,
+)
 from temporalio.converter import StorageDriverStoreContext, StorageDriverWorkflowInfo
+from temporalio.nexus.system.stream_service.workflow._system_nexus_interceptor import (
+    _start_system_nexus_operation as _start_stream_system_nexus_operation,
+)
+from temporalio.nexus.system.stream_service.workflow._system_nexus_interceptor import (
+    _SystemNexusWorkflowOutboundInterceptorTerminal as _StreamSystemNexusInterceptorTerminal,
+)
 from temporalio.nexus.system.workflow_service._system_nexus_interceptor import (
     _start_system_nexus_operation,
     _SystemNexusWorkflowOutboundInterceptorTerminal,
@@ -185,6 +196,8 @@ class WorkflowInstanceDetails:
         temporalio.converter.NexusSerializationContext | None
     ) = None
     """Serialization context of the Nexus operation handler that started the workflow, if any."""
+    has_stream_backend: bool = False
+    """Whether the worker sends the Stream operations of workflows to a Stream backend."""
 
 
 class WorkflowInstance(ABC):
@@ -301,6 +314,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # the Nexus caller, which decodes them with the handler's Nexus context. A retried or cron run
         # reads the previous run's result and failure with the same context.
         self._nexus_serialization_context = det.nexus_serialization_context
+        self._has_stream_backend = det.has_stream_backend
         if self._nexus_serialization_context:
             self._result_payload_converter = self._payload_converter_with_context(
                 self._nexus_serialization_context
@@ -1830,23 +1844,25 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         event_groups: Sequence[temporalio.workflow.EventGroup] | None = None,
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
         if temporalio.nexus.system.is_system_endpoint(endpoint):
-            return await _start_system_nexus_operation(
-                self._outbound,
-                StartNexusOperationInput(
-                    endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
-                    service=service,
-                    operation=operation,
-                    input=input,
-                    output_type=output_type,
-                    schedule_to_close_timeout=schedule_to_close_timeout,
-                    schedule_to_start_timeout=schedule_to_start_timeout,
-                    start_to_close_timeout=start_to_close_timeout,
-                    cancellation_type=cancellation_type,
-                    headers=None,
-                    summary=summary,
-                    event_groups=event_groups,
-                ),
+            system_input = StartNexusOperationInput(
+                endpoint=temporalio.nexus.system.TEMPORAL_SYSTEM_ENDPOINT,
+                service=service,
+                operation=operation,
+                input=input,
+                output_type=output_type,
+                schedule_to_close_timeout=schedule_to_close_timeout,
+                schedule_to_start_timeout=schedule_to_start_timeout,
+                start_to_close_timeout=start_to_close_timeout,
+                cancellation_type=cancellation_type,
+                headers=None,
+                summary=summary,
+                event_groups=event_groups,
             )
+            if service == _STREAM_SERVICE.name:
+                return await _start_stream_system_nexus_operation(
+                    self._outbound, system_input
+                )
+            return await _start_system_nexus_operation(self._outbound, system_input)
         return await self._outbound.start_nexus_operation(
             StartNexusOperationInput(
                 endpoint=endpoint,
@@ -2299,25 +2315,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             )
 
         if temporalio.nexus.system.is_system_endpoint(input.endpoint):
-            serialization_context = temporalio.nexus.system._get_serialization_context(
-                input.service,
-                input.operation_name,
-                input.input,
-            )
-            user_payload_converter = self._context_free_payload_converter
-            user_failure_converter = self._context_free_failure_converter
-            if serialization_context is not None:
-                user_payload_converter = self._payload_converter_with_context(
-                    serialization_context
-                )
-                user_failure_converter = self._failure_converter_with_context(
-                    serialization_context
-                )
-            payload_converter = temporalio.nexus.system._get_payload_converter(
-                user_payload_converter,
-                user_failure_converter,
-            )
-            failure_converter = user_failure_converter
+            payload_converter, failure_converter = self._system_nexus_converters(input)
         else:
             serialization_context = temporalio.converter.NexusSerializationContext(
                 endpoint=input.endpoint,
@@ -2355,8 +2353,81 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
 
     async def _schedule_system_nexus_operation(
         self, input: StartNexusOperationInput[Any, OutputT]
-    ) -> _NexusOperationHandle[OutputT]:
+    ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
+        if self._has_stream_backend and input.service == _STREAM_SERVICE.name:
+            return self._start_stream_backend_operation(input)
         return await self._outbound_start_nexus_operation(input)
+
+    def _system_nexus_converters(
+        self, input: StartNexusOperationInput[Any, Any]
+    ) -> tuple[
+        temporalio.converter.PayloadConverter, temporalio.converter.FailureConverter
+    ]:
+        serialization_context = temporalio.nexus.system._get_serialization_context(
+            input.service,
+            input.operation_name,
+            input.input,
+        )
+        user_payload_converter = self._context_free_payload_converter
+        user_failure_converter = self._context_free_failure_converter
+        if serialization_context is not None:
+            user_payload_converter = self._payload_converter_with_context(
+                serialization_context
+            )
+            user_failure_converter = self._failure_converter_with_context(
+                serialization_context
+            )
+        payload_converter = temporalio.nexus.system._get_payload_converter(
+            user_payload_converter,
+            user_failure_converter,
+        )
+        return payload_converter, user_failure_converter
+
+    def _start_stream_backend_operation(
+        self, input: StartNexusOperationInput[Any, OutputT]
+    ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
+        # A close must run after the Workflow Task commits. Workflow reads come later.
+        if input.operation_name in ("CloseStream", "ReadRecords"):
+            raise temporalio.exceptions.ApplicationError(
+                f"{input.operation_name} from Workflow code with a Stream backend isn't "
+                "supported yet",
+                non_retryable=True,
+            )
+        # Workflow code builds the request, so the Local Activity does only the I/O.
+        payload_converter, _ = self._system_nexus_converters(input)
+        [request] = payload_converter.to_payloads([input.input])
+        activity = self._outbound_schedule_activity(
+            StartLocalActivityInput(
+                activity=_STREAM_BACKEND_ACTIVITY,
+                args=(input.operation_name, request.data),
+                activity_id=None,
+                schedule_to_close_timeout=input.schedule_to_close_timeout,
+                schedule_to_start_timeout=input.schedule_to_start_timeout,
+                start_to_close_timeout=input.start_to_close_timeout
+                or timedelta(seconds=60),
+                # A backend error fails the call at once, as it does for a client.
+                retry_policy=temporalio.common.RetryPolicy(maximum_attempts=1),
+                local_retry_threshold=None,
+                cancellation_type=temporalio.workflow.ActivityCancellationType.TRY_CANCEL,
+                headers={},
+                summary=input.summary,
+                event_groups=input.event_groups,
+                arg_types=[str, bytes],
+                ret_type=bytes,
+            )
+        )
+
+        async def result() -> OutputT:
+            return _stream_response(
+                payload_converter,
+                input.operation_name,
+                input.output_type,
+                await activity,
+            )
+
+        return _StreamBackendOperationHandle(
+            self.create_task(result(), name=f"stream backend: {input.operation_name}")
+        )
 
     #### Miscellaneous helpers ####
     # These are in alphabetical order.
@@ -3360,7 +3431,9 @@ class _WorkflowInboundImpl(WorkflowInboundInterceptor):
 
 
 class _WorkflowOutboundImpl(
-    _SystemNexusWorkflowOutboundInterceptorTerminal, WorkflowOutboundInterceptor
+    _SystemNexusWorkflowOutboundInterceptorTerminal,
+    _StreamSystemNexusInterceptorTerminal,
+    WorkflowOutboundInterceptor,
 ):
     def __init__(self, instance: _WorkflowInstanceImpl) -> None:  # type: ignore
         # We are intentionally not calling the base class's __init__ here
@@ -3407,7 +3480,7 @@ class _WorkflowOutboundImpl(
 
     async def start_system_nexus_operation(
         self, input: StartNexusOperationInput[Any, OutputT]
-    ) -> _NexusOperationHandle[OutputT]:
+    ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
         return await self._instance._schedule_system_nexus_operation(input)
 
     def start_local_activity(
@@ -3852,6 +3925,21 @@ class _ExternalWorkflowHandle(temporalio.workflow.ExternalWorkflowHandle[Any]):
         v.reason = reason
 
         await self._instance._cancel_external_workflow(command)
+
+
+class _StreamBackendOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
+    def __init__(self, task: asyncio.Task[OutputT]) -> None:
+        self._task = task
+
+    def cancel(self) -> bool:
+        return self._task.cancel()
+
+    def __await__(self) -> Generator[Any, Any, OutputT]:
+        return self._task.__await__()
+
+    @property
+    def operation_token(self) -> str | None:
+        return None
 
 
 class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):

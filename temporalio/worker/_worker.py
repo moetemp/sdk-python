@@ -24,6 +24,7 @@ import temporalio.client
 import temporalio.common
 import temporalio.runtime
 import temporalio.service
+from temporalio.client._stream_backend import _stream_backend_activity
 from temporalio.common import (
     HeaderCodecBehavior,
     VersioningBehavior,
@@ -498,7 +499,14 @@ class Worker:
             or bridge_client.config.runtime
             or temporalio.runtime.Runtime.default()
         )
-        activities = config.get("activities")
+        activities = list(config.get("activities") or [])
+        stream_backends = client_config["stream_backends"]
+        if stream_backends and config.get("workflows"):
+            activities.append(
+                _stream_backend_activity(
+                    stream_backends[0], client_config["data_converter"]
+                )
+            )
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
             self._activity_worker = _ActivityWorker(
@@ -578,6 +586,7 @@ class Worker:
                 encode_headers=client_config["header_codec_behavior"]
                 != HeaderCodecBehavior.NO_CODEC,
                 max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
+                has_stream_backend=bool(stream_backends),
             )
 
         tuner = config.get("tuner")
@@ -667,7 +676,9 @@ class Worker:
                     enable_workflows=self._workflow_worker is not None,
                     enable_local_activities=self._activity_worker is not None
                     and self._workflow_worker is not None,
-                    enable_remote_activities=self._activity_worker is not None
+                    # The Stream backend Local Activity alone doesn't make this worker
+                    # poll for Activity Tasks.
+                    enable_remote_activities=bool(config.get("activities"))
                     and not config.get("no_remote_activities"),
                     enable_nexus=self._nexus_worker is not None,
                 ),
