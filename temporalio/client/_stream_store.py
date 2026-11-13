@@ -53,7 +53,10 @@ class StreamStoreCallOptions:
 class StreamStore(ABC):
     """A Store that answers the Stream operations of a client.
 
-    A client with a Store sends each Stream operation to it instead of the server.
+    A client with a Store sends each Stream operation to it instead of the server. A
+    Store is configuration. Use
+    :py:class:`temporalio.contrib.redis.streams.RedisStreamStore`, or
+    :py:class:`temporalio.testing.MemoryStreamStore` in tests.
 
     .. warning::
         This API is experimental and subject to change.
@@ -71,8 +74,8 @@ class StreamStore(ABC):
         return StreamStoreCallOptions()
 
     @abstractmethod
-    async def call(self, operation: str, request: bytes) -> bytes:
-        """Answer one Stream operation.
+    async def _call(self, operation: str, request: bytes) -> bytes:
+        """Answer one Stream operation, in the form that the bridge defines.
 
         Args:
             operation: The Nexus operation name, such as ``CreateStream``,
@@ -121,7 +124,7 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
         self, runtime: temporalio.bridge.runtime.Runtime
     ) -> temporalio.bridge.streams.StreamRuntime: ...
 
-    async def call(self, operation: str, request: bytes) -> bytes:
+    async def _call(self, operation: str, request: bytes) -> bytes:
         """Answer one Stream operation with the Stream runtime of the bridge.
 
         Raises:
@@ -168,7 +171,7 @@ async def _call_stream_store(  # pyright: ignore[reportUnusedFunction]
     request: bytes,
 ) -> bytes:
     if not data_converter.payload_codec:
-        return await store.call(operation, request)
+        return await store._call(operation, request)
     # The worker package imports the client, so a module level import would cycle.
     from temporalio.bridge.worker import _Visitor
 
@@ -178,7 +181,7 @@ async def _call_stream_store(  # pyright: ignore[reportUnusedFunction]
     await visitor.visit(
         _Visitor(data_converter._encode_payload_sequence), request_message
     )
-    response = await store.call(operation, request_message.SerializeToString())
+    response = await store._call(operation, request_message.SerializeToString())
     response_message = _proto_type(definition.output_type).FromString(response)
     await visitor.visit(
         _Visitor(data_converter._decode_payload_sequence), response_message

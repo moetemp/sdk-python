@@ -180,7 +180,7 @@ class FailingStreamStore(StreamStore):
     def name(self) -> str:
         return "failing"
 
-    async def call(self, operation: str, request: bytes) -> bytes:
+    async def _call(self, operation: str, request: bytes) -> bytes:
         raise AssertionError(f"A replay called the Store with {operation}")
 
 
@@ -202,13 +202,13 @@ class FlakyDescribeStore(MemoryStreamStore):
     def call_options(self) -> StreamStoreCallOptions:
         return self._options
 
-    async def call(self, operation: str, request: bytes) -> bytes:
+    async def _call(self, operation: str, request: bytes) -> bytes:
         if operation == "DescribeStream":
             self.describes += 1
             await asyncio.sleep(self._delay.total_seconds())
             if self.describes <= self._failures:
                 raise RuntimeError("describe failed")
-        return await super().call(operation, request)
+        return await super()._call(operation, request)
 
 
 class RecordingInterceptor(Interceptor):
