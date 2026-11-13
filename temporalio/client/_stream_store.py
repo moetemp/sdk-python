@@ -32,6 +32,11 @@ class StreamStoreCallOptions:
     Workflow code can't do I/O, so a worker calls its Stream Store from a Local
     Activity.
 
+    A Workflow's call whose ref names a Store takes the options of that Store. A call
+    whose ref names no Store, such as a create, takes the options of the only Store.
+    With several Stores, such a call takes the defaults of this class, since the Local
+    Activity picks the Store only when it runs.
+
     .. warning::
         This API is experimental and subject to change.
     """
@@ -157,8 +162,8 @@ class StreamSelectContext:
     target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None = None
     """The Workflow or Activity that makes the call, or ``None`` for a plain client.
 
-    A call in an Activity has that Activity here. Workflow code never calls the
-    selector, since a Worker serves one Store.
+    A call in an Activity has that Activity here. A Workflow's call runs the selector
+    in the SDK's Local Activity, and has that Workflow here.
     """
 
 
@@ -183,8 +188,7 @@ class StreamConfig:
 
     A ref carries the :py:attr:`StreamStore.name` of its Store, and a call looks
     the Store up by that name. With more than one Store, :py:attr:`store_selector`
-    must also be set. A Worker serves one Store, so a Worker whose client has more
-    than one raises :py:class:`temporalio.exceptions.StreamConfigError`.
+    must also be set. A Worker serves every Store of its client.
     """
 
     store_selector: Callable[[StreamSelectContext], StreamStore] | None = None
@@ -194,9 +198,10 @@ class StreamConfig:
     Store, and returns one of the instances in :py:attr:`stores`. When it is
     ``None`` and there is one Store, every new Stream goes to that Store.
 
-    A replayed create must reach the same Store, so a selector uses facts that are
-    fixed for the run, such as the Stream id. The time, a random value or the load
-    of a Store can change between two runs of one create.
+    A Workflow's create runs the selector in a Local Activity. History keeps the
+    ref with the Store's name, so a replay doesn't call the selector again. A Stream
+    that code builds from an id only goes through the selector on each call, so the
+    selector must give the same Store for the same id.
     """
 
     _store_map: dict[str, StreamStore] = dataclasses.field(

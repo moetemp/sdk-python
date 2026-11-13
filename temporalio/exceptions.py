@@ -294,9 +294,8 @@ class StreamConfigError(RuntimeError):
     * A ref names a Store that the config of the client doesn't have.
     * The selector returns a Store that isn't one of the config's Stores.
     * A :py:class:`temporalio.client.StreamStore` is given in ``plugins``.
-    * A Worker's client has more than one Store, since a Worker serves one Store.
-    * A Workflow's Stream call names another Store than the Worker's. This fails the
-      Workflow Task.
+    * A Workflow's Stream call has a ref that names a Store that the config of the
+      Worker's client doesn't have. This fails the Workflow Task.
     * This build of temporalio has no Stream runtime, or no Redis Stream Store.
 
     .. warning::

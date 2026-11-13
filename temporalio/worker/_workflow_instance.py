@@ -194,8 +194,8 @@ class WorkflowInstanceDetails:
     ) = None
     """Serialization context of the Nexus operation handler that started the workflow, if any."""
     stream_store: _WorkflowStreamStore | None = None
-    """The Worker's Stream Store as Workflow code reaches it, or ``None`` when the Worker's
-    client has none."""
+    """The Worker's Stream Stores as Workflow code reaches them, or ``None`` when the
+    Worker's client has none."""
 
 
 class WorkflowInstance(ABC):

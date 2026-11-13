@@ -14,13 +14,14 @@ from temporalio.api.enums.v1 import EventType, StreamErrorReason
 from temporalio.client import (
     Client,
     StreamConfig,
+    StreamSelectContext,
     StreamStore,
     StreamStoreCallOptions,
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy
-from temporalio.converter import DataConverter
-from temporalio.exceptions import ApplicationError, StreamConfigError, StreamError
+from temporalio.converter import DataConverter, StorageDriverWorkflowInfo
+from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import (
     Producer,
     ProducerKindClient,
@@ -36,7 +37,6 @@ from temporalio.worker import (
     ExecuteActivityInput,
     Interceptor,
     Replayer,
-    Worker,
 )
 from tests.helpers import assert_task_fail_eventually, new_worker
 from tests.test_converter import SimpleCodec
@@ -133,6 +133,25 @@ class DescribeOtherStoreWorkflow:
         await get_stream(
             StreamRef(id=stream_id, store="other"), body_type=str
         ).describe()
+
+
+@workflow.defn
+class CreateAndDescribeWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> StreamRef[str]:
+        stream = await create_stream(id=stream_id, body_type=str)
+        await stream.describe()
+        return stream.ref
+
+
+class CountingStore(MemoryStreamStore):
+    def __init__(self, name: str) -> None:
+        super().__init__(name=name)
+        self.operations: list[str] = []
+
+    async def _call(self, operation: str, request: bytes) -> bytes:
+        self.operations.append(operation)
+        return await super()._call(operation, request)
 
 
 @activity.defn
@@ -245,9 +264,39 @@ class _RecordingActivityInbound(ActivityInboundInterceptor):
 
 
 def _with_store(client: Client, store: StreamStore) -> Client:
+    return _with_config(client, StreamConfig(stores=[store]))
+
+
+def _with_config(client: Client, stream_config: StreamConfig) -> Client:
     config = client.config()
-    config["stream_config"] = StreamConfig(stores=[store])
+    config["stream_config"] = stream_config
     return Client(**config)
+
+
+def _two_counting_stores(
+    contexts: list[StreamSelectContext],
+) -> tuple[CountingStore, CountingStore, StreamConfig]:
+    first = CountingStore("first")
+    second = CountingStore("second")
+
+    def select(context: StreamSelectContext) -> StreamStore:
+        contexts.append(context)
+        return second
+
+    return first, second, StreamConfig(stores=[first, second], store_selector=select)
+
+
+async def _run_create_and_describe(
+    client: Client, stream_id: str
+) -> tuple[WorkflowHandle[CreateAndDescribeWorkflow, StreamRef[str]], StreamRef[str]]:
+    async with new_worker(client, CreateAndDescribeWorkflow) as worker:
+        handle = await client.start_workflow(
+            CreateAndDescribeWorkflow.run,
+            stream_id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        return handle, await handle.result()
 
 
 async def _read_all(client: Client, stream_id: str) -> list[StreamRecord[str]]:
@@ -555,21 +604,6 @@ async def test_user_local_activity_append_has_local_activity_producer(client: Cl
     assert producer.kind.value.epoch.attempt == 1
 
 
-async def test_worker_refuses_a_client_with_two_stores(client: Client):
-    config = client.config()
-    first = MemoryStreamStore(name="first")
-    config["stream_config"] = StreamConfig(
-        stores=[first, MemoryStreamStore(name="second")],
-        store_selector=lambda _: first,
-    )
-    with pytest.raises(StreamConfigError, match="one Stream Store"):
-        Worker(
-            Client(**config),
-            task_queue=f"tq-{uuid.uuid4()}",
-            workflows=[AppendWorkflow],
-        )
-
-
 async def test_workflow_ref_of_another_store_fails_the_task(client: Client):
     stream_client = _with_store(client, MemoryStreamStore())
     async with new_worker(stream_client, DescribeOtherStoreWorkflow) as worker:
@@ -584,3 +618,42 @@ async def test_workflow_ref_of_another_store_fails_the_task(client: Client):
             handle, message_contains="names the Stream Store 'other'"
         )
         await handle.terminate()
+
+
+async def test_workflow_create_goes_to_the_selected_store(client: Client):
+    contexts: list[StreamSelectContext] = []
+    first, second, stream_config = _two_counting_stores(contexts)
+    stream_id = f"stream-{uuid.uuid4()}"
+    handle, ref = await _run_create_and_describe(
+        _with_config(client, stream_config), stream_id
+    )
+    assert ref.store == "second"
+    assert first.operations == []
+    assert second.operations == ["CreateStream", "DescribeStream"]
+    # The describe goes by the Store that the ref names, so the selector runs once.
+    assert contexts == [
+        StreamSelectContext(
+            id=stream_id,
+            target=StorageDriverWorkflowInfo(
+                id=handle.id,
+                type="CreateAndDescribeWorkflow",
+                run_id=handle.result_run_id,
+                namespace=client.namespace,
+            ),
+        )
+    ]
+
+
+async def test_workflow_replay_calls_no_selector_and_no_store(client: Client):
+    _, _, stream_config = _two_counting_stores([])
+    handle, _ = await _run_create_and_describe(
+        _with_config(client, stream_config), f"stream-{uuid.uuid4()}"
+    )
+    contexts: list[StreamSelectContext] = []
+    first, second, replay_config = _two_counting_stores(contexts)
+    await Replayer(
+        workflows=[CreateAndDescribeWorkflow], stream_config=replay_config
+    ).replay_workflow(await handle.fetch_history())
+    assert contexts == []
+    assert first.operations == []
+    assert second.operations == []

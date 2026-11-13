@@ -34,11 +34,7 @@ from ._activity import SharedStateManager, _ActivityWorker
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
 from ._plugin import Plugin
-from ._stream_store import (
-    _stream_store_activity,
-    _worker_stream_store,
-    _WorkflowStreamStore,
-)
+from ._stream_store import _stream_store_activity, _WorkflowStreamStore
 from ._tuning import WorkerTuner
 from ._workflow import (
     _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
@@ -505,10 +501,9 @@ class Worker:
         )
         activities = list(config.get("activities") or [])
         stream_config = client_config.get("stream_config")
-        stream_store = _worker_stream_store(stream_config)
-        if stream_store is not None and config.get("workflows"):
+        if stream_config is not None and config.get("workflows"):
             activities.append(
-                _stream_store_activity(stream_store, client_config["data_converter"])
+                _stream_store_activity(stream_config, client_config["data_converter"])
             )
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
