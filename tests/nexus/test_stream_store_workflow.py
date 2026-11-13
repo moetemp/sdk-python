@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-import temporalio.api.stream.v1
+import temporalio.common
 import temporalio.exceptions
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import EventType, StreamErrorReason
@@ -26,9 +26,11 @@ from temporalio.nexus.system.stream_service import (
     ProducerKindClient,
     ProducerKindLocalActivity,
     StreamIdConflictPolicy,
+    StreamRecord,
     StreamRef,
 )
 from temporalio.nexus.system.stream_service.workflow import create_stream, get_stream
+from temporalio.testing import MemoryStreamStore
 from temporalio.worker import (
     ActivityInboundInterceptor,
     ExecuteActivityInput,
@@ -36,7 +38,6 @@ from temporalio.worker import (
     Replayer,
 )
 from tests.helpers import assert_task_fail_eventually, new_worker
-from tests.helpers.stream_store import MemoryStreamStore
 from tests.test_converter import SimpleCodec
 
 # Workflow code writes these values, so the History shows only whether a Record body
@@ -86,6 +87,19 @@ class AppendResultWorkflow:
             return f"ApplicationError {err.type}: {err.message}"
         except temporalio.exceptions.TimeoutError as err:
             return f"TimeoutError {err.type and err.type.name}"
+        return "appended"
+
+
+@workflow.defn
+class AppendToStreamWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> str:
+        stream = get_stream(StreamRef(id=stream_id), body_type=str)
+        try:
+            await stream.append("a")
+        except StreamError as err:
+            assert isinstance(err, ApplicationError)
+            return StreamErrorReason.Name(err.reason)
         return "appended"
 
 
@@ -167,12 +181,10 @@ class FlakyAppendStore(MemoryStreamStore):
         *,
         failures: int = 0,
         delay: timedelta = timedelta(),
-        error: Exception | None = None,
     ) -> None:
         super().__init__()
         self._options = options
         self._failures = failures
-        self._error = error or RuntimeError("append failed")
         self._delay = delay
         self.appends = 0
 
@@ -185,7 +197,7 @@ class FlakyAppendStore(MemoryStreamStore):
             self.appends += 1
             await asyncio.sleep(self._delay.total_seconds())
             if self.appends <= self._failures:
-                raise self._error
+                raise RuntimeError("append failed")
         return await super().call(operation, request)
 
 
@@ -215,6 +227,17 @@ def _with_store(client: Client, store: StreamStore) -> Client:
     config = client.config()
     config["stream_stores"] = [store]
     return Client(**config)
+
+
+async def _read_all(client: Client, stream_id: str) -> list[StreamRecord[str]]:
+    stream = client.get_stream(StreamRef(id=stream_id), body_type=str)
+    return [record async for record in stream.iter_read_items()]
+
+
+def _producers(records: list[StreamRecord[str]]) -> list[Producer]:
+    producers = [record.producer for record in records]
+    assert all(producer is not None for producer in producers)
+    return [producer for producer in producers if producer is not None]
 
 
 async def _run_append_workflow(
@@ -269,7 +292,11 @@ async def test_workflow_stream_store_uses_payload_codec(client: Client):
     stream_client = Client(**config)
     _, ref = await _run_append_workflow(stream_client)
 
-    stored = [record.body for record in store.streams[ref.id].records]
+    # A client without the codec reads the bodies as the Store keeps them.
+    raw = _with_store(client, store).get_stream(
+        StreamRef(id=ref.id), body_type=temporalio.common.RawValue
+    )
+    stored = [record.body.payload async for record in raw.iter_read_items()]
     assert [body.metadata["simple-codec"] for body in stored] == [b"true", b"true"]
     stream = stream_client.get_stream(ref, body_type=str)
     assert [record.body async for record in stream.iter_read_items()] == _BODIES
@@ -338,15 +365,41 @@ async def test_workflow_stream_store_error_reaches_workflow_code(client: Client)
     assert store.appends == 1
 
 
-async def test_workflow_stream_store_stream_error_reaches_workflow_code(
+async def test_workflow_append_to_closed_stream_raises_stream_error(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore())
+    stream = await stream_client.create_stream(
+        id=f"stream-{uuid.uuid4()}", body_type=str
+    )
+    await stream.close()
+    async with new_worker(stream_client, AppendToStreamWorkflow) as worker:
+        reason = await stream_client.execute_workflow(
+            AppendToStreamWorkflow.run,
+            stream.ref.id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    assert reason == "STREAM_ERROR_REASON_CLOSED"
+
+
+async def test_client_append_after_workflow_append_keeps_offset_order(
     client: Client,
 ):
-    error = StreamError(
-        "the Stream is closed", reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED
-    )
-    store = FlakyAppendStore(StreamStoreCallOptions(), failures=1, error=error)
-    result = await _append_result(client, store)
-    assert result == "StreamError STREAM_ERROR_REASON_CLOSED: the Stream is closed"
+    stream_client = _with_store(client, MemoryStreamStore())
+    _, ref = await _run_append_workflow(stream_client)
+    stream = stream_client.get_stream(ref, body_type=str)
+    appended = await stream.append("from-client")
+    records = await _read_all(stream_client, ref.id)
+    assert [record.body for record in records] == [*_BODIES, "from-client"]
+    offsets = [record.offset for record in records]
+    assert offsets == sorted(offsets)
+    assert len(set(offsets)) == len(offsets)
+    assert offsets[-1] == appended.last_offset
+    kinds = [type(producer.kind) for producer in _producers(records)]
+    assert kinds == [
+        ProducerKindLocalActivity,
+        ProducerKindLocalActivity,
+        ProducerKindClient,
+    ]
 
 
 async def test_workflow_stream_store_call_options_retry(client: Client):
@@ -395,8 +448,7 @@ async def test_activity_interceptors_skip_stream_store_activity(client: Client):
 async def test_workflow_task_retry_appends_with_higher_epoch(client: Client):
     global _fail_next_task
     _fail_next_task = True
-    store = MemoryStreamStore()
-    stream_client = _with_store(client, store)
+    stream_client = _with_store(client, MemoryStreamStore())
     stream_id = f"stream-{uuid.uuid4()}"
     async with new_worker(stream_client, AppendThenFailTaskOnceWorkflow) as worker:
         await stream_client.execute_workflow(
@@ -405,19 +457,19 @@ async def test_workflow_task_retry_appends_with_higher_epoch(client: Client):
             id=f"workflow-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-    first, second = (record.producer for record in store.streams[stream_id].records)
+    first, second = _producers(await _read_all(stream_client, stream_id))
     assert first.id == second.id
 
-    def epoch(producer: temporalio.api.stream.v1.Producer) -> tuple[int, int, int]:
-        local = producer.local_activity.epoch
+    def epoch(producer: Producer) -> tuple[int, int, int]:
+        assert isinstance(producer.kind, ProducerKindLocalActivity)
+        local = producer.kind.value.epoch
         return (local.task.started_event_id, local.task.attempt, local.attempt)
 
     assert epoch(second) > epoch(first)
 
 
 async def test_user_local_activity_append_has_local_activity_producer(client: Client):
-    store = MemoryStreamStore()
-    stream_client = _with_store(client, store)
+    stream_client = _with_store(client, MemoryStreamStore())
     stream = await stream_client.create_stream(
         id=f"stream-{uuid.uuid4()}", body_type=str
     )
@@ -433,17 +485,17 @@ async def test_user_local_activity_append_has_local_activity_producer(client: Cl
             task_queue=worker.task_queue,
         )
         await handle.result()
-    [record] = store.streams[stream.ref.id].records
+    [producer] = _producers(await _read_all(stream_client, stream.ref.id))
     run_id = handle.result_run_id
-    assert record.producer.id == f"la:{run_id}:1"
-    assert record.producer.local_activity.run_id == run_id
-    assert record.producer.local_activity.epoch.task.started_event_id > 0
-    assert record.producer.local_activity.epoch.attempt == 1
+    assert producer.id == f"la:{run_id}:1"
+    assert isinstance(producer.kind, ProducerKindLocalActivity)
+    assert producer.kind.value.run_id == run_id
+    assert producer.kind.value.epoch.task.started_event_id > 0
+    assert producer.kind.value.epoch.attempt == 1
 
 
 async def test_workflow_explicit_producer_reaches_store(client: Client):
-    store = MemoryStreamStore()
-    stream_client = _with_store(client, store)
+    stream_client = _with_store(client, MemoryStreamStore())
     stream_id = f"stream-{uuid.uuid4()}"
     async with new_worker(stream_client, ExplicitProducerWorkflow) as worker:
         await stream_client.execute_workflow(
@@ -452,6 +504,6 @@ async def test_workflow_explicit_producer_reaches_store(client: Client):
             id=f"workflow-{uuid.uuid4()}",
             task_queue=worker.task_queue,
         )
-    [record] = store.streams[stream_id].records
-    assert record.producer.id == "mine"
-    assert record.producer.WhichOneof("kind") == "client"
+    [producer] = _producers(await _read_all(stream_client, stream_id))
+    assert producer.id == "mine"
+    assert isinstance(producer.kind, ProducerKindClient)

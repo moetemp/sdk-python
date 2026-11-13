@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import uuid
+from collections.abc import Awaitable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -12,15 +13,15 @@ import pytest
 
 import temporalio
 import temporalio.activity
-import temporalio.api.common.v1
 import temporalio.api.stream.v1
-import temporalio.exceptions
 import temporalio.api.workflowservice.v1
+import temporalio.common
+import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.nexus.system._support
 import temporalio.workflow
-from temporalio.client import Client
 from temporalio.api.enums.v1 import StreamErrorReason
+from temporalio.client import Client
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import (
@@ -28,72 +29,133 @@ from temporalio.nexus.system.stream_service import (
     DescribeStreamRequest,
     Producer,
     ProducerKindClient,
+    ProducerKindLocalActivity,
+    ProducerKindStandaloneActivity,
+    ProducerKindWorkflowActivity,
+    StreamIdConflictPolicy,
     StreamRef,
     StreamService,
+    StreamStatus,
+    Timestamp,
 )
 from temporalio.nexus.system.stream_service.client import (
     Stream,
     StreamServiceClientExtension,
 )
-from temporalio.testing import ActivityEnvironment
-from tests.helpers.stream_store import MemoryStreamStore
+from temporalio.testing import ActivityEnvironment, MemoryStreamStore
 from tests.test_converter import SimpleCodec
 
 
-def _offset(n: int) -> bytes:
-    return n.to_bytes(8, "big")
+def _with_store(client: Client, store: MemoryStreamStore) -> Client:
+    config = client.config()
+    config["stream_stores"] = [store]
+    return Client(**config)
 
 
 async def _create_stream(client: Client, store: MemoryStreamStore) -> Stream[str]:
-    config = client.config()
-    config["stream_stores"] = [store]
-    return await Client(**config).create_stream(
+    return await _with_store(client, store).create_stream(
         id=f"stream-{uuid.uuid4()}", body_type=str
     )
 
 
-async def _append_in_activity(
-    client: Client, info: temporalio.activity.Info
-) -> temporalio.api.stream.v1.Producer:
-    store = MemoryStreamStore()
-    stream = await _create_stream(client, store)
-    env = ActivityEnvironment()
-    env.info = info
-    await env.run(stream.append, "a")
-    [record] = store.streams[stream.ref.id].records
+async def _only_producer(stream: Stream[str]) -> Producer:
+    [record] = [record async for record in stream.iter_read_items()]
+    assert record.producer is not None
     return record.producer
 
 
-def _timestamp(value: datetime) -> google.protobuf.timestamp_pb2.Timestamp:
+async def _append_in_activity(
+    client: Client, info: temporalio.activity.Info
+) -> Producer:
+    stream = await _create_stream(client, MemoryStreamStore())
+    env = ActivityEnvironment()
+    env.info = info
+    await env.run(stream.append, "a")
+    return await _only_producer(stream)
+
+
+def _timestamp(value: datetime) -> Timestamp:
     proto = google.protobuf.timestamp_pb2.Timestamp()
     proto.FromDatetime(value)
-    return proto
+    return Timestamp(seconds=proto.seconds, nanos=proto.nanos)
+
+
+async def _stream_error(call: Awaitable[object]) -> StreamError:
+    with pytest.raises(StreamError) as err:
+        await call
+    return err.value
 
 
 async def test_client_stream_uses_store(client: Client):
-    config = client.config()
-    config["stream_stores"] = [MemoryStreamStore()]
-    stream_client = Client(**config)
+    stream_client = _with_store(client, MemoryStreamStore())
 
     stream = await stream_client.create_stream(
         id=f"stream-{uuid.uuid4()}", body_type=str
     )
     assert stream.created
+    assert stream.ref.store == "memory"
     appended = await stream.append("a", "b")
-    assert (appended.first_offset, appended.last_offset) == (_offset(1), _offset(2))
+    assert appended.first_offset is not None
+    assert appended.last_offset is not None
+    assert appended.first_offset < appended.last_offset
     records = [record async for record in stream.iter_read_items()]
     assert [(record.body, record.offset) for record in records] == [
-        ("a", _offset(1)),
-        ("b", _offset(2)),
+        ("a", appended.first_offset),
+        ("b", appended.last_offset),
     ]
 
     other = stream_client.get_stream(stream.ref, body_type=str)
     assert [record.body async for record in other.iter_read_items()] == ["a", "b"]
 
+    described = await stream.describe()
+    assert described.status == StreamStatus.StreamStatusOpen
+    assert described.last_offset == appended.last_offset
+
     await stream.close()
+    described = await stream.describe()
+    assert described.status == StreamStatus.StreamStatusClosed
+    assert described.last_offset == appended.last_offset
     page = await stream.read(from_offset=records[-1].offset)
     assert page.done
     assert page.records == []
+    pages = [page async for page in stream.iter_read()]
+    assert pages[-1].done
+    assert [record.body for page in pages for record in page.records] == ["a", "b"]
+
+
+async def test_client_strict_create_of_existing_stream_fails(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore())
+    stream_id = f"stream-{uuid.uuid4()}"
+    await stream_client.create_stream(id=stream_id, body_type=str)
+    err = await _stream_error(stream_client.create_stream(id=stream_id, body_type=str))
+    assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+    assert err.non_retryable
+    existing = await stream_client.create_stream(
+        id=stream_id,
+        body_type=str,
+        id_conflict_policy=StreamIdConflictPolicy.StreamIdConflictPolicyUseExisting,
+    )
+    # The response's `created` is false, which the generated model reads as unset.
+    assert not existing.created
+
+
+async def test_client_read_or_describe_of_unknown_stream_fails(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore())
+    stream = stream_client.get_stream(
+        StreamRef(id=f"stream-{uuid.uuid4()}"), body_type=str
+    )
+    for call in (stream.read(), stream.describe()):
+        err = await _stream_error(call)
+        assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+
+
+async def test_client_append_after_close_fails(client: Client):
+    stream = await _create_stream(client, MemoryStreamStore())
+    await stream.append("a")
+    await stream.close()
+    err = await _stream_error(stream.append("b"))
+    assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+    assert err.type == "StreamError"
 
 
 async def test_client_stream_store_uses_payload_codec(client: Client):
@@ -107,22 +169,21 @@ async def test_client_stream_store_uses_payload_codec(client: Client):
         id=f"stream-{uuid.uuid4()}", body_type=str
     )
     await stream.append("a", "b")
-    stored = [record.body for record in store.streams[stream.ref.id].records]
+    # A client without the codec reads the bodies as the Store keeps them.
+    raw = _with_store(client, store).get_stream(
+        StreamRef(id=stream.ref.id), body_type=temporalio.common.RawValue
+    )
+    stored = [record.body.payload async for record in raw.iter_read_items()]
     assert [body.metadata["simple-codec"] for body in stored] == [b"true", b"true"]
-    assert [
-        temporalio.api.common.v1.Payloads.FromString(body.data).payloads[0].data
-        for body in stored
-    ] == [b'"a"', b'"b"']
     assert [record.body async for record in stream.iter_read_items()] == ["a", "b"]
 
 
 async def test_client_append_has_client_producer(client: Client):
-    store = MemoryStreamStore()
-    stream = await _create_stream(client, store)
+    stream = await _create_stream(client, MemoryStreamStore())
     await stream.append("a")
-    [record] = store.streams[stream.ref.id].records
-    assert record.producer.id.startswith("client:")
-    assert record.producer.WhichOneof("kind") == "client"
+    producer = await _only_producer(stream)
+    assert producer.id.startswith("client:")
+    assert isinstance(producer.kind, ProducerKindClient)
 
 
 async def test_workflow_activity_append_has_activity_producer(client: Client):
@@ -145,10 +206,10 @@ async def test_workflow_activity_append_has_activity_producer(client: Client):
         * 1000
     )
     assert producer.id == f"act:run-1:step%3A1:{epoch_nanos}"
-    assert producer.WhichOneof("kind") == "workflow_activity"
-    assert producer.workflow_activity.run_id == "run-1"
-    assert producer.workflow_activity.epoch.attempt == 3
-    assert producer.workflow_activity.epoch.attempt_scheduled_time == _timestamp(
+    assert isinstance(producer.kind, ProducerKindWorkflowActivity)
+    assert producer.kind.value.run_id == "run-1"
+    assert producer.kind.value.epoch.attempt == 3
+    assert producer.kind.value.epoch.attempt_scheduled_time == _timestamp(
         attempt_scheduled
     )
 
@@ -170,10 +231,10 @@ async def test_standalone_activity_append_has_activity_producer(client: Client):
         ),
     )
     assert producer.id == "sa:job:job-run"
-    assert producer.WhichOneof("kind") == "standalone_activity"
-    assert producer.standalone_activity.run_id == ""
-    assert producer.standalone_activity.epoch.attempt == 2
-    assert producer.standalone_activity.epoch.attempt_scheduled_time == _timestamp(
+    assert isinstance(producer.kind, ProducerKindStandaloneActivity)
+    assert not producer.kind.value.run_id
+    assert producer.kind.value.epoch.attempt == 2
+    assert producer.kind.value.epoch.attempt_scheduled_time == _timestamp(
         attempt_scheduled
     )
 
@@ -194,12 +255,12 @@ async def test_local_activity_append_has_local_activity_producer(client: Client)
         ),
     )
     assert producer.id == "la:run%3A1:3"
-    assert producer.WhichOneof("kind") == "local_activity"
-    assert producer.local_activity.run_id == "run:1"
-    assert producer.local_activity.epoch.task.started_event_id == 7
-    assert producer.local_activity.epoch.task.attempt == 1
-    assert producer.local_activity.epoch.task.started_time == _timestamp(task_started)
-    assert producer.local_activity.epoch.attempt == 2
+    assert isinstance(producer.kind, ProducerKindLocalActivity)
+    assert producer.kind.value.run_id == "run:1"
+    assert producer.kind.value.epoch.task.started_event_id == 7
+    assert producer.kind.value.epoch.task.attempt == 1
+    assert producer.kind.value.epoch.task.started_time == _timestamp(task_started)
+    assert producer.kind.value.epoch.attempt == 2
 
 
 async def test_local_activity_append_without_workflow_task_fails(client: Client):
@@ -211,8 +272,7 @@ async def test_local_activity_append_without_workflow_task_fails(client: Client)
 
 
 async def test_explicit_producer_is_sent(client: Client):
-    store = MemoryStreamStore()
-    stream = await _create_stream(client, store)
+    stream = await _create_stream(client, MemoryStreamStore())
     with mock.patch.object(
         temporalio.nexus.system._support, "default_producer"
     ) as default_producer:
@@ -220,9 +280,9 @@ async def test_explicit_producer_is_sent(client: Client):
             "a", producer=Producer(id="mine", kind=ProducerKindClient(ClientProducer()))
         )
     default_producer.assert_not_called()
-    [record] = store.streams[stream.ref.id].records
-    assert record.producer.id == "mine"
-    assert record.producer.WhichOneof("kind") == "client"
+    producer = await _only_producer(stream)
+    assert producer.id == "mine"
+    assert isinstance(producer.kind, ProducerKindClient)
 
 
 def test_client_stream_methods_are_generated():
@@ -332,7 +392,9 @@ def test_stream_error_from_application_error():
     unknown = from_failure(
         ApplicationError(
             "x",
-            temporalio.api.stream.v1.StreamErrorDetails(reason=999),
+            temporalio.api.stream.v1.StreamErrorDetails(
+                reason=StreamErrorReason.ValueType(999)
+            ),
             type="StreamError",
         )
     )

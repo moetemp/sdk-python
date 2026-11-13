@@ -258,13 +258,17 @@ def _stream_error_from_reason(reason: int, message: str) -> StreamError:
     )
 
 
-def _stream_error_from_call(message: str, details: bytes) -> StreamError:
+def _stream_error_from_call(  # pyright: ignore[reportUnusedFunction]
+    message: str, details: bytes
+) -> StreamError:
     # A Store on the bridge fails with the encoded details, as a gRPC status has them.
     proto = temporalio.api.stream.v1.StreamErrorDetails.FromString(details)
     return _stream_error_from_reason(proto.reason, message)
 
 
-def _stream_error_from_failure(err: BaseException) -> StreamError | None:
+def _stream_error_from_failure(  # pyright: ignore[reportUnusedFunction]
+    err: BaseException,
+) -> StreamError | None:
     # A Local Activity or a Nexus operation hands back a plain application error, so the
     # error is rebuilt from its type and details.
     if isinstance(err, StreamError):
