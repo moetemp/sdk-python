@@ -185,6 +185,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_backend import StreamBackend
 from ._worker_versioning import (
     BuildIdOp,
     BuildIdOpAddNewCompatible,
@@ -350,6 +351,7 @@ __all__ = [
     "TaskReachabilityType",
     "CloudOperationsClient",
     "Plugin",
+    "StreamBackend",
     "Callback",
     "_ClientImpl",
     "_apply_headers",

@@ -17,6 +17,7 @@ from typing import (
     cast,
 )
 
+import nexusrpc
 from google.protobuf.internal.containers import MessageMap
 
 import temporalio.api.common.v1
@@ -27,12 +28,16 @@ import temporalio.api.schedule.v1
 import temporalio.api.taskqueue.v1
 import temporalio.api.update.v1
 import temporalio.api.workflowservice.v1
+import temporalio.bridge._visitor
 import temporalio.common
 import temporalio.converter
+import temporalio.converter._payload_converter
 import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus
 import temporalio.nexus._operation_context
+import temporalio.nexus.system
+import temporalio.nexus.system.stream_service
 from temporalio.activity import ActivityCancellationDetails
 from temporalio.converter import (
     ActivitySerializationContext,
@@ -125,6 +130,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_backend import StreamBackend
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
 from ._workflow import (
     WorkflowExecutionAsyncIterator,
@@ -139,6 +145,10 @@ from ._workflow import (
 
 if TYPE_CHECKING:
     from ._client import Client
+
+_STREAM_SERVICE = nexusrpc.get_service_definition(
+    temporalio.nexus.system.stream_service.StreamService
+)
 
 
 class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
@@ -1565,6 +1575,14 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
+        stream_backends = self._client._config["stream_backends"]
+        if (
+            stream_backends
+            and _STREAM_SERVICE is not None
+            and temporalio.nexus.system.is_system_endpoint(input.endpoint)
+            and input.service == _STREAM_SERVICE.name
+        ):
+            return await self._start_stream_backend_operation(stream_backends[0], input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
             service=input.service,
@@ -1647,6 +1665,63 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             service=input.service,
             operation=input.operation,
         )
+
+    async def _start_stream_backend_operation(
+        self, backend: StreamBackend, input: StartNexusOperationInput
+    ) -> NexusOperationHandle[Any]:
+        result_type = input.result_type
+        response_converter = (
+            temporalio.converter._payload_converter._get_transfer_type_converter(
+                result_type
+            )
+        )
+        if (
+            result_type is None
+            or response_converter is None
+            or response_converter.transfer_type is None
+        ):
+            raise TypeError(
+                f"Stream operation {input.operation} needs a result type that has a proto"
+            )
+        data_converter = self._client.data_converter
+        serialization_context = temporalio.nexus.system._get_serialization_context(
+            input.service, input.operation, input.arg
+        )
+        if serialization_context is not None:
+            data_converter = data_converter.with_context(serialization_context)
+        payload_converter = temporalio.nexus.system._get_payload_converter(
+            data_converter.payload_converter, data_converter.failure_converter
+        )
+        payload_visitor = temporalio.bridge._visitor.PayloadVisitor(
+            skip_search_attributes=True
+        )
+        # The worker package imports the client, so a module level import would cycle.
+        from temporalio.bridge.worker import _Visitor
+
+        [request] = payload_converter.to_payloads([input.arg])
+        if data_converter.payload_codec:
+            await payload_visitor.visit(
+                _Visitor(data_converter._encode_payload_sequence), request
+            )
+        response_data = await backend.call(input.operation, request.data)
+        [response] = payload_converter.to_payloads(
+            [response_converter.transfer_type.FromString(response_data)]
+        )
+        if data_converter.payload_codec:
+            await payload_visitor.visit(
+                _Visitor(data_converter._decode_payload_sequence), response
+            )
+        [result] = payload_converter.from_payloads([response], [result_type])
+        handle: NexusOperationHandle[Any] = NexusOperationHandle(
+            self._client,
+            input.id,
+            result_type=result_type,
+            endpoint=input.endpoint,
+            service=input.service,
+            operation=input.operation,
+        )
+        handle._known_outcome = result
+        return handle
 
     async def describe_nexus_operation(
         self, input: DescribeNexusOperationInput
