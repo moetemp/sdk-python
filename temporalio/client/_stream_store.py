@@ -10,13 +10,11 @@ import google.protobuf.message
 import nexusrpc
 
 import temporalio.activity
-import temporalio.api.streamservice.v1
 import temporalio.bridge._visitor
 import temporalio.bridge.runtime
 import temporalio.common
 import temporalio.converter
 import temporalio.converter._payload_converter
-import temporalio.nexus.system._support
 import temporalio.nexus.system.stream_service
 import temporalio.runtime
 
@@ -44,9 +42,7 @@ class StreamStoreCallOptions:
     retry_policy: temporalio.common.RetryPolicy = dataclasses.field(
         default_factory=lambda: temporalio.common.RetryPolicy(maximum_attempts=1)
     )
-    """Retries of a failed call. The default is one attempt. In one Workflow Task, each
-    attempt of a Workflow's append without an explicit ``producer`` sends the same
-    Producer, epoch and sequence, so the Store writes the batch once."""
+    """Retries of a failed call. The default is one attempt."""
 
     def __post_init__(self) -> None:
         """Check that a timeout is set."""
@@ -216,30 +212,6 @@ def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
 ) -> Callable[[str, bytes], Awaitable[bytes]]:
     @temporalio.activity.defn(name=_STREAM_STORE_ACTIVITY)
     async def call(operation: str, request: bytes) -> bytes:
-        if operation == "AppendRecords":
-            request = _with_local_activity_producer(request)
         return await _call_stream_store(store, data_converter, operation, request)
 
     return call
-
-
-def _with_local_activity_producer(request: bytes) -> bytes:
-    message = temporalio.api.streamservice.v1.AppendRecordsRequest.FromString(request)
-    # On a Store, a Workflow appends as the Local Activity that runs the append, so the
-    # Store can fence the write of a failed Workflow Task.
-    if message.producer.WhichOneof("kind") != "workflow":
-        return request
-    converter = temporalio.converter._payload_converter._get_transfer_type_converter(
-        temporalio.nexus.system.stream_service.Producer
-    )
-    if converter is None:
-        raise TypeError("The generated Producer has no proto transfer type")
-    message.producer.CopyFrom(
-        converter.to_transfer_type(temporalio.nexus.system._support.default_producer())
-    )
-    # Each retry of this Local Activity in one Workflow Task sends the same Producer, epoch
-    # and sequence, so the Store writes the batch once and gives back its first offsets.
-    message.producer.local_activity.epoch.attempt = 1
-    if not message.sequence:
-        message.sequence = 1
-    return message.SerializeToString()

@@ -285,6 +285,20 @@ async def test_explicit_producer_is_sent(client: Client):
     assert isinstance(producer.kind, ProducerKindClient)
 
 
+async def test_client_append_with_sequence_writes_once(client: Client):
+    stream = await _create_stream(client, MemoryStreamStore())
+    producer = Producer(id="mine", kind=ProducerKindClient(ClientProducer()))
+    first = await stream.append("a", "b", producer=producer, sequence=5)
+    second = await stream.append("a", "b", producer=producer, sequence=5)
+    assert second == first
+    records = [record async for record in stream.iter_read_items()]
+    assert [record.body for record in records] == ["a", "b"]
+    assert [record.offset for record in records] == [
+        first.first_offset,
+        first.last_offset,
+    ]
+
+
 def test_client_stream_methods_are_generated():
     assert "create_stream" not in vars(Client)
     assert "get_stream" not in vars(Client)

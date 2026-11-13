@@ -15,6 +15,9 @@ from temporalio.client import Client, StreamStore
 from temporalio.contrib.redis.streams import RedisStreamStore
 from temporalio.exceptions import StreamError
 from temporalio.nexus.system.stream_service import (
+    ClientProducer,
+    Producer,
+    ProducerKindClient,
     ProducerKindLocalActivity,
     ProducerKindWorkflowActivity,
     StreamRef,
@@ -53,12 +56,21 @@ async def _stream_error(call: Awaitable[object]) -> StreamError:
     return err.value
 
 
+@activity.defn
+async def append_values(ref: StreamRef[str], values: list[str]) -> None:
+    await activity.client().get_stream(ref, body_type=str).append(*values)
+
+
 @workflow.defn
 class AppendWorkflow:
     @workflow.run
     async def run(self, stream_id: str) -> StreamRef[str]:
         stream = await create_stream(id=stream_id, body_type=str)
-        await stream.append("a", "b")
+        await workflow.execute_local_activity(
+            append_values,
+            args=[stream.ref, ["a", "b"]],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
         return stream.ref
 
 
@@ -103,9 +115,13 @@ async def test_client_creates_appends_reads_and_closes(client: Client):
     assert page.records == []
 
 
-async def test_workflow_appends_with_local_activity_producer(client: Client):
+async def test_workflow_local_activity_appends_with_local_activity_producer(
+    client: Client,
+):
     stream_client = _with_store(client, _store())
-    async with new_worker(stream_client, AppendWorkflow) as worker:
+    async with new_worker(
+        stream_client, AppendWorkflow, activities=[append_values]
+    ) as worker:
         handle = await stream_client.start_workflow(
             AppendWorkflow.run,
             f"stream-{uuid.uuid4()}",
@@ -143,6 +159,20 @@ async def test_activity_appends_with_activity_producer(client: Client):
     assert record.producer is not None
     assert isinstance(record.producer.kind, ProducerKindWorkflowActivity)
     assert record.producer.kind.value.run_id == handle.result_run_id
+
+
+async def test_client_append_with_sequence_writes_once(client: Client):
+    stream = await _create_stream(_with_store(client, _store()))
+    producer = Producer(id="mine", kind=ProducerKindClient(ClientProducer()))
+    first = await stream.append("a", "b", producer=producer, sequence=5)
+    second = await stream.append("a", "b", producer=producer, sequence=5)
+    assert second == first
+    records = [record async for record in stream.iter_read_items()]
+    assert [record.body for record in records] == ["a", "b"]
+    assert [record.offset for record in records] == [
+        first.first_offset,
+        first.last_offset,
+    ]
 
 
 async def test_failed_calls_raise_stream_error_with_reason(client: Client):

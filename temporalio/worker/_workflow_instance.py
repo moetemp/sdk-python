@@ -289,6 +289,21 @@ _T = TypeVar("_T")
 _Context: TypeAlias = dict[str, Any]
 _ExceptionHandler: TypeAlias = Callable[[asyncio.AbstractEventLoop, _Context], Any]
 
+_STREAM_STORE_REFUSALS = {
+    "AppendRecords": (
+        "Workflow code can't append to a Stream on a Store in this release. "
+        "Call a Local Activity that appends through its client."
+    ),
+    "CloseStream": (
+        "Workflow code can't close a Stream on a Store in this release. "
+        "Call an Activity that closes it through its client."
+    ),
+    "ReadRecords": (
+        "Workflow code can't read a Stream on a Store in this release. "
+        "Call an Activity that reads it through its client."
+    ),
+}
+
 
 class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     WorkflowInstance, temporalio.workflow._Runtime, asyncio.AbstractEventLoop
@@ -2391,13 +2406,12 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         input: StartNexusOperationInput[Any, OutputT],
         options: StreamStoreCallOptions,
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
-        # A close must run after the Workflow Task commits. Workflow reads come later.
-        if input.operation_name in ("CloseStream", "ReadRecords"):
-            raise temporalio.exceptions.ApplicationError(
-                f"{input.operation_name} from Workflow code with a Stream Store isn't "
-                "supported yet",
-                non_retryable=True,
-            )
+        # The generator can't leave these methods out of the Workflow `Stream` yet. In
+        # this release, Workflow code writes and reads a Stream on a Store through its
+        # own Activities.
+        refusal = _STREAM_STORE_REFUSALS.get(input.operation_name)
+        if refusal is not None:
+            raise temporalio.exceptions.ApplicationError(refusal, non_retryable=True)
         # Workflow code builds the request, so the Local Activity does only the I/O.
         payload_converter, _ = self._system_nexus_converters(input)
         [request] = payload_converter.to_payloads([input.input])
