@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import temporalio.bridge.runtime
 import temporalio.bridge.streams
 import temporalio.runtime
-from temporalio.client import StreamStore
 
 
-class MemoryStreamStore(StreamStore):
+class MemoryStreamStore(temporalio.bridge.streams._BridgeStreamStore):
     """A Stream Store that keeps its Streams in the memory of this process, for tests.
 
     It runs the same Stream runtime and rules as every other Store on the bridge. A
@@ -38,36 +38,19 @@ class MemoryStreamStore(StreamStore):
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
                 :py:meth:`temporalio.runtime.Runtime.default` at the first call.
         """
-        for label, value in (
-            ("retention", retention),
-            ("last_write_ttl", last_write_ttl),
-        ):
-            if value is not None and value < timedelta():
-                raise ValueError(f"{label} must not be negative")
-        self._name = name
+        temporalio.bridge.streams._check_not_negative(
+            retention=retention, last_write_ttl=last_write_ttl
+        )
+        super().__init__(name=name, runtime=runtime)
         self._retention = retention
         self._last_write_ttl = last_write_ttl
-        self._runtime = runtime
-        self._stream_runtime: temporalio.bridge.streams.StreamRuntime | None = None
 
-    @property
-    def name(self) -> str:
-        """Name of the Store."""
-        return self._name
-
-    async def call(self, operation: str, request: bytes) -> bytes:
-        """Answer one Stream operation with the Stream runtime of the bridge.
-
-        Raises:
-            temporalio.exceptions.StreamError: The call failed.
-            RuntimeError: This build of temporalio has no Stream runtime.
-        """
-        if self._stream_runtime is None:
-            runtime = self._runtime or temporalio.runtime.Runtime.default()
-            self._stream_runtime = temporalio.bridge.streams.StreamRuntime.new_memory(
-                runtime._core_runtime,
-                name=self._name,
-                retention=self._retention,
-                last_write_ttl=self._last_write_ttl,
-            )
-        return await self._stream_runtime.call(operation, request)
+    def _new_stream_runtime(
+        self, runtime: temporalio.bridge.runtime.Runtime
+    ) -> temporalio.bridge.streams.StreamRuntime:
+        return temporalio.bridge.streams.StreamRuntime.new_memory(
+            runtime,
+            name=self._name,
+            retention=self._retention,
+            last_write_ttl=self._last_write_ttl,
+        )
