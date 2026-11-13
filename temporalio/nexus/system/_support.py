@@ -1,9 +1,15 @@
 import collections.abc
+import dataclasses
+import functools
 import typing
+import urllib.parse
+import uuid
 from datetime import timedelta
 
 import google.protobuf.duration_pb2
+import google.protobuf.timestamp_pb2
 
+import temporalio.activity
 import temporalio.api.common.v1.message_pb2 as common_pb2
 import temporalio.api.enums.v1.workflow_pb2 as workflow_enums_pb2
 import temporalio.api.failure.v1.message_pb2 as failure_pb2
@@ -13,10 +19,61 @@ import temporalio.common
 import temporalio.converter
 import temporalio.nexus.system
 
+if typing.TYPE_CHECKING:
+    from temporalio.nexus.system.stream_service.models import (
+        Producer,
+        ReadRecordsRequest,
+        ReadRecordsResponse,
+        StreamRecord,
+    )
+
+_BodyT = typing.TypeVar("_BodyT")
+
 
 class SignalWithStartWorkflowModelRequest(typing.Protocol):
     namespace: str
     id: str
+
+
+def request_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _producer_id(*parts: str) -> str:
+    # Quoting keeps a ':' inside an id from shifting the parts.
+    return ":".join(urllib.parse.quote(part, safe="") for part in parts)
+
+
+# One id for the process, because nothing fences a client write.
+@functools.cache
+def _client_producer_id() -> str:
+    return _producer_id("client", str(uuid.uuid4()))
+
+
+def default_producer() -> "Producer":
+    from temporalio.nexus.system.stream_service.models import (
+        ClientProducer,
+        Producer,
+        ProducerKindClient,
+    )
+
+    return Producer(id=_client_producer_id(), kind=ProducerKindClient(ClientProducer()))
+
+
+def next_read_request(
+    request: "ReadRecordsRequest[_BodyT]", response: "ReadRecordsResponse[_BodyT]"
+) -> "ReadRecordsRequest[_BodyT] | None":
+    if response.done or (request.wait is None and not response.records):
+        return None
+    if response.last_offset is None:
+        return request
+    return dataclasses.replace(request, from_offset=response.last_offset)
+
+
+def resume_read_request(
+    request: "ReadRecordsRequest[_BodyT]", item: "StreamRecord[_BodyT]"
+) -> "ReadRecordsRequest[_BodyT]":
+    return dataclasses.replace(request, from_offset=item.offset)
 
 
 def retry_policy_from_proto(
