@@ -14,12 +14,15 @@ import temporalio
 import temporalio.activity
 import temporalio.api.common.v1
 import temporalio.api.stream.v1
+import temporalio.exceptions
 import temporalio.api.workflowservice.v1
 import temporalio.nexus.system
 import temporalio.nexus.system._support
 import temporalio.workflow
 from temporalio.client import Client
+from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import (
     ClientProducer,
     DescribeStreamRequest,
@@ -290,3 +293,50 @@ async def test_client_rejects_two_stream_stores(client: Client):
     config["stream_stores"] = [MemoryStreamStore(), MemoryStreamStore()]
     with pytest.raises(ValueError, match="selector"):
         Client(**config)
+
+
+def test_stream_error_carries_its_reason():
+    err = StreamError(
+        "the Stream is closed", reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+    )
+    assert err.type == "StreamError"
+    assert err.message == "the Stream is closed"
+    assert err.non_retryable
+    assert list(err.details) == [
+        temporalio.api.stream.v1.StreamErrorDetails(
+            reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+        )
+    ]
+    assert not StreamError(
+        "down", reason=StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE
+    ).non_retryable
+    assert StreamError("x").reason == (
+        StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
+    )
+
+
+def test_stream_error_from_application_error():
+    from_failure = temporalio.exceptions._stream_error_from_failure
+    rebuilt = from_failure(
+        ApplicationError(
+            "the Stream exists",
+            temporalio.api.stream.v1.StreamErrorDetails(
+                reason=StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+            ),
+            type="StreamError",
+        )
+    )
+    assert isinstance(rebuilt, StreamError)
+    assert rebuilt.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+    assert rebuilt.message == "the Stream exists"
+    unknown = from_failure(
+        ApplicationError(
+            "x",
+            temporalio.api.stream.v1.StreamErrorDetails(reason=999),
+            type="StreamError",
+        )
+    )
+    assert unknown is not None
+    assert unknown.reason == StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
+    assert from_failure(ApplicationError("x", type="RuntimeError")) is None
+    assert from_failure(RuntimeError("x")) is None

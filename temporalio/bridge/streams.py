@@ -10,6 +10,7 @@ from typing import Any
 
 import temporalio.bridge.runtime
 import temporalio.bridge.temporal_sdk_bridge
+import temporalio.exceptions
 
 StreamCallError: type[Exception] = temporalio.bridge.temporal_sdk_bridge.StreamCallError
 
@@ -45,6 +46,12 @@ class StreamRuntime:
         """Run one Stream operation on an encoded request and return the encoded response.
 
         Raises:
-            StreamCallError: The call failed, with the gRPC code, message and details as args.
+            temporalio.exceptions.StreamError: The call failed.
         """
-        return await self._ref.call(operation, request)
+        try:
+            return await self._ref.call(operation, request)
+        except StreamCallError as err:
+            _, message, details = err.args
+            raise temporalio.exceptions._stream_error_from_call(
+                message, details
+            ) from None

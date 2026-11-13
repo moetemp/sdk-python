@@ -8,6 +8,7 @@ from typing import Any
 
 import temporalio.api.enums.v1
 import temporalio.api.failure.v1
+import temporalio.api.stream.v1
 
 
 class TemporalError(Exception):
@@ -196,6 +197,86 @@ class ApplicationError(FailureError):
     def category(self) -> ApplicationErrorCategory:
         """Severity category of the application error"""
         return self._category
+
+
+_STREAM_ERROR_REASON_UNSPECIFIED = (
+    temporalio.api.enums.v1.StreamErrorReason.STREAM_ERROR_REASON_UNSPECIFIED
+)
+
+# The one reason that a retry can fix.
+_STREAM_RETRYABLE_REASONS: frozenset[int] = frozenset(
+    {temporalio.api.enums.v1.StreamErrorReason.STREAM_ERROR_REASON_STORAGE_UNAVAILABLE}
+)
+
+
+class StreamError(ApplicationError):
+    """A failed Stream call. ``reason`` tells the cases apart.
+
+    One class covers every failed call in client, Activity and Workflow code, so match
+    on ``reason`` and not on the type. The reason is a ``StreamErrorReason``, such as
+    ``STREAM_ERROR_REASON_NOT_FOUND`` (nobody created the Stream),
+    ``STREAM_ERROR_REASON_CLOSED`` (the Stream is closed), or
+    ``STREAM_ERROR_REASON_ALREADY_EXISTS`` (a strict create of a Stream that exists).
+    A Store outage, ``STREAM_ERROR_REASON_STORAGE_UNAVAILABLE``, is the one retryable
+    reason.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: temporalio.api.enums.v1.StreamErrorReason.ValueType | None = None,
+    ) -> None:
+        """Initialize a Stream error. ``reason`` defaults to the unspecified reason."""
+        if reason is None:
+            reason = _STREAM_ERROR_REASON_UNSPECIFIED
+        # The details carry the reason, so the error keeps it when it crosses an
+        # Activity or a Nexus operation.
+        super().__init__(
+            message,
+            temporalio.api.stream.v1.StreamErrorDetails(reason=reason),
+            type="StreamError",
+            non_retryable=reason not in _STREAM_RETRYABLE_REASONS,
+        )
+        self._reason = reason
+
+    @property
+    def reason(self) -> temporalio.api.enums.v1.StreamErrorReason.ValueType:
+        """Why the Stream call failed."""
+        return self._reason
+
+
+def _stream_error_from_reason(reason: int, message: str) -> StreamError:
+    if reason not in temporalio.api.enums.v1.StreamErrorReason.values():
+        # A reason that this SDK doesn't know gives the unspecified reason.
+        reason = _STREAM_ERROR_REASON_UNSPECIFIED
+    return StreamError(
+        message, reason=temporalio.api.enums.v1.StreamErrorReason.ValueType(reason)
+    )
+
+
+def _stream_error_from_call(message: str, details: bytes) -> StreamError:
+    # A Store on the bridge fails with the encoded details, as a gRPC status has them.
+    proto = temporalio.api.stream.v1.StreamErrorDetails.FromString(details)
+    return _stream_error_from_reason(proto.reason, message)
+
+
+def _stream_error_from_failure(err: BaseException) -> StreamError | None:
+    # A Local Activity or a Nexus operation hands back a plain application error, so the
+    # error is rebuilt from its type and details.
+    if isinstance(err, StreamError):
+        return err
+    if not isinstance(err, ApplicationError) or err.type != "StreamError":
+        return None
+    reason: int = _STREAM_ERROR_REASON_UNSPECIFIED
+    for detail in err.details:
+        if isinstance(detail, temporalio.api.stream.v1.StreamErrorDetails):
+            reason = detail.reason
+            break
+    return _stream_error_from_reason(reason, err.message)
 
 
 class CancelledError(FailureError):

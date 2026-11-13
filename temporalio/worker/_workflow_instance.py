@@ -2423,8 +2423,20 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         async def result() -> OutputT:
             try:
                 response = await activity
+            except temporalio.exceptions.ApplicationError as err:
+                # Core hands back a failed Local Activity's error without a wrapper.
+                stream_error = temporalio.exceptions._stream_error_from_failure(err)
+                if stream_error is not None:
+                    raise stream_error from None
+                raise
             except temporalio.exceptions.ActivityError as err:
                 # Workflow code gets the Store's error, not the Local Activity's wrapper.
+                if err.cause is not None:
+                    stream_error = temporalio.exceptions._stream_error_from_failure(
+                        err.cause
+                    )
+                    if stream_error is not None:
+                        raise stream_error from None
                 if isinstance(
                     err.cause,
                     (

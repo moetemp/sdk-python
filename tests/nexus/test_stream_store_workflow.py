@@ -10,7 +10,7 @@ import pytest
 import temporalio.api.stream.v1
 import temporalio.exceptions
 from temporalio import activity, workflow
-from temporalio.api.enums.v1 import EventType
+from temporalio.api.enums.v1 import EventType, StreamErrorReason
 from temporalio.client import (
     Client,
     StreamStore,
@@ -19,7 +19,7 @@ from temporalio.client import (
 )
 from temporalio.common import RetryPolicy
 from temporalio.converter import DataConverter
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import (
     ClientProducer,
     Producer,
@@ -80,6 +80,8 @@ class AppendResultWorkflow:
         stream = await create_stream(id=stream_id, body_type=str)
         try:
             await stream.append("a")
+        except StreamError as err:
+            return f"StreamError {StreamErrorReason.Name(err.reason)}: {err.message}"
         except ApplicationError as err:
             return f"ApplicationError {err.type}: {err.message}"
         except temporalio.exceptions.TimeoutError as err:
@@ -165,10 +167,12 @@ class FlakyAppendStore(MemoryStreamStore):
         *,
         failures: int = 0,
         delay: timedelta = timedelta(),
+        error: Exception | None = None,
     ) -> None:
         super().__init__()
         self._options = options
         self._failures = failures
+        self._error = error or RuntimeError("append failed")
         self._delay = delay
         self.appends = 0
 
@@ -181,7 +185,7 @@ class FlakyAppendStore(MemoryStreamStore):
             self.appends += 1
             await asyncio.sleep(self._delay.total_seconds())
             if self.appends <= self._failures:
-                raise RuntimeError("append failed")
+                raise self._error
         return await super().call(operation, request)
 
 
@@ -332,6 +336,17 @@ async def test_workflow_stream_store_error_reaches_workflow_code(client: Client)
     result = await _append_result(client, store)
     assert result == "ApplicationError RuntimeError: append failed"
     assert store.appends == 1
+
+
+async def test_workflow_stream_store_stream_error_reaches_workflow_code(
+    client: Client,
+):
+    error = StreamError(
+        "the Stream is closed", reason=StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+    )
+    store = FlakyAppendStore(StreamStoreCallOptions(), failures=1, error=error)
+    result = await _append_result(client, store)
+    assert result == "StreamError STREAM_ERROR_REASON_CLOSED: the Stream is closed"
 
 
 async def test_workflow_stream_store_call_options_retry(client: Client):
