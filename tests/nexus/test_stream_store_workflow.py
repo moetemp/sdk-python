@@ -103,6 +103,17 @@ class AppendToStreamWorkflow:
         return "appended"
 
 
+@workflow.defn
+class CreateThenContinueAsNewWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str, run: int) -> list[bool]:
+        stream = await create_stream(id=stream_id, body_type=str)
+        await stream.append(f"run-{run}")
+        if run == 1:
+            workflow.continue_as_new(args=[stream_id, 2])
+        return [bool(stream.created)]
+
+
 @activity.defn
 async def user_activity() -> None:
     pass
@@ -379,6 +390,30 @@ async def test_workflow_append_to_closed_stream_raises_stream_error(client: Clie
             task_queue=worker.task_queue,
         )
     assert reason == "STREAM_ERROR_REASON_CLOSED"
+
+
+async def test_strict_create_in_each_run_of_a_chain_succeeds(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore())
+    stream_id = f"stream-{uuid.uuid4()}"
+    async with new_worker(stream_client, CreateThenContinueAsNewWorkflow) as worker:
+        handle = await stream_client.start_workflow(
+            CreateThenContinueAsNewWorkflow.run,
+            args=[stream_id, 1],
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+        assert await handle.result() == [True]
+    first_run_id = handle.first_execution_run_id
+    last_run = await stream_client.get_workflow_handle(handle.id).describe()
+    assert first_run_id
+    assert last_run.run_id != first_run_id
+    records = await _read_all(stream_client, stream_id)
+    assert [record.body for record in records] == ["run-1", "run-2"]
+    first, second = _producers(records)
+    assert isinstance(first.kind, ProducerKindLocalActivity)
+    assert isinstance(second.kind, ProducerKindLocalActivity)
+    assert first.kind.value.run_id == first_run_id
+    assert second.kind.value.run_id == last_run.run_id
 
 
 async def test_client_append_after_workflow_append_keeps_offset_order(

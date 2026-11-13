@@ -38,9 +38,10 @@ class SignalWithStartWorkflowModelRequest(typing.Protocol):
 def request_id() -> str:
     import temporalio.workflow
 
-    # Workflow code must get the same id on replay.
+    # Each run of a chain sends the same create, and the Store answers a create with the
+    # request id that made the Stream as a success. One id for the chain also replays.
     if temporalio.workflow.in_workflow():
-        return str(temporalio.workflow.uuid4())
+        return temporalio.workflow.info().first_execution_run_id
     return str(uuid.uuid4())
 
 
