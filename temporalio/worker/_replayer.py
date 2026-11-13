@@ -22,6 +22,7 @@ import temporalio.workflow
 
 from ..common import HeaderCodecBehavior
 from ._interceptor import Interceptor
+from ._stream_store import _WorkflowStreamStore
 from ._worker import load_default_build_id
 from ._workflow import _WorkflowWorker
 from ._workflow_instance import (
@@ -257,7 +258,6 @@ class Replayer:
                 self._config.get("data_converter")
                 or temporalio.converter.DataConverter.default
             )
-            stream_stores = self._config.get("stream_stores")
             workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: bridge_worker,
                 namespace=self._config.get("namespace", "ReplayNamespace"),
@@ -294,9 +294,9 @@ class Replayer:
                 default_workflow_logic_flags=frozenset(
                     self._default_workflow_logic_flags
                 ),
-                stream_store_call_options=stream_stores[0].call_options
-                if stream_stores
-                else None,
+                stream_store=_WorkflowStreamStore.from_stores(
+                    self._config.get("stream_stores", ())
+                ),
             )
             external_storage = data_converter.external_storage
             storage_driver_types = (

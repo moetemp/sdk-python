@@ -24,7 +24,6 @@ import temporalio.client
 import temporalio.common
 import temporalio.runtime
 import temporalio.service
-from temporalio.client._stream_store import _stream_store_activity
 from temporalio.common import (
     HeaderCodecBehavior,
     VersioningBehavior,
@@ -35,6 +34,7 @@ from ._activity import SharedStateManager, _ActivityWorker
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
 from ._plugin import Plugin
+from ._stream_store import _stream_store_activity, _WorkflowStreamStore
 from ._tuning import WorkerTuner
 from ._workflow import (
     _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
@@ -586,9 +586,7 @@ class Worker:
                 encode_headers=client_config["header_codec_behavior"]
                 != HeaderCodecBehavior.NO_CODEC,
                 max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
-                stream_store_call_options=stream_stores[0].call_options
-                if stream_stores
-                else None,
+                stream_store=_WorkflowStreamStore.from_stores(stream_stores),
             )
 
         tuner = config.get("tuner")

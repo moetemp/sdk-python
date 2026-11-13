@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import google.protobuf.message
 import nexusrpc
 
-import temporalio.activity
 import temporalio.bridge._visitor
 import temporalio.bridge.runtime
 import temporalio.common
@@ -142,9 +140,6 @@ def _check_not_negative(**durations: timedelta | None) -> None:  # pyright: igno
             raise ValueError(f"{label} must not be negative")
 
 
-_STREAM_STORE_ACTIVITY = "__temporal_stream_store_call"
-
-
 def _stream_service() -> nexusrpc.ServiceDefinition:
     service = nexusrpc.get_service_definition(
         temporalio.nexus.system.stream_service.StreamService
@@ -166,7 +161,7 @@ def _proto_type(model_type: Any) -> type[google.protobuf.message.Message]:
     return converter.transfer_type
 
 
-async def _call_stream_store(
+async def _call_stream_store(  # pyright: ignore[reportUnusedFunction]
     store: StreamStore,
     data_converter: temporalio.converter.DataConverter,
     operation: str,
@@ -205,13 +200,3 @@ def _stream_response(  # pyright: ignore[reportUnusedFunction]
         [payload], [result_type] if result_type else None
     )
     return result
-
-
-def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
-    store: StreamStore, data_converter: temporalio.converter.DataConverter
-) -> Callable[[str, bytes], Awaitable[bytes]]:
-    @temporalio.activity.defn(name=_STREAM_STORE_ACTIVITY)
-    async def call(operation: str, request: bytes) -> bytes:
-        return await _call_stream_store(store, data_converter, operation, request)
-
-    return call

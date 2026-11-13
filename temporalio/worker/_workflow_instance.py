@@ -59,12 +59,7 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.workflow
-from temporalio.client._stream_store import (
-    _STREAM_SERVICE,
-    _STREAM_STORE_ACTIVITY,
-    StreamStoreCallOptions,
-    _stream_response,
-)
+from temporalio.client._stream_store import _STREAM_SERVICE
 from temporalio.converter import StorageDriverStoreContext, StorageDriverWorkflowInfo
 from temporalio.nexus.system.stream_service.workflow._system_nexus_interceptor import (
     _start_system_nexus_operation as _start_stream_system_nexus_operation,
@@ -100,6 +95,7 @@ from ._interceptor import (
     WorkflowInboundInterceptor,
     WorkflowOutboundInterceptor,
 )
+from ._stream_store import _WorkflowStreamStore
 
 logger = logging.getLogger(__name__)
 
@@ -197,9 +193,9 @@ class WorkflowInstanceDetails:
         temporalio.converter.NexusSerializationContext | None
     ) = None
     """Serialization context of the Nexus operation handler that started the workflow, if any."""
-    stream_store_call_options: StreamStoreCallOptions | None = None
-    """Options of the Local Activity that calls the worker's Stream Store, or None when
-    the worker has no Stream Store."""
+    stream_store: _WorkflowStreamStore | None = None
+    """The Worker's Stream Store as Workflow code reaches it, or ``None`` when the Worker's
+    client has none."""
 
 
 class WorkflowInstance(ABC):
@@ -289,21 +285,6 @@ _T = TypeVar("_T")
 _Context: TypeAlias = dict[str, Any]
 _ExceptionHandler: TypeAlias = Callable[[asyncio.AbstractEventLoop, _Context], Any]
 
-_STREAM_STORE_REFUSALS = {
-    "AppendRecords": (
-        "Workflow code can't append to a Stream on a Store in this release. "
-        "Call a Local Activity that appends through its client."
-    ),
-    "CloseStream": (
-        "Workflow code can't close a Stream on a Store in this release. "
-        "Call an Activity that closes it through its client."
-    ),
-    "ReadRecords": (
-        "Workflow code can't read a Stream on a Store in this release. "
-        "Call an Activity that reads it through its client."
-    ),
-}
-
 
 class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     WorkflowInstance, temporalio.workflow._Runtime, asyncio.AbstractEventLoop
@@ -331,7 +312,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # the Nexus caller, which decodes them with the handler's Nexus context. A retried or cron run
         # reads the previous run's result and failure with the same context.
         self._nexus_serialization_context = det.nexus_serialization_context
-        self._stream_store_call_options = det.stream_store_call_options
+        self._stream_store = det.stream_store
         if self._nexus_serialization_context:
             self._result_payload_converter = self._payload_converter_with_context(
                 self._nexus_serialization_context
@@ -2371,9 +2352,11 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     async def _schedule_system_nexus_operation(
         self, input: StartNexusOperationInput[Any, OutputT]
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
-        options = self._stream_store_call_options
-        if options is not None and input.service == _STREAM_SERVICE.name:
-            return self._start_stream_store_operation(input, options)
+        # A Worker whose client has a Stream Store answers a Stream call with that Store. Any
+        # other Worker sends it to the server, as it sends every system Nexus operation.
+        store = self._stream_store
+        if store is not None and input.service == _STREAM_SERVICE.name:
+            return store.start_operation(self, input)
         return await self._outbound_start_nexus_operation(input)
 
     def _system_nexus_converters(
@@ -2400,73 +2383,6 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
             user_failure_converter,
         )
         return payload_converter, user_failure_converter
-
-    def _start_stream_store_operation(
-        self,
-        input: StartNexusOperationInput[Any, OutputT],
-        options: StreamStoreCallOptions,
-    ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
-        # The generator can't leave these methods out of the Workflow `Stream` yet. In
-        # this release, Workflow code writes and reads a Stream on a Store through its
-        # own Activities.
-        refusal = _STREAM_STORE_REFUSALS.get(input.operation_name)
-        if refusal is not None:
-            raise temporalio.exceptions.ApplicationError(refusal, non_retryable=True)
-        # Workflow code builds the request, so the Local Activity does only the I/O.
-        payload_converter, _ = self._system_nexus_converters(input)
-        [request] = payload_converter.to_payloads([input.input])
-        activity = self._outbound_schedule_activity(
-            StartLocalActivityInput(
-                activity=_STREAM_STORE_ACTIVITY,
-                args=(input.operation_name, request.data),
-                activity_id=None,
-                schedule_to_close_timeout=options.schedule_to_close_timeout,
-                schedule_to_start_timeout=None,
-                start_to_close_timeout=options.start_to_close_timeout,
-                retry_policy=options.retry_policy,
-                local_retry_threshold=None,
-                cancellation_type=temporalio.workflow.ActivityCancellationType.TRY_CANCEL,
-                headers={},
-                summary=input.summary,
-                event_groups=input.event_groups,
-                arg_types=[str, bytes],
-                ret_type=bytes,
-            )
-        )
-
-        async def result() -> OutputT:
-            try:
-                response = await activity
-            except temporalio.exceptions.ApplicationError as err:
-                # Core hands back a failed Local Activity's error without a wrapper.
-                stream_error = temporalio.exceptions._stream_error_from_failure(err)
-                if stream_error is not None:
-                    raise stream_error from None
-                raise
-            except temporalio.exceptions.ActivityError as err:
-                # Workflow code gets the Store's error, not the Local Activity's wrapper.
-                if err.cause is not None:
-                    stream_error = temporalio.exceptions._stream_error_from_failure(
-                        err.cause
-                    )
-                    if stream_error is not None:
-                        raise stream_error from None
-                if isinstance(
-                    err.cause,
-                    (
-                        temporalio.exceptions.ApplicationError,
-                        temporalio.exceptions.TimeoutError,
-                    ),
-                ):
-                    raise err.cause
-                raise
-            return _stream_response(
-                payload_converter, input.operation_name, input.output_type, response
-            )
-
-        return _StreamStoreOperationHandle(
-            self.create_task(result(), name=f"stream store: {input.operation_name}")
-        )
 
     #### Miscellaneous helpers ####
     # These are in alphabetical order.
@@ -3964,21 +3880,6 @@ class _ExternalWorkflowHandle(temporalio.workflow.ExternalWorkflowHandle[Any]):
         v.reason = reason
 
         await self._instance._cancel_external_workflow(command)
-
-
-class _StreamStoreOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
-    def __init__(self, task: asyncio.Task[OutputT]) -> None:
-        self._task = task
-
-    def cancel(self) -> bool:
-        return self._task.cancel()
-
-    def __await__(self) -> Generator[Any, Any, OutputT]:
-        return self._task.__await__()
-
-    @property
-    def operation_token(self) -> str | None:
-        return None
 
 
 class _NexusOperationHandle(temporalio.workflow.NexusOperationHandle[OutputT]):
