@@ -4,7 +4,7 @@ import functools
 import typing
 import urllib.parse
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import google.protobuf.duration_pb2
 import google.protobuf.timestamp_pb2
@@ -50,14 +50,59 @@ def _client_producer_id() -> str:
     return _producer_id("client", str(uuid.uuid4()))
 
 
+def _timestamp(value: datetime) -> google.protobuf.timestamp_pb2.Timestamp:
+    proto = google.protobuf.timestamp_pb2.Timestamp()
+    proto.FromDatetime(value)
+    return proto
+
+
 def default_producer() -> "Producer":
     from temporalio.nexus.system.stream_service.models import (
+        ActivityEpoch,
+        ActivityProducer,
         ClientProducer,
         Producer,
         ProducerKindClient,
+        ProducerKindStandaloneActivity,
+        ProducerKindWorkflowActivity,
+        Timestamp,
     )
 
-    return Producer(id=_client_producer_id(), kind=ProducerKindClient(ClientProducer()))
+    if not temporalio.activity.in_activity():
+        return Producer(
+            id=_client_producer_id(), kind=ProducerKindClient(ClientProducer())
+        )
+    info = temporalio.activity.info()
+    if info.is_local:
+        raise RuntimeError(
+            "A Stream write from a Local Activity needs the Workflow Task of the "
+            "Activity, which the SDK doesn't give yet"
+        )
+    attempt_time = _timestamp(info.current_attempt_scheduled_time)
+    epoch = ActivityEpoch(
+        attempt_scheduled_time=Timestamp(
+            seconds=attempt_time.seconds, nanos=attempt_time.nanos
+        ),
+        attempt=info.attempt,
+    )
+    if info.workflow_run_id is not None:
+        # The scheduled time stays the same across attempts, and it tells apart two uses
+        # of one activity id in a run.
+        schedule_key = str(_timestamp(info.scheduled_time).ToNanoseconds())
+        return Producer(
+            id=_producer_id(
+                "act", info.workflow_run_id, info.activity_id, schedule_key
+            ),
+            kind=ProducerKindWorkflowActivity(
+                ActivityProducer(run_id=info.workflow_run_id, epoch=epoch)
+            ),
+        )
+    if info.activity_run_id is None:
+        raise RuntimeError("A Standalone Activity has no activity run id")
+    return Producer(
+        id=_producer_id("sa", info.activity_id, info.activity_run_id),
+        kind=ProducerKindStandaloneActivity(ActivityProducer(epoch=epoch)),
+    )
 
 
 def next_read_request(

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import google.protobuf.timestamp_pb2
 import pytest
 
 import temporalio
@@ -31,6 +34,7 @@ from temporalio.nexus.system.stream_service.client import (
     Stream,
     StreamServiceClientExtension,
 )
+from temporalio.testing import ActivityEnvironment
 from tests.test_converter import SimpleCodec
 
 
@@ -118,6 +122,24 @@ async def _create_stream(client: Client, backend: MemoryStreamBackend) -> Stream
     )
 
 
+async def _append_in_activity(
+    client: Client, info: temporalio.activity.Info
+) -> temporalio.api.stream.v1.Producer:
+    backend = MemoryStreamBackend()
+    stream = await _create_stream(client, backend)
+    env = ActivityEnvironment()
+    env.info = info
+    await env.run(stream.append, "a")
+    [record] = backend.streams[stream.ref.id].records
+    return record.producer
+
+
+def _timestamp(value: datetime) -> google.protobuf.timestamp_pb2.Timestamp:
+    proto = google.protobuf.timestamp_pb2.Timestamp()
+    proto.FromDatetime(value)
+    return proto
+
+
 async def test_client_stream_uses_backend(client: Client):
     config = client.config()
     config["stream_backends"] = [MemoryStreamBackend()]
@@ -171,6 +193,67 @@ async def test_client_append_has_client_producer(client: Client):
     [record] = backend.streams[stream.ref.id].records
     assert record.producer.id.startswith("client:")
     assert record.producer.WhichOneof("kind") == "client"
+
+
+async def test_workflow_activity_append_has_activity_producer(client: Client):
+    scheduled = datetime(2026, 11, 12, 10, 0, 0, 123456, tzinfo=timezone.utc)
+    attempt_scheduled = scheduled + timedelta(seconds=30)
+    producer = await _append_in_activity(
+        client,
+        dataclasses.replace(
+            ActivityEnvironment.default_info(),
+            activity_id="step:1",
+            attempt=3,
+            workflow_run_id="run-1",
+            scheduled_time=scheduled,
+            current_attempt_scheduled_time=attempt_scheduled,
+        ),
+    )
+    epoch_nanos = (
+        (scheduled - datetime(1970, 1, 1, tzinfo=timezone.utc))
+        // timedelta(microseconds=1)
+        * 1000
+    )
+    assert producer.id == f"act:run-1:step%3A1:{epoch_nanos}"
+    assert producer.WhichOneof("kind") == "workflow_activity"
+    assert producer.workflow_activity.run_id == "run-1"
+    assert producer.workflow_activity.epoch.attempt == 3
+    assert producer.workflow_activity.epoch.attempt_scheduled_time == _timestamp(
+        attempt_scheduled
+    )
+
+
+async def test_standalone_activity_append_has_activity_producer(client: Client):
+    attempt_scheduled = datetime(2026, 11, 12, 10, 0, 30, tzinfo=timezone.utc)
+    producer = await _append_in_activity(
+        client,
+        dataclasses.replace(
+            ActivityEnvironment.default_info(),
+            activity_id="job",
+            activity_run_id="job-run",
+            attempt=2,
+            workflow_id=None,
+            workflow_namespace=None,
+            workflow_run_id=None,
+            workflow_type=None,
+            current_attempt_scheduled_time=attempt_scheduled,
+        ),
+    )
+    assert producer.id == "sa:job:job-run"
+    assert producer.WhichOneof("kind") == "standalone_activity"
+    assert producer.standalone_activity.run_id == ""
+    assert producer.standalone_activity.epoch.attempt == 2
+    assert producer.standalone_activity.epoch.attempt_scheduled_time == _timestamp(
+        attempt_scheduled
+    )
+
+
+async def test_local_activity_append_fails(client: Client):
+    with pytest.raises(RuntimeError, match="Local Activity"):
+        await _append_in_activity(
+            client,
+            dataclasses.replace(ActivityEnvironment.default_info(), is_local=True),
+        )
 
 
 async def test_explicit_producer_is_sent(client: Client):
