@@ -586,7 +586,9 @@ class Worker:
                 encode_headers=client_config["header_codec_behavior"]
                 != HeaderCodecBehavior.NO_CODEC,
                 max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
-                has_stream_backend=bool(stream_backends),
+                stream_backend_call_options=stream_backends[0].call_options
+                if stream_backends
+                else None,
             )
 
         tuner = config.get("tuner")
@@ -762,12 +764,20 @@ class Worker:
         Changing the client will make sure the worker starts using it for the
         next calls it makes. However, outstanding client calls will still
         complete with the existing client. The new client cannot be "lazy" and
-        must be using the same runtime as the current client.
+        must be using the same runtime and Stream backends as the current client.
         """
         bridge_client = _extract_bridge_client_for_worker(value)
         if self._runtime is not bridge_client._runtime:
             raise ValueError(
                 "New client is not on the same runtime as the existing client"
+            )
+        # Running Workflows route their Stream calls by the backend that the worker
+        # started with, so a new client can't change it.
+        if list(value.config(active_config=True)["stream_backends"]) != list(
+            self.client.config(active_config=True)["stream_backends"]
+        ):
+            raise ValueError(
+                "New client doesn't have the Stream backends of the existing client"
             )
         assert bridge_client._bridge_client
         self._bridge_worker.replace_client(bridge_client._bridge_client)

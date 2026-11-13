@@ -257,6 +257,7 @@ class Replayer:
                 self._config.get("data_converter")
                 or temporalio.converter.DataConverter.default
             )
+            stream_backends = self._config.get("stream_backends")
             workflow_worker = _WorkflowWorker(
                 bridge_worker=lambda: bridge_worker,
                 namespace=self._config.get("namespace", "ReplayNamespace"),
@@ -293,7 +294,9 @@ class Replayer:
                 default_workflow_logic_flags=frozenset(
                     self._default_workflow_logic_flags
                 ),
-                has_stream_backend=bool(self._config.get("stream_backends")),
+                stream_backend_call_options=stream_backends[0].call_options
+                if stream_backends
+                else None,
             )
             external_storage = data_converter.external_storage
             storage_driver_types = (

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any
 
 import google.protobuf.message
@@ -9,9 +11,41 @@ import nexusrpc
 
 import temporalio.activity
 import temporalio.bridge._visitor
+import temporalio.common
 import temporalio.converter
 import temporalio.converter._payload_converter
 import temporalio.nexus.system.stream_service
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamBackendCallOptions:
+    """Options of the Local Activity that calls a Stream backend for Workflow code.
+
+    Workflow code can't do I/O, so a worker calls its Stream backend from a Local
+    Activity.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+    start_to_close_timeout: timedelta | None = timedelta(seconds=60)
+    """Most time for one attempt."""
+
+    schedule_to_close_timeout: timedelta | None = None
+    """Most time for all attempts."""
+
+    retry_policy: temporalio.common.RetryPolicy = dataclasses.field(
+        default_factory=lambda: temporalio.common.RetryPolicy(maximum_attempts=1)
+    )
+    """Retries of a failed call. The default is one attempt, since an append that runs
+    again writes its Records again."""
+
+    def __post_init__(self) -> None:
+        """Check that a timeout is set."""
+        if not self.start_to_close_timeout and not self.schedule_to_close_timeout:
+            raise ValueError(
+                "start_to_close_timeout or schedule_to_close_timeout must be set"
+            )
 
 
 class StreamBackend(ABC):
@@ -28,6 +62,11 @@ class StreamBackend(ABC):
     def name(self) -> str:
         """Name of the backend."""
         ...
+
+    @property
+    def call_options(self) -> StreamBackendCallOptions:
+        """Options of the Local Activity that calls this backend for Workflow code."""
+        return StreamBackendCallOptions()
 
     @abstractmethod
     async def call(self, operation: str, request: bytes) -> bytes:

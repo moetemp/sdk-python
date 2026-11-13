@@ -62,6 +62,7 @@ import temporalio.workflow
 from temporalio.client._stream_backend import (
     _STREAM_BACKEND_ACTIVITY,
     _STREAM_SERVICE,
+    StreamBackendCallOptions,
     _stream_response,
 )
 from temporalio.converter import StorageDriverStoreContext, StorageDriverWorkflowInfo
@@ -196,8 +197,9 @@ class WorkflowInstanceDetails:
         temporalio.converter.NexusSerializationContext | None
     ) = None
     """Serialization context of the Nexus operation handler that started the workflow, if any."""
-    has_stream_backend: bool = False
-    """Whether the worker sends the Stream operations of workflows to a Stream backend."""
+    stream_backend_call_options: StreamBackendCallOptions | None = None
+    """Options of the Local Activity that calls the worker's Stream backend, or None when
+    the worker has no Stream backend."""
 
 
 class WorkflowInstance(ABC):
@@ -314,7 +316,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # the Nexus caller, which decodes them with the handler's Nexus context. A retried or cron run
         # reads the previous run's result and failure with the same context.
         self._nexus_serialization_context = det.nexus_serialization_context
-        self._has_stream_backend = det.has_stream_backend
+        self._stream_backend_call_options = det.stream_backend_call_options
         if self._nexus_serialization_context:
             self._result_payload_converter = self._payload_converter_with_context(
                 self._nexus_serialization_context
@@ -2354,8 +2356,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     async def _schedule_system_nexus_operation(
         self, input: StartNexusOperationInput[Any, OutputT]
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
-        if self._has_stream_backend and input.service == _STREAM_SERVICE.name:
-            return self._start_stream_backend_operation(input)
+        options = self._stream_backend_call_options
+        if options is not None and input.service == _STREAM_SERVICE.name:
+            return self._start_stream_backend_operation(input, options)
         return await self._outbound_start_nexus_operation(input)
 
     def _system_nexus_converters(
@@ -2384,7 +2387,9 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         return payload_converter, user_failure_converter
 
     def _start_stream_backend_operation(
-        self, input: StartNexusOperationInput[Any, OutputT]
+        self,
+        input: StartNexusOperationInput[Any, OutputT],
+        options: StreamBackendCallOptions,
     ) -> temporalio.workflow.NexusOperationHandle[OutputT]:
         # A close must run after the Workflow Task commits. Workflow reads come later.
         if input.operation_name in ("CloseStream", "ReadRecords"):
@@ -2401,12 +2406,10 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
                 activity=_STREAM_BACKEND_ACTIVITY,
                 args=(input.operation_name, request.data),
                 activity_id=None,
-                schedule_to_close_timeout=input.schedule_to_close_timeout,
-                schedule_to_start_timeout=input.schedule_to_start_timeout,
-                start_to_close_timeout=input.start_to_close_timeout
-                or timedelta(seconds=60),
-                # A backend error fails the call at once, as it does for a client.
-                retry_policy=temporalio.common.RetryPolicy(maximum_attempts=1),
+                schedule_to_close_timeout=options.schedule_to_close_timeout,
+                schedule_to_start_timeout=None,
+                start_to_close_timeout=options.start_to_close_timeout,
+                retry_policy=options.retry_policy,
                 local_retry_threshold=None,
                 cancellation_type=temporalio.workflow.ActivityCancellationType.TRY_CANCEL,
                 headers={},
@@ -2418,11 +2421,21 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         )
 
         async def result() -> OutputT:
+            try:
+                response = await activity
+            except temporalio.exceptions.ActivityError as err:
+                # Workflow code gets the backend's error, not the Local Activity's wrapper.
+                if isinstance(
+                    err.cause,
+                    (
+                        temporalio.exceptions.ApplicationError,
+                        temporalio.exceptions.TimeoutError,
+                    ),
+                ):
+                    raise err.cause
+                raise
             return _stream_response(
-                payload_converter,
-                input.operation_name,
-                input.output_type,
-                await activity,
+                payload_converter, input.operation_name, input.output_type, response
             )
 
         return _StreamBackendOperationHandle(

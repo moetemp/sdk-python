@@ -34,6 +34,7 @@ import temporalio.common
 import temporalio.converter
 import temporalio.converter._serialization_context
 import temporalio.exceptions
+from temporalio.client._stream_backend import _STREAM_BACKEND_ACTIVITY
 from temporalio.converter import (
     StorageDriverActivityInfo,
     StorageDriverStoreContext,
@@ -732,8 +733,11 @@ class _ActivityWorker:
         # now even though the info() can't be intercepted and heartbeat() will
         # fail. The interceptors may want to use the info() during init.
         impl: ActivityInboundInterceptor = _ActivityInboundImpl(self, running_activity)
-        for interceptor in reversed(list(self._interceptors)):
-            impl = interceptor.intercept_activity(impl)
+        # Users see a Stream call through the Workflow interceptors, so this internal
+        # Activity skips theirs.
+        if info.activity_type != _STREAM_BACKEND_ACTIVITY:
+            for interceptor in reversed(list(self._interceptors)):
+                impl = interceptor.intercept_activity(impl)
 
         impl.init(_ActivityOutboundImpl(self, running_activity.info))
         return await impl.execute_activity(input)
