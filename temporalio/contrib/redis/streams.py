@@ -22,10 +22,11 @@ from datetime import timedelta
 import temporalio.bridge.runtime
 import temporalio.bridge.streams
 import temporalio.client
+import temporalio.client._stream_store
 import temporalio.runtime
 
 
-class RedisStreamStore(temporalio.bridge.streams._BridgeStreamStore):
+class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
     """A Stream Store that keeps its Streams in Redis 7.0 or later.
 
     It runs the Stream runtime of the bridge on the Redis Store of the
@@ -84,7 +85,7 @@ class RedisStreamStore(temporalio.bridge.streams._BridgeStreamStore):
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
                 :py:meth:`temporalio.runtime.Runtime.default` at the first call.
         """
-        temporalio.bridge.streams._check_not_negative(
+        temporalio.client._stream_store._check_not_negative(
             retention=retention,
             last_write_ttl=last_write_ttl,
             response_timeout=response_timeout,

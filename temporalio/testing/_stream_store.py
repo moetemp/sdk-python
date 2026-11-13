@@ -6,10 +6,11 @@ from datetime import timedelta
 
 import temporalio.bridge.runtime
 import temporalio.bridge.streams
+import temporalio.client._stream_store
 import temporalio.runtime
 
 
-class MemoryStreamStore(temporalio.bridge.streams._BridgeStreamStore):
+class MemoryStreamStore(temporalio.client._stream_store._BridgeStreamStore):
     """A Stream Store that keeps its Streams in the memory of this process, for tests.
 
     It runs the same Stream runtime and rules as every other Store on the bridge. A
@@ -38,7 +39,7 @@ class MemoryStreamStore(temporalio.bridge.streams._BridgeStreamStore):
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
                 :py:meth:`temporalio.runtime.Runtime.default` at the first call.
         """
-        temporalio.bridge.streams._check_not_negative(
+        temporalio.client._stream_store._check_not_negative(
             retention=retention, last_write_ttl=last_write_ttl
         )
         super().__init__(name=name, runtime=runtime)

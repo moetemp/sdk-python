@@ -4,7 +4,7 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import google.protobuf.message
 import nexusrpc
@@ -12,11 +12,16 @@ import nexusrpc
 import temporalio.activity
 import temporalio.api.streamservice.v1
 import temporalio.bridge._visitor
+import temporalio.bridge.runtime
 import temporalio.common
 import temporalio.converter
 import temporalio.converter._payload_converter
 import temporalio.nexus.system._support
 import temporalio.nexus.system.stream_service
+import temporalio.runtime
+
+if TYPE_CHECKING:
+    import temporalio.bridge.streams
 
 
 @dataclasses.dataclass(frozen=True)
@@ -85,6 +90,59 @@ class StreamStore(ABC):
             The serialized response message of ``temporal.api.streamservice.v1``.
         """
         ...
+
+
+class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
+    """A Store that runs on the Stream runtime of the bridge.
+
+    It builds the runtime at its first call, so the Store can be built before the
+    Runtime and its Tokio threads exist.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        runtime: temporalio.runtime.Runtime | None,
+        call_options: StreamStoreCallOptions | None = None,
+    ) -> None:
+        self._name = name
+        self._runtime = runtime
+        self._call_options = call_options
+        self._stream_runtime: temporalio.bridge.streams.StreamRuntime | None = None
+
+    @property
+    def name(self) -> str:
+        """Name of the Store."""
+        return self._name
+
+    @property
+    def call_options(self) -> StreamStoreCallOptions:
+        """Options of the Local Activity that calls this Store for Workflow code."""
+        return self._call_options or super().call_options
+
+    @abstractmethod
+    def _new_stream_runtime(
+        self, runtime: temporalio.bridge.runtime.Runtime
+    ) -> temporalio.bridge.streams.StreamRuntime: ...
+
+    async def call(self, operation: str, request: bytes) -> bytes:
+        """Answer one Stream operation with the Stream runtime of the bridge.
+
+        Raises:
+            temporalio.exceptions.StreamError: The call failed.
+            RuntimeError: This build of temporalio has no Stream runtime.
+        """
+        if self._stream_runtime is None:
+            runtime = self._runtime or temporalio.runtime.Runtime.default()
+            self._stream_runtime = self._new_stream_runtime(runtime._core_runtime)
+        return await self._stream_runtime.call(operation, request)
+
+
+def _check_not_negative(**durations: timedelta | None) -> None:  # pyright: ignore[reportUnusedFunction]
+    for label, value in durations.items():
+        if value is not None and value < timedelta():
+            raise ValueError(f"{label} must not be negative")
 
 
 _STREAM_STORE_ACTIVITY = "__temporal_stream_store_call"
