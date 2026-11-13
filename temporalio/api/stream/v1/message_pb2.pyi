@@ -168,8 +168,8 @@ global___ActivityEpoch = ActivityEpoch
 class WorkflowProducer(google.protobuf.message.Message):
     """Experimental. Might change in the future.
     A Workflow run Producer. On the server's Streams, a Workflow writes as this Producer in its
-    Workflow Task. On a Store, a Workflow appends as a Local Activity Producer, and this Producer
-    only closes the Stream.
+    Workflow Task. On a Store, Workflow code writes through a Local Activity, so its writes carry a
+    Local Activity Producer.
     """
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
@@ -180,9 +180,7 @@ class WorkflowProducer(google.protobuf.message.Message):
     """Required. The run id of the Workflow run, not of its chain. Each run is its own Producer."""
     @property
     def epoch(self) -> global___WorkflowTaskEpoch:
-        """The Workflow Task of the write. A close on a Store runs after the Workflow Task and sends
-        no epoch.
-        """
+        """The Workflow Task of the write."""
 
     def __init__(
         self,
@@ -418,8 +416,10 @@ class StreamRecord(google.protobuf.message.Message):
     OFFSET_FIELD_NUMBER: builtins.int
     offset: builtins.bytes
     """Required. The Record's offset. An offset is ordered and unique in one Stream, and it is
-    sparse. Offsets have gaps, so they don't count Records. An offset is never empty. A read
-    gives its Stream, so the read checks the offset against that Stream.
+    sparse. Offsets have gaps, so they don't count Records. Two offsets of one Stream compare
+    bytewise, as unsigned bytes, in the order of their Records. So a reader, a Store and the
+    server order them without decoding them. An offset is never empty. A read gives its
+    Stream, so the read checks the offset against that Stream.
     """
     @property
     def producer(self) -> global___Producer: ...
