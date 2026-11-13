@@ -231,7 +231,10 @@ class Client(
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
             stream_stores: Stores that answer the Stream operations of this
-                client instead of the server. At most one is supported.
+                client instead of the server. It is a list, as
+                :py:attr:`temporalio.converter.ExternalStorage.drivers` is, so that a
+                later release can route between several Stores. This release takes
+                one Store.
 
                 .. warning::
                     This API is experimental and subject to change.
@@ -311,6 +314,8 @@ class Client(
         self._init_from_config(config)
 
     def _init_from_config(self, config: ClientConfig):
+        # Two Stores need a rule that picks one for a new Stream. That selector isn't here yet,
+        # so a second Store is refused and not ignored.
         if len(config["stream_stores"]) > 1:
             raise ValueError(
                 "More than one Stream Store needs a selector, which isn't supported yet"
