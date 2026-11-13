@@ -56,14 +56,14 @@ class StreamRuntime:
         """Build the runtime on Redis. It connects at its first call.
 
         Raises:
-            RuntimeError: The bridge build has no Stream runtime.
+            RuntimeError: The bridge build has no Redis Stream Store.
             ValueError: An option is bad.
         """
         new = getattr(
             temporalio.bridge.temporal_sdk_bridge, "new_redis_stream_runtime", None
         )
         if new is None:
-            raise RuntimeError("This build of temporalio has no Stream runtime")
+            raise RuntimeError("This build of temporalio has no Redis Stream Store")
         return StreamRuntime(
             new(
                 runtime._ref,

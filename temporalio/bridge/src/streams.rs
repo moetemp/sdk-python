@@ -1,6 +1,6 @@
-//! Bindings to the Stream runtime of the `temporalio-streams` crate, on the memory Store or on the
-//! Redis Store of `temporalio-streams-redis`. Python calls the five Stream service operations by
-//! name, with the encoded request, and gets the encoded response.
+//! Bindings to the Stream runtime of the `temporalio-streams` crate, on the memory Store or, with
+//! the `streams-redis` feature, on the Redis Store of `temporalio-streams-redis`. Python calls the
+//! five Stream service operations by name, with the encoded request, and gets the encoded response.
 
 use pyo3::exceptions::PyException;
 #[cfg(feature = "streams")]
@@ -69,7 +69,7 @@ pub fn new_memory_stream_runtime(
 }
 
 /// The options of the Redis Store, as Python passes them. A `None` takes the crate's default.
-#[cfg(feature = "streams")]
+#[cfg(feature = "streams-redis")]
 pub struct RedisStreamOptions {
     pub urls: Vec<String>,
     pub cluster: bool,
@@ -84,7 +84,7 @@ pub struct RedisStreamOptions {
 
 /// Builds the runtime on Redis. It connects at its first call, so a server that is down fails that
 /// call and not this one. A bad option raises `ValueError` with the crate's message.
-#[cfg(feature = "streams")]
+#[cfg(feature = "streams-redis")]
 pub fn new_redis_stream_runtime(
     runtime_ref: &runtime::RuntimeRef,
     options: RedisStreamOptions,
@@ -118,7 +118,7 @@ pub fn new_redis_stream_runtime(
 
 // The config's durations are the `prost-wkt-types` type that the Redis crate's protos use. The
 // bridge doesn't depend on that crate, so the field's type picks the conversion.
-#[cfg(feature = "streams")]
+#[cfg(feature = "streams-redis")]
 fn proto_duration<T>(field: &str, value: Option<std::time::Duration>) -> PyResult<Option<T>>
 where
     T: TryFrom<std::time::Duration>,

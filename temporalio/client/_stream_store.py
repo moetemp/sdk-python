@@ -131,7 +131,7 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
 
         Raises:
             temporalio.exceptions.StreamError: The call failed.
-            RuntimeError: This build of temporalio has no Stream runtime.
+            RuntimeError: This build of temporalio has no Stream runtime, or not this Store.
         """
         if self._stream_runtime is None:
             runtime = self._runtime or temporalio.runtime.Runtime.default()
