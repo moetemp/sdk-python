@@ -58,6 +58,7 @@ jobs:
         if: ${{ matrix.clippyLinter }}
       - run: poe build-develop
       - run: poe lint
+      - uses: ./.github/actions/install-redis
       - run: mkdir junit-xml
       - run: poe test ${{matrix.pytestExtraArgs}} -s --junit-xml=junit-xml/${{ matrix.python }}--${{ matrix.os }}.xml
         timeout-minutes: 15
