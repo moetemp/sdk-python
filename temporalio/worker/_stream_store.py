@@ -15,7 +15,6 @@ import temporalio.exceptions
 import temporalio.workflow
 from temporalio.client._stream_store import (
     StreamConfig,
-    StreamStoreCallOptions,
     _call_stream_store,
     _request_ref,
     _stream_response,
@@ -80,15 +79,6 @@ class _WorkflowStreamStore:
         """Build it from the Stream config of a client, or give ``None`` when it has none."""
         return cls(config=config) if config is not None else None
 
-    def _call_options(self, ref_store: str) -> StreamStoreCallOptions:
-        # The Local Activity picks the Store of a ref that names none, so with several
-        # Stores its options can't come from that Store.
-        if ref_store:
-            return self.config._get_store_by_name(ref_store).call_options
-        if len(self.config.stores) == 1:
-            return self.config.stores[0].call_options
-        return StreamStoreCallOptions()
-
     def start_operation(
         self,
         instance: _WorkflowInstanceImpl,
@@ -106,9 +96,10 @@ class _WorkflowStreamStore:
         [request] = payload_converter.to_payloads([input.input])
         # A ref of a Store that the config doesn't have fails here, with no I/O. Its
         # `StreamConfigError` fails the Workflow Task.
-        options = self._call_options(
-            _request_ref(input.operation_name, request.data).store
-        )
+        ref_store = _request_ref(input.operation_name, request.data).store
+        if ref_store:
+            self.config._get_store_by_name(ref_store)
+        options = self.config.workflow_call_options
         activity = instance._outbound_schedule_activity(
             StartLocalActivityInput(
                 activity=_STREAM_STORE_ACTIVITY,

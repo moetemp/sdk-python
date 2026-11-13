@@ -32,10 +32,9 @@ class StreamStoreCallOptions:
     Workflow code can't do I/O, so a worker calls its Stream Store from a Local
     Activity.
 
-    A Workflow's call whose ref names a Store takes the options of that Store. A call
-    whose ref names no Store, such as a create, takes the options of the only Store.
-    With several Stores, such a call takes the defaults of this class, since the Local
-    Activity picks the Store only when it runs.
+    A :py:class:`StreamConfig` holds them in
+    :py:attr:`StreamConfig.workflow_call_options`, and every Store of that config
+    gets the same options.
 
     .. warning::
         This API is experimental and subject to change.
@@ -78,11 +77,6 @@ class StreamStore(ABC):
         """Name of the Store."""
         ...
 
-    @property
-    def call_options(self) -> StreamStoreCallOptions:
-        """Options of the Local Activity that calls this Store for Workflow code."""
-        return StreamStoreCallOptions()
-
     @abstractmethod
     async def _call(self, operation: str, request: bytes) -> bytes:
         """Answer one Stream operation, in the form that the bridge defines.
@@ -112,22 +106,15 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
         *,
         name: str,
         runtime: temporalio.runtime.Runtime | None,
-        call_options: StreamStoreCallOptions | None = None,
     ) -> None:
         self._name = name
         self._runtime = runtime
-        self._call_options = call_options
         self._stream_runtime: temporalio.bridge.streams.StreamRuntime | None = None
 
     @property
     def name(self) -> str:
         """Name of the Store."""
         return self._name
-
-    @property
-    def call_options(self) -> StreamStoreCallOptions:
-        """Options of the Local Activity that calls this Store for Workflow code."""
-        return self._call_options or super().call_options
 
     @abstractmethod
     def _new_stream_runtime(
@@ -202,6 +189,15 @@ class StreamConfig:
     ref with the Store's name, so a replay doesn't call the selector again. A Stream
     that code builds from an id only goes through the selector on each call, so the
     selector must give the same Store for the same id.
+    """
+
+    workflow_call_options: StreamStoreCallOptions = dataclasses.field(
+        default_factory=StreamStoreCallOptions
+    )
+    """Options of the Local Activity that calls a Store for Workflow code.
+
+    They are the same for every Store of this config. The Local Activity of a create
+    picks its Store only when it runs, so its options can't come from that Store.
     """
 
     _store_map: dict[str, StreamStore] = dataclasses.field(

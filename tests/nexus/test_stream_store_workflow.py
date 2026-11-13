@@ -215,22 +215,11 @@ class FailingStreamStore(StreamStore):
 
 
 class FlakyDescribeStore(MemoryStreamStore):
-    def __init__(
-        self,
-        options: StreamStoreCallOptions,
-        *,
-        failures: int = 0,
-        delay: timedelta = timedelta(),
-    ) -> None:
+    def __init__(self, *, failures: int = 0, delay: timedelta = timedelta()) -> None:
         super().__init__()
-        self._options = options
         self._failures = failures
         self._delay = delay
         self.describes = 0
-
-    @property
-    def call_options(self) -> StreamStoreCallOptions:
-        return self._options
 
     async def _call(self, operation: str, request: bytes) -> bytes:
         if operation == "DescribeStream":
@@ -238,6 +227,19 @@ class FlakyDescribeStore(MemoryStreamStore):
             await asyncio.sleep(self._delay.total_seconds())
             if self.describes <= self._failures:
                 raise RuntimeError("describe failed")
+        return await super()._call(operation, request)
+
+
+class FlakyCreateStore(CountingStore):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.failed_creates = 0
+
+    async def _call(self, operation: str, request: bytes) -> bytes:
+        if operation == "CreateStream" and not self.failed_creates:
+            self.failed_creates += 1
+            self.operations.append(operation)
+            raise RuntimeError("create failed")
         return await super()._call(operation, request)
 
 
@@ -323,8 +325,15 @@ async def _run_append_workflow(
         return handle, await handle.result()
 
 
-async def _describe_result(client: Client, store: StreamStore) -> str:
-    stream_client = _with_store(client, store)
+async def _describe_result(
+    client: Client,
+    store: StreamStore,
+    options: StreamStoreCallOptions | None = None,
+) -> str:
+    stream_config = StreamConfig(
+        stores=[store], workflow_call_options=options or StreamStoreCallOptions()
+    )
+    stream_client = _with_config(client, stream_config)
     async with new_worker(stream_client, DescribeResultWorkflow) as worker:
         return await stream_client.execute_workflow(
             DescribeResultWorkflow.run,
@@ -438,7 +447,7 @@ async def test_workflow_stream_append_close_and_read_fail_with_store(client: Cli
 
 
 async def test_workflow_stream_store_error_reaches_workflow_code(client: Client):
-    store = FlakyDescribeStore(StreamStoreCallOptions(), failures=1)
+    store = FlakyDescribeStore(failures=1)
     result = await _describe_result(client, store)
     assert result == "ApplicationError RuntimeError: describe failed"
     assert store.describes == 1
@@ -509,15 +518,16 @@ async def test_workflow_stream_store_call_options_retry(client: Client):
             initial_interval=timedelta(milliseconds=10), maximum_attempts=2
         )
     )
-    store = FlakyDescribeStore(options, failures=1)
-    assert await _describe_result(client, store) == "described"
+    store = FlakyDescribeStore(failures=1)
+    assert await _describe_result(client, store, options) == "described"
     assert store.describes == 2
 
 
 async def test_workflow_stream_store_call_options_timeout(client: Client):
     options = StreamStoreCallOptions(start_to_close_timeout=timedelta(milliseconds=200))
-    store = FlakyDescribeStore(options, delay=timedelta(seconds=5))
-    assert await _describe_result(client, store) == "TimeoutError START_TO_CLOSE"
+    store = FlakyDescribeStore(delay=timedelta(seconds=5))
+    result = await _describe_result(client, store, options)
+    assert result == "TimeoutError START_TO_CLOSE"
 
 
 async def test_worker_keeps_its_stream_stores(client: Client):
@@ -657,3 +667,27 @@ async def test_workflow_replay_calls_no_selector_and_no_store(client: Client):
     assert contexts == []
     assert first.operations == []
     assert second.operations == []
+
+
+async def test_workflow_create_with_several_stores_takes_the_config_options(
+    client: Client,
+):
+    first = CountingStore("first")
+    second = FlakyCreateStore("second")
+    stream_config = StreamConfig(
+        stores=[first, second],
+        store_selector=lambda _: second,
+        workflow_call_options=StreamStoreCallOptions(
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(milliseconds=10), maximum_attempts=2
+            )
+        ),
+    )
+    # The default options make one attempt, so only the config's retry policy lets
+    # the create pass after its first attempt fails.
+    _, ref = await _run_create_and_describe(
+        _with_config(client, stream_config), f"stream-{uuid.uuid4()}"
+    )
+    assert ref.store == "second"
+    assert first.operations == []
+    assert second.operations == ["CreateStream", "CreateStream", "DescribeStream"]

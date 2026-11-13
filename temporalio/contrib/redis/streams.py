@@ -21,7 +21,6 @@ from datetime import timedelta
 
 import temporalio.bridge.runtime
 import temporalio.bridge.streams
-import temporalio.client
 import temporalio.client._stream_store
 import temporalio.runtime
 
@@ -53,7 +52,6 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
         wait_replicas: int = 0,
         wait_timeout: timedelta | None = None,
         name: str = "redis",
-        call_options: temporalio.client.StreamStoreCallOptions | None = None,
         runtime: temporalio.runtime.Runtime | None = None,
     ) -> None:
         """Create a Redis Store. It builds its Stream runtime and connects at its first call.
@@ -79,9 +77,6 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
                 ``response_timeout``. ``None`` takes 1 second.
             name: Name of the Store, which the refs of its Streams carry, so that every
                 process can route a ref that it gets.
-            call_options: Options of the Local Activity that calls this Store for
-                Workflow code. ``None`` takes the defaults of
-                :py:class:`temporalio.client.StreamStoreCallOptions`.
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
                 :py:meth:`temporalio.runtime.Runtime.default` at the first call.
         """
@@ -91,7 +86,7 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
             response_timeout=response_timeout,
             wait_timeout=wait_timeout,
         )
-        super().__init__(name=name, runtime=runtime, call_options=call_options)
+        super().__init__(name=name, runtime=runtime)
         self._urls = [url] if isinstance(url, str) else list(url)
         self._cluster = cluster
         self._key_prefix = key_prefix
