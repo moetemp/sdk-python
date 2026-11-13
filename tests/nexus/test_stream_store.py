@@ -47,7 +47,12 @@ from temporalio.nexus.system.stream_service.client import (
     Stream,
     StreamServiceClientExtension,
 )
-from temporalio.testing import ActivityEnvironment, MemoryStreamStore
+from temporalio.testing import (
+    ActivityEnvironment,
+    MemoryStreamStore,
+    WorkflowEnvironment,
+)
+from tests import DEV_SERVER_DOWNLOAD_VERSION
 from tests.test_converter import SimpleCodec
 
 
@@ -471,6 +476,19 @@ async def test_ref_of_a_store_that_the_client_lacks_fails(client: Client):
     )
     with pytest.raises(StreamConfigError, match="'other'"):
         await stream.describe()
+
+
+async def test_start_local_gives_its_client_the_stream_config():
+    stream_config = StreamConfig(stores=[MemoryStreamStore()])
+    async with await WorkflowEnvironment.start_local(
+        stream_config=stream_config,
+        dev_server_download_version=DEV_SERVER_DOWNLOAD_VERSION,
+    ) as env:
+        assert env.client.config()["stream_config"] is stream_config
+        stream = await env.client.create_stream(
+            id=f"stream-{uuid.uuid4()}", body_type=str
+        )
+        assert stream.ref.store == "memory"
 
 
 def test_stream_error_carries_its_reason():
