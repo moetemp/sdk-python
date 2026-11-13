@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +17,7 @@ import temporalio.common
 import temporalio.converter
 import temporalio.nexus.system.stream_service
 import temporalio.runtime
+import temporalio.workflow
 from temporalio.converter import StorageDriverActivityInfo, StorageDriverWorkflowInfo
 from temporalio.exceptions import StreamConfigError
 
@@ -28,8 +29,8 @@ if TYPE_CHECKING:
 class StreamStoreCallOptions:
     """Options of the Local Activity that calls a Stream Store for Workflow code.
 
-    Workflow code can't do I/O, so a worker calls its Stream Store from a Local
-    Activity.
+    Workflow code can't do I/O, so the default
+    :py:meth:`StreamStore.call_from_workflow` calls its Store from a Local Activity.
 
     A :py:class:`StreamConfig` holds them in
     :py:attr:`StreamConfig.workflow_call_options`, and every Store of that config
@@ -129,6 +130,50 @@ class StreamStore(ABC):
         """Give the status and the newest offset of a Stream."""
         ...
 
+    def worker_activities(self) -> Sequence[Callable[..., Any]]:
+        """The Activities that a Worker registers for this Store when it runs Workflows.
+
+        The default is one Activity, named for this Store, that
+        :py:meth:`call_from_workflow` runs as a Local Activity. A Store that overrides
+        one of the two methods overrides the other to match.
+        """
+        return [_store_call_activity(self)]
+
+    async def call_from_workflow(
+        self,
+        operation: str,
+        request: google.protobuf.message.Message,
+        options: StreamStoreCallOptions,
+    ) -> google.protobuf.message.Message:
+        """Answer one Stream operation for Workflow code.
+
+        It runs in Workflow code, so it does no I/O itself. The default runs the
+        Activity of :py:meth:`worker_activities` as a Local Activity, with the timeouts
+        and the retry policy of ``options``. A replay takes the result from History and
+        calls no method of this Store.
+
+        Args:
+            operation: The Nexus operation name, ``CreateStream`` or ``DescribeStream``
+                in this release.
+            request: The request message of ``temporalio.api.streamservice.v1``.
+            options: The :py:attr:`StreamConfig.workflow_call_options` of the config.
+
+        Returns:
+            The response message of the operation.
+        """
+        stream_operation = _STREAM_OPERATIONS[operation]
+        # Workflow code can start only a create and a describe in this release, and their
+        # messages carry no payload. So the Local Activity has no payload codec step.
+        response = await temporalio.workflow.execute_local_activity(
+            _store_call_activity_name(self.name),
+            args=[operation, request.SerializeToString()],
+            result_type=bytes,
+            schedule_to_close_timeout=options.schedule_to_close_timeout,
+            start_to_close_timeout=options.start_to_close_timeout,
+            retry_policy=options.retry_policy,
+        )
+        return stream_operation.response_type.FromString(response)
+
 
 class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
     """A Store that runs on the Stream runtime of the bridge.
@@ -225,7 +270,16 @@ class _StreamOperation:
         self, store: StreamStore, request: google.protobuf.message.Message
     ) -> google.protobuf.message.Message:
         """Call the method of ``store`` for this operation and check its answer."""
-        response = await getattr(store, self.store_method)(request)
+        return self.check_response(
+            store, await getattr(store, self.store_method)(request)
+        )
+
+    def check_response(
+        self, store: StreamStore, response: object
+    ) -> google.protobuf.message.Message:
+        """Give ``response`` back when it has the response type of this operation."""
+        # A Store that someone wrote can give another type, and the error names it here
+        # rather than in the conversion to the user's type.
         if not isinstance(response, self.response_type):
             raise TypeError(
                 f"The Stream Store '{store.name}' answered {self.store_method} with "
@@ -275,6 +329,27 @@ _STREAM_OPERATIONS: dict[str, _StreamOperation] = {
 }
 """The operations of the Stream service, by their Nexus operation name."""
 
+_STORE_CALL_ACTIVITY = "__temporal_stream_store_call"
+
+
+def _store_call_activity_name(store_name: str) -> str:
+    # The name carries the Store's name, so two Stores on one Worker don't clash.
+    return f"{_STORE_CALL_ACTIVITY}:{store_name}"
+
+
+def _store_call_activity(
+    store: StreamStore,
+) -> Callable[[str, bytes], Awaitable[bytes]]:
+    @temporalio.activity.defn(name=_store_call_activity_name(store.name))
+    async def call(operation: str, request: bytes) -> bytes:
+        stream_operation = _STREAM_OPERATIONS[operation]
+        response = await stream_operation.call(
+            store, stream_operation.request_type.FromString(request)
+        )
+        return response.SerializeToString()
+
+    return call
+
 
 @dataclasses.dataclass(frozen=True)
 class StreamSelectContext:
@@ -291,7 +366,7 @@ class StreamSelectContext:
     """The Workflow or Activity that makes the call, or ``None`` for a plain client.
 
     A call in an Activity has that Activity here. A Workflow's call runs the selector
-    in the SDK's Local Activity, and has that Workflow here.
+    in Workflow code, and has that Workflow here.
     """
 
 
@@ -328,19 +403,21 @@ class StreamConfig:
     Store, and returns one of the instances in :py:attr:`stores`. When it is
     ``None`` and there is one Store, every new Stream goes to that Store.
 
-    A Workflow's create runs the selector in a Local Activity. History keeps the
-    ref with the Store's name, so a replay doesn't call the selector again. A Stream
-    that code builds from an id only goes through the selector on each call, so the
-    selector must give the same Store for the same id.
+    For a call of Workflow code, the selector runs in Workflow code, also on a
+    replay. So it must give the same Store for the same context. The Local Activity
+    of the chosen Store is in History, and another answer on a replay is a
+    non-determinism error. A Stream that code builds from an id only goes through the
+    selector on each call, so the selector must also give the same Store for the same
+    id.
     """
 
     workflow_call_options: StreamStoreCallOptions = dataclasses.field(
         default_factory=StreamStoreCallOptions
     )
-    """Options of the Local Activity that calls a Store for Workflow code.
+    """Options of a Store's call for Workflow code, for every Store of this config.
 
-    They are the same for every Store of this config. The Local Activity of a create
-    picks its Store only when it runs, so its options can't come from that Store.
+    :py:meth:`StreamStore.call_from_workflow` gets them. The default runs its Local
+    Activity with their timeouts and retry policy.
     """
 
     _store_map: dict[str, StreamStore] = dataclasses.field(

@@ -67,8 +67,9 @@ class Replayer:
         ran.
 
         ``stream_config`` takes the Stream config of the client that the
-        worker had, so a replay makes the same commands. A replay never calls
-        its Stores.
+        worker had, so a replay makes the same commands. A history with a Stream
+        call needs it, since a Stream call with no Stream config fails the
+        Workflow Task. A replay calls no method of its Stores.
 
         Note, unlike the worker, for the replayer the workflow_task_executor
         will default to a new thread pool executor with no max_workers set that

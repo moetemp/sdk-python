@@ -34,7 +34,7 @@ from ._activity import SharedStateManager, _ActivityWorker
 from ._interceptor import Interceptor
 from ._nexus import _NexusWorker
 from ._plugin import Plugin
-from ._stream_store import _stream_store_activity, _WorkflowStreamStore
+from ._stream_store import _WorkflowStreamStore
 from ._tuning import WorkerTuner
 from ._workflow import (
     _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
@@ -502,9 +502,8 @@ class Worker:
         activities = list(config.get("activities") or [])
         stream_config = client_config.get("stream_config")
         if stream_config is not None and config.get("workflows"):
-            activities.append(
-                _stream_store_activity(stream_config, client_config["data_converter"])
-            )
+            for store in stream_config.stores:
+                activities.extend(store.worker_activities())
         if activities:
             _warn_if_activity_executor_max_workers_is_inconsistent(config)
             self._activity_worker = _ActivityWorker(
@@ -674,8 +673,8 @@ class Worker:
                     enable_workflows=self._workflow_worker is not None,
                     enable_local_activities=self._activity_worker is not None
                     and self._workflow_worker is not None,
-                    # The Stream Store Local Activity alone doesn't make this worker
-                    # poll for Activity Tasks.
+                    # The Activities of the Stream Stores run as Local Activities, so
+                    # alone they don't make this worker poll for Activity Tasks.
                     enable_remote_activities=bool(config.get("activities"))
                     and not config.get("no_remote_activities"),
                     enable_nexus=self._nexus_worker is not None,

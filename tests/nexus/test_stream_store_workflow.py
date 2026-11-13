@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -12,6 +13,18 @@ import temporalio.common
 import temporalio.exceptions
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import EventType, StreamErrorReason
+from temporalio.api.streamservice.v1 import (
+    CreateStreamRequest as CreateStreamRequestMessage,
+)
+from temporalio.api.streamservice.v1 import (
+    CreateStreamResponse as CreateStreamResponseMessage,
+)
+from temporalio.api.streamservice.v1 import (
+    DescribeStreamRequest as DescribeStreamRequestMessage,
+)
+from temporalio.api.streamservice.v1 import (
+    DescribeStreamResponse as DescribeStreamResponseMessage,
+)
 from temporalio.client import (
     Client,
     StreamConfig,
@@ -589,7 +602,7 @@ async def test_activity_interceptors_see_stream_store_activity(client: Client):
         )
     # The create runs as the SDK's Local Activity, before the Workflow's own Activity.
     assert interceptor.activity_types == [
-        "__temporal_stream_store_call",
+        "__temporal_stream_store_call:memory",
         "user_activity",
     ]
 
@@ -692,17 +705,22 @@ async def test_workflow_create_goes_to_the_selected_store(client: Client):
     ]
 
 
-async def test_workflow_replay_calls_no_selector_and_no_store(client: Client):
+async def test_workflow_replay_calls_no_store(client: Client):
     _, _, stream_config = _two_counting_stores([])
+    stream_id = f"stream-{uuid.uuid4()}"
     handle, _ = await _run_create_and_describe(
-        _with_config(client, stream_config), f"stream-{uuid.uuid4()}"
+        _with_config(client, stream_config), stream_id
     )
     contexts: list[StreamSelectContext] = []
     first, second, replay_config = _two_counting_stores(contexts)
     await Replayer(
         workflows=[CreateAndDescribeWorkflow], stream_config=replay_config
     ).replay_workflow(await handle.fetch_history())
-    assert contexts == []
+    # The selector runs in Workflow code, so a replay runs it again with the Workflow.
+    assert [context.id for context in contexts] == [stream_id]
+    target = contexts[0].target
+    assert isinstance(target, StorageDriverWorkflowInfo)
+    assert (target.id, target.run_id) == (handle.id, handle.result_run_id)
     assert first.operations == []
     assert second.operations == []
 
@@ -729,3 +747,60 @@ async def test_workflow_create_with_several_stores_takes_the_config_options(
     assert ref.store == "second"
     assert first.operations == []
     assert second.operations == ["CreateStream", "CreateStream", "DescribeStream"]
+
+
+class OwnActivityStore(CountingStore):
+    """A Store that brings its own Activity for the calls of Workflow code."""
+
+    def __init__(self) -> None:
+        super().__init__("own")
+        self.workflow_calls: list[str] = []
+
+    def worker_activities(self) -> Sequence[Callable[..., Any]]:
+        @activity.defn(name="own_store_call")
+        async def own_store_call(operation: str, request: bytes) -> bytes:
+            if operation == "CreateStream":
+                created = await self.create_stream(
+                    CreateStreamRequestMessage.FromString(request)
+                )
+                return created.SerializeToString()
+            described = await self.describe_stream(
+                DescribeStreamRequestMessage.FromString(request)
+            )
+            return described.SerializeToString()
+
+        return [own_store_call]
+
+    async def call_from_workflow(
+        self, operation: str, request: Message, options: StreamStoreCallOptions
+    ) -> Message:
+        self.workflow_calls.append(operation)
+        response = await workflow.execute_local_activity(
+            "own_store_call",
+            args=[operation, request.SerializeToString()],
+            result_type=bytes,
+            start_to_close_timeout=options.start_to_close_timeout,
+        )
+        if operation == "CreateStream":
+            return CreateStreamResponseMessage.FromString(response)
+        return DescribeStreamResponseMessage.FromString(response)
+
+
+async def test_workflow_call_goes_through_the_store_own_activity(client: Client):
+    store = OwnActivityStore()
+    interceptor = RecordingInterceptor()
+    stream_client = _with_store(client, store)
+    stream_id = f"stream-{uuid.uuid4()}"
+    async with new_worker(
+        stream_client, CreateAndDescribeWorkflow, interceptors=[interceptor]
+    ) as worker:
+        ref = await stream_client.execute_workflow(
+            CreateAndDescribeWorkflow.run,
+            stream_id,
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+        )
+    assert ref == StreamRef(id=stream_id, store="own")
+    assert store.workflow_calls == ["CreateStream", "DescribeStream"]
+    assert store.operations == ["CreateStream", "DescribeStream"]
+    assert interceptor.activity_types == ["own_store_call", "own_store_call"]
