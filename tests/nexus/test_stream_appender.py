@@ -5,6 +5,7 @@ import uuid
 from datetime import timedelta
 
 import pytest
+from google.protobuf.message import Message
 
 import temporalio.api.streamservice.v1
 from temporalio.api.enums.v1 import StreamErrorReason
@@ -12,29 +13,26 @@ from temporalio.client import BufferedAppender, Client
 from temporalio.nexus.system.stream_service import StreamRef
 from temporalio.nexus.system.stream_service.client import Stream
 from temporalio.testing import MemoryStreamStore
+from tests.helpers.streams import RecordingStreamStore
 from tests.nexus.test_stream_store import _create_stream, _stream_error, _with_store
 
 # Long enough that only a flush, a full batch or the end of `async with` starts a write.
 _NEVER = timedelta(hours=1)
 
 
-class RecordingStore(MemoryStreamStore):
+class RecordingStore(RecordingStreamStore):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(MemoryStreamStore())
         self.batches: list[int] = []
         self.append_started = asyncio.Event()
         self.release: asyncio.Event | None = None
 
-    async def _call(self, operation: str, request: bytes) -> bytes:
-        if operation == "AppendRecords":
-            message = temporalio.api.streamservice.v1.AppendRecordsRequest.FromString(
-                request
-            )
-            self.batches.append(len(message.records))
+    async def before_call(self, operation: str, request: Message) -> None:
+        if isinstance(request, temporalio.api.streamservice.v1.AppendRecordsRequest):
+            self.batches.append(len(request.records))
             self.append_started.set()
             if self.release is not None:
                 await self.release.wait()
-        return await super()._call(operation, request)
 
 
 async def _bodies(stream: Stream[str]) -> list[str]:

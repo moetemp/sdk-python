@@ -17,7 +17,9 @@ import temporalio
 import temporalio.activity
 import temporalio.api.stream.v1
 import temporalio.api.workflowservice.v1
+import temporalio.client._stream_store
 import temporalio.common
+import temporalio.converter._payload_converter
 import temporalio.exceptions
 import temporalio.nexus.system
 import temporalio.nexus.system._support
@@ -29,7 +31,7 @@ from temporalio.client import (
     StreamSelectContext,
     StreamStore,
 )
-from temporalio.client._stream_store import _request_ref
+from temporalio.client._stream_store import _STREAM_OPERATIONS, _request_ref
 from temporalio.converter import DataConverter, StorageDriverActivityInfo
 from temporalio.exceptions import ApplicationError, StreamConfigError, StreamError
 from temporalio.nexus.system.stream_service import (
@@ -56,10 +58,11 @@ from temporalio.testing import (
     WorkflowEnvironment,
 )
 from tests import DEV_SERVER_DOWNLOAD_VERSION
+from tests.helpers.streams import DictStreamStore
 from tests.test_converter import SimpleCodec
 
 
-def _with_store(client: Client, store: MemoryStreamStore) -> Client:
+def _with_store(client: Client, store: StreamStore) -> Client:
     return _with_config(client, StreamConfig(stores=[store]))
 
 
@@ -77,7 +80,7 @@ def _two_stores(
     return first, second, StreamConfig(stores=[first, second], store_selector=selector)
 
 
-async def _create_stream(client: Client, store: MemoryStreamStore) -> Stream[str]:
+async def _create_stream(client: Client, store: StreamStore) -> Stream[str]:
     return await _with_store(client, store).create_stream(
         id=f"stream-{uuid.uuid4()}", body_type=str
     )
@@ -146,6 +149,55 @@ async def test_client_stream_uses_store(client: Client):
     pages = [page async for page in stream.iter_read()]
     assert pages[-1].done
     assert [record.body for page in pages for record in page.records] == ["a", "b"]
+
+
+async def test_client_stream_uses_a_store_written_from_scratch(client: Client):
+    store = DictStreamStore()
+    config = client.config()
+    config["data_converter"] = DataConverter(payload_codec=SimpleCodec())
+    config["stream_config"] = StreamConfig(stores=[store])
+    stream_client = Client(**config)
+
+    stream_id = f"stream-{uuid.uuid4()}"
+    stream = await stream_client.create_stream(id=stream_id, body_type=str)
+    assert stream.created
+    assert stream.ref.store == "dict"
+    appended = await stream.append("a", "b")
+    assert [record.body async for record in stream.iter_read_items()] == ["a", "b"]
+    # The Store gets payloads that the client already encoded with the codec.
+    stored = store.streams[stream_id].records
+    assert [record.body.metadata["simple-codec"] for record in stored] == [
+        b"true",
+        b"true",
+    ]
+    described = await stream.describe()
+    assert described.status == StreamStatus.StreamStatusOpen
+    assert described.last_offset == appended.last_offset
+    err = await _stream_error(stream_client.create_stream(id=stream_id, body_type=str))
+    assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_ALREADY_EXISTS
+
+    await stream.close()
+    err = await _stream_error(stream.append("c"))
+    assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_CLOSED
+
+
+def test_stream_operations_match_the_stream_service():
+    service = temporalio.client._stream_store._STREAM_SERVICE
+    assert set(_STREAM_OPERATIONS) == set(service.operation_definitions)
+    for name, operation in _STREAM_OPERATIONS.items():
+        definition = service.operation_definitions[name]
+        for model, message in (
+            (definition.input_type, operation.request_type),
+            (definition.output_type, operation.response_type),
+        ):
+            converter = (
+                temporalio.converter._payload_converter._get_transfer_type_converter(
+                    model
+                )
+            )
+            assert converter is not None
+            assert converter.transfer_type is message
+        assert callable(getattr(StreamStore, operation.store_method))
 
 
 async def test_client_strict_create_of_existing_stream_fails(client: Client):

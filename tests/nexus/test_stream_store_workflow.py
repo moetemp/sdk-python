@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from google.protobuf.message import Message
 
 import temporalio.common
 import temporalio.exceptions
@@ -49,6 +50,7 @@ from temporalio.worker import (
     Replayer,
 )
 from tests.helpers import assert_task_fail_eventually, new_worker
+from tests.helpers.streams import DictStreamStore, RecordingStreamStore
 from tests.test_converter import SimpleCodec
 
 # Workflow code writes these values, so the History shows only whether a Record body
@@ -160,14 +162,9 @@ class CreateAndDescribeWorkflow:
         return stream.ref
 
 
-class CountingStore(MemoryStreamStore):
+class CountingStore(RecordingStreamStore):
     def __init__(self, name: str) -> None:
-        super().__init__(name=name)
-        self.operations: list[str] = []
-
-    async def _call(self, operation: str, request: bytes) -> bytes:
-        self.operations.append(operation)
-        return await super()._call(operation, request)
+        super().__init__(MemoryStreamStore(name=name))
 
 
 @activity.defn
@@ -221,29 +218,19 @@ class UserLocalActivityAppendWorkflow:
         )
 
 
-class FailingStreamStore(StreamStore):
-    @property
-    def name(self) -> str:
-        return "failing"
-
-    async def _call(self, operation: str, request: bytes) -> bytes:
-        raise AssertionError(f"A replay called the Store with {operation}")
-
-
-class FlakyDescribeStore(MemoryStreamStore):
+class FlakyDescribeStore(RecordingStreamStore):
     def __init__(self, *, failures: int = 0, delay: timedelta = timedelta()) -> None:
-        super().__init__()
+        super().__init__(MemoryStreamStore())
         self._failures = failures
         self._delay = delay
         self.describes = 0
 
-    async def _call(self, operation: str, request: bytes) -> bytes:
+    async def before_call(self, operation: str, request: Message) -> None:
         if operation == "DescribeStream":
             self.describes += 1
             await asyncio.sleep(self._delay.total_seconds())
             if self.describes <= self._failures:
                 raise RuntimeError("describe failed")
-        return await super()._call(operation, request)
 
 
 class FlakyCreateStore(CountingStore):
@@ -251,12 +238,10 @@ class FlakyCreateStore(CountingStore):
         super().__init__(name)
         self.failed_creates = 0
 
-    async def _call(self, operation: str, request: bytes) -> bytes:
+    async def before_call(self, operation: str, request: Message) -> None:
         if operation == "CreateStream" and not self.failed_creates:
             self.failed_creates += 1
-            self.operations.append(operation)
             raise RuntimeError("create failed")
-        return await super()._call(operation, request)
 
 
 class RecordingInterceptor(Interceptor):
@@ -378,6 +363,19 @@ async def test_workflow_stream_uses_store(client: Client):
     assert first.kind.value.epoch.attempt == 1
 
 
+async def test_workflow_stream_uses_a_store_written_from_scratch(client: Client):
+    store = DictStreamStore()
+    stream_client = _with_store(client, store)
+    stream_id = f"stream-{uuid.uuid4()}"
+    _, ref = await _run_create_and_describe(stream_client, stream_id)
+    assert ref == StreamRef(id=stream_id, store="dict")
+    assert list(store.streams) == [stream_id]
+
+    stream = stream_client.get_stream(ref, body_type=str)
+    await stream.append("a")
+    assert [record.body async for record in stream.iter_read_items()] == ["a"]
+
+
 async def test_workflow_stream_store_uses_payload_codec(client: Client):
     store = MemoryStreamStore()
     config = client.config()
@@ -415,10 +413,12 @@ async def test_workflow_stream_history_has_no_bodies(client: Client):
 async def test_workflow_stream_replay_does_not_call_store(client: Client):
     stream_client = _with_store(client, MemoryStreamStore())
     handle, _ = await _run_append_workflow(stream_client)
+    replay_store = CountingStore("memory")
     await Replayer(
         workflows=[AppendWorkflow],
-        stream_config=StreamConfig(stores=[FailingStreamStore()]),
+        stream_config=StreamConfig(stores=[replay_store]),
     ).replay_workflow(await handle.fetch_history())
+    assert replay_store.operations == []
 
 
 async def test_workflow_create_without_store_fails_the_task(client: Client):

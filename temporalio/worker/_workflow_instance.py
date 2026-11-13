@@ -2303,6 +2303,7 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
         # examples of the evolution of the resulting handle state machine in the sync and async
         # Nexus response cases.
         handle: _NexusOperationHandle[OutputT]
+        payload_converter: temporalio.converter.PayloadConverter
 
         async def operation_handle_fn() -> OutputT:
             return cast(
@@ -2369,7 +2370,8 @@ class _WorkflowInstanceImpl(  # type: ignore[reportImplicitAbstractClass]
     def _system_nexus_converters(
         self, input: StartNexusOperationInput[Any, Any]
     ) -> tuple[
-        temporalio.converter.PayloadConverter, temporalio.converter.FailureConverter
+        temporalio.nexus.system._SystemNexusPayloadConverter,
+        temporalio.converter.FailureConverter,
     ]:
         serialization_context = temporalio.nexus.system._get_serialization_context(
             input.service,

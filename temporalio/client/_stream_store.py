@@ -10,11 +10,11 @@ import google.protobuf.message
 import nexusrpc
 
 import temporalio.activity
+import temporalio.api.streamservice.v1
 import temporalio.bridge._visitor
 import temporalio.bridge.runtime
 import temporalio.common
 import temporalio.converter
-import temporalio.converter._payload_converter
 import temporalio.nexus.system.stream_service
 import temporalio.runtime
 from temporalio.converter import StorageDriverActivityInfo, StorageDriverWorkflowInfo
@@ -67,6 +67,13 @@ class StreamStore(ABC):
     :py:class:`temporalio.contrib.redis.streams.RedisStreamStore`, or
     :py:class:`temporalio.testing.MemoryStreamStore` in tests.
 
+    To keep Streams in another system, write a Store that implements :py:attr:`name`
+    and the five operations. Each operation takes and gives a message of
+    ``temporalio.api.streamservice.v1``. The bodies of the Records arrive as payloads
+    that the SDK already encoded with the data converter and the payload codec, so a
+    Store keeps payloads and not the user's types. A failed call raises
+    :py:class:`temporalio.exceptions.StreamError` with a reason.
+
     .. warning::
         This API is experimental and subject to change.
     """
@@ -74,23 +81,52 @@ class StreamStore(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Name of the Store."""
+        """Name of the Store, which the refs of its Streams carry."""
         ...
 
     @abstractmethod
-    async def _call(self, operation: str, request: bytes) -> bytes:
-        """Answer one Stream operation, in the form that the bridge defines.
+    async def create_stream(
+        self, request: temporalio.api.streamservice.v1.CreateStreamRequest
+    ) -> temporalio.api.streamservice.v1.CreateStreamResponse:
+        """Create a Stream, or get the open one when the conflict policy allows it.
 
-        Args:
-            operation: The Nexus operation name, such as ``CreateStream``,
-                ``AppendRecords``, ``ReadRecords``, ``CloseStream`` or
-                ``DescribeStream``.
-            request: The serialized request message of
-                ``temporal.api.streamservice.v1``.
-
-        Returns:
-            The serialized response message of ``temporal.api.streamservice.v1``.
+        The ref of the response carries the name of this Store.
         """
+        ...
+
+    @abstractmethod
+    async def append_records(
+        self, request: temporalio.api.streamservice.v1.AppendRecordsRequest
+    ) -> temporalio.api.streamservice.v1.AppendRecordsResponse:
+        """Append one batch of Records as one Producer.
+
+        A batch that is sent again with the same Producer, epoch and sequence is
+        written once.
+        """
+        ...
+
+    @abstractmethod
+    async def read_records(
+        self, request: temporalio.api.streamservice.v1.ReadRecordsRequest
+    ) -> temporalio.api.streamservice.v1.ReadRecordsResponse:
+        """Read one page of Records after an offset.
+
+        At the end of the Stream it waits up to the request's ``wait`` for a new Record.
+        """
+        ...
+
+    @abstractmethod
+    async def close_stream(
+        self, request: temporalio.api.streamservice.v1.CloseStreamRequest
+    ) -> temporalio.api.streamservice.v1.CloseStreamResponse:
+        """Close a Stream. Readers drain what is left, and later appends fail."""
+        ...
+
+    @abstractmethod
+    async def describe_stream(
+        self, request: temporalio.api.streamservice.v1.DescribeStreamRequest
+    ) -> temporalio.api.streamservice.v1.DescribeStreamResponse:
+        """Give the status and the newest offset of a Stream."""
         ...
 
 
@@ -121,7 +157,39 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
         self, runtime: temporalio.bridge.runtime.Runtime
     ) -> temporalio.bridge.streams.StreamRuntime: ...
 
-    async def _call(self, operation: str, request: bytes) -> bytes:
+    async def create_stream(
+        self, request: temporalio.api.streamservice.v1.CreateStreamRequest
+    ) -> temporalio.api.streamservice.v1.CreateStreamResponse:
+        """See base class."""
+        return await self._call_bridge("CreateStream", request)
+
+    async def append_records(
+        self, request: temporalio.api.streamservice.v1.AppendRecordsRequest
+    ) -> temporalio.api.streamservice.v1.AppendRecordsResponse:
+        """See base class."""
+        return await self._call_bridge("AppendRecords", request)
+
+    async def read_records(
+        self, request: temporalio.api.streamservice.v1.ReadRecordsRequest
+    ) -> temporalio.api.streamservice.v1.ReadRecordsResponse:
+        """See base class."""
+        return await self._call_bridge("ReadRecords", request)
+
+    async def close_stream(
+        self, request: temporalio.api.streamservice.v1.CloseStreamRequest
+    ) -> temporalio.api.streamservice.v1.CloseStreamResponse:
+        """See base class."""
+        return await self._call_bridge("CloseStream", request)
+
+    async def describe_stream(
+        self, request: temporalio.api.streamservice.v1.DescribeStreamRequest
+    ) -> temporalio.api.streamservice.v1.DescribeStreamResponse:
+        """See base class."""
+        return await self._call_bridge("DescribeStream", request)
+
+    async def _call_bridge(
+        self, operation: str, request: google.protobuf.message.Message
+    ) -> Any:
         """Answer one Stream operation with the Stream runtime of the bridge.
 
         Raises:
@@ -132,7 +200,80 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
         if self._stream_runtime is None:
             runtime = self._runtime or temporalio.runtime.Runtime.default()
             self._stream_runtime = self._new_stream_runtime(runtime._core_runtime)
-        return await self._stream_runtime.call(operation, request)
+        # The bridge takes and gives the messages in their wire form.
+        response = await self._stream_runtime.call(
+            operation, request.SerializeToString()
+        )
+        return _STREAM_OPERATIONS[operation].response_type.FromString(response)
+
+
+@dataclasses.dataclass(frozen=True)
+class _StreamOperation:
+    """How a Store answers one operation of the Stream service."""
+
+    store_method: str
+    """The name of the :py:class:`StreamStore` method that answers it."""
+
+    request_type: type[google.protobuf.message.Message]
+
+    response_type: type[google.protobuf.message.Message]
+
+    workflow_refusal: str | None = None
+    """Why Workflow code can't start it in this release, or ``None`` when it can."""
+
+    async def call(
+        self, store: StreamStore, request: google.protobuf.message.Message
+    ) -> google.protobuf.message.Message:
+        """Call the method of ``store`` for this operation and check its answer."""
+        response = await getattr(store, self.store_method)(request)
+        if not isinstance(response, self.response_type):
+            raise TypeError(
+                f"The Stream Store '{store.name}' answered {self.store_method} with "
+                f"{type(response).__name__}, not {self.response_type.__name__}"
+            )
+        return response
+
+
+_STREAM_OPERATIONS: dict[str, _StreamOperation] = {
+    "CreateStream": _StreamOperation(
+        "create_stream",
+        temporalio.api.streamservice.v1.CreateStreamRequest,
+        temporalio.api.streamservice.v1.CreateStreamResponse,
+    ),
+    "AppendRecords": _StreamOperation(
+        "append_records",
+        temporalio.api.streamservice.v1.AppendRecordsRequest,
+        temporalio.api.streamservice.v1.AppendRecordsResponse,
+        workflow_refusal=(
+            "Workflow code can't append to a Stream on a Store in this release. "
+            "Call a Local Activity that appends through its client."
+        ),
+    ),
+    "ReadRecords": _StreamOperation(
+        "read_records",
+        temporalio.api.streamservice.v1.ReadRecordsRequest,
+        temporalio.api.streamservice.v1.ReadRecordsResponse,
+        workflow_refusal=(
+            "Workflow code can't read a Stream on a Store in this release. "
+            "Call an Activity that reads it through its client."
+        ),
+    ),
+    "CloseStream": _StreamOperation(
+        "close_stream",
+        temporalio.api.streamservice.v1.CloseStreamRequest,
+        temporalio.api.streamservice.v1.CloseStreamResponse,
+        workflow_refusal=(
+            "Workflow code can't close a Stream on a Store in this release. "
+            "Call an Activity that closes it through its client."
+        ),
+    ),
+    "DescribeStream": _StreamOperation(
+        "describe_stream",
+        temporalio.api.streamservice.v1.DescribeStreamRequest,
+        temporalio.api.streamservice.v1.DescribeStreamResponse,
+    ),
+}
+"""The operations of the Stream service, by their Nexus operation name."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -318,51 +459,20 @@ def _stream_service() -> nexusrpc.ServiceDefinition:
 _STREAM_SERVICE = _stream_service()
 
 
-def _proto_type(model_type: Any) -> type[google.protobuf.message.Message]:
-    converter = temporalio.converter._payload_converter._get_transfer_type_converter(
-        model_type
-    )
-    if converter is None or converter.transfer_type is None:
-        raise TypeError(f"{model_type} has no proto transfer type")
-    return converter.transfer_type
-
-
 async def _call_stream_store(  # pyright: ignore[reportUnusedFunction]
     store: StreamStore,
     data_converter: temporalio.converter.DataConverter,
     operation: str,
-    request: bytes,
-) -> bytes:
+    request: google.protobuf.message.Message,
+) -> google.protobuf.message.Message:
+    stream_operation = _STREAM_OPERATIONS[operation]
     if not data_converter.payload_codec:
-        return await store._call(operation, request)
+        return await stream_operation.call(store, request)
     # The worker package imports the client, so a module level import would cycle.
     from temporalio.bridge.worker import _Visitor
 
-    definition = _STREAM_SERVICE.operation_definitions[operation]
     visitor = temporalio.bridge._visitor.PayloadVisitor(skip_search_attributes=True)
-    request_message = _proto_type(definition.input_type).FromString(request)
-    await visitor.visit(
-        _Visitor(data_converter._encode_payload_sequence), request_message
-    )
-    response = await store._call(operation, request_message.SerializeToString())
-    response_message = _proto_type(definition.output_type).FromString(response)
-    await visitor.visit(
-        _Visitor(data_converter._decode_payload_sequence), response_message
-    )
-    return response_message.SerializeToString()
-
-
-def _stream_response(  # pyright: ignore[reportUnusedFunction]
-    payload_converter: temporalio.converter.PayloadConverter,
-    operation: str,
-    result_type: type | None,
-    response: bytes,
-) -> Any:
-    definition = _STREAM_SERVICE.operation_definitions[operation]
-    [payload] = payload_converter.to_payloads(
-        [_proto_type(definition.output_type).FromString(response)]
-    )
-    [result] = payload_converter.from_payloads(
-        [payload], [result_type] if result_type else None
-    )
-    return result
+    await visitor.visit(_Visitor(data_converter._encode_payload_sequence), request)
+    response = await stream_operation.call(store, request)
+    await visitor.visit(_Visitor(data_converter._decode_payload_sequence), response)
+    return response

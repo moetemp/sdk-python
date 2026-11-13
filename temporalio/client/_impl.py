@@ -132,7 +132,6 @@ from ._stream_store import (
     _activity_target,
     _call_stream_store,
     _request_ref,
-    _stream_response,
 )
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
 from ._workflow import (
@@ -1681,10 +1680,11 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         payload_converter = temporalio.nexus.system._get_payload_converter(
             data_converter.payload_converter, data_converter.failure_converter
         )
-        [request] = payload_converter.to_payloads([input.arg])
+        # The generated model converts to its proto message with no payload in between.
+        request = payload_converter._to_transfer_value(input.arg)
         store = stream_config._store_for(_request_ref(input.arg), _activity_target())
         response = await _call_stream_store(
-            store, data_converter, input.operation, request.data
+            store, data_converter, input.operation, request
         )
         handle: NexusOperationHandle[Any] = NexusOperationHandle(
             self._client,
@@ -1694,8 +1694,8 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             service=input.service,
             operation=input.operation,
         )
-        handle._known_outcome = _stream_response(
-            payload_converter, input.operation, input.result_type, response
+        handle._known_outcome = payload_converter._from_transfer_value(
+            response, input.result_type
         )
         return handle
 

@@ -14,10 +14,10 @@ import temporalio.converter
 import temporalio.exceptions
 import temporalio.workflow
 from temporalio.client._stream_store import (
+    _STREAM_OPERATIONS,
     StreamConfig,
     _call_stream_store,
     _request_ref,
-    _stream_response,
 )
 from temporalio.converter import StorageDriverWorkflowInfo
 from temporalio.nexus.system.stream_service import StreamRef
@@ -28,21 +28,6 @@ if TYPE_CHECKING:
     from ._workflow_instance import _WorkflowInstanceImpl
 
 _STREAM_STORE_ACTIVITY = "__temporal_stream_store_call"
-
-_STREAM_STORE_REFUSALS = {
-    "AppendRecords": (
-        "Workflow code can't append to a Stream on a Store in this release. "
-        "Call a Local Activity that appends through its client."
-    ),
-    "CloseStream": (
-        "Workflow code can't close a Stream on a Store in this release. "
-        "Call an Activity that closes it through its client."
-    ),
-    "ReadRecords": (
-        "Workflow code can't read a Stream on a Store in this release. "
-        "Call an Activity that reads it through its client."
-    ),
-}
 
 
 def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
@@ -56,7 +41,9 @@ def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
         # isn't decoded again to route it. An empty `store_name` means no Store.
         ref = StreamRef[Any](id=stream_id, store=store_name or None)
         store = config._store_for(ref, _workflow_target())
-        return await _call_stream_store(store, data_converter, operation, request)
+        message = _STREAM_OPERATIONS[operation].request_type.FromString(request)
+        response = await _call_stream_store(store, data_converter, operation, message)
+        return response.SerializeToString()
 
     return call
 
@@ -95,12 +82,14 @@ class _WorkflowStreamStore:
         # Workflow service still has their operations, so Workflow code can start one
         # through a Nexus client. In this release, Workflow code writes and reads a Stream
         # on a Store through its own Activities.
-        refusal = _STREAM_STORE_REFUSALS.get(input.operation_name)
-        if refusal is not None:
-            raise temporalio.exceptions.ApplicationError(refusal, non_retryable=True)
+        stream_operation = _STREAM_OPERATIONS[input.operation_name]
+        if stream_operation.workflow_refusal is not None:
+            raise temporalio.exceptions.ApplicationError(
+                stream_operation.workflow_refusal, non_retryable=True
+            )
         # Workflow code builds the request, so the Local Activity does only the I/O.
         payload_converter, _ = instance._system_nexus_converters(input)
-        [request] = payload_converter.to_payloads([input.input])
+        request = payload_converter._to_transfer_value(input.input)
         # A ref of a Store that the config doesn't have fails here, with no I/O. Its
         # `StreamConfigError` fails the Workflow Task.
         ref = _request_ref(input.input)
@@ -110,7 +99,12 @@ class _WorkflowStreamStore:
         activity = instance._outbound_schedule_activity(
             StartLocalActivityInput(
                 activity=_STREAM_STORE_ACTIVITY,
-                args=(input.operation_name, request.data, ref.id, ref.store or ""),
+                args=(
+                    input.operation_name,
+                    request.SerializeToString(),
+                    ref.id,
+                    ref.store or "",
+                ),
                 activity_id=None,
                 schedule_to_close_timeout=options.schedule_to_close_timeout,
                 schedule_to_start_timeout=None,
@@ -152,8 +146,9 @@ class _WorkflowStreamStore:
                 ):
                     raise err.cause
                 raise
-            return _stream_response(
-                payload_converter, input.operation_name, input.output_type, response
+            return payload_converter._from_transfer_value(
+                stream_operation.response_type.FromString(response),
+                input.output_type,
             )
 
         return _StreamStoreOperationHandle(

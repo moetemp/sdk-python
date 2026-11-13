@@ -19,6 +19,7 @@ import temporalio.exceptions
 from temporalio.bridge._visitor_functions import VisitorFunctions
 from temporalio.converter import BinaryProtoPayloadConverter, CompositePayloadConverter
 from temporalio.converter._payload_converter import (
+    _get_transfer_type_converter,
     _TemporalTransferTypePayloadConverter,
 )
 
@@ -123,6 +124,27 @@ class _SystemNexusPayloadConverter(temporalio.converter.PayloadConverter):
         with _user_converter_context(self._user_converters):
             return self._outer_payload_converter.from_payloads(payloads, type_hints)
 
+    def _to_transfer_value(self, value: Any) -> Any:
+        """Convert a system Nexus model to its proto message, with no payload in between."""
+        converter = _get_transfer_type_converter(type(value))
+        if converter is None:
+            raise TypeError(f"{type(value).__name__} has no transfer type")
+        with _user_converter_context(self._user_converters):
+            return converter.to_transfer_type(value)
+
+    def _from_transfer_value(self, value: Any, type_hint: type | None) -> Any:
+        """Convert a proto message to the system Nexus model of ``type_hint``.
+
+        With no ``type_hint``, or one that has no transfer type, it gives the message.
+        """
+        converter = (
+            _get_transfer_type_converter(type_hint) if type_hint is not None else None
+        )
+        if converter is None or type_hint is None:
+            return value
+        with _user_converter_context(self._user_converters):
+            return converter.from_transfer_type(value, type_hint)
+
 
 def is_system_endpoint(endpoint: str) -> bool:
     """Return whether a Nexus endpoint is the Temporal system endpoint.
@@ -171,7 +193,7 @@ async def maybe_visit_payload(
 def _get_payload_converter(  # pyright: ignore[reportUnusedFunction]
     user_payload_converter: temporalio.converter.PayloadConverter,
     user_failure_converter: temporalio.converter.FailureConverter,
-) -> temporalio.converter.PayloadConverter:
+) -> _SystemNexusPayloadConverter:
     """Return the fixed payload converter for system Nexus outer envelopes."""
     return _SystemNexusPayloadConverter(user_payload_converter, user_failure_converter)
 
