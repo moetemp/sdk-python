@@ -185,6 +185,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_appender import BufferedAppender
 from ._stream_store import (
     StreamConfig,
     StreamSelectContext,
@@ -356,6 +357,7 @@ __all__ = [
     "TaskReachabilityType",
     "CloudOperationsClient",
     "Plugin",
+    "BufferedAppender",
     "StreamConfig",
     "StreamSelectContext",
     "StreamStore",
