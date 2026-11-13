@@ -1,13 +1,13 @@
 """The Redis Stream Store.
 
-A client takes it in ``stream_stores``, and its Workers use the same Store::
+A client takes it in ``stream_config``, and its Workers use the same Store::
 
-    from temporalio.client import Client
+    from temporalio.client import Client, StreamConfig
     from temporalio.contrib.redis.streams import RedisStreamStore
 
     client = await Client.connect(
         "localhost:7233",
-        stream_stores=[RedisStreamStore("redis://localhost:6379")],
+        stream_config=StreamConfig(stores=[RedisStreamStore("redis://localhost:6379")]),
     )
 
 .. warning::

@@ -13,13 +13,14 @@ from temporalio import activity, workflow
 from temporalio.api.enums.v1 import EventType, StreamErrorReason
 from temporalio.client import (
     Client,
+    StreamConfig,
     StreamStore,
     StreamStoreCallOptions,
     WorkflowHandle,
 )
 from temporalio.common import RetryPolicy
 from temporalio.converter import DataConverter
-from temporalio.exceptions import ApplicationError, StreamError
+from temporalio.exceptions import ApplicationError, StreamConfigError, StreamError
 from temporalio.nexus.system.stream_service import (
     Producer,
     ProducerKindClient,
@@ -35,6 +36,7 @@ from temporalio.worker import (
     ExecuteActivityInput,
     Interceptor,
     Replayer,
+    Worker,
 )
 from tests.helpers import assert_task_fail_eventually, new_worker
 from tests.test_converter import SimpleCodec
@@ -122,6 +124,15 @@ class CreateThenContinueAsNewWorkflow:
         if run == 1:
             workflow.continue_as_new(args=[stream_id, 2])
         return [bool(stream.created)]
+
+
+@workflow.defn
+class DescribeOtherStoreWorkflow:
+    @workflow.run
+    async def run(self, stream_id: str) -> None:
+        await get_stream(
+            StreamRef(id=stream_id, store="other"), body_type=str
+        ).describe()
 
 
 @activity.defn
@@ -235,7 +246,7 @@ class _RecordingActivityInbound(ActivityInboundInterceptor):
 
 def _with_store(client: Client, store: StreamStore) -> Client:
     config = client.config()
-    config["stream_stores"] = [store]
+    config["stream_config"] = StreamConfig(stores=[store])
     return Client(**config)
 
 
@@ -297,7 +308,7 @@ async def test_workflow_stream_store_uses_payload_codec(client: Client):
     store = MemoryStreamStore()
     config = client.config()
     config["data_converter"] = DataConverter(payload_codec=SimpleCodec())
-    config["stream_stores"] = [store]
+    config["stream_config"] = StreamConfig(stores=[store])
     stream_client = Client(**config)
     _, ref = await _run_append_workflow(stream_client)
 
@@ -331,7 +342,8 @@ async def test_workflow_stream_replay_does_not_call_store(client: Client):
     stream_client = _with_store(client, MemoryStreamStore())
     handle, _ = await _run_append_workflow(stream_client)
     await Replayer(
-        workflows=[AppendWorkflow], stream_stores=[FailingStreamStore()]
+        workflows=[AppendWorkflow],
+        stream_config=StreamConfig(stores=[FailingStreamStore()]),
     ).replay_workflow(await handle.fetch_history())
 
 
@@ -541,3 +553,34 @@ async def test_user_local_activity_append_has_local_activity_producer(client: Cl
     assert producer.kind.value.run_id == run_id
     assert producer.kind.value.epoch.task.started_event_id > 0
     assert producer.kind.value.epoch.attempt == 1
+
+
+async def test_worker_refuses_a_client_with_two_stores(client: Client):
+    config = client.config()
+    first = MemoryStreamStore(name="first")
+    config["stream_config"] = StreamConfig(
+        stores=[first, MemoryStreamStore(name="second")],
+        store_selector=lambda _: first,
+    )
+    with pytest.raises(StreamConfigError, match="one Stream Store"):
+        Worker(
+            Client(**config),
+            task_queue=f"tq-{uuid.uuid4()}",
+            workflows=[AppendWorkflow],
+        )
+
+
+async def test_workflow_ref_of_another_store_fails_the_task(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore())
+    async with new_worker(stream_client, DescribeOtherStoreWorkflow) as worker:
+        handle = await stream_client.start_workflow(
+            DescribeOtherStoreWorkflow.run,
+            f"stream-{uuid.uuid4()}",
+            id=f"workflow-{uuid.uuid4()}",
+            task_queue=worker.task_queue,
+            execution_timeout=timedelta(seconds=30),
+        )
+        await assert_task_fail_eventually(
+            handle, message_contains="names the Stream Store 'other'"
+        )
+        await handle.terminate()

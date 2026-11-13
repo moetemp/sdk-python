@@ -11,7 +11,7 @@ import pytest
 
 from temporalio import activity, workflow
 from temporalio.api.enums.v1 import StreamErrorReason
-from temporalio.client import Client, StreamStore
+from temporalio.client import Client, StreamConfig, StreamStore
 from temporalio.contrib.redis.streams import RedisStreamStore
 from temporalio.exceptions import StreamError
 from temporalio.nexus.system.stream_service import (
@@ -42,7 +42,7 @@ def _store() -> RedisStreamStore:
 
 def _with_store(client: Client, store: StreamStore) -> Client:
     config = client.config()
-    config["stream_stores"] = [store]
+    config["stream_config"] = StreamConfig(stores=[store])
     return Client(**config)
 
 

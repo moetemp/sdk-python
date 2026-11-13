@@ -30,13 +30,16 @@ class StreamRuntime:
         """Build the runtime on a new memory Store.
 
         Raises:
-            RuntimeError: The bridge build has no Stream runtime.
+            temporalio.exceptions.StreamConfigError: The bridge build has no Stream
+                runtime.
         """
         new = getattr(
             temporalio.bridge.temporal_sdk_bridge, "new_memory_stream_runtime", None
         )
         if new is None:
-            raise RuntimeError("This build of temporalio has no Stream runtime")
+            raise temporalio.exceptions.StreamConfigError(
+                "This build of temporalio has no Stream runtime"
+            )
         return StreamRuntime(new(runtime._ref, name, retention, last_write_ttl))
 
     @staticmethod
@@ -56,14 +59,17 @@ class StreamRuntime:
         """Build the runtime on Redis. It connects at its first call.
 
         Raises:
-            RuntimeError: The bridge build has no Redis Stream Store.
+            temporalio.exceptions.StreamConfigError: The bridge build has no Redis
+                Stream Store.
             ValueError: An option is bad.
         """
         new = getattr(
             temporalio.bridge.temporal_sdk_bridge, "new_redis_stream_runtime", None
         )
         if new is None:
-            raise RuntimeError("This build of temporalio has no Redis Stream Store")
+            raise temporalio.exceptions.StreamConfigError(
+                "This build of temporalio has no Redis Stream Store"
+            )
         return StreamRuntime(
             new(
                 runtime._ref,

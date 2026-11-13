@@ -128,7 +128,8 @@ from ._schedule import (
 )
 from ._stream_store import (
     _STREAM_SERVICE,
-    StreamStore,
+    StreamConfig,
+    _activity_target,
     _call_stream_store,
     _stream_response,
 )
@@ -1572,13 +1573,13 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
-        stream_stores = self._client._config["stream_stores"]
+        stream_config = self._client._config.get("stream_config")
         if (
-            stream_stores
+            stream_config is not None
             and temporalio.nexus.system.is_system_endpoint(input.endpoint)
             and input.service == _STREAM_SERVICE.name
         ):
-            return await self._start_stream_store_operation(stream_stores[0], input)
+            return await self._start_stream_store_operation(stream_config, input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
             service=input.service,
@@ -1663,7 +1664,7 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         )
 
     async def _start_stream_store_operation(
-        self, store: StreamStore, input: StartNexusOperationInput
+        self, stream_config: StreamConfig, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         data_converter = self._client.data_converter
         serialization_context = temporalio.nexus.system._get_serialization_context(
@@ -1675,6 +1676,9 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             data_converter.payload_converter, data_converter.failure_converter
         )
         [request] = payload_converter.to_payloads([input.arg])
+        store = stream_config._store_for(
+            input.operation, request.data, _activity_target()
+        )
         response = await _call_stream_store(
             store, data_converter, input.operation, request.data
         )

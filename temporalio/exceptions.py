@@ -283,6 +283,27 @@ def _stream_error_from_failure(  # pyright: ignore[reportUnusedFunction]
     return _stream_error_from_reason(reason, err.message)
 
 
+class StreamConfigError(RuntimeError):
+    """A Stream call can't find its Store, because of how the Stores are set up.
+
+    It is not a :py:class:`StreamError`. A Store didn't fail. The setup of the Stores
+    is wrong, and a retry won't help. These are its cases.
+
+    * A :py:class:`temporalio.client.StreamConfig` has no Store, has two Stores with
+      one name, or has more than one Store and no selector.
+    * A ref names a Store that the config of the client doesn't have.
+    * The selector returns a Store that isn't one of the config's Stores.
+    * A :py:class:`temporalio.client.StreamStore` is given in ``plugins``.
+    * A Worker's client has more than one Store, since a Worker serves one Store.
+    * A Workflow's Stream call names another Store than the Worker's. This fails the
+      Workflow Task.
+    * This build of temporalio has no Stream runtime, or no Redis Stream Store.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+
 class CancelledError(FailureError):
     """Error raised on workflow/activity cancellation."""
 

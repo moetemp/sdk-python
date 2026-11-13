@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import uuid
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -21,9 +21,14 @@ import temporalio.nexus.system
 import temporalio.nexus.system._support
 import temporalio.workflow
 from temporalio.api.enums.v1 import StreamErrorReason
-from temporalio.client import Client
-from temporalio.converter import DataConverter
-from temporalio.exceptions import ApplicationError, StreamError
+from temporalio.client import (
+    Client,
+    StreamConfig,
+    StreamSelectContext,
+    StreamStore,
+)
+from temporalio.converter import DataConverter, StorageDriverActivityInfo
+from temporalio.exceptions import ApplicationError, StreamConfigError, StreamError
 from temporalio.nexus.system.stream_service import (
     ClientProducer,
     DescribeStreamRequest,
@@ -47,9 +52,21 @@ from tests.test_converter import SimpleCodec
 
 
 def _with_store(client: Client, store: MemoryStreamStore) -> Client:
+    return _with_config(client, StreamConfig(stores=[store]))
+
+
+def _with_config(client: Client, stream_config: StreamConfig) -> Client:
     config = client.config()
-    config["stream_stores"] = [store]
+    config["stream_config"] = stream_config
     return Client(**config)
+
+
+def _two_stores(
+    selector: Callable[[StreamSelectContext], StreamStore],
+) -> tuple[MemoryStreamStore, MemoryStreamStore, StreamConfig]:
+    first = MemoryStreamStore(name="first")
+    second = MemoryStreamStore(name="second")
+    return first, second, StreamConfig(stores=[first, second], store_selector=selector)
 
 
 async def _create_stream(client: Client, store: MemoryStreamStore) -> Stream[str]:
@@ -162,7 +179,7 @@ async def test_client_stream_store_uses_payload_codec(client: Client):
     store = MemoryStreamStore()
     config = client.config()
     config["data_converter"] = DataConverter(payload_codec=SimpleCodec())
-    config["stream_stores"] = [store]
+    config["stream_config"] = StreamConfig(stores=[store])
     stream_client = Client(**config)
 
     stream = await stream_client.create_stream(
@@ -362,11 +379,98 @@ async def test_client_without_stream_store_starts_nexus_operation(client: Client
     assert request.operation == "DescribeStream"
 
 
-async def test_client_rejects_two_stream_stores(client: Client):
+def test_stream_config_refuses_a_bad_set_of_stores():
+    with pytest.raises(StreamConfigError, match="at least one Store"):
+        StreamConfig(stores=[])
+    same_name = [MemoryStreamStore(name="a"), MemoryStreamStore(name="a")]
+    with pytest.raises(StreamConfigError, match="more than one Store named 'a'"):
+        StreamConfig(stores=same_name, store_selector=lambda _: same_name[0])
+    with pytest.raises(StreamConfigError, match="store_selector must be set"):
+        StreamConfig(stores=[MemoryStreamStore(name="a"), MemoryStreamStore(name="b")])
+    assert not issubclass(StreamConfigError, StreamError)
+
+
+def test_client_refuses_a_store_in_plugins(client: Client):
     config = client.config()
-    config["stream_stores"] = [MemoryStreamStore(), MemoryStreamStore()]
-    with pytest.raises(ValueError, match="selector"):
+    config["plugins"] = [MemoryStreamStore()]  # type: ignore[list-item]
+    with pytest.raises(StreamConfigError, match="plugins"):
         Client(**config)
+
+
+async def test_selector_picks_the_store_of_a_new_stream(client: Client):
+    contexts: list[StreamSelectContext] = []
+
+    def select(context: StreamSelectContext) -> StreamStore:
+        contexts.append(context)
+        return second
+
+    first, second, stream_config = _two_stores(select)
+    stream_client = _with_config(client, stream_config)
+    stream_id = f"stream-{uuid.uuid4()}"
+    stream = await stream_client.create_stream(id=stream_id, body_type=str)
+    assert stream.ref.store == "second"
+    assert contexts == [StreamSelectContext(id=stream_id, target=None)]
+
+    await stream_client.get_stream(stream.ref, body_type=str).append("a")
+    # A call through a ref that names its Store doesn't ask the selector.
+    assert len(contexts) == 1
+    in_second = _with_store(client, second).get_stream(stream.ref, body_type=str)
+    assert [record.body async for record in in_second.iter_read_items()] == ["a"]
+    in_first = _with_store(client, first).get_stream(
+        StreamRef(id=stream_id), body_type=str
+    )
+    err = await _stream_error(in_first.describe())
+    assert err.reason == StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+
+
+async def test_selector_gets_the_activity_that_makes_the_call(client: Client):
+    contexts: list[StreamSelectContext] = []
+
+    def select(context: StreamSelectContext) -> StreamStore:
+        contexts.append(context)
+        return first
+
+    first, _, stream_config = _two_stores(select)
+    stream_client = _with_config(client, stream_config)
+    stream_id = f"stream-{uuid.uuid4()}"
+    env = ActivityEnvironment()
+    env.info = dataclasses.replace(
+        ActivityEnvironment.default_info(),
+        activity_id="job",
+        activity_type="make_stream",
+        activity_run_id="job-run",
+        namespace="streams",
+    )
+
+    async def create() -> Stream[str]:
+        return await stream_client.create_stream(id=stream_id, body_type=str)
+
+    stream = await env.run(create)
+    assert stream.ref.store == "first"
+    assert contexts == [
+        StreamSelectContext(
+            id=stream_id,
+            target=StorageDriverActivityInfo(
+                id="job", type="make_stream", run_id="job-run", namespace="streams"
+            ),
+        )
+    ]
+
+
+async def test_selector_that_returns_another_store_fails(client: Client):
+    _, _, stream_config = _two_stores(lambda _: MemoryStreamStore(name="first"))
+    stream_client = _with_config(client, stream_config)
+    with pytest.raises(StreamConfigError, match="isn't one of"):
+        await stream_client.create_stream(id=f"stream-{uuid.uuid4()}", body_type=str)
+
+
+async def test_ref_of_a_store_that_the_client_lacks_fails(client: Client):
+    stream_client = _with_store(client, MemoryStreamStore(name="first"))
+    stream = stream_client.get_stream(
+        StreamRef(id=f"stream-{uuid.uuid4()}", store="other"), body_type=str
+    )
+    with pytest.raises(StreamConfigError, match="'other'"):
+        await stream.describe()
 
 
 def test_stream_error_carries_its_reason():

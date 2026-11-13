@@ -95,7 +95,7 @@ from ._schedule import (
     ScheduleBackfill,
     ScheduleHandle,
 )
-from ._stream_store import StreamStore
+from ._stream_store import StreamConfig, _refuse_store_plugins
 from ._worker_versioning import (
     BuildIdOp,
     TaskReachabilityType,
@@ -160,7 +160,7 @@ class Client(
         grpc_compression: GrpcCompression = GrpcCompression.GZIP,
         payload_limits: PayloadLimitsConfig = PayloadLimitsConfig(),
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
-        stream_stores: Sequence[StreamStore] = (),
+        stream_config: StreamConfig | None = None,
     ) -> Self:
         """Connect to a Temporal server.
 
@@ -230,15 +230,16 @@ class Client(
             payload_limits: Warning thresholds for outbound payload/memo sizes. Over-threshold
                 fields are logged but still sent. Set a threshold to 0 to disable it.
             header_codec_behavior: Encoding behavior for headers sent by the client.
-            stream_stores: Stores that answer the Stream operations of this
-                client instead of the server. It is a list, as
-                :py:attr:`temporalio.converter.ExternalStorage.drivers` is, so that a
-                later release can route between several Stores. This release takes
-                one Store.
+            stream_config: The Stream Stores of this client and the selector that
+                picks one for a new Stream, as
+                :py:class:`temporalio.converter.ExternalStorage` holds drivers and a
+                selector. A client with it sends each Stream operation to one of its
+                Stores instead of the server. ``None`` sends them to the server.
 
                 .. warning::
                     This API is experimental and subject to change.
         """
+        _refuse_store_plugins(plugins)
         connect_config = temporalio.service.ConnectConfig(
             target_host=target_host,
             api_key=api_key,
@@ -275,7 +276,7 @@ class Client(
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
             plugins=plugins,
-            stream_stores=stream_stores,
+            stream_config=stream_config,
         )
 
     def __init__(
@@ -289,12 +290,13 @@ class Client(
         default_workflow_query_reject_condition: None
         | (temporalio.common.QueryRejectCondition) = None,
         header_codec_behavior: HeaderCodecBehavior = HeaderCodecBehavior.NO_CODEC,
-        stream_stores: Sequence[StreamStore] = (),
+        stream_config: StreamConfig | None = None,
     ):
         """Create a Temporal client from a service client.
 
         See :py:meth:`connect` for details on the parameters.
         """
+        _refuse_store_plugins(plugins)
         # Store the config for tracking
         config = ClientConfig(
             service_client=service_client,
@@ -304,7 +306,7 @@ class Client(
             interceptors=interceptors,
             default_workflow_query_reject_condition=default_workflow_query_reject_condition,
             header_codec_behavior=header_codec_behavior,
-            stream_stores=stream_stores,
+            stream_config=stream_config,
         )
         self._initial_config = config.copy()
 
@@ -314,12 +316,6 @@ class Client(
         self._init_from_config(config)
 
     def _init_from_config(self, config: ClientConfig):
-        # Two Stores need a rule that picks one for a new Stream. That selector isn't here yet,
-        # so a second Store is refused and not ignored.
-        if len(config["stream_stores"]) > 1:
-            raise ValueError(
-                "More than one Stream Store needs a selector, which isn't supported yet"
-            )
         self._config = config
 
         # Iterate over interceptors in reverse building the impl
@@ -3051,7 +3047,7 @@ class ClientConnectConfig(TypedDict, total=False):
     grpc_compression: GrpcCompression
     payload_limits: PayloadLimitsConfig
     header_codec_behavior: HeaderCodecBehavior
-    stream_stores: Sequence[StreamStore]
+    stream_config: StreamConfig | None
 
 
 class ClientConfig(TypedDict, total=False):
@@ -3066,4 +3062,4 @@ class ClientConfig(TypedDict, total=False):
         temporalio.common.QueryRejectCondition | None
     ]
     header_codec_behavior: Required[HeaderCodecBehavior]
-    stream_stores: Required[Sequence[StreamStore]]
+    stream_config: Required[StreamConfig | None]

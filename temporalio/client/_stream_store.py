@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import google.protobuf.message
 import nexusrpc
 
+import temporalio.activity
+import temporalio.api.stream.v1
 import temporalio.bridge._visitor
 import temporalio.bridge.runtime
 import temporalio.common
@@ -15,6 +18,8 @@ import temporalio.converter
 import temporalio.converter._payload_converter
 import temporalio.nexus.system.stream_service
 import temporalio.runtime
+from temporalio.converter import StorageDriverActivityInfo, StorageDriverWorkflowInfo
+from temporalio.exceptions import StreamConfigError
 
 if TYPE_CHECKING:
     import temporalio.bridge.streams
@@ -129,12 +134,167 @@ class _BridgeStreamStore(StreamStore):  # pyright: ignore[reportUnusedClass]
 
         Raises:
             temporalio.exceptions.StreamError: The call failed.
-            RuntimeError: This build of temporalio has no Stream runtime, or not this Store.
+            temporalio.exceptions.StreamConfigError: This build of temporalio has no
+                Stream runtime, or not this Store.
         """
         if self._stream_runtime is None:
             runtime = self._runtime or temporalio.runtime.Runtime.default()
             self._stream_runtime = self._new_stream_runtime(runtime._core_runtime)
         return await self._stream_runtime.call(operation, request)
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamSelectContext:
+    """Context passed to :py:attr:`StreamConfig.store_selector` calls.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+    id: str
+    """The id of the Stream."""
+
+    target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None = None
+    """The Workflow or Activity that makes the call, or ``None`` for a plain client.
+
+    A call in an Activity has that Activity here. Workflow code never calls the
+    selector, since a Worker serves one Store.
+    """
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamConfig:
+    """The Stream Stores of a client, and the rule that picks one for a new Stream.
+
+    A client with this config sends each Stream operation to one of its Stores
+    instead of the server. It holds Stores and a selector, as
+    :py:class:`temporalio.converter.ExternalStorage` holds drivers and a selector.
+
+    A ref carries the name of its Store, so a call on a known Stream goes to the
+    Store of that name. A call whose ref names no Store, such as a create, goes to
+    the one Store, or to the Store that :py:attr:`store_selector` returns.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+    stores: Sequence[StreamStore]
+    """At least one Store. Each Store has a unique name.
+
+    A ref carries the :py:attr:`StreamStore.name` of its Store, and a call looks
+    the Store up by that name. With more than one Store, :py:attr:`store_selector`
+    must also be set. A Worker serves one Store, so a Worker whose client has more
+    than one raises :py:class:`temporalio.exceptions.StreamConfigError`.
+    """
+
+    store_selector: Callable[[StreamSelectContext], StreamStore] | None = None
+    """Picks the Store of a new Stream. Required with more than one Store.
+
+    It gets a :py:class:`StreamSelectContext` for each call whose ref names no
+    Store, and returns one of the instances in :py:attr:`stores`. When it is
+    ``None`` and there is one Store, every new Stream goes to that Store.
+
+    A replayed create must reach the same Store, so a selector uses facts that are
+    fixed for the run, such as the Stream id. The time, a random value or the load
+    of a Store can change between two runs of one create.
+    """
+
+    _store_map: dict[str, StreamStore] = dataclasses.field(
+        init=False, repr=False, compare=False
+    )
+    """Name-keyed index of :py:attr:`stores`, built at construction time."""
+
+    def __post_init__(self) -> None:
+        """Check the Stores and build the name-keyed map of them.
+
+        Raises :py:class:`temporalio.exceptions.StreamConfigError` if there is no
+        Store, if two Stores share a name, or if more than one Store is given
+        without a :py:attr:`store_selector`.
+        """
+        if not self.stores:
+            raise StreamConfigError("StreamConfig.stores must have at least one Store")
+        store_map: dict[str, StreamStore] = {}
+        for store in self.stores:
+            if store.name in store_map:
+                raise StreamConfigError(
+                    f"StreamConfig.stores has more than one Store named '{store.name}'. "
+                    "Each Store needs a unique name."
+                )
+            store_map[store.name] = store
+        if len(self.stores) > 1 and self.store_selector is None:
+            raise StreamConfigError(
+                "StreamConfig.store_selector must be set when there is more than one Store"
+            )
+        object.__setattr__(self, "_store_map", store_map)
+
+    def _select_store(self, context: StreamSelectContext) -> StreamStore:
+        selector = self.store_selector
+        if selector is None:
+            return self.stores[0]
+        store = selector(context)
+        if (
+            not isinstance(store, StreamStore)
+            or self._store_map.get(store.name) is not store
+        ):
+            raise StreamConfigError(
+                f"The store_selector returned {store!r}, which isn't one of "
+                "StreamConfig.stores"
+            )
+        return store
+
+    def _get_store_by_name(self, name: str) -> StreamStore:
+        store = self._store_map.get(name)
+        if store is None:
+            raise StreamConfigError(
+                f"The ref names the Stream Store '{name}', which this client doesn't have"
+            )
+        return store
+
+    def _store_for(
+        self,
+        operation: str,
+        request: bytes,
+        target: StorageDriverActivityInfo | StorageDriverWorkflowInfo | None,
+    ) -> StreamStore:
+        ref = _request_ref(operation, request)
+        if ref.store:
+            return self._get_store_by_name(ref.store)
+        return self._select_store(StreamSelectContext(id=ref.id, target=target))
+
+
+def _request_ref(operation: str, request: bytes) -> temporalio.api.stream.v1.StreamRef:
+    definition = _STREAM_SERVICE.operation_definitions[operation]
+    message = _proto_type(definition.input_type).FromString(request)
+    # A create calls its ref `stream_ref` and every other request calls it `ref`, so
+    # the field is found by its type.
+    for field in message.DESCRIPTOR.fields:
+        if field.message_type is temporalio.api.stream.v1.StreamRef.DESCRIPTOR:
+            return getattr(message, field.name)
+    raise TypeError(f"The {operation} request has no StreamRef")
+
+
+def _activity_target() -> StorageDriverActivityInfo | None:  # pyright: ignore[reportUnusedFunction]
+    # External storage builds the same value from the running Activity.
+    if not temporalio.activity.in_activity():
+        return None
+    info = temporalio.activity.info()
+    return StorageDriverActivityInfo(
+        id=info.activity_id,
+        type=info.activity_type,
+        run_id=info.activity_run_id,
+        namespace=info.namespace,
+    )
+
+
+def _refuse_store_plugins(  # pyright: ignore[reportUnusedFunction]
+    plugins: Sequence[object],
+) -> None:
+    for plugin in plugins:
+        if isinstance(plugin, StreamStore):
+            raise StreamConfigError(
+                f"The Stream Store '{plugin.name}' is in plugins. Give it in "
+                "stream_config=StreamConfig(stores=[...]) instead."
+            )
 
 
 def _check_not_negative(**durations: timedelta | None) -> None:  # pyright: ignore[reportUnusedFunction]

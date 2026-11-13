@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator
 from typing import TYPE_CHECKING, Any
 
 from nexusrpc import OutputT
@@ -14,11 +14,14 @@ import temporalio.converter
 import temporalio.exceptions
 import temporalio.workflow
 from temporalio.client._stream_store import (
+    StreamConfig,
     StreamStore,
     StreamStoreCallOptions,
     _call_stream_store,
+    _request_ref,
     _stream_response,
 )
+from temporalio.exceptions import StreamConfigError
 
 from ._interceptor import StartLocalActivityInput, StartNexusOperationInput
 
@@ -53,19 +56,44 @@ def _stream_store_activity(  # pyright: ignore[reportUnusedFunction]
     return call
 
 
+def _worker_stream_store(config: StreamConfig | None) -> StreamStore | None:
+    """Give the one Store that a Worker serves, or ``None`` when its client has none.
+
+    Raises:
+        temporalio.exceptions.StreamConfigError: The client has more than one Store.
+    """
+    if config is None:
+        return None
+    # Workflow code never calls the selector, so a Workflow's new Stream needs a single
+    # Store that the Worker knows without one.
+    if len(config.stores) > 1:
+        raise StreamConfigError(
+            f"A Worker serves one Stream Store, and its client has {len(config.stores)}"
+        )
+    return config.stores[0]
+
+
 @dataclasses.dataclass(frozen=True)
 class _WorkflowStreamStore:
     """The Worker's Stream Store as Workflow code reaches it."""
+
+    name: str
+    """Name of the Store."""
 
     call_options: StreamStoreCallOptions
     """Options of the Local Activity that calls the Store."""
 
     @classmethod
-    def from_stores(cls, stores: Sequence[StreamStore]) -> _WorkflowStreamStore | None:
-        """Build it from the Stream Stores of a client, or give ``None`` when it has none."""
-        if not stores:
+    def from_config(cls, config: StreamConfig | None) -> _WorkflowStreamStore | None:
+        """Build it from the Stream config of a client, or give ``None`` when it has none.
+
+        Raises:
+            temporalio.exceptions.StreamConfigError: The client has more than one Store.
+        """
+        store = _worker_stream_store(config)
+        if store is None:
             return None
-        return cls(call_options=stores[0].call_options)
+        return cls(name=store.name, call_options=store.call_options)
 
     def start_operation(
         self,
@@ -83,6 +111,14 @@ class _WorkflowStreamStore:
         # Workflow code builds the request, so the Local Activity does only the I/O.
         payload_converter, _ = instance._system_nexus_converters(input)
         [request] = payload_converter.to_payloads([input.input])
+        # The Local Activity calls the Worker's Store, so a ref of another Store can't be
+        # answered here. The error fails the Workflow Task, so that a fixed Worker can retry it.
+        ref_store = _request_ref(input.operation_name, request.data).store
+        if ref_store and ref_store != self.name:
+            raise StreamConfigError(
+                f"The ref names the Stream Store '{ref_store}', and this Worker serves "
+                f"'{self.name}'"
+            )
         activity = instance._outbound_schedule_activity(
             StartLocalActivityInput(
                 activity=_STREAM_STORE_ACTIVITY,
