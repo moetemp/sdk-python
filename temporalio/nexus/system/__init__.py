@@ -199,3 +199,10 @@ __all__ = [
     "TEMPORAL_SYSTEM_ENDPOINT",
     "is_system_endpoint",
 ]
+
+# The generated Workflow modules of `stream_service` import `temporalio.workflow` at their top,
+# and `temporalio.workflow` imports `create_stream` and `get_stream` from them. So this package
+# loads `temporalio.workflow` as its last statement, when every name above exists. Then
+# `temporalio.workflow` is complete before a generated Workflow module starts, whichever module
+# is the first import.
+import temporalio.workflow  # noqa: E402  # pyright: ignore[reportUnusedImport]

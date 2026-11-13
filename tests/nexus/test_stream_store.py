@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import subprocess
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
@@ -349,6 +351,31 @@ def test_no_hand_written_stream_classes():
         assert value is None or value.__module__.startswith(
             "temporalio.nexus.system.stream_service."
         )
+
+
+def test_each_stream_module_can_be_the_first_import():
+    modules = [
+        "temporalio.nexus.system.stream_service.workflow",
+        "temporalio.nexus.system.stream_service.client",
+        "temporalio.nexus.system.stream_service",
+        "temporalio.nexus.system",
+        "temporalio.workflow",
+        "temporalio.client",
+        "temporalio.worker",
+        "temporalio.contrib.redis.streams",
+    ]
+    failures: dict[str, str] = {}
+    for module in modules:
+        # Only a new interpreter has no module loaded, so the import order is real.
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures[module] = result.stderr.strip().splitlines()[-1]
+    assert failures == {}
 
 
 async def test_client_without_stream_store_starts_nexus_operation(client: Client):
