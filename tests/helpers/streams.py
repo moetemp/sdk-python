@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
@@ -89,6 +90,12 @@ class _DictStream:
     request_id: str
     records: list[StreamRecord] = dataclasses.field(default_factory=list)
     closed: bool = False
+    changed: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
+
+    def wake(self) -> None:
+        """Wake the reads that wait, and give later reads a new event."""
+        self.changed.set()
+        self.changed = asyncio.Event()
 
 
 def _offset(index: int) -> bytes:
@@ -98,13 +105,15 @@ def _offset(index: int) -> bytes:
 class DictStreamStore(StreamStore):
     """A Store written from scratch, with no bridge, that keeps its Streams in a dict.
 
-    It has enough of each operation for the tests, and no dedupe, no wait and no
-    Retention.
+    It has enough of each operation for the tests, and no dedupe and no Retention. A
+    read with a ``wait`` waits for an append or a close, as Core needs for Workflow
+    code. :py:attr:`waiting` counts the reads that wait, so a test sees one that stays.
     """
 
     def __init__(self, name: str = "dict") -> None:
         self._name = name
         self.streams: dict[str, _DictStream] = {}
+        self.waiting = 0
 
     @property
     def name(self) -> str:
@@ -155,6 +164,8 @@ class DictStreamStore(StreamStore):
                     offset=_offset(len(stream.records) + 1),
                 )
             )
+        if request.records:
+            stream.wake()
         return AppendRecordsResponse(
             first_offset=_offset(first), last_offset=_offset(len(stream.records))
         )
@@ -162,6 +173,15 @@ class DictStreamStore(StreamStore):
     async def read_records(self, request: ReadRecordsRequest) -> ReadRecordsResponse:
         stream = self._stream(request.ref)
         start = int.from_bytes(request.from_offset, "big") if request.from_offset else 0
+        wait = request.wait.ToTimedelta().total_seconds()
+        if start >= len(stream.records) and not stream.closed and wait > 0:
+            self.waiting += 1
+            try:
+                await asyncio.wait_for(stream.changed.wait(), wait)
+            except TimeoutError:
+                pass
+            finally:
+                self.waiting -= 1
         page = stream.records[start : start + (request.max_records or 1000)]
         last_offset = page[-1].offset if page else request.from_offset
         return ReadRecordsResponse(
@@ -171,7 +191,9 @@ class DictStreamStore(StreamStore):
         )
 
     async def close_stream(self, request: CloseStreamRequest) -> CloseStreamResponse:
-        self._stream(request.ref).closed = True
+        stream = self._stream(request.ref)
+        stream.closed = True
+        stream.wake()
         return CloseStreamResponse()
 
     async def describe_stream(

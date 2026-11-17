@@ -43,6 +43,37 @@ class StreamRuntime:
         return StreamRuntime(new(runtime._ref, name, retention, producer_idle_ttl))
 
     @staticmethod
+    def new_python(
+        runtime: temporalio.bridge.runtime.Runtime,
+        *,
+        name: str,
+        caller: Any,
+    ) -> StreamRuntime:
+        """Build the runtime on a Store written in Python, which Core calls for Workflow code.
+
+        ``caller`` runs each call of the Store on the Worker's event loop.
+
+        Raises:
+            temporalio.exceptions.StreamConfigError: The bridge build has no Stream
+                runtime.
+        """
+        new = getattr(
+            temporalio.bridge.temporal_sdk_bridge, "new_python_stream_runtime", None
+        )
+        if new is None:
+            raise temporalio.exceptions.StreamConfigError(
+                "This build of temporalio has no Stream runtime"
+            )
+        return StreamRuntime(new(runtime._ref, name, caller))
+
+    @staticmethod
+    def has_runtime() -> bool:
+        """Whether the bridge build has the Stream runtime."""
+        return hasattr(
+            temporalio.bridge.temporal_sdk_bridge, "new_python_stream_runtime"
+        )
+
+    @staticmethod
     def new_redis(
         runtime: temporalio.bridge.runtime.Runtime,
         *,

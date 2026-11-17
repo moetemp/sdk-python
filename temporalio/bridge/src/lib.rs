@@ -55,6 +55,7 @@ fn temporal_sdk_bridge(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         m.add_class::<streams::StreamRuntimeRef>()?;
         m.add_function(wrap_pyfunction!(new_memory_stream_runtime, m)?)?;
+        m.add_function(wrap_pyfunction!(new_python_stream_runtime, m)?)?;
         #[cfg(feature = "streams-redis")]
         m.add_function(wrap_pyfunction!(new_redis_stream_runtime, m)?)?;
     }
@@ -125,6 +126,16 @@ fn new_memory_stream_runtime(
     producer_idle_ttl: Option<std::time::Duration>,
 ) -> PyResult<streams::StreamRuntimeRef> {
     streams::new_memory_stream_runtime(runtime_ref, store_name, retention, producer_idle_ttl)
+}
+
+#[cfg(feature = "streams")]
+#[pyfunction]
+fn new_python_stream_runtime(
+    runtime_ref: &runtime::RuntimeRef,
+    store_name: String,
+    caller: Py<PyAny>,
+) -> PyResult<streams::StreamRuntimeRef> {
+    streams::new_python_stream_runtime(runtime_ref, store_name, caller)
 }
 
 #[cfg(feature = "streams-redis")]
