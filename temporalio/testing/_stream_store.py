@@ -28,7 +28,7 @@ class MemoryStreamStore(temporalio.client._stream_store._BridgeStreamStore):
         producer_idle_ttl: timedelta | None = None,
         runtime: temporalio.runtime.Runtime | None = None,
     ) -> None:
-        """Create a memory Store. It builds its Stream runtime at its first call.
+        """Create a memory Store. It builds its Stream runtime at its first use.
 
         Args:
             name: Name of the Store, which the refs of its Streams carry.
@@ -37,7 +37,7 @@ class MemoryStreamStore(temporalio.client._stream_store._BridgeStreamStore):
             producer_idle_ttl: How long an open Stream stays after the last write of any
                 Producer. ``None`` keeps an open Stream until its close.
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
-                :py:meth:`temporalio.runtime.Runtime.default` at the first call.
+                :py:meth:`temporalio.runtime.Runtime.default` at the first use.
         """
         temporalio.client._stream_store._check_not_negative(
             retention=retention, producer_idle_ttl=producer_idle_ttl

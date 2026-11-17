@@ -1,7 +1,6 @@
 """The Redis Stream Store.
 
-A client takes it in ``stream_config``. The Activities of a Worker on that client reach
-the same Store through ``activity.client()``::
+A client takes it in ``stream_config``, and its Workers use the same Store::
 
     from temporalio.client import Client, StreamConfig
     from temporalio.contrib.redis.streams import RedisStreamStore
@@ -32,7 +31,9 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
     It runs the Stream runtime of the bridge on the Redis Store of the
     ``temporalio-streams-redis`` crate. It connects at its first call, so building
     it needs no server, and a server that is down fails that call. A failed call
-    raises :py:class:`temporalio.exceptions.StreamError`.
+    raises :py:class:`temporalio.exceptions.StreamError`. A Worker with Workflows gives
+    Core this runtime when the Worker is built, so Core can read and append for Workflow
+    code.
 
     A key has no namespace, so a Stream id is unique in one Redis and key prefix.
     Give each namespace its own key prefix to keep their Streams apart.
@@ -55,10 +56,12 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
         name: str = "redis",
         runtime: temporalio.runtime.Runtime | None = None,
     ) -> None:
-        """Create a Redis Store. It builds its Stream runtime and connects at its first call.
+        """Create a Redis Store. It builds its Stream runtime at its first use.
 
-        A bad option raises ``ValueError`` at that first call, with the message of the
-        Redis crate.
+        The first use is the first call, or the build of a Worker with Workflows on a
+        client with this Store, which gives Core the runtime. A bad option raises
+        ``ValueError`` there, with the message of the Redis crate. The Store connects at
+        its first call.
 
         Args:
             url: A ``redis://`` or ``rediss://`` URL, or the seed URLs of a cluster.
@@ -80,7 +83,7 @@ class RedisStreamStore(temporalio.client._stream_store._BridgeStreamStore):
             name: Name of the Store, which the refs of its Streams carry, so that every
                 process can route a ref that it gets.
             runtime: Runtime whose Tokio threads run the Store. ``None`` takes
-                :py:meth:`temporalio.runtime.Runtime.default` at the first call.
+                :py:meth:`temporalio.runtime.Runtime.default` at the first use.
         """
         temporalio.client._stream_store._check_not_negative(
             retention=retention,

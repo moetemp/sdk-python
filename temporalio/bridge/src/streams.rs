@@ -16,7 +16,7 @@ pyo3::create_exception!(temporal_sdk_bridge, StreamCallError, PyException);
 #[cfg(feature = "streams")]
 #[pyclass(frozen)]
 pub struct StreamRuntimeRef {
-    streams: std::sync::Arc<temporalio_streams::StreamRuntime>,
+    pub(crate) streams: std::sync::Arc<temporalio_streams::StreamRuntime>,
     runtime: runtime::Runtime,
 }
 

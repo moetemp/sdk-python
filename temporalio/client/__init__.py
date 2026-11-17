@@ -187,8 +187,10 @@ from ._schedule import (
 )
 from ._stream_store import (
     StreamConfig,
+    StreamReplaySource,
     StreamSelectContext,
     StreamStore,
+    StreamStoreCallOptions,
 )
 from ._worker_versioning import (
     BuildIdOp,
@@ -356,8 +358,10 @@ __all__ = [
     "CloudOperationsClient",
     "Plugin",
     "StreamConfig",
+    "StreamReplaySource",
     "StreamSelectContext",
     "StreamStore",
+    "StreamStoreCallOptions",
     "Callback",
     "_ClientImpl",
     "_apply_headers",
