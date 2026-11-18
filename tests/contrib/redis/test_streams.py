@@ -143,7 +143,7 @@ async def test_workflow_local_activity_appends_with_local_activity_producer(
         ref = await handle.result()
 
     stream = stream_client.get_stream(ref, body_type=str)
-    records = [record async for record in stream.iter_read_items()]
+    records = [record async for record in stream.read()]
     assert [record.body for record in records] == ["a", "b"]
     run_id = handle.result_run_id
     for record in records:
@@ -164,7 +164,7 @@ async def test_workflow_appends_and_closes(client: Client):
         ref = await handle.result()
 
     stream = stream_client.get_stream(ref, body_type=str)
-    records = [record async for record in stream.iter_read_items()]
+    records = [record async for record in stream.read()]
     assert [record.body for record in records] == ["a", "b"]
     run_id = handle.result_run_id
     for record in records:
@@ -191,7 +191,7 @@ async def append_in_two_steps(stream_id: str, seen_id: str) -> None:
     await stream.append("a", "b")
     # The second step waits until the Workflow says that it has the first, so the
     # Workflow reads while the Activity runs.
-    async for _ in seen.iter_read_items(wait=timedelta(seconds=30)):
+    async for _ in seen.read(wait=timedelta(seconds=30)):
         break
     await stream.append("c", "d")
     await stream.close()
@@ -211,7 +211,7 @@ class ReadWhileActivityRunsWorkflow:
         got: list[str] = []
         # The wait is far longer than the pause between the two steps, so the loop ends
         # only with the page that is done.
-        async for page in stream.iter_read(wait=timedelta(seconds=30)):
+        async for page in stream.read_pages(wait=timedelta(seconds=30)):
             for record in page.records:
                 got.append(record.body)
                 if record.body == "b":
