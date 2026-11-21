@@ -7,11 +7,13 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import google.protobuf.message
 import nexusrpc
 
+import temporalio.activity
 from temporalio.api.enums.v1 import StreamErrorReason
 from temporalio.api.streamservice.v1 import (
     AppendRecordsRequest,
@@ -25,12 +27,20 @@ from temporalio.api.streamservice.v1 import (
     ReadRecordsRequest,
     ReadRecordsResponse,
 )
-from temporalio.converter import StorageDriverActivityInfo, StorageDriverWorkflowInfo
+from temporalio.converter import (
+    PayloadCodec,
+    StorageDriverActivityInfo,
+    StorageDriverWorkflowInfo,
+)
 from temporalio.converter._payload_converter import _get_transfer_type_converter
 from temporalio.exceptions import StreamError
 from temporalio.nexus.system.stream_service import StreamRef, StreamService
 
 logger = logging.getLogger(__name__)
+
+_definition = nexusrpc.get_service_definition(StreamService)
+assert _definition
+_STREAM_SERVICE: nexusrpc.ServiceDefinition = _definition
 
 
 class StreamStore(ABC):
@@ -324,9 +334,7 @@ def _operation(
     """Return the :py:class:`StreamStore` method of a Stream operation, with the
     classes of its request message and of its response message.
     """
-    definition = nexusrpc.get_service_definition(StreamService)
-    assert definition
-    operation = definition.operation_definitions[name]
+    operation = _STREAM_SERVICE.operation_definitions[name]
     request, response = (
         _get_transfer_type_converter(model)
         for model in (operation.input_type, operation.output_type)
@@ -364,6 +372,53 @@ async def _call_method(
             reason=StreamErrorReason.STREAM_ERROR_REASON_STORE_CORRUPT,
         )
     return response
+
+
+async def _call_store(  # pyright: ignore[reportUnusedFunction]
+    store: StreamStore,
+    codec: PayloadCodec | None,
+    operation: str,
+    request: google.protobuf.message.Message,
+    timeout: timedelta | None = None,
+) -> google.protobuf.message.Message:
+    """Call a Store for client code, which is :py:func:`_call_method` with the
+    payload codec and a timeout.
+
+    The codec gets each body of an append and each Record of a read alone, with no
+    serialization context, since the reader of a Record can be any code.
+    """
+    if codec and isinstance(request, AppendRecordsRequest):
+        for appended in request.records:
+            [body] = await codec.encode([appended.body])
+            appended.body.CopyFrom(body)
+    try:
+        # A timeout of zero is no timeout, as for an RPC of the client.
+        async with asyncio.timeout(timeout.total_seconds() if timeout else None):
+            response = await _call_method(store, operation, request)
+    except TimeoutError as err:
+        raise StreamError(
+            f"The Stream Store '{store.name()}' didn't answer the {operation} call "
+            "within its rpc_timeout",
+            reason=StreamErrorReason.STREAM_ERROR_REASON_STORE_UNAVAILABLE,
+        ) from err
+    if codec and isinstance(response, ReadRecordsResponse):
+        for record in response.records:
+            [body] = await codec.decode([record.body])
+            record.body.CopyFrom(body)
+    return response
+
+
+def _activity_target() -> StorageDriverActivityInfo | None:  # pyright: ignore[reportUnusedFunction]
+    """Return the running Activity as the target of a Stream call, if there is one."""
+    if not temporalio.activity.in_activity():
+        return None
+    info = temporalio.activity.info()
+    return StorageDriverActivityInfo(
+        id=info.activity_id,
+        type=info.activity_type,
+        run_id=info.activity_run_id,
+        namespace=info.namespace,
+    )
 
 
 class _StoreCaller:  # pyright: ignore[reportUnusedClass]
