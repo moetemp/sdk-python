@@ -66,6 +66,9 @@ class WorkerConfig:
     disable_payload_error_limit: bool
     stream_stores: Sequence[tuple[str, temporalio.bridge.streams.StoreCaller]]
     """The caller of each Stream Store that Workflow code can use, by Store name."""
+    stream_read_max_wait_millis: int | None
+    stream_replay_as_workflow_fail: bool
+    stream_replay_as_workflow_fail_for_types: set[str]
 
 
 @dataclass

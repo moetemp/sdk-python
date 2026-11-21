@@ -269,6 +269,12 @@ class StreamConfig:
       happen. A Workflow that needs its close awaits it, as ``async with`` does.
     - A call with no Store fails the Workflow Task, also when Workflow code catches
       the error.
+    - A read with no ``max_records`` gives at most 256 Records in a page, and a
+      read with no ``max_bytes`` at most 4 MiB of them. A page has at most 16 MiB
+      of Records, also for a larger ``max_bytes``.
+    - A read of a Stream with no body type raises :exc:`TypeError` in the call, as
+      in client code, and a body that isn't of the Stream's type fails the
+      Workflow Task.
 
     .. warning::
         This API is experimental and subject to change.
