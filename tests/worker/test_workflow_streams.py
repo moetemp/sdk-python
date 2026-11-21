@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from google.protobuf.duration_pb2 import Duration
 from google.protobuf.message import Message
 
 import temporalio.api.common.v1
@@ -49,6 +50,7 @@ from temporalio.bridge.proto.workflow_activation import (
     ResolveStreamAppend,
     ResolveStreamClose,
     ResolveStreamRead,
+    SignalWorkflow,
     StreamAppended,
     StreamReadEnd,
     WorkflowActivation,
@@ -58,8 +60,10 @@ from temporalio.bridge.proto.workflow_commands import (
     ActivityCancellationType,
     AppendToStream,
     CloseStream,
+    CloseStreamRead,
     CompleteWorkflowExecution,
     RequestCancelLocalActivity,
+    StartStreamRead,
     WorkflowCommand,
 )
 from temporalio.bridge.proto.workflow_completion import (
@@ -76,7 +80,10 @@ from temporalio.exceptions import ApplicationError, StreamError
 from temporalio.nexus.system.stream_service import StreamRef as ModelRef
 from temporalio.testing import MemoryStreamStore
 from temporalio.worker._workflow import _CommandAwareDataConverter
-from temporalio.worker._workflow_instance import _WorkflowInstanceImpl
+from temporalio.worker._workflow_instance import (
+    _WorkflowInstanceImpl,
+    _WorkflowLogicFlag,
+)
 from tests.helpers.streams import (
     CodecCall,
     ContextCodec,
@@ -152,10 +159,13 @@ async def _activate(
     instance: _WorkflowInstanceImpl,
     *jobs: WorkflowActivationJob,
     replaying: bool = False,
+    flags: Sequence[int] = (),
 ) -> WorkflowActivationCompletion:
     # A Worker runs an activation in another thread too, so that the tasks of the
     # Workflow don't run inside the task of the caller.
-    activation = WorkflowActivation(run_id="run", jobs=jobs, is_replaying=replaying)
+    activation = WorkflowActivation(
+        run_id="run", jobs=jobs, is_replaying=replaying, available_internal_flags=flags
+    )
     return await asyncio.to_thread(instance.activate, activation)
 
 
@@ -625,3 +635,279 @@ async def _calls_script(rng: random.Random) -> None:
     # An eviction ends each task of the instance, also the task of a call that waits.
     evict = WorkflowActivationJob(remove_from_cache=RemoveFromCache())
     assert (await _activate(instance, evict)).HasField("successful")
+
+
+@dataclass
+class _ReadCall:
+    """One generated reader, which reads pages of a Stream one after the other, and
+    what Workflow code got for each page.
+    """
+
+    stream: str
+    start: int
+    """The offset that the first page comes after. Zero is the start of the Stream."""
+    wait: timedelta | None
+    pages: int
+    """The maximum number of pages that the reader asks for."""
+    body_type: Any
+    """The body type of the reader's Stream, which is ``int``, ``Any`` or none."""
+    outcome: list[Any] = dataclasses.field(default_factory=list)
+
+
+class _ReadScript:
+    """The readers of :py:class:`_ReadsWorkflow`, and for each ``step`` Signal the
+    readers that its handler cancels and the ones that it starts.
+    """
+
+    calls: list[_ReadCall] = []
+    steps: list[tuple[list[int], list[int]]] = []
+
+
+@workflow.defn
+class _ReadsWorkflow:
+    def __init__(self) -> None:
+        self._readers: dict[int, asyncio.Future[None]] = {}
+
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: False)
+
+    @workflow.signal
+    def step(self) -> None:
+        cancels, starts = _ReadScript.steps.pop(0)
+        for call in cancels:
+            self._readers[call].cancel()
+        for call in starts:
+            reader = self._read(_ReadScript.calls[call])
+            self._readers[call] = asyncio.ensure_future(reader)
+
+    async def _read(self, call: _ReadCall) -> None:
+        body_type: Any = call.body_type
+        ref: Any = ModelRef(id=call.stream, store="a")
+        if body_type:
+            ref = ModelRef[body_type](id=call.stream, store="a")
+        stream = workflow.get_stream(ref)
+        offset = _offset(call.start) or None
+        try:
+            for _ in range(call.pages):
+                page = await stream.read_page(from_offset=offset, wait=call.wait)
+                bodies = [record.body for record in page.records]
+                offset = page.last_offset
+                call.outcome.append((bodies, offset or b"", page.done))
+                if page.done:
+                    return
+        except StreamError as err:
+            call.outcome.append(err.reason)
+        except TypeError:
+            call.outcome.append("TypeError")
+        except asyncio.CancelledError:
+            call.outcome.append("cancelled")
+            raise
+
+
+def _offset(number: int) -> bytes:
+    return number.to_bytes(8, "big") if number else b""
+
+
+def _body(stream: str, number: int) -> Any:
+    """Return the body of a Record, which for some isn't the ``int`` of a reader."""
+    return "text" if stream == "s1" and number % 3 == 0 else number
+
+
+@dataclass
+class _OpenRead:
+    """A read of SDK Core whose job hasn't come, and the reader that started it."""
+
+    stream: str
+    after: int
+    call: int
+    cancelled: bool = False
+    """Whether its reader was cancelled. Its ``CloseStreamRead`` then went, and Core
+    gives no job for it in a later activation."""
+
+
+async def test_a_read_page_call_is_one_read_of_core() -> None:
+    single_batch = _WorkflowLogicFlag.PROCESS_WORKFLOW_ACTIVATION_JOBS_AS_SINGLE_BATCH
+    for seed in range(300):
+        # Signals run before the Stream jobs of their activation, or after all of them
+        # with the single-batch flag of the History.
+        for flags in ((), (single_batch,)):
+            # A replay sends the same commands as the first run.
+            replaying = seed % 2 == 1
+            with failure_note(f"seed {seed}, flags {flags}, replaying {replaying}"):
+                await _reads_script(random.Random(seed), flags, replaying)
+
+
+async def _reads_script(
+    rng: random.Random, flags: Sequence[int], replaying: bool
+) -> None:
+    converter = temporalio.converter.DefaultPayloadConverter()
+    calls: list[_ReadCall] = []
+    _ReadScript.calls, _ReadScript.steps = calls, []
+    instance = _new_instance(_ReadsWorkflow)
+    initialize = WorkflowActivationJob(initialize_workflow=InitializeWorkflow())
+    completion = await _activate(instance, initialize, flags=flags, replaying=replaying)
+    assert not completion.successful.commands
+
+    reads: dict[int, _OpenRead] = {}
+    # The Stream of each read by its seq, and the offset that each reader is at
+    streams: dict[int, str] = {}
+    positions: list[int] = []
+    outcomes: list[list[Any]] = []
+    seqs = 0
+    refused = False
+
+    def call_read(call: int, commands: list[WorkflowCommand]) -> None:
+        """Start the read of a reader's next page."""
+        nonlocal seqs
+        reader, after = calls[call], positions[call]
+        if reader.body_type is None:
+            # A read with no body type raises in the call, before any command.
+            outcomes[call].append("TypeError")
+            return
+        seqs += 1
+        reads[seqs] = _OpenRead(reader.stream, after, call)
+        streams[seqs] = reader.stream
+        idle = Duration()
+        idle.FromTimedelta(reader.wait or timedelta())
+        start = StartStreamRead(
+            seq=seqs,
+            stream=StreamRef(id=reader.stream, store="a"),
+            from_offset=_offset(after),
+            idle_timeout=idle,
+        )
+        commands.append(WorkflowCommand(start_stream_read=start))
+
+    def close(seq: int) -> WorkflowCommand:
+        return WorkflowCommand(close_stream_read=CloseStreamRead(seq=seq))
+
+    for step in range(rng.randrange(2, 7)):
+        # Core gives one job to a read, and none after its `CloseStreamRead`.
+        jobs: list[tuple[int, list[int], StreamReadEnd | None]] = []
+        for seq, read in reads.items():
+            if not read.cancelled and rng.random() < 0.6:
+                count = rng.randrange(4)
+                end = rng.choice(
+                    [None, None, None, StreamReadEnd(done=True), StreamReadEnd()]
+                )
+                if rng.random() < 0.15:
+                    not_found = StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND
+                    count, end = 0, StreamReadEnd(failed=core_failure(not_found))
+                if count or end:
+                    records = [read.after + 1 + at for at in range(count)]
+                    jobs.append((seq, records, end))
+        rng.shuffle(jobs)
+        waiting = sorted(read.call for read in reads.values() if not read.cancelled)
+        cancels = [call for call in waiting if rng.random() < 0.25]
+        starts: list[int] = []
+        for _ in range(rng.randrange(3)):
+            reader = _ReadCall(
+                stream=rng.choice(["s0", "s1"]),
+                start=rng.choice([0, 1, 2]),
+                wait=rng.choice([None, timedelta(seconds=5)]),
+                pages=rng.randrange(1, 4),
+                body_type=rng.choice([int, int, int, Any, Any, None]),
+            )
+            starts.append(len(calls))
+            calls.append(reader)
+            outcomes.append([])
+            positions.append(reader.start)
+        _ReadScript.steps.append((cancels, starts))
+
+        # The commands of the jobs, of the handler, and of the readers that go on
+        of_jobs: list[WorkflowCommand] = []
+        of_handler: list[WorkflowCommand] = []
+        of_readers: list[WorkflowCommand] = []
+        # The readers that got a job in this activation, in the order of the jobs
+        got: list[tuple[int, list[int], StreamReadEnd | None]] = []
+
+        def apply_jobs() -> None:
+            nonlocal refused
+            for seq, records, end in jobs:
+                read = reads.pop(seq)
+                # A cancelled reader already stopped its read, so its job is dropped.
+                if read.cancelled:
+                    continue
+                # The call takes one page, so it stops a read that has no end yet.
+                if not end:
+                    of_jobs.append(close(seq))
+                got.append((read.call, records, end))
+                # The job converts the page, so a body that isn't of the reader's type
+                # fails the Workflow Task, also if the reader is cancelled later.
+                bodies = [_body(read.stream, number) for number in records]
+                typed = calls[read.call].body_type is int
+                refused = refused or (typed and "text" in bodies)
+
+        def run_handler() -> None:
+            for call in starts:
+                call_read(call, of_handler)
+            for call in cancels:
+                outcomes[call].append("cancelled")
+                if any(job[0] == call for job in got):
+                    # A cancel wins over a job that came for the reader in this
+                    # activation. The job already stopped the read.
+                    got[:] = [job for job in got if job[0] != call]
+                    continue
+                for seq, read in reads.items():
+                    if read.call == call:
+                        read.cancelled = True
+                        of_handler.append(close(seq))
+
+        for part in (apply_jobs, run_handler) if flags else (run_handler, apply_jobs):
+            part()
+        for call, records, end in got:
+            reader = calls[call]
+            bodies = [_body(reader.stream, number) for number in records]
+            if end and end.HasField("failed"):
+                outcomes[call].append(StreamErrorReason.STREAM_ERROR_REASON_NOT_FOUND)
+                continue
+            done = bool(end and end.done)
+            positions[call] = records[-1] if records else positions[call]
+            outcomes[call].append((bodies, _offset(positions[call]), done))
+            if not done and len(outcomes[call]) < reader.pages:
+                call_read(call, of_readers)
+        commands = (
+            of_jobs + of_handler if flags else of_handler + of_jobs
+        ) + of_readers
+
+        signal = SignalWorkflow(signal_name="step", originating_event_id=step + 1)
+        activation = [WorkflowActivationJob(signal_workflow=signal)]
+        if refused and flags:
+            # The jobs come first here, so the handler of the Signal would never start.
+            activation = []
+        for seq, records, end in jobs:
+            job = ResolveStreamRead(
+                seq=seq,
+                records=[
+                    StreamRecord(
+                        offset=_offset(number),
+                        body=converter.to_payload(_body(streams[seq], number)),
+                    )
+                    for number in records
+                ],
+                end=end,
+            )
+            activation.append(WorkflowActivationJob(resolve_stream_read=job))
+        completion = await _activate(
+            instance, *activation, flags=flags, replaying=replaying
+        )
+        if refused:
+            assert completion.HasField("failed")
+            break
+        assert list(completion.successful.commands) == commands
+        assert [call.outcome for call in calls] == outcomes
+        # Each read leaves with its job. A cancelled read stays, since its job can
+        # still come in the activation of the cancel.
+        assert set(instance._streams._reads) == set(reads)
+
+    # A read gets one job, so a second one fails the activation as a job of an unknown
+    # seq does.
+    gone = [seq for seq in range(1, seqs + 1) if seq not in reads]
+    if gone and not refused:
+        second = ResolveStreamRead(seq=rng.choice(gone), end=StreamReadEnd(done=True))
+        again = WorkflowActivationJob(resolve_stream_read=second)
+        completion = await _activate(instance, again, flags=flags, replaying=replaying)
+        assert completion.HasField("failed")
+    # An eviction sends no command, also for the reads whose readers it cancels.
+    evict = WorkflowActivationJob(remove_from_cache=RemoveFromCache())
+    assert not (await _activate(instance, evict)).successful.commands

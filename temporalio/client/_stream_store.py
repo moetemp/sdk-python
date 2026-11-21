@@ -272,6 +272,12 @@ class StreamConfig:
       happen. A Workflow that needs its close awaits it, as ``async with`` does.
     - A call with no Store fails the Workflow Task, also when Workflow code catches
       the error.
+    - The ``max_records`` and ``max_bytes`` of a read have no effect. The Worker
+      sets the size of a page, with its ``stream_read_page_records`` and
+      ``stream_read_ahead_bytes``.
+    - A read of a Stream with no body type raises :exc:`TypeError` in the call, as
+      in client code, and a body that isn't of the Stream's type fails the
+      Workflow Task.
 
     .. warning::
         This API is experimental and subject to change.
