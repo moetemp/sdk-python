@@ -150,6 +150,7 @@ class Worker:
         nexus_task_poller_behavior: PollerBehavior | None = None,
         disable_payload_error_limit: bool = False,
         max_workflow_task_external_storage_concurrency: int = _DEFAULT_WORKFLOW_TASK_EXTERNAL_STORAGE_CONCURRENCY,
+        stream_read_max_wait: timedelta | None = None,
     ) -> None:
         """Create a worker to process workflows and/or activities.
 
@@ -349,6 +350,10 @@ class Worker:
                 Please report any issues you encounter with this setting or if you
                 feel the default should be changed.
                 WARNING: This setting is experimental.
+            stream_read_max_wait: Longest wait of one Store call of a Stream read
+                of Workflow code. A read that waits longer calls its Store again.
+                Defaults to 60 seconds.
+                WARNING: This setting is experimental.
 
         """
         config = WorkerConfig(
@@ -398,6 +403,7 @@ class Worker:
             nexus_task_poller_behavior=nexus_task_poller_behavior,
             disable_payload_error_limit=disable_payload_error_limit,
             max_workflow_task_external_storage_concurrency=max_workflow_task_external_storage_concurrency,
+            stream_read_max_wait=stream_read_max_wait,
         )
 
         plugins_from_client = cast(
@@ -648,6 +654,7 @@ class Worker:
         deduped_storage_driver_types = {
             driver.type() for driver in self._storage_drivers
         }
+        stream_read_max_wait = config.get("stream_read_max_wait")
 
         # Create bridge worker last. We have empirically observed that if it is
         # created before an error is raised from the activity worker
@@ -729,6 +736,18 @@ class Worker:
                     (name, _StoreCaller(functools.partial(self._stream_store, name)))
                     for name in sorted(_stream_store_names(client))
                 ],
+                stream_read_max_wait_millis=int(
+                    1000 * stream_read_max_wait.total_seconds()
+                )
+                if stream_read_max_wait is not None
+                else None,
+                stream_replay_as_workflow_fail=self._workflow_worker is not None
+                and self._workflow_worker.stream_replay_as_workflow_fail(),
+                stream_replay_as_workflow_fail_for_types=(
+                    self._workflow_worker.stream_replay_as_workflow_fail_for_types()
+                    if self._workflow_worker
+                    else set()
+                ),
             ),
         )
 
@@ -1088,6 +1107,7 @@ class WorkerConfig(TypedDict, total=False):
     nexus_task_poller_behavior: PollerBehavior | None
     disable_payload_error_limit: bool
     max_workflow_task_external_storage_concurrency: int
+    stream_read_max_wait: timedelta | None
 
 
 def _poller_behavior_to_bridge(
