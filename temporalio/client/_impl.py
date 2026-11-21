@@ -33,6 +33,8 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus
 import temporalio.nexus._operation_context
+import temporalio.nexus.system
+import temporalio.nexus.system._support
 from temporalio.activity import ActivityCancellationDetails
 from temporalio.converter import (
     ActivitySerializationContext,
@@ -41,6 +43,7 @@ from temporalio.converter import (
     StorageDriverWorkflowInfo,
     WorkflowSerializationContext,
 )
+from temporalio.nexus.system.stream_service import CreateStreamRequest
 from temporalio.service import (
     RPCError,
     RPCStatusCode,
@@ -125,6 +128,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_store import _STREAM_SERVICE, _activity_target, _call_store
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
 from ._workflow import (
     WorkflowExecutionAsyncIterator,
@@ -1565,6 +1569,11 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
+        if (
+            temporalio.nexus.system.is_system_endpoint(input.endpoint)
+            and input.service == _STREAM_SERVICE.name
+        ):
+            return await self._call_stream_store(input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
             service=input.service,
@@ -1647,6 +1656,50 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
             service=input.service,
             operation=input.operation,
         )
+
+    async def _call_stream_store(
+        self, input: StartNexusOperationInput
+    ) -> NexusOperationHandle[Any]:
+        """Call the Stream Store of a Stream operation, and return a handle that
+        has its result.
+        """
+        stream_config = self._client._config["stream_config"]
+        if stream_config is None:
+            raise ValueError(
+                "Client has no stream_config, which every Stream call requires."
+            )
+        request = input.arg
+        store = stream_config._store_for(request.ref, _activity_target())
+        if isinstance(request, CreateStreamRequest):
+            # The created Stream takes the ref of its request.
+            request.ref.store = store.name()
+        data_converter = self._client.data_converter
+        converters = (
+            data_converter.payload_converter,
+            data_converter.failure_converter,
+        )
+        response = await _call_store(
+            store,
+            stream_config._limits(),
+            data_converter.payload_codec,
+            input.operation,
+            temporalio.nexus.system._support.model_to_proto(request, *converters),
+            input.rpc_timeout,
+        )
+        # Each generated Stream call gives its result type.
+        result_type: Any = input.result_type
+        handle: NexusOperationHandle[Any] = NexusOperationHandle(
+            self._client,
+            input.id,
+            result_type=result_type,
+            endpoint=input.endpoint,
+            service=input.service,
+            operation=input.operation,
+        )
+        handle._known_outcome = temporalio.nexus.system._support.model_from_proto(
+            response, result_type, *converters
+        )
+        return handle
 
     async def describe_nexus_operation(
         self, input: DescribeNexusOperationInput
