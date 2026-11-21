@@ -5,7 +5,7 @@ use prost::Message;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -68,6 +68,9 @@ pub struct WorkerConfig {
     storage_drivers: HashSet<String>,
     disable_payload_error_limit: bool,
     stream_stores: Vec<(String, Py<PyAny>)>,
+    stream_read_max_wait_millis: Option<u64>,
+    stream_replay_as_workflow_fail: bool,
+    stream_replay_as_workflow_fail_for_types: HashSet<String>,
 }
 
 #[derive(FromPyObject)]
@@ -521,7 +524,11 @@ pub fn new_replay_worker<'a>(
     runtime_ref
         .runtime
         .assert_same_process("create replay worker")?;
-    let event_loop_task_locals = Arc::new(OnceLock::new());
+    // A replay Worker gets no `validate` call, and a replay reads its Python Stores on the
+    // loop that created it.
+    let event_loop_task_locals = Arc::new(OnceLock::from(
+        pyo3_async_runtimes::TaskLocals::with_running_loop(py)?.copy_context(py)?,
+    ));
     let config = convert_worker_config(config, event_loop_task_locals.clone())?;
     let (history_pusher, stream) = HistoryPusher::new(runtime_ref.runtime.clone());
     let worker = WorkerRef {
@@ -531,7 +538,7 @@ pub fn new_replay_worker<'a>(
                     PyValueError::new_err(format!("Failed creating replay worker: {err}"))
                 })?,
         )),
-        event_loop_task_locals: Default::default(),
+        event_loop_task_locals,
         runtime: runtime_ref.runtime.clone(),
     };
     PyTuple::new(
@@ -719,7 +726,7 @@ fn convert_worker_config(
     conf: WorkerConfig,
     task_locals: Arc<OnceLock<pyo3_async_runtimes::TaskLocals>>,
 ) -> PyResult<temporalio_sdk_core::WorkerConfig> {
-    let stream_runtimes =
+    let mut stream_runtimes =
         StreamRuntimes::new(conf.stream_stores.into_iter().map(|(name, caller)| {
             let store = PythonStore {
                 caller,
@@ -728,6 +735,25 @@ fn convert_worker_config(
             let runtime = StreamRuntime::new(Arc::new(store));
             (name, Arc::new(runtime))
         }));
+    if let Some(millis) = conf.stream_read_max_wait_millis {
+        stream_runtimes.settings.read_max_wait = Duration::from_millis(millis);
+    }
+    let mut failure_errors = HashSet::new();
+    if conf.nondeterminism_as_workflow_fail {
+        failure_errors.insert(WorkflowErrorType::Nondeterminism);
+    }
+    if conf.stream_replay_as_workflow_fail {
+        failure_errors.insert(WorkflowErrorType::StreamReplay);
+    }
+    let mut type_failure_errors = HashMap::<String, HashSet<WorkflowErrorType>>::new();
+    for workflow_type in conf.nondeterminism_as_workflow_fail_for_types {
+        let errors = type_failure_errors.entry(workflow_type).or_default();
+        errors.insert(WorkflowErrorType::Nondeterminism);
+    }
+    for workflow_type in conf.stream_replay_as_workflow_fail_for_types {
+        let errors = type_failure_errors.entry(workflow_type).or_default();
+        errors.insert(WorkflowErrorType::StreamReplay);
+    }
     let converted_tuner = convert_tuner_holder(conf.tuner, task_locals)?;
     let converted_versioning_strategy = convert_versioning_strategy(conf.versioning_strategy);
     temporalio_sdk_core::WorkerConfig::builder()
@@ -759,22 +785,8 @@ fn convert_worker_config(
         // auto-cancel-activity behavior of shutdown will not occur, so we
         // always set it even if 0.
         .graceful_shutdown_period(Duration::from_millis(conf.graceful_shutdown_period_millis))
-        .workflow_failure_errors(if conf.nondeterminism_as_workflow_fail {
-            HashSet::from([WorkflowErrorType::Nondeterminism])
-        } else {
-            HashSet::new()
-        })
-        .workflow_types_to_failure_errors(
-            conf.nondeterminism_as_workflow_fail_for_types
-                .iter()
-                .map(|s| {
-                    (
-                        s.to_owned(),
-                        HashSet::from([WorkflowErrorType::Nondeterminism]),
-                    )
-                })
-                .collect(),
-        )
+        .workflow_failure_errors(failure_errors)
+        .workflow_types_to_failure_errors(type_failure_errors)
         .maybe_nexus_task_poller_behavior(conf.nexus_task_poller_behavior.map(Into::into))
         .plugins(
             conf.plugins
