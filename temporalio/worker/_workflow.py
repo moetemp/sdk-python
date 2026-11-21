@@ -27,6 +27,7 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.workflow
 from temporalio.bridge.worker import PollShutdownError
+from temporalio.client._stream_store import StreamConfig
 from temporalio.converter import StorageDriverStoreContext, StorageDriverWorkflowInfo
 from temporalio.worker.workflow_sandbox._runner import SandboxedWorkflowRunner
 
@@ -125,6 +126,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
         disable_safe_eviction: bool,
         should_enforce_versioning_behavior: bool,
         assert_local_activity_valid: Callable[[str], None],
+        stream_config: Callable[[], StreamConfig | None],
         encode_headers: bool,
         max_workflow_task_external_storage_concurrency: int,
         default_workflow_logic_flags: frozenset[_WorkflowLogicFlag] | None = None,
@@ -184,6 +186,7 @@ class _WorkflowWorker:  # type:ignore[reportUnusedClass]
             **_WorkflowExternFunctions(  # type: ignore
                 __temporal_get_metric_meter=lambda: metric_meter,
                 __temporal_assert_local_activity_valid=assert_local_activity_valid,
+                __temporal_stream_config=stream_config,
             )
         )
 
