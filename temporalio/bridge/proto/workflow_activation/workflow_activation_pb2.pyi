@@ -23,6 +23,7 @@ import temporalio.api.enums.v1.failed_cause_pb2
 import temporalio.api.enums.v1.workflow_pb2
 import temporalio.api.failure.v1.message_pb2
 import temporalio.api.nexus.v1.message_pb2
+import temporalio.api.stream.v1.message_pb2
 import temporalio.api.update.v1.message_pb2
 import temporalio.bridge.proto.activity_result.activity_result_pb2
 import temporalio.bridge.proto.child_workflow.child_workflow_pb2
@@ -49,7 +50,7 @@ class WorkflowActivation(google.protobuf.message.Message):
     3. random-seed-updates
     4. signals/updates
     5. all others
-    6. local activity resolutions
+    6. local activity resolutions, then Stream results
     7. queries
     8. evictions
 
@@ -65,6 +66,9 @@ class WorkflowActivation(google.protobuf.message.Message):
      in that same activation (prime example: cancelling not-wait-for-cancel activities). So, we do
      this to ensure the LA resolution happens after that cancel (or whatever else it may be) as it
      normally would have when executing.
+    * The results of Stream calls go after the local activity resolutions for the same reason, the
+     appends by `seq`, then the closes by `seq`, and then the pages of reads by `seq`. A replay that
+     gives the results of several activations in one keeps the order of those activations.
     * Queries always go last (and, in fact, always come in their own activation)
     * Evictions also always come in their own activation
 
@@ -76,6 +80,8 @@ class WorkflowActivation(google.protobuf.message.Message):
     execution works this way, then determinism is only impacted by the order routines are driven in
     (which must be stable based on lang implementation or convention), rather than the order jobs are
     processed.
+
+    Workflow tasks with no activation jobs are handled internally by Core, without activating lang.
 
     ## Evictions
 
@@ -244,6 +250,9 @@ class WorkflowActivationJob(google.protobuf.message.Message):
     DO_UPDATE_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_START_FIELD_NUMBER: builtins.int
     RESOLVE_NEXUS_OPERATION_FIELD_NUMBER: builtins.int
+    RESOLVE_STREAM_READ_FIELD_NUMBER: builtins.int
+    RESOLVE_STREAM_APPEND_FIELD_NUMBER: builtins.int
+    RESOLVE_STREAM_CLOSE_FIELD_NUMBER: builtins.int
     REMOVE_FROM_CACHE_FIELD_NUMBER: builtins.int
     @property
     def initialize_workflow(self) -> global___InitializeWorkflow:
@@ -319,6 +328,18 @@ class WorkflowActivationJob(google.protobuf.message.Message):
         """A nexus operation resolved."""
 
     @property
+    def resolve_stream_read(self) -> global___ResolveStreamRead:
+        """A read of a Stream returned Records, ended, or both."""
+
+    @property
+    def resolve_stream_append(self) -> global___ResolveStreamAppend:
+        """An append to a Stream finished."""
+
+    @property
+    def resolve_stream_close(self) -> global___ResolveStreamClose:
+        """A close of a Stream finished."""
+
+    @property
     def remove_from_cache(self) -> global___RemoveFromCache:
         """Remove the workflow identified by the [WorkflowActivation] containing this job from the
         cache after performing the activation. It is guaranteed that this will be the only job
@@ -347,6 +368,9 @@ class WorkflowActivationJob(google.protobuf.message.Message):
         do_update: global___DoUpdate | None = ...,
         resolve_nexus_operation_start: global___ResolveNexusOperationStart | None = ...,
         resolve_nexus_operation: global___ResolveNexusOperation | None = ...,
+        resolve_stream_read: global___ResolveStreamRead | None = ...,
+        resolve_stream_append: global___ResolveStreamAppend | None = ...,
+        resolve_stream_close: global___ResolveStreamClose | None = ...,
         remove_from_cache: global___RemoveFromCache | None = ...,
     ) -> None: ...
     def HasField(
@@ -380,6 +404,12 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
+            "resolve_stream_append",
+            b"resolve_stream_append",
+            "resolve_stream_close",
+            b"resolve_stream_close",
+            "resolve_stream_read",
+            b"resolve_stream_read",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
@@ -419,6 +449,12 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             b"resolve_request_cancel_external_workflow",
             "resolve_signal_external_workflow",
             b"resolve_signal_external_workflow",
+            "resolve_stream_append",
+            b"resolve_stream_append",
+            "resolve_stream_close",
+            b"resolve_stream_close",
+            "resolve_stream_read",
+            b"resolve_stream_read",
             "signal_workflow",
             b"signal_workflow",
             "update_random_seed",
@@ -446,6 +482,9 @@ class WorkflowActivationJob(google.protobuf.message.Message):
             "do_update",
             "resolve_nexus_operation_start",
             "resolve_nexus_operation",
+            "resolve_stream_read",
+            "resolve_stream_append",
+            "resolve_stream_close",
             "remove_from_cache",
         ]
         | None
@@ -1639,3 +1678,184 @@ class RemoveFromCache(google.protobuf.message.Message):
     ) -> None: ...
 
 global___RemoveFromCache = RemoveFromCache
+
+@typing.final
+class ResolveStreamRead(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    RECORDS_FIELD_NUMBER: builtins.int
+    END_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    """The `seq` of the `StartStreamRead`."""
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamRecord
+    ]:
+        """The Records in Stream order. It's empty in a job that only ends the read."""
+
+    @property
+    def end(self) -> global___StreamReadEnd:
+        """Set in the last job of the read."""
+
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        records: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamRecord
+        ]
+        | None = ...,
+        end: global___StreamReadEnd | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["end", b"end"]) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal["end", b"end", "records", b"records", "seq", b"seq"],
+    ) -> None: ...
+
+global___ResolveStreamRead = ResolveStreamRead
+
+@typing.final
+class StreamReadEnd(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    DONE_FIELD_NUMBER: builtins.int
+    FAILED_FIELD_NUMBER: builtins.int
+    done: builtins.bool
+    """True if the Stream is closed and the read returned its last Record. False if the read ended
+    because no Record came within its idle timeout.
+    """
+    @property
+    def failed(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Set if the read failed. It has the parts of the `failed` of a `ResolveStreamAppend`."""
+
+    def __init__(
+        self,
+        *,
+        done: builtins.bool = ...,
+        failed: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["failed", b"failed"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing.Literal["done", b"done", "failed", b"failed"]
+    ) -> None: ...
+
+global___StreamReadEnd = StreamReadEnd
+
+@typing.final
+class ResolveStreamAppend(google.protobuf.message.Message):
+    """The result of an `AppendToStream`. Core gives each result in the next activation after it comes,
+    so each result can cost an activation. A replay gives a result in the activation in which the
+    first run gave it only if History has the flag that turns workflow task chunking off. Without
+    that flag it can give the results of several activations in one, as for a Local Activity.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    APPENDED_FIELD_NUMBER: builtins.int
+    FAILED_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    """The `seq` of the `AppendToStream`."""
+    @property
+    def appended(self) -> global___StreamAppended: ...
+    @property
+    def failed(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """The failure of the append, with these parts:
+        * an `ApplicationFailureInfo` whose type is `stream_` and the reason of the Stream error
+          in snake case, such as `stream_closed`, and whose `non_retryable` is set
+        * in its details, one `binary/protobuf` payload of a
+          `temporalio.api.stream.v1.StreamErrorDetails`
+        * a message of at most 4096 bytes
+        """
+
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        appended: global___StreamAppended | None = ...,
+        failed: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing.Literal[
+            "appended", b"appended", "failed", b"failed", "status", b"status"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "appended",
+            b"appended",
+            "failed",
+            b"failed",
+            "seq",
+            b"seq",
+            "status",
+            b"status",
+        ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing.Literal["status", b"status"]
+    ) -> typing.Literal["appended", "failed"] | None: ...
+
+global___ResolveStreamAppend = ResolveStreamAppend
+
+@typing.final
+class StreamAppended(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    FIRST_OFFSET_FIELD_NUMBER: builtins.int
+    LAST_OFFSET_FIELD_NUMBER: builtins.int
+    first_offset: builtins.bytes
+    last_offset: builtins.bytes
+    def __init__(
+        self,
+        *,
+        first_offset: builtins.bytes = ...,
+        last_offset: builtins.bytes = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "first_offset", b"first_offset", "last_offset", b"last_offset"
+        ],
+    ) -> None: ...
+
+global___StreamAppended = StreamAppended
+
+@typing.final
+class ResolveStreamClose(google.protobuf.message.Message):
+    """The result of a `CloseStream`. What `ResolveStreamAppend` says of its activation holds for it."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    FAILED_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    """The `seq` of the `CloseStream`."""
+    @property
+    def failed(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Unset if the Stream is closed, even if it was already closed before. If set, it has the parts
+        of the `failed` of a `ResolveStreamAppend`.
+        """
+
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        failed: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["failed", b"failed"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self, field_name: typing.Literal["failed", b"failed", "seq", b"seq"]
+    ) -> None: ...
+
+global___ResolveStreamClose = ResolveStreamClose

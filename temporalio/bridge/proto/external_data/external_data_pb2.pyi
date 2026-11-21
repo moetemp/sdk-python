@@ -4,12 +4,17 @@ isort:skip_file
 """
 
 import builtins
+import collections.abc
 import typing
 
 import google.protobuf.descriptor
 import google.protobuf.duration_pb2
+import google.protobuf.internal.containers
 import google.protobuf.message
 import google.protobuf.timestamp_pb2
+
+import temporalio.api.failure.v1.message_pb2
+import temporalio.api.stream.v1.message_pb2
 
 DESCRIPTOR: google.protobuf.descriptor.FileDescriptor
 
@@ -139,3 +144,336 @@ class PatchedMarkerData(google.protobuf.message.Message):
     ) -> None: ...
 
 global___PatchedMarkerData = PatchedMarkerData
+
+@typing.final
+class StreamMarkerData(google.protobuf.message.Message):
+    """The data of a `core_stream` marker, in its `data` detail as `binary/protobuf`. Core records one
+    in each Workflow Task in which Workflow code got a Stream result or asked for a close.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    STREAMS_FIELD_NUMBER: builtins.int
+    CLOSE_INTENTS_FIELD_NUMBER: builtins.int
+    APPENDS_FIELD_NUMBER: builtins.int
+    CLOSES_FIELD_NUMBER: builtins.int
+    READS_FIELD_NUMBER: builtins.int
+    @property
+    def streams(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamRef
+    ]:
+        """Each Stream that the entries refer to, once. An entry refers to a Stream by its index here."""
+
+    @property
+    def close_intents(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___StreamCloseIntent
+    ]: ...
+    @property
+    def appends(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___StreamAppendResult
+    ]: ...
+    @property
+    def closes(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___StreamCloseResult
+    ]: ...
+    @property
+    def reads(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        global___StreamReadEntry
+    ]: ...
+    def __init__(
+        self,
+        *,
+        streams: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamRef
+        ]
+        | None = ...,
+        close_intents: collections.abc.Iterable[global___StreamCloseIntent]
+        | None = ...,
+        appends: collections.abc.Iterable[global___StreamAppendResult] | None = ...,
+        closes: collections.abc.Iterable[global___StreamCloseResult] | None = ...,
+        reads: collections.abc.Iterable[global___StreamReadEntry] | None = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "appends",
+            b"appends",
+            "close_intents",
+            b"close_intents",
+            "closes",
+            b"closes",
+            "reads",
+            b"reads",
+            "streams",
+            b"streams",
+        ],
+    ) -> None: ...
+
+global___StreamMarkerData = StreamMarkerData
+
+@typing.final
+class StreamCloseIntent(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    STREAM_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    stream: builtins.int
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        stream: builtins.int = ...,
+    ) -> None: ...
+    def ClearField(
+        self, field_name: typing.Literal["seq", b"seq", "stream", b"stream"]
+    ) -> None: ...
+
+global___StreamCloseIntent = StreamCloseIntent
+
+@typing.final
+class StreamAppendResult(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    STREAM_FIELD_NUMBER: builtins.int
+    ACTIVATION_FIELD_NUMBER: builtins.int
+    APPENDED_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    stream: builtins.int
+    activation: builtins.int
+    """The index of the activation, within its Workflow Task, in which Workflow code got the result."""
+    @property
+    def appended(self) -> global___StreamAppendOffsets: ...
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        stream: builtins.int = ...,
+        activation: builtins.int = ...,
+        appended: global___StreamAppendOffsets | None = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self,
+        field_name: typing.Literal[
+            "appended", b"appended", "failure", b"failure", "result", b"result"
+        ],
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "activation",
+            b"activation",
+            "appended",
+            b"appended",
+            "failure",
+            b"failure",
+            "result",
+            b"result",
+            "seq",
+            b"seq",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+    def WhichOneof(
+        self, oneof_group: typing.Literal["result", b"result"]
+    ) -> typing.Literal["appended", "failure"] | None: ...
+
+global___StreamAppendResult = StreamAppendResult
+
+@typing.final
+class StreamAppendOffsets(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    FIRST_OFFSET_FIELD_NUMBER: builtins.int
+    LAST_OFFSET_FIELD_NUMBER: builtins.int
+    first_offset: builtins.bytes
+    last_offset: builtins.bytes
+    def __init__(
+        self,
+        *,
+        first_offset: builtins.bytes = ...,
+        last_offset: builtins.bytes = ...,
+    ) -> None: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "first_offset", b"first_offset", "last_offset", b"last_offset"
+        ],
+    ) -> None: ...
+
+global___StreamAppendOffsets = StreamAppendOffsets
+
+@typing.final
+class StreamCloseResult(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    ACTIVATION_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    activation: builtins.int
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure:
+        """Unset if the Stream is closed."""
+
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        activation: builtins.int = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["failure", b"failure"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "activation", b"activation", "failure", b"failure", "seq", b"seq"
+        ],
+    ) -> None: ...
+
+global___StreamCloseResult = StreamCloseResult
+
+@typing.final
+class StreamReadEntry(google.protobuf.message.Message):
+    """What one read gave Workflow code in this task."""
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    SEQ_FIELD_NUMBER: builtins.int
+    STREAM_FIELD_NUMBER: builtins.int
+    AFTER_OFFSET_FIELD_NUMBER: builtins.int
+    PAGE_RECORDS_FIELD_NUMBER: builtins.int
+    PAGE_ACTIVATIONS_FIELD_NUMBER: builtins.int
+    DIGEST_FIELD_NUMBER: builtins.int
+    RECORDS_FIELD_NUMBER: builtins.int
+    END_FIELD_NUMBER: builtins.int
+    RECORD_BYTES_FIELD_NUMBER: builtins.int
+    seq: builtins.int
+    stream: builtins.int
+    after_offset: builtins.bytes
+    """The offset of the Record before this task's first one, which is `from_offset` in the read's
+    first task.
+    """
+    digest: builtins.bytes
+    """The first 16 bytes of the SHA-256 of this task's Records. It's empty when `records` is set."""
+    record_bytes: builtins.int
+    """The bytes of the Records that the pages of this entry gave Workflow code in this task, each as
+    a page of a read encodes it, with the tag and the length of its field. That is the measure of
+    the `max_bytes` of a read. It's set when `digest` is, so a replay knows how much it reads.
+    """
+    @property
+    def page_records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.int]:
+        """The number of Records in each page, and the activation that got the page. Both lists have the
+        same length.
+        """
+
+    @property
+    def page_activations(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[
+        builtins.int
+    ]: ...
+    @property
+    def records(
+        self,
+    ) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[
+        temporalio.api.stream.v1.message_pb2.StreamRecord
+    ]:
+        """This task's Records, for a read with `records_in_history`."""
+
+    @property
+    def end(self) -> global___StreamReadEnded:
+        """Set in the task in which Workflow code got the end of the read."""
+
+    def __init__(
+        self,
+        *,
+        seq: builtins.int = ...,
+        stream: builtins.int = ...,
+        after_offset: builtins.bytes = ...,
+        page_records: collections.abc.Iterable[builtins.int] | None = ...,
+        page_activations: collections.abc.Iterable[builtins.int] | None = ...,
+        digest: builtins.bytes = ...,
+        records: collections.abc.Iterable[
+            temporalio.api.stream.v1.message_pb2.StreamRecord
+        ]
+        | None = ...,
+        end: global___StreamReadEnded | None = ...,
+        record_bytes: builtins.int = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["end", b"end"]) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "after_offset",
+            b"after_offset",
+            "digest",
+            b"digest",
+            "end",
+            b"end",
+            "page_activations",
+            b"page_activations",
+            "page_records",
+            b"page_records",
+            "record_bytes",
+            b"record_bytes",
+            "records",
+            b"records",
+            "seq",
+            b"seq",
+            "stream",
+            b"stream",
+        ],
+    ) -> None: ...
+
+global___StreamReadEntry = StreamReadEntry
+
+@typing.final
+class StreamReadEnded(google.protobuf.message.Message):
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    ACTIVATION_FIELD_NUMBER: builtins.int
+    DONE_FIELD_NUMBER: builtins.int
+    FAILURE_FIELD_NUMBER: builtins.int
+    activation: builtins.int
+    done: builtins.bool
+    @property
+    def failure(self) -> temporalio.api.failure.v1.message_pb2.Failure: ...
+    def __init__(
+        self,
+        *,
+        activation: builtins.int = ...,
+        done: builtins.bool = ...,
+        failure: temporalio.api.failure.v1.message_pb2.Failure | None = ...,
+    ) -> None: ...
+    def HasField(
+        self, field_name: typing.Literal["failure", b"failure"]
+    ) -> builtins.bool: ...
+    def ClearField(
+        self,
+        field_name: typing.Literal[
+            "activation", b"activation", "done", b"done", "failure", b"failure"
+        ],
+    ) -> None: ...
+
+global___StreamReadEnded = StreamReadEnded
