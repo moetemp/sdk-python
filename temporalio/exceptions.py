@@ -1,13 +1,17 @@
 """Common Temporal exceptions."""
 
 import asyncio
+import functools
 from collections.abc import Sequence
 from datetime import timedelta
 from enum import IntEnum
 from typing import Any
 
+import google.protobuf.json_format
+
 import temporalio.api.enums.v1
 import temporalio.api.failure.v1
+import temporalio.api.stream.v1
 
 
 class TemporalError(Exception):
@@ -472,6 +476,84 @@ class NexusOperationError(FailureError):
     def operation_token(self) -> str:
         """The operation token returned by the failed operation."""
         return self._operation_token
+
+
+class StreamError(ApplicationError):
+    """Error raised when a Stream call fails.
+
+    Client, Activity and Workflow code all get this class for a failed Stream
+    call, with no other error around it, and :py:attr:`reason` says why the call
+    failed. A call that fails with ``STREAM_ERROR_REASON_STORE_UNAVAILABLE`` may
+    succeed on another try, so it's the only reason that isn't ``non_retryable``.
+
+    .. warning::
+        This API is experimental and subject to change.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: temporalio.api.enums.v1.StreamErrorReason.ValueType,
+    ) -> None:
+        """Initialize a Stream error."""
+        reasons = temporalio.api.enums.v1.StreamErrorReason
+        super().__init__(
+            message,
+            temporalio.api.stream.v1.StreamErrorDetails(reason=reason),
+            # The form of the type in a failure that Core builds
+            type="stream_"
+            + reasons.Name(reason).removeprefix("STREAM_ERROR_REASON_").lower(),
+            non_retryable=reason != reasons.STREAM_ERROR_REASON_STORE_UNAVAILABLE,
+        )
+        self._reason = reason
+
+    @property
+    def reason(self) -> temporalio.api.enums.v1.StreamErrorReason.ValueType:
+        """Why the Stream call failed."""
+        return self._reason
+
+    def __reduce__(self) -> Any:
+        """Return the parts that ``copy`` and ``pickle`` build the error from."""
+        # The default calls the class with `args` alone, which has no reason.
+        _, *rest = tuple(super().__reduce__())
+        return functools.partial(type(self), reason=self._reason), *rest
+
+    @classmethod
+    def _from_failure(
+        cls, failure: temporalio.api.failure.v1.Failure
+    ) -> "StreamError | None":
+        """Return the Stream error of a failure, or ``None`` if it isn't one.
+
+        The failure of a Stream call has a
+        ``temporal.api.stream.v1.StreamErrorDetails`` message in its details. A
+        reason that this SDK doesn't know becomes
+        ``STREAM_ERROR_REASON_UNSPECIFIED``.
+        """
+        reasons = temporalio.api.enums.v1.StreamErrorReason
+        details = temporalio.api.stream.v1.StreamErrorDetails()
+        for payload in failure.application_failure_info.details.payloads:
+            if (
+                payload.metadata.get("messageType")
+                != details.DESCRIPTOR.full_name.encode()
+            ):
+                continue
+            # Core writes the details as binary, and the default converter as JSON.
+            if payload.metadata.get("encoding") == b"json/protobuf":
+                try:
+                    google.protobuf.json_format.Parse(payload.data, details)
+                except google.protobuf.json_format.ParseError:
+                    # The JSON has a reason by a name that this SDK doesn't know.
+                    pass
+            else:
+                details.ParseFromString(payload.data)
+            reason = details.reason
+            if reason not in reasons.values():
+                reason = reasons.STREAM_ERROR_REASON_UNSPECIFIED
+            error = cls(failure.message, reason=reason)
+            error._failure = failure
+            return error
+        return None
 
 
 def is_cancelled_exception(exception: BaseException) -> bool:
