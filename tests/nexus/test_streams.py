@@ -24,9 +24,8 @@ import temporalio.client
 import temporalio.converter
 import temporalio.nexus.system
 from temporalio.activity import WorkflowTaskAttempt
-from temporalio.api.common.v1 import Payload, Payloads
 from temporalio.api.enums.v1 import StreamErrorReason, StreamIdConflictPolicy
-from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
+from temporalio.api.failure.v1 import Failure
 from temporalio.api.stream.v1 import (
     AppendRecord,
     ClientProducer,
@@ -57,6 +56,7 @@ from temporalio.testing import ActivityEnvironment
 from tests.helpers.streams import (
     FaultStore,
     Hold,
+    core_failure,
     failure_note,
     run_with_virtual_clock,
 )
@@ -323,24 +323,7 @@ async def test_a_stream_error_keeps_its_reason_on_every_path() -> None:
             raised, converter.payload_converter, failure
         )
         # From Core, which builds the failure of a Stream job itself.
-        from_core = Failure(
-            message=message,
-            application_failure_info=ApplicationFailureInfo(
-                type=token,
-                non_retryable=reason != _UNAVAILABLE,
-                details=Payloads(
-                    payloads=[
-                        Payload(
-                            metadata={
-                                "encoding": b"binary/protobuf",
-                                "messageType": details.DESCRIPTOR.full_name.encode(),
-                            },
-                            data=details.SerializeToString(),
-                        )
-                    ]
-                ),
-            ),
-        )
+        from_core = core_failure(number, message)
         for form in (failure, from_core):
             error = StreamError._from_failure(form)
             assert error is not None, number
