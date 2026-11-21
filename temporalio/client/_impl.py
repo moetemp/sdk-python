@@ -33,6 +33,7 @@ import temporalio.converter._serialization_context
 import temporalio.exceptions
 import temporalio.nexus
 import temporalio.nexus._operation_context
+import temporalio.nexus.system
 from temporalio.activity import ActivityCancellationDetails
 from temporalio.converter import (
     ActivitySerializationContext,
@@ -125,6 +126,7 @@ from ._schedule import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from ._stream_store import _STREAM_SERVICE, _call_stream_store
 from ._worker_versioning import WorkerBuildIdVersionSets, WorkerTaskReachability
 from ._workflow import (
     WorkflowExecutionAsyncIterator,
@@ -1565,6 +1567,11 @@ class _ClientImpl(OutboundInterceptor):  # pyright: ignore[reportUnusedClass]
         self, input: StartNexusOperationInput
     ) -> NexusOperationHandle[Any]:
         """Start a nexus operation and return a handle to it."""
+        if (
+            temporalio.nexus.system.is_system_endpoint(input.endpoint)
+            and input.service == _STREAM_SERVICE.name
+        ):
+            return await _call_stream_store(self._client, input)
         nexus_context = temporalio.converter.NexusSerializationContext(
             endpoint=input.endpoint,
             service=input.service,
