@@ -19,14 +19,16 @@ use temporalio_sdk_core::replay::{HistoryForReplay, ReplayWorkerInput};
 use temporalio_sdk_core::{
     PollError, SlotInfo, SlotInfoTrait, SlotKind, SlotKindType, SlotMarkUsedContext,
     SlotReleaseContext, SlotReservationContext, SlotSupplier as SlotSupplierTrait,
-    SlotSupplierPermit, WorkflowErrorType,
+    SlotSupplierPermit, StreamRuntimes, WorkflowErrorType,
 };
+use temporalio_streams::StreamRuntime;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 
 use crate::client;
 use crate::runtime;
+use crate::streams::{store_limits, PythonStore};
 
 pyo3::create_exception!(temporal_sdk_bridge, PollShutdownError, PyException);
 
@@ -65,6 +67,8 @@ pub struct WorkerConfig {
     plugins: Vec<(String, String)>,
     storage_drivers: HashSet<String>,
     disable_payload_error_limit: bool,
+    stream_limits: Option<(usize, usize, usize)>,
+    stream_stores: Vec<(String, Py<PyAny>)>,
 }
 
 #[derive(FromPyObject)]
@@ -716,6 +720,16 @@ fn convert_worker_config(
     conf: WorkerConfig,
     task_locals: Arc<OnceLock<pyo3_async_runtimes::TaskLocals>>,
 ) -> PyResult<temporalio_sdk_core::WorkerConfig> {
+    let limits = (conf.stream_limits.map(store_limits).transpose()?).unwrap_or_default();
+    let stream_runtimes =
+        StreamRuntimes::new(conf.stream_stores.into_iter().map(|(name, caller)| {
+            let store = PythonStore {
+                caller,
+                event_loop_task_locals: task_locals.clone(),
+            };
+            let runtime = StreamRuntime::new(Arc::new(store), limits);
+            (name, Arc::new(runtime))
+        }));
     let converted_tuner = convert_tuner_holder(conf.tuner, task_locals)?;
     let converted_versioning_strategy = convert_versioning_strategy(conf.versioning_strategy);
     temporalio_sdk_core::WorkerConfig::builder()
@@ -777,6 +791,7 @@ fn convert_worker_config(
                 .collect::<HashSet<_>>(),
         )
         .disable_payload_error_limit(conf.disable_payload_error_limit)
+        .stream_runtimes(stream_runtimes)
         .build()
         .map_err(|err| PyValueError::new_err(format!("Invalid worker config: {err}")))
 }
