@@ -4,11 +4,12 @@ import dataclasses
 import inspect
 import ipaddress
 import logging
+import random
 import sys
 import traceback
 import typing
 from collections import deque
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum, IntEnum, StrEnum
@@ -455,6 +456,32 @@ def test_temporal_transfer_type_payload_converter_with_generic_value(
     assert converter.from_payload(payload, type_hint) == value
 
 
+@pytest.mark.parametrize(
+    ("value", "type_hint"),
+    [
+        (TemporalTransferTypeValue("workflow-id"), TemporalTransferTypeValue | None),
+        (None, TemporalTransferTypeValue | None),
+        (
+            TemporalTransferTypeValueWithoutHint("workflow-id"),
+            TemporalTransferTypeValueWithoutHint | None,
+        ),
+        (
+            TemporalTransferTypeGenericValue(123),
+            TemporalTransferTypeGenericValue[int] | None,
+        ),
+        (None, TemporalTransferTypeGenericValue[int] | None),
+    ],
+)
+def test_temporal_transfer_type_payload_converter_with_optional_hint(
+    value: Any, type_hint: Any
+):
+    converter = DataConverter.default.payload_converter
+
+    payload = converter.to_payload(value)
+
+    assert converter.from_payload(payload, type_hint) == value
+
+
 def test_transfer_type_convertible_rejects_existing_converter():
     with pytest.raises(TypeError, match="already has a transfer type converter"):
         transfer_type_convertible(TemporalTransferTypeValueConverter)(
@@ -564,6 +591,14 @@ class InitFalseIntDataClass:
     bar: int = dataclasses.field(default=0, init=False)
 
 
+@dataclass
+class GenericDataClass(Generic[T]):
+    value: T
+    items: list[T] = dataclasses.field(default_factory=list)
+    nested: GenericDataClass[T] | None = None
+    maybe: T | None = None
+
+
 class MyTypedDict(TypedDict):
     foo: str
     bar: MyDataClass
@@ -603,6 +638,62 @@ def test_json_nested_frozenset_round_trip():
     payload = converter.to_payload(value)
     assert payload is not None
     assert converter.from_payload(payload, set[frozenset[int]]) == value
+
+
+def test_json_generic_dataclass_round_trip():
+    converter = JSONPlainPayloadConverter()
+    # mypy takes a type argument from a variable only on a value of type Any
+    generic_type: Any = GenericDataClass
+    # Each type argument, with a function that makes a value of it
+    arguments: list[tuple[Any, Callable[[random.Random], Any]]] = [
+        (int, lambda rng: rng.randrange(100)),
+        (str, lambda rng: f"text {rng.randrange(100)}"),
+        (list[int], lambda rng: [rng.randrange(100) for _ in range(rng.randrange(3))]),
+        (
+            MyDataClass,
+            lambda rng: MyDataClass("foo", rng.randrange(100), SerializableEnum.FOO),
+        ),
+        (
+            GenericDataClass[str],
+            lambda rng: GenericDataClass(f"text {rng.randrange(100)}"),
+        ),
+    ]
+
+    def generic(
+        rng: random.Random, make: Callable[[random.Random], Any], depth: int
+    ) -> GenericDataClass[Any]:
+        return GenericDataClass(
+            value=make(rng),
+            items=[make(rng) for _ in range(rng.randrange(3))],
+            nested=generic(rng, make, depth - 1)
+            if depth and rng.random() < 0.7
+            else None,
+            maybe=make(rng) if rng.random() < 0.5 else None,
+        )
+
+    for seed in range(200):
+        rng = random.Random(seed)
+        argument, make = rng.choice(arguments)
+        value = generic(rng, make, 2)
+        payload = converter.to_payload(value)
+        assert payload
+        decoded = converter.from_payload(payload, generic_type[argument])
+        assert decoded == value, f"seed {seed}"
+        assert decoded.__orig_class__ == generic_type[argument], f"seed {seed}"
+
+        # A value of another type argument fails or converts as it does for a field
+        # of that type in a plain dataclass.
+        other, _ = rng.choice(arguments)
+        plain = dataclasses.make_dataclass("Plain", [("value", other)])
+        payload = converter.to_payload({"value": make(rng)})
+        assert payload
+        outcomes: list[Any] = []
+        for hint in (generic_type[other], plain):
+            try:
+                outcomes.append(converter.from_payload(payload, hint).value)
+            except Exception as err:
+                outcomes.append(type(err))
+        assert outcomes[0] == outcomes[1], f"seed {seed}"
 
 
 def test_json_type_hints():
