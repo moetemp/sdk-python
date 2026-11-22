@@ -78,7 +78,7 @@ class TransferTypeConverter(Generic[ValueT, TransferTypeT], ABC):
         """Convert a transfer type value to its user-facing value.
 
         ``type_hint`` is the requested user-facing type, including concrete
-        generic arguments.
+        generic arguments. For a hint such as ``T | None`` it is ``T``.
 
         .. warning::
             This API is experimental and subject to change.
@@ -580,6 +580,16 @@ class BinaryProtoPayloadConverter(EncodingPayloadConverter):
             raise RuntimeError("Failed parsing") from err
 
 
+def _non_none_arg(hint: Any) -> Any:
+    """Return ``X`` for the hint ``X | None``, and the hint itself for any other."""
+    origin = typing.get_origin(hint)
+    if origin is typing.Union or origin is UnionType:  # type:ignore[reportDeprecated]
+        args = typing.get_args(hint)
+        if len(args) == 2 and type(None) in args:
+            return args[0] if args[1] is type(None) else args[1]
+    return hint
+
+
 class _TemporalTransferTypePayloadConverter(PayloadConverter, WithSerializationContext):
     """Payload converter wrapper for registered Temporal transfer type converters.
 
@@ -587,7 +597,8 @@ class _TemporalTransferTypePayloadConverter(PayloadConverter, WithSerializationC
     transfer type value, then encoded by the wrapped payload converter. When
     decoding to a type with a registered transfer type converter, the wrapped
     converter first decodes the payload to the transfer type value and this wrapper
-    constructs the requested user-facing type from it.
+    constructs the requested user-facing type from it. A hint that is such a type
+    or ``None`` decodes the same way, and a null payload gives ``None``.
     """
 
     _inner_payload_converter: PayloadConverter
@@ -623,21 +634,34 @@ class _TemporalTransferTypePayloadConverter(PayloadConverter, WithSerializationC
         """See base class."""
         if type_hints is None:
             return self._inner_payload_converter.from_payloads(payloads, None)
+        # A hint that is one type or None takes the converter of that type.
+        value_hints = [_non_none_arg(type_hint) for type_hint in type_hints]
         converters = [
-            _get_transfer_type_converter(type_hint) for type_hint in type_hints
+            _get_transfer_type_converter(value_hint) for value_hint in value_hints
         ]
-        inner_type_hints = [
-            converter.transfer_type if converter is not None else type_hint
-            for converter, type_hint in zip(converters, type_hints)
-        ]
+        inner_type_hints: list[Any] = []
+        for converter, value_hint, type_hint in zip(
+            converters, value_hints, type_hints
+        ):
+            if converter is None:
+                inner_type_hints.append(type_hint)
+            elif value_hint is type_hint or converter.transfer_type is None:
+                inner_type_hints.append(converter.transfer_type)
+            else:
+                # A transfer type can be a value with no `|`, such as a string.
+                inner_type_hints.append(
+                    typing.Optional[converter.transfer_type]  # type:ignore[reportDeprecated]
+                )
         values = self._inner_payload_converter.from_payloads(
             payloads, typing.cast("list[type]", inner_type_hints)
         )
         return [
-            converter.from_transfer_type(value, type_hint)
-            if converter is not None
-            else value
-            for value, converter, type_hint in zip(values, converters, type_hints)
+            value
+            if converter is None or (value is None and value_hint is not type_hint)
+            else converter.from_transfer_type(value, value_hint)
+            for value, converter, value_hint, type_hint in zip(
+                values, converters, value_hints, type_hints
+            )
         ]
 
     def with_context(self, context: SerializationContext) -> Self:
@@ -801,6 +825,17 @@ def _get_iso_datetime_parser() -> Callable[[str], datetime]:
         A callable to parse date strings into datetimes.
     """
     return datetime.fromisoformat
+
+
+def _with_type_args(hint: Any, type_var_args: Mapping[Any, Any]) -> Any:
+    """Return a hint with each of its type variables replaced by its argument."""
+    if isinstance(hint, TypeVar):
+        return type_var_args.get(hint, hint)
+    # Only an alias takes arguments. A bare generic class keeps its own variables.
+    parameters = getattr(hint, "__parameters__", ())
+    if parameters and typing.get_origin(hint) is not None:
+        return hint[tuple(type_var_args.get(param, param) for param in parameters)]
+    return hint
 
 
 def value_to_type(
@@ -974,8 +1009,16 @@ def value_to_type(
             ret_dict = hint(**ret_dict)
         return ret_dict
 
-    # Dataclass
-    if dataclasses.is_dataclass(hint):
+    # Dataclass, also with type arguments such as ``Box[int]``. The class of such
+    # a hint is its origin, and its arguments stand for the type variables.
+    dataclass_type: Any = hint
+    type_var_args: dict[Any, Any] = {}
+    alias_origin = typing.get_origin(hint)
+    if dataclasses.is_dataclass(alias_origin):
+        dataclass_type = alias_origin
+        parameters = getattr(alias_origin, "__parameters__", ())
+        type_var_args = dict(zip(parameters, type_args))
+    if dataclasses.is_dataclass(dataclass_type):
         if not isinstance(value, dict):
             raise TypeError(
                 f"Cannot convert to dataclass {hint}, value is {type(value)} not dict"
@@ -983,8 +1026,8 @@ def value_to_type(
         # Obtain dataclass fields and check that all dict fields are there and
         # that no required fields are missing. Unknown fields are silently
         # ignored.
-        fields = dataclasses.fields(hint)
-        field_hints = get_type_hints(hint)
+        fields = dataclasses.fields(dataclass_type)
+        field_hints = get_type_hints(dataclass_type)
         field_values = {}
         non_init_field_values = {}
         for field in fields:
@@ -997,7 +1040,9 @@ def value_to_type(
                 # rejects this dataclass when trying union members
                 try:
                     converted = value_to_type(
-                        field_hints[field.name], field_value, custom_converters
+                        _with_type_args(field_hints[field.name], type_var_args),
+                        field_value,
+                        custom_converters,
                     )
                 except Exception as err:
                     raise TypeError(
@@ -1010,6 +1055,7 @@ def value_to_type(
         # Simply instantiate the dataclass. This will fail as expected when
         # missing required fields.
         # TODO(cretz): Want way to convert snake case to camel case?
+        # Calling the hint lets an instance of ``Box[int]`` keep its type argument.
         obj = hint(**field_values)
         # init=False fields cannot be passed to __init__ but are serialized, so
         # restore them afterwards. object.__setattr__ also works on frozen
