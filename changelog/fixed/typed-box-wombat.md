@@ -1,0 +1,1 @@
+Decode a generic dataclass by a hint with type arguments, such as `Box[int]`, and a value with a transfer type by a hint such as `T | None`. A `StreamRef[T]` then keeps its type as a dataclass field, in a list, and as an argument or a result that can be `None`.
