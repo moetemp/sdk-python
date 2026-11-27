@@ -28,7 +28,7 @@ class CreateStreamRequest(google.protobuf.message.Message):
 
     A create has no Retention. Retention is a setting of the Store, as it's a setting of the
     namespace for Workflows. It's the only lifetime setting of a Stream. It starts at the create,
-    and each append starts it again. When it passes, the Stream is expired.
+    and an append that writes a new batch starts it again. A resend keeps the existing expiry. When it passes, the Stream is expired.
     (-- api-linter: core::0133=disabled
         aip.dev/not-precedent: The request identifies a Stream by its id. --)
     """
